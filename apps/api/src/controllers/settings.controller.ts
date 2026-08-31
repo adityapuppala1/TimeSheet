@@ -41,6 +41,7 @@ import {
   getSuggestedProviderOrder
 } from "../services/ai-provider-config.service.js";
 import { getAIQualitySummary } from "../services/ai-quality.service.js";
+import { loadFindingRoutingRules, resolveFindingLocation } from "../services/finding-routing.service.js";
 import { testVirusScanner } from "../services/virus-scan.service.js";
 import { describeCertificate, testLdapConnection, testOidcConnection, testSamlConnection, type SsoTestResult } from "../services/sso-validation.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
@@ -224,6 +225,7 @@ const ticketingSchema = z.object({
       enableCostAnalytics: z.boolean().optional(),
       enableLeaderboard: z.boolean().optional(),
       blockResolveOnFailingTests: z.boolean().optional(),
+      blockResolveOnFailingQualityGate: z.boolean().optional(),
       // Verified Work Attestation — see services/attestation.service.ts. NOTE: this schema is
       // `.strict()`, so a new GlobalTicketSettings field MUST be listed here or the PATCH 400s.
       defaultCurrency: z.string().length(3).optional(),
@@ -1071,11 +1073,19 @@ settingsRouter.get("/security-ingestion", requireSuperAdmin, async (_req, res) =
     testRunsWebhookPath: `/api/devops/${orgSlug}/test-runs`,
     fallbackProjectId: settings?.fallbackProjectId ?? null,
     autoReopenEnabled: settings?.autoReopenEnabled ?? false,
+    verifyResolutionEnabled: settings?.verifyResolutionEnabled ?? false,
+    verificationWindowDays: settings?.verificationWindowDays ?? 14,
     codeownersAssignEnabled: settings?.codeownersAssignEnabled ?? false,
     autoCreateTicketOnCiFailureEnabled: settings?.autoCreateTicketOnCiFailureEnabled ?? false,
     sarifFindingsWebhookPath: `/api/devops/${orgSlug}/findings/sarif`,
     sbomWebhookPath: `/api/devops/${orgSlug}/sbom`,
-    errorEventsWebhookPath: `/api/devops/${orgSlug}/error-events`
+    errorEventsWebhookPath: `/api/devops/${orgSlug}/error-events`,
+    // SonarQube and ESLint, both accepting their tool's own output verbatim — see
+    // devops-webhook.controller.ts. The quality-gate one is what a customer pastes into Sonar's
+    // Administration → Webhooks; the other two are `curl` steps in a pipeline.
+    sonarFindingsWebhookPath: `/api/devops/${orgSlug}/findings/sonar`,
+    eslintFindingsWebhookPath: `/api/devops/${orgSlug}/findings/eslint`,
+    qualityGateWebhookPath: `/api/devops/${orgSlug}/quality-gate`
   });
 });
 
@@ -1110,6 +1120,60 @@ settingsRouter.patch("/security-ingestion/auto-reopen", requireSuperAdmin, valid
   });
   await audit(req.user!.id, "settings.security_ingestion_auto_reopen_updated", "IngestionSettings", "global", { autoReopenEnabled: req.body.autoReopenEnabled });
   res.json({ autoReopenEnabled: updated.autoReopenEnabled });
+});
+
+const verifyResolutionSchema = z.object({
+  body: z.object({ verifyResolutionEnabled: z.boolean() }).strict()
+});
+
+/**
+ * The FIRST rung of the verification ladder — see
+ * services/security-report.service.ts#markFindingsAwaitingVerification. On its own it marks findings
+ * as awaiting proof, judges every later scan, and reports the verdict; it does NOT move any ticket.
+ * That is `autoReopenEnabled` above, and keeping the two separate is the point: "tell me the fix did
+ * not hold, but do not touch my tickets" is a configuration a workspace is entitled to, and one
+ * switch could not express it. Off by default like every other automated decision in this model.
+ */
+settingsRouter.patch("/security-ingestion/verify-resolution", requireSuperAdmin, validate(verifyResolutionSchema), async (req, res) => {
+  const updated = await prisma.ingestionSettings.upsert({
+    where: { id: "global" },
+    update: { verifyResolutionEnabled: req.body.verifyResolutionEnabled },
+    create: { id: "global", verifyResolutionEnabled: req.body.verifyResolutionEnabled }
+  });
+  await audit(req.user!.id, "settings.security_ingestion_verify_resolution_updated", "IngestionSettings", "global", {
+    verifyResolutionEnabled: req.body.verifyResolutionEnabled
+  });
+  res.json({ verifyResolutionEnabled: updated.verifyResolutionEnabled });
+});
+
+const verificationWindowSchema = z.object({
+  // Bounded rather than open: a one-day window declares a fix unverified before most teams' nightly
+  // scan has run twice, and a 180-day one is indistinguishable from having no window at all. Both
+  // ends are the failure mode, not the middle.
+  body: z.object({ verificationWindowDays: z.number().int().min(1).max(90) }).strict()
+});
+
+/**
+ * How long a claimed fix waits for a qualifying scan before it is called UNVERIFIED and its assignee
+ * is nudged — see services/security-report.service.ts#sweepUnverifiedFindings. Never a reopen:
+ * absence of proof is not proof of failure. Measured from when the gate marked the finding, not
+ * stored as a deadline, so lowering this applies to everything already waiting.
+ */
+settingsRouter.patch("/security-ingestion/verification-window", requireSuperAdmin, validate(verificationWindowSchema), async (req, res) => {
+  // `validate()` discards its parsed output and handlers see the raw body (see middleware/validate.ts)
+  // — so the number arrives as whatever JSON carried, and a string here would be written straight
+  // into an Int column. The schema above accepts only a real number, and this makes the write agree
+  // with that rather than trusting the shape twice.
+  const verificationWindowDays = Number(req.body.verificationWindowDays);
+  const updated = await prisma.ingestionSettings.upsert({
+    where: { id: "global" },
+    update: { verificationWindowDays },
+    create: { id: "global", verificationWindowDays }
+  });
+  await audit(req.user!.id, "settings.security_ingestion_verification_window_updated", "IngestionSettings", "global", {
+    verificationWindowDays
+  });
+  res.json({ verificationWindowDays: updated.verificationWindowDays });
 });
 
 const codeownersAssignSchema = z.object({
@@ -1190,9 +1254,17 @@ const vaptReportSchema = z.object({
 settingsRouter.post("/security-ingestion/vapt-report", requireSuperAdmin, validate(vaptReportSchema), async (req, res) => {
   const { assessor, findings } = req.body as z.infer<typeof vaptReportSchema>["body"];
 
+  // The other ingest path gets the same routing the webhook gets — repository → project, file path
+  // → module. A VAPT report carries no repository, so step (a) always lands on the fallback
+  // project; the file path is still enough to name the module, and leaving it out here would make
+  // the per-module breakdown quietly exclude the one finding type a human wrote by hand. Loaded
+  // once for the upload, matched in memory (see services/finding-routing.service.ts).
+  const routingRules = await loadFindingRoutingRules();
+
   let ticketAttached = 0;
   const created = await Promise.all(
     findings.map(async (f) => {
+      const location = resolveFindingLocation(routingRules, { repository: null, filePath: f.filePath });
       let ticketId: string | null = null;
       if (f.ticketKey) {
         const ticket = await prisma.ticket.findFirst({
@@ -1212,7 +1284,9 @@ settingsRouter.post("/security-ingestion/vapt-report", requireSuperAdmin, valida
           description: f.description,
           cwe: f.cwe,
           filePath: f.filePath,
-          lineNumber: f.lineNumber
+          lineNumber: f.lineNumber,
+          moduleId: location.moduleId,
+          submoduleId: location.submoduleId
         }
       });
     })

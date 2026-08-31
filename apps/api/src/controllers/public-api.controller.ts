@@ -36,7 +36,13 @@ import { publicApiAuth, requireWriteScope, type PublicApiRequest } from "../midd
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { emitDomainEvent, emitTicketStatusChanged } from "../services/domain-events.js";
-import { assertValidTicketType, computeTicketDueDate, getGlobalTicketSettings, issueTicketKey } from "../services/ticket.service.js";
+import {
+  assertQualityGateAllowsResolve,
+  assertValidTicketType,
+  computeTicketDueDate,
+  getGlobalTicketSettings,
+  issueTicketKey
+} from "../services/ticket.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
 
 export const publicApiRouter = Router();
@@ -168,6 +174,9 @@ publicApiRouter.patch(
           throw new AppError(422, `Cannot resolve ${existing.key} — its latest CI run (${latestRun.provider}) is failing.`);
         }
       }
+      // And the quality-gate sibling. Imported rather than copied — see its header in
+      // ticket.service.ts for why this one is shared where the CI gate above is duplicated.
+      await assertQualityGateAllowsResolve(existing);
     }
 
     const data: Record<string, unknown> = { status: nextStatus };

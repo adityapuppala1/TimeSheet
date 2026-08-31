@@ -16,7 +16,7 @@
  * question to answer is whether the pricing page, the docs, and any signed contracts agree.
  */
 import { describe, expect, it } from "vitest";
-import { PLAN_TIER_LIMITS, planTiers, UNLIMITED_PLAN_ITEMS, UNLIMITED_SEATS } from "@timesheet/shared";
+import { formatMinorUnits, PLAN_TIER_LIMITS, PLAN_TIER_LIST_PRICES, planTierPriceLabel, planTiers, UNLIMITED_PLAN_ITEMS, UNLIMITED_SEATS } from "@timesheet/shared";
 
 describe("plan tier limits", () => {
   it("matches the tiers the pricing table sells", () => {
@@ -196,5 +196,77 @@ describe("plan tier limits", () => {
         expect(higher[quota], `${order[i]} ${quota}`).toBeGreaterThanOrEqual(lower[quota]);
       }
     }
+  });
+});
+
+/**
+ * The COMMERCIAL half of the same contract (4.2.0).
+ *
+ * Same argument as the block above, applied to money: the landing page used to type "$8" into a
+ * card by hand, and until 4.2.0 there was no price anywhere in the database at all — so when the
+ * platform console learned to report MRR there was nothing stopping the page a buyer reads and the
+ * figure an operator quotes from being two different numbers.
+ *
+ * The structural fix is `PLAN_TIER_LIST_PRICES` in @timesheet/shared: `Landing.tsx` renders its
+ * price cards from it, `prisma/control/seed.ts` writes it into `PlanTierLimit.listPricePerSeatMinor`
+ * on a fresh install, and the 4.2.0 migration seeds the same two values into existing rows. This is
+ * the second line of defence — it pins the VALUES, so changing what a seat costs is a deliberate act
+ * with a failing test attached.
+ *
+ * A failure here is not a bug. It means somebody changed the price, and the question to answer is
+ * whether the pricing page, the docs, and any signed contracts agree.
+ */
+describe("plan tier list prices", () => {
+  it("matches the prices the landing page advertises", () => {
+    expect(PLAN_TIER_LIST_PRICES).toEqual({
+      // Free, and a real 0 rather than a null: Starter HAS a price and it is nothing.
+      STARTER: { perSeatMinor: 0, currency: "USD" },
+      TEAM: { perSeatMinor: 800, currency: "USD" },
+      // Deliberately unset. Enterprise is priced per contract and the page says "Custom"; a made-up
+      // list price for it would land inside an MRR figure an operator then quotes to somebody.
+      ENTERPRISE: { perSeatMinor: null, currency: "USD" }
+    });
+  });
+
+  it("keeps an unset price DISTINCT from a free one, everywhere it is rendered", () => {
+    // The single most expensive confusion available in this feature. `null` means "no list price"
+    // and is excluded from every revenue total; `0` means free and is counted. A renderer that
+    // collapsed them would report a deployment's largest customers as worth exactly nothing.
+    expect(PLAN_TIER_LIST_PRICES.ENTERPRISE.perSeatMinor).toBeNull();
+    expect(PLAN_TIER_LIST_PRICES.STARTER.perSeatMinor).toBe(0);
+    expect(planTierPriceLabel("ENTERPRISE")).toBe("Custom");
+    expect(planTierPriceLabel("STARTER")).toBe("$0");
+    expect(planTierPriceLabel("TEAM")).toBe("$8");
+  });
+
+  it("formats minor units without inventing precision", () => {
+    expect(formatMinorUnits(800)).toBe("$8");
+    expect(formatMinorUnits(850)).toBe("$8.50");
+    expect(formatMinorUnits(0)).toBe("$0");
+    expect(formatMinorUnits(null)).toBe("—");
+    expect(formatMinorUnits(null, "USD", "Not set")).toBe("Not set");
+  });
+
+  it("never prices a lower tier above a higher one", () => {
+    // Incoherent to sell, and usually a typo. An UNSET price is skipped rather than treated as
+    // infinitely large or as zero — Enterprise sits above Team by contract, not by this table.
+    const priced = planTiers.filter((tier) => PLAN_TIER_LIST_PRICES[tier].perSeatMinor !== null);
+    for (let i = 1; i < priced.length; i++) {
+      expect(PLAN_TIER_LIST_PRICES[priced[i]].perSeatMinor!, `${priced[i]} price`).toBeGreaterThanOrEqual(PLAN_TIER_LIST_PRICES[priced[i - 1]].perSeatMinor!);
+    }
+  });
+
+  it("charges nothing for the tier whose AI ceiling is zero, and something for the one above it", () => {
+    // The coherence check between the two contracts in this file: Starter is the free tier AND the
+    // one with no AI budget. If one of those changed without the other, this is where it shows.
+    expect(PLAN_TIER_LIST_PRICES.STARTER.perSeatMinor).toBe(0);
+    expect(PLAN_TIER_LIMITS.STARTER.aiMonthlyBudgetCeilingUsd).toBe(0);
+    expect(PLAN_TIER_LIST_PRICES.TEAM.perSeatMinor!).toBeGreaterThan(0);
+    expect(PLAN_TIER_LIMITS.TEAM.aiMonthlyBudgetCeilingUsd).toBeGreaterThan(0);
+  });
+
+  it("prices every tier in one currency, so a deployment's MRR is a single sum", () => {
+    const currencies = new Set(planTiers.map((tier) => PLAN_TIER_LIST_PRICES[tier].currency));
+    expect(currencies.size, "mixed currencies make the console's MRR total meaningless").toBe(1);
   });
 });

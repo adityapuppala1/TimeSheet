@@ -41,6 +41,14 @@ export type NotificationCategory =
   | "digest.weekly"
   | "digest.practice_update"
   | "ticket.closed_digest"
+  /** A scan proved a claimed fix did not hold. Goes far wider than `ticket.closed_digest` — see
+   *  security-report.service.ts#sendTicketReopenedDigest for who and why. */
+  | "ticket.reopened_digest"
+  /** In-app ONLY — see the `null` in SETTINGS_FIELD. A claimed fix ran out of its grace window with
+   *  no qualifying scan. Deliberately has no email leg: "nothing has been proven either way" is the
+   *  weakest message this system sends, and an inbox is where weak messages teach people to ignore
+   *  the strong ones. The ticket comment the sweep posts carries the full explanation. */
+  | "security.verification_unverified"
   | "digest.security_weekly"
   | "face.enrollment_required"
   | "face.enrollment_reminder"
@@ -141,6 +149,8 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "digest.weekly": "emailWeeklyDigest",
   "digest.practice_update": "emailPracticeUpdate",
   "ticket.closed_digest": "emailTicketClosedDigest",
+  "ticket.reopened_digest": "emailTicketReopenedDigest",
+  "security.verification_unverified": null,
   "digest.security_weekly": "emailSecurityWeeklyDigest",
   "face.enrollment_required": "emailFaceEnrollmentRequired",
   "face.enrollment_reminder": "emailFaceEnrollmentReminder",

@@ -29,6 +29,12 @@
  * phone. Both read from ONE draft per tier held here, so an edit survives a resize across the
  * breakpoint instead of being stranded in whichever copy was visible when it was typed.
  *
+ * THE ONE NON-ENTITLEMENT ROW (5.0.0): the list price. It enforces nothing — no capability fails
+ * closed on it — and it is here because until 5.0.0 there was no price anywhere in this product's
+ * data, so the console could report seats, tickets and AI spend and not one unit of revenue. It is
+ * grouped on its own so nobody reads it as a limit, and an EMPTY box is a real value meaning "this
+ * tier is priced per contract", which is not the same as 0.
+ *
  * SCOPE, unchanged: an individual org can still override seat limit and AI budget on its own
  * record (see `Organizations.tsx`); everything else here is tier-only, with no per-org override.
  *
@@ -37,7 +43,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
-import { BACKUP_FREQUENCY_LABEL, UNLIMITED_PLAN_ITEMS, type BackupFrequency } from "@timesheet/shared";
+import { BACKUP_FREQUENCY_LABEL, platformCapabilities, platformRoleHas, UNLIMITED_PLAN_ITEMS, type BackupFrequency } from "@timesheet/shared";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
@@ -51,6 +57,7 @@ import { TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } f
 import { toast } from "../../components/ui/toaster";
 import { cn } from "../../lib/utils";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, FieldGrid, Num, PRIMARY_BTN, Toolbar } from "./console-ui";
+import { usePlatformAdminAuthStore } from "../../store/platform-admin-auth";
 import { PLAN_CAPABILITIES, PLAN_QUOTAS, platformAdminBillingApi, platformAdminPlanTierApi, type ChatPlatform, type PlanCapabilityKey, type PlanQuotaKey, type PlanTierLimitRow, type SsoProvider } from "../../services/platform-admin-api";
 
 type PlanTier = PlanTierLimitRow["tier"];
@@ -75,6 +82,10 @@ const CHAT_PLATFORM_LABEL: Record<ChatPlatform, string> = {
 type TierDraft = {
   seatLimit: string;
   budget: string;
+  /** The list price in MAJOR units as typed ("8", "8.50"), converted to minor units on save. An
+   *  EMPTY string is meaningful and is not zero: it means "this tier has no list price", which is
+   *  what Enterprise is. `payloadFromDraft` sends `null` for it, and the API accepts null. */
+  listPrice: string;
   providers: SsoProvider[];
   chatPlatforms: ChatPlatform[];
   capabilities: Record<PlanCapabilityKey, boolean>;
@@ -87,6 +98,9 @@ type TierDraft = {
 const draftFromRow = (row: PlanTierLimitRow): TierDraft => ({
   seatLimit: row.seatLimit.toString(),
   budget: row.aiMonthlyBudgetCeilingUsd,
+  // Null becomes "", not "0". The difference is the whole point: an unset price is excluded from
+  // MRR, and a zero price is a free tier that is counted.
+  listPrice: row.listPricePerSeatMinor === null || row.listPricePerSeatMinor === undefined ? "" : (row.listPricePerSeatMinor / 100).toString(),
   providers: row.allowedSsoProviders,
   chatPlatforms: row.allowedChatPlatforms,
   capabilities: Object.fromEntries(PLAN_CAPABILITIES.map((c) => [c.key, row[c.key]])) as Record<PlanCapabilityKey, boolean>,
@@ -99,6 +113,9 @@ const draftFromRow = (row: PlanTierLimitRow): TierDraft => ({
 const payloadFromDraft = (draft: TierDraft) => ({
   seatLimit: Number(draft.seatLimit),
   aiMonthlyBudgetCeilingUsd: Number(draft.budget),
+  // `Math.round` because a price typed as "8.005" must not reach the database as 800.5 minor
+  // units. An empty box sends null, which CLEARS the price rather than setting it to nothing owed.
+  listPricePerSeatMinor: draft.listPrice.trim() === "" ? null : Math.round(Number(draft.listPrice) * 100),
   allowedSsoProviders: draft.providers,
   allowedChatPlatforms: draft.chatPlatforms,
   ...draft.capabilities,
@@ -203,7 +220,43 @@ const BACKUP_GROUP: EntitlementGroup = {
   ]
 };
 
+/**
+ * The one row on this page that is not an entitlement.
+ *
+ * A price ENFORCES NOTHING — no capability fails closed on it, no request is refused because of it.
+ * It exists so the console can report MRR at all: until 5.0.0 there was no price anywhere in this
+ * database, because `PlatformBillingSettings` holds opaque Stripe Price IDs and a deployment that
+ * assigns tiers by hand has no Stripe account. It is grouped separately so nobody reads it as a
+ * limit, and its hint says plainly what an empty box means, because "unset" and "free" look
+ * identical in a number and mean opposite things to every figure derived from them.
+ */
+const COMMERCIAL_GROUP: EntitlementGroup = {
+  id: "commercial",
+  title: "List price",
+  note: (
+    <>
+      What the pricing page advertises, per seat per month — <strong className="text-foreground">not</strong> what any given customer is billed. A discount, an
+      annual commitment or a negotiated contract all differ from it, and the console labels every figure derived from this as list price for exactly that
+      reason. Leave it <strong className="text-foreground">empty</strong> for a tier priced per contract: an empty price is excluded from MRR and shown as “Not
+      set”, while <strong className="text-muted-foreground">0</strong> is a real, free price that is counted.
+    </>
+  ),
+  rows: [
+    {
+      kind: "number",
+      id: "listPrice",
+      label: "Per seat / month",
+      hint: "In whole currency units — 8 means $8.00. Empty means this tier has no list price.",
+      min: 0,
+      max: 10_000,
+      get: (d) => d.listPrice,
+      set: (d, v) => ({ ...d, listPrice: v })
+    }
+  ]
+};
+
 const ENTITLEMENT_GROUPS: EntitlementGroup[] = [
+  COMMERCIAL_GROUP,
   {
     id: "limits",
     title: "Plan limits",
@@ -284,6 +337,8 @@ const ENTITLEMENT_GROUPS: EntitlementGroup[] = [
 
 export function PlatformAdminPlanTiers() {
   const queryClient = useQueryClient();
+  const role = usePlatformAdminAuthStore((s) => s.admin?.role);
+  const canSeeBilling = role ? platformRoleHas(role, platformCapabilities.PLATFORM_BILLING) : false;
   const limits = useQuery({ queryKey: ["platform-admin", "plan-tier-limits"], queryFn: platformAdminPlanTierApi.list });
 
   // One draft per tier, held here rather than inside a per-tier card, because the matrix needs all
@@ -318,7 +373,11 @@ export function PlatformAdminPlanTiers() {
       title="Plan tiers"
       description="Every entitlement the platform enforces, per tier — seats, AI budget, the SSO and chat allow-lists, ten capabilities and seven quotas. Seat limit and AI budget can be overridden per organization on its own record; everything else here is tier-only."
     >
-      <StripeBillingCard />
+      {/* Hidden, not disabled, for a role without `platform:billing`: `GET /billing-settings` is
+          itself a BILLING capability, so rendering the card for a SUPPORT or READ_ONLY operator
+          would paint an error where a card should be. The route stays open to them because the
+          plan-tier limits above ARE readable by everyone — the Stripe credentials are not. */}
+      {canSeeBilling && <StripeBillingCard />}
 
       {limits.isLoading && <Skeleton className="h-64 w-full" />}
       {!limits.isLoading && tiers.length === 0 && (

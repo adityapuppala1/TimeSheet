@@ -1,6 +1,6 @@
 import express from "express";
 import { errorHandler } from "../../src/middleware/error.js";
-import { billingWebhookRouter } from "../../src/controllers/billing.controller.js";
+import { billingRouter, billingWebhookRouter } from "../../src/controllers/billing.controller.js";
 import { scimRouter } from "../../src/controllers/scim.controller.js";
 
 /**
@@ -14,6 +14,17 @@ import { scimRouter } from "../../src/controllers/scim.controller.js";
 export function buildBillingWebhookApp() {
   const app = express();
   app.use("/billing", billingWebhookRouter);
+  app.use(errorHandler);
+  return app;
+}
+
+/** Mirrors app.ts: the ordinary billing routes sit behind the global express.json() and after
+ *  tenant resolution. `requireAuth` and `requireTenantContext` are module-level on that router, so
+ *  a caller has to mock both before importing this helper — see billing.plan-change.test.ts. */
+export function buildBillingApp() {
+  const app = express();
+  app.use(express.json());
+  app.use("/billing", billingRouter);
   app.use(errorHandler);
   return app;
 }

@@ -10,6 +10,7 @@
  * already linked to `ticketId` by the features that created Phases 2a/2b/pre-existing security
  * ingestion — this is a read-side view, not a new data source.
  */
+import { securityFindingStatusBuckets } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 
 export type TicketLineageEventType = "branch_linked" | "pr_status" | "test_run" | "security_finding";
@@ -84,7 +85,16 @@ export async function buildTicketLineage(ticketId: string): Promise<TicketLineag
       at: finding.createdAt,
       summary: `${finding.severity} ${finding.type} finding: ${finding.title}`,
       detail: finding.aiVerdict ? `AI triage: ${finding.aiVerdict.replace("_", " ").toLowerCase()}` : undefined,
-      tone: finding.status === "FIXED" || finding.status === "ACCEPTED_RISK" ? "success" : finding.severity === "CRITICAL" || finding.severity === "HIGH" ? "failure" : "neutral"
+      // A SIXTH copy of the resolved-status list. THE DECISION THIS TIMELINE MAKES: only the
+      // `resolved` bucket earns the green tone. A pending (claimed fixed, unconfirmed) finding
+      // keeps whatever tone its severity gives it, because a green dot on a timeline reads as
+      // "this one is behind us" and an unproven fix has not earned that.
+      tone:
+        securityFindingStatusBuckets[finding.status] === "resolved"
+          ? "success"
+          : finding.severity === "CRITICAL" || finding.severity === "HIGH"
+            ? "failure"
+            : "neutral"
     });
   }
 

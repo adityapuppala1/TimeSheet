@@ -12,6 +12,301 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 5.0.0 — a claimed fix now has to be proven — 2026-08-31
+
+**Why this is a major.** One behaviour a customer already relied on has changed, in the two places
+that had it. An auto-created ticket — from a security finding, or from a failed CI run — used to be
+assigned by finding *the first module on the fallback project that happened to have a
+`ModuleAssigneeRule`* — an arbitrary choice, and now deleted from both. A workspace that has a module
+assignee rule but has not yet configured any of the new path rules will find its finding tickets
+fall through to CODEOWNERS, or land unassigned; its CI-failure tickets land unassigned either way. Nobody could sensibly have relied on **which** person
+that was; they could reasonably have relied on **someone**. That is the same bar 4.0.0 set, so it
+gets the same answer: a major, and an upgrade note telling operators exactly what to configure.
+Everything else is additive. No environment variable was added, removed or changed meaning —
+`apps/api/src/config/env.ts` is untouched — and the upgrade path is the ordinary one.
+
+### 💥 A security finding is no longer assigned to whoever happens to own module #1 — nor is a CI failure
+
+- The old rule was written to reuse email intake's routing and it did so badly: a finding names a
+  **file**, not a module, so the code asked "does any module on the fallback project have an
+  assignee rule?" and took the first answer. In practice that meant a vulnerability in the billing
+  service was assigned to whoever owned whichever module was created first, in a project chosen
+  because it was the fallback. It was assignment as a formality.
+- The replacement routes on the path the finding actually names — see below — and then falls back
+  to CODEOWNERS/last-committer where that is switched on, and to unassigned where it is not.
+  **Unassigned is deliberate**: a ticket in somebody's queue who has no idea why it is there is
+  worse than a ticket in a triage list, because the first one looks handled.
+- **The same lookup had been copied into the CI-failure path, and it is gone from there too.** A
+  ticket auto-created from a failed CI run picked its assignee the same arbitrary way, from its own
+  duplicate of the code. Deleting it for findings and leaving it for CI failures would have made the
+  paragraph above true of half the product and the release note true of neither half, so a
+  CI-failure ticket now opens unassigned as well. There is no CODEOWNERS rung to fall to on this
+  one: a failed run names no single file, so there is nothing to attribute it to.
+- **A CI-failure ticket does now pick its project, though.** A failed run's pull-request URL names
+  the repository for every provider TimeSphere supports, so the repository rules a finding uses
+  decide which project the ticket opens in — and it takes that project's own key prefix, so a broken
+  build on the billing repo reads `BILLING-8` rather than `WEB-8`. No pull-request URL, or no rule
+  matching the one there is, lands it on the fallback project exactly as before. The module stays
+  empty either way, because a path rule matches a file path and a failed run does not have one.
+- **What to do about it** is one screen: Workspace Settings → Security & DevOps → *Route findings by
+  file path*, which is what puts a finding in front of the right owner, and *Route findings by
+  repository* directly above it, which is what a CI failure routes on. There is a "Test a path" box
+  beside them that runs the real resolver, so the rules can be checked before a scanner exercises
+  them at 3am.
+
+### ✨ Verified remediation — a resolved ticket is a claim, and the next scan decides
+
+- This is the release's centre. Resolving or closing a ticket that carries security findings no
+  longer marks those findings fixed. It marks them **`PENDING_VERIFICATION`** — a claim — and they
+  keep counting as unresolved until a scanner agrees. The person closing the ticket is asserting
+  something about the world; the scanner is the only thing here that can check it.
+- **What counts as proof is narrow on purpose.** The next scan must come from the **same tool**, on
+  the **same repository and branch**, and be of the **same finding type**. A SAST run has nothing to
+  say about whether a lint finding is gone, and a different scanner's silence is not evidence — it
+  may simply not look for that class of bug. The fingerprint absent from a qualifying run means
+  fixed, stamped with the run and the commit that proved it. Still present means the fix did not
+  hold.
+- **A fix that did not hold reopens the ticket with its evidence**: which scan, which commit, which
+  findings survived, and how long they have been open. The SLA clock restarts, because the work is
+  not done and pretending otherwise is what the timer exists to prevent.
+- **No qualifying scan inside the grace window marks it *unverified*, nudges the assignee, and never
+  reopens.** Absence of proof is not proof of failure. A repository whose nightly job broke a week
+  ago should produce a question, not a wave of reopened tickets attributed to engineers who did
+  nothing wrong. The window is 7, 14, 30 or 60 days, default 14.
+- **`verificationState` is a separate column from `status`, and that is the whole design.** Status
+  records a decision a person made. `verificationState` records what a scanner observed. Collapsing
+  them would mean either a machine overwriting a human's decision or a human's decision hiding a
+  machine's observation, and there is no version of that which reads correctly a month later.
+- **The two switches are a ladder, not a pair.** Verification on with auto-reopen off — "tell me,
+  don't move my tickets" — is a supported configuration, stated in the schema so nobody later reads
+  it as a half-installed feature. The finding is still marked, the digest is still sent, and the
+  ticket stays exactly where its owner left it.
+- **The digest goes to the people who actually touched it**: whoever closed it (recovered from the
+  audit log, because nothing else records that), the current assignee, and everyone who **logged
+  time against it** — cc'ing the closer's manager and the routed module's owner. The time loggers
+  are the entry nobody would have thought to add and the one that matters: they are the people who
+  know what the fix was supposed to do.
+
+### ✨ A finding learns which part of the product it is in
+
+- Two new rule tables. **Repository maps** take a repository pattern to a project; **module path
+  rules** take a path glob to a module and optional submodule. Both are ordered, first match wins —
+  the same semantics ticket routing already uses, so there is one rule-evaluation model in this
+  product rather than two that behave subtly differently.
+- The consequence is that a finding in `apps/api/src/services/billing-*` opens its ticket in the
+  billing project, with **that** project's key prefix, assigned through **that** module's owner.
+- **The path matcher does not compile to a RegExp at all.** A glob converted to a regex is a
+  user-supplied pattern handed to a backtracking engine, and the mitigations for that are all
+  guesses about input. This simulates the pattern as an automaton over a boolean array of reachable
+  positions: one linear pass per token, work bounded by pattern length × subject length, no
+  backtracking of any kind to blow up. Impossible rather than unlikely.
+- Patterns are validated at write time (422, not a silent rule that never matches), and the
+  dry-run runs the same resolver the ingest does — not a reimplementation of it, which would be a
+  second thing to keep in step.
+
+### ✨ SonarQube and ESLint, spoken natively
+
+- `POST /devops/:orgSlug/quality-gate` takes **Sonar's own webhook payload verbatim**. Paste the URL
+  into SonarQube's webhook configuration; there is no translation script to write and no shim to
+  maintain. `/findings/sonar` takes its issues-API response, `/findings/eslint` takes
+  `eslint --format json`, both unmodified.
+- Sonar's own taxonomy already carries the distinction that matters, so it is honoured rather than
+  overridden: a `VULNERABILITY` becomes a SAST finding, a `BUG` or `CODE_SMELL` becomes a QUALITY
+  one. ESLint results are always `LINT`, and never above MEDIUM severity — a lint rule does not get
+  to declare itself critical.
+- **A finding's discipline is derived from its type and compile-enforced.** Security disciplines are
+  SAST/DAST/SSAT/SSCT/VAPT; quality is QUALITY/LINT. Without that split, connecting Sonar to a
+  workspace would import a thousand code smells and bury one critical SQL injection under them — the
+  risk score would move, the by-severity chart would fill, and the org's security posture would
+  appear to collapse on the day it gained a linter. A regression test asserts the risk score moves
+  by **exactly zero** when a thousand quality findings arrive.
+- A failing quality gate can optionally block **Resolved**, the sibling of the existing
+  failing-tests gate. It matches ticket to gate through the linked branch, only counts a run whose
+  analysis actually succeeded, and never blocks a ticket with no branch linked.
+
+### ✨ Findings that stop multiplying
+
+- Ingest was create-always. A nightly scan reporting the same 200 issues inserted 200 new rows every
+  night — which inflated the risk score, bent the trend chart, padded the weekly digest and created
+  duplicate tickets, all of it looking like a security problem getting worse rather than a data
+  problem getting worse.
+- Every finding now carries a **fingerprint**: tool, rule identity (CWE where there is one, rule id
+  otherwise), the normalised path, and the line bucketed in fifties — so an edit upstream that moves
+  a vulnerability by ten lines is still the same vulnerability. Ingest finds, then updates or
+  creates, raising `occurrences` and moving `lastSeenAt` while `firstSeenAt` stays put. "How long has
+  this been open" finally has an answer.
+- **Every scan is recorded, including the ones that found nothing.** A `ScanRun` per tool, type,
+  repository and branch — and a zero-result run is the most important row in the table, because it
+  is the one that proves a fix.
+- The finding-status buckets — which statuses count as open, resolved or pending — were written by
+  hand in six places, and adding a sixth status meant finding all six. They are one compile-enforced
+  `Record` in `packages/shared` now, and a `Record` over the enum cannot silently miss a member.
+
+### 🐛 The upgrade that billed you twice
+
+- `POST /billing/checkout-session` never looked at `Organization.stripeSubscriptionId`. It always
+  created a **new** Stripe subscription, and the webhook then overwrote that column with the new id.
+  So a paying Team customer clicking "Upgrade to Enterprise" ended up with **two active
+  subscriptions**, charged for both, with the first one no longer referenced by anything in our
+  database — invisible to us and perfectly visible on their card statement.
+- An existing subscription is now modified in place with proration. A stored id Stripe no longer
+  recognises — deleted, cancelled, expired, or with no items — falls back to Checkout and clears the
+  column, so a stale id is self-healing rather than permanently broken. A *transient* Stripe failure
+  still throws: "Stripe is down" and "this subscription is gone" must not produce the same action.
+
+### 💳 A billing surface a customer can actually use
+
+- **`POST /billing/portal-session`** opens Stripe's Customer Portal — card, invoices, cancellation —
+  which is the correct answer to every "how do I change my card" support ticket, because the answer
+  is a link rather than a form we would have to build and secure.
+- **`GET /billing/invoices`** lists the last twelve, linking out to Stripe's own hosted invoice and
+  PDF pages. We render the summary; Stripe renders the document that has to be right.
+- A **`billing.plan_changed`** receipt reaches the workspace's super admins on a real tier change,
+  and stays silent on a quantity-only seat sync — a workspace that hires three people should not get
+  a "your plan changed" email three times for a plan that did not change.
+- **`/app/settings?billing=success` is finally read.** It was in the Checkout redirect URL the whole
+  time and nothing looked at it: the customer paid and landed on a page that said nothing had
+  happened. There is now a toast, a refetch, a cleaned URL, and a second refetch four seconds later
+  because Stripe's webhook and the browser's redirect race and the redirect usually wins.
+- **Workspace Settings honours `?tab=`.** Every billing email has pointed at `?tab=billing` for
+  months and landed the reader on the Reminders tab.
+
+### 📞 A contact page, and a pipeline behind it
+
+- Public `/contact`, with the fields that make a lead answerable rather than a name and a blank box:
+  team size band, deployment preference, what they are evaluating, and timeline. "Talk to sales" on
+  the Enterprise card used to open a deployment-model comparison, because there was nowhere to send
+  anyone.
+- **Anti-spam is a honeypot, a time floor and a rate limiter — deliberately no third-party captcha**,
+  because the FAQ printed beside the form promises the app never calls out to anyone, and a form that
+  loads Google's script while claiming that is a lie the reader can see in the network tab. The time
+  floor reads the browser's **monotonic** clock and sends an elapsed interval rather than a
+  timestamp, so a wrong system clock cannot reject a real person. A submission that looks automated
+  gets a normal 201 and is silently dropped.
+- Leads land in a control-plane `SalesLead` table with an audit row, and in a **Leads** page under
+  Growth in the console with a status pipeline, an owner and notes.
+- **Two platform emails**: the internal notification, whose **Reply-To is the prospect** so that
+  hitting Reply answers the customer rather than the robot, and an acknowledgement to them. Neither
+  can fail the request — a lead is captured even if the mail relay is down, because losing the lead
+  to protect the notification would be exactly backwards.
+- The free-mail domain list is now **shared with signup, with deliberately different verdicts**:
+  signup still rejects a personal address, sales only flags it. A founder evaluating from a Gmail
+  account is a real lead, and refusing them would be optimising a spam metric at the cost of the
+  pipeline.
+
+### 🔐 The console stops being one all-powerful role
+
+- **Five roles over a five-capability matrix**: Owner, Operator, Support, Billing, Read only.
+  **Support and Billing are siblings, not rungs.** The obvious shape is a single ladder and it is
+  wrong in both directions — it would hand a finance operator the break-glass that resets a
+  customer's super-admin password, and hand a support operator the ability to move a workspace onto
+  a different plan. Operator is the union below Owner because it is the on-call role: nobody holding
+  the pager at 3am should discover that restoring service needs an account they do not have.
+- **The role is read from the database row on every request, never from a JWT claim.** A demotion
+  binds on the next request rather than whenever the token happens to expire, which is the only
+  version of "we removed their access" that is true when you say it. An unrecognised value fails
+  closed to Read only.
+- **TOTP, hand-rolled on `node:crypto`** and pinned against RFC 6238's own published test vectors —
+  the only way to know an authenticator implementation is right is to check it against the numbers
+  in the specification. Recovery codes are bcrypt-hashed and consumed atomically, a replay ratchet
+  refuses a step already used, and **the challenge sits before a session row exists**, so no refresh
+  credential can be minted without the second factor. **Enrolment is opt-in.** The console nags;
+  it does not lock anybody out of their own control plane on upgrade night.
+- **A two-person rule on the five irreversible actions** — deleting a workspace, restoring or
+  deleting a snapshot, creating an admin, changing an admin's role. Membership is decided by "can it
+  be undone", not by "is it dangerous": a suspended workspace can be un-suspended, a deleted one
+  cannot. The countersignature **replays through the same handler**, so every guard re-runs against
+  live data rather than against what was true when the request was queued, and a request expires
+  after 24 hours rather than sitting armed forever.
+- **A reason for access**, recorded on the audit row beside `before`, `after` and the caller's IP. It
+  travels as a header rather than a body field, because the routes that most need it include a `GET`
+  with no body at all.
+- Eight destructive routes that previously wrote **no audit row whatsoever** now write one —
+  provisioning a database, suspending a workspace, resetting a customer's super-admin password,
+  retuning a plan tier, setting the merchant credentials. The control plane's audit trail used to
+  begin after the most consequential things had already happened.
+- **`GET /backups/:id/download` is operator-only despite its verb.** It streams an entire customer
+  database as SQL. It is the least read-only `GET` in this codebase and the classification says so.
+
+### 📊 The business the console could not see
+
+- **A nightly usage snapshot per workspace** — seats, tickets by status, AI spend against the ceiling
+  in force, mail counts, database size, last activity, and the plan and status *as they stood that
+  day*. This is the release's quiet structural fix twice over: the analytics page used to open a
+  connection to every tenant database on every page load and got slower with each customer won, and
+  because nothing was ever kept, **no trend, cohort, churn or retention question could be asked at
+  all**. There is no backfill and there cannot be one — every figure is a point-in-time count of
+  mutable state — so the series starts the night this ships and every reader returns `null` rather
+  than a number while its window is too short.
+- An operator-editable **list price** per tier drives MRR, ARR, ARPA, revenue by tier, trial-to-paid
+  conversion, logo and revenue churn, NRR/GRR, and a signup-month cohort table. It is seeded from the
+  same constant the landing page's pricing cards render, so what a buyer reads and what an operator
+  quotes cannot disagree.
+- **Every money figure is list price, not billed revenue, and the screen says so in the first
+  sentence.** A discount, an annual commitment or a negotiated contract will differ. **A null price
+  is not zero:** Enterprise has no list price, those workspaces are excluded from MRR, and the count
+  of exclusions is printed beside the total — a visible gap is honest, a silent under-report is not.
+- **Account health names the signal, not a score.** Seat pressure, AI burn, dormancy, ticket velocity
+  across snapshots, mail failure rate, backup failures — each arriving with a measured detail that
+  has its number in it. `signals` is never empty: a clean workspace says what was checked. A band
+  nobody can explain is a band nobody acts on, and therefore a band nobody maintains.
+- An org 360 page that **composes** what already existed — the organization record, monitoring trend,
+  backups, email log, audit and advisories — rather than reimplementing any of it.
+
+### 🔭 Alerts that leave the room, and drift you can see
+
+- **A six-hourly fleet-alert digest that reports only what changed** — appeared, escalated, cleared.
+  A standing alert is never re-sent, which is the difference between a digest people read and a
+  digest people filter. Delivery state is written only when a channel actually accepted the message,
+  so a failed send self-heals on the next pass instead of being marked done.
+- An optional **outbound webhook**, signed with the same HMAC scheme the tenant webhook dispatcher
+  uses, with the SSRF egress check re-run on every attempt rather than trusted from the moment the
+  URL was saved.
+- **Fleet schema drift**: which workspaces are behind which migration, against what the running build
+  expects, with the exact command that fixes it printed on the page. Deliberately **read-only** — a
+  per-tenant migration fan-out is a thing that needs a terminal and a human watching it, and a button
+  that starts one from a browser tab is a button that eventually gets clicked by accident.
+- **Growth forecasting that refuses**, twice: not enough samples, or a trend line too noisy to mean
+  anything. It says which, and how short it was. A confident number describing nothing is worse than
+  no number.
+- **Schema-shape findings are kept, not discarded.** Tables with no primary key and index-heavy
+  tables were computed on every hourly sample, raised as an alert, and then thrown away — so the one
+  question an operator actually asks about them, "when did this start?", had no answer anywhere in
+  the product. The counts now ride on the sample and make a trend; the table names ride with them
+  (capped) and make a count actionable. The columns are **nullable and not backfilled to zero**,
+  because a zero on a sample taken before the column existed would read as "we checked that hour and
+  the schema was clean", which is exactly the false history the chart exists to avoid.
+- **General per-org feature overrides** beside the existing seat and AI-budget ones. Granting past
+  what the plan includes is allowed and takes an explicit acknowledgement, refused with a message
+  saying so and recorded against the operator's name.
+- CSV export built from the array the page is already showing — the file and the screen cannot
+  disagree — a ⌘K command palette driven by the same nav the sidebar renders, and an incident
+  timeline on each org's page merging audit rows, backups, alerts, maintenance and failed mail.
+
+### ⬆ Upgrading
+
+- **Run the migrations, then fan them out.** Four tenant migrations and four control-plane migrations
+  ship in this release. `update.sh` / `update.ps1` apply the default org's automatically; every
+  *additional* organization needs the fan-out, which cannot run inside the container's boot chain:
+  `docker compose exec api npm run migrate:tenants -w apps/api`.
+- **Configure path rules if you relied on auto-assignment.** This is the breaking change. If your
+  workspace has a `ModuleAssigneeRule` and auto-created security tickets have been landing on
+  somebody, open **Workspace Settings → Security & DevOps → Route findings by file path**, add the
+  rules, and use "Test a path" to check them. Until you do, those tickets fall through to CODEOWNERS
+  or arrive unassigned.
+- **Every existing platform admin is backfilled to OWNER by the migration.** Nobody loses access on
+  upgrade. Demote deliberately, afterwards, from **Platform → Access** — which is itself Owner-only.
+- **Two-factor is opt-in.** Nothing is enforced; the console prompts. Enrol from the console's own
+  account page before you demote anyone, so there is always a way back in.
+- **Nothing else switches itself on.** Verified remediation, auto-reopen, the quality-gate resolve
+  block and the alert digest webhook are all off after upgrading. The contact page is public
+  immediately, and its notifications go to the sales inbox configured under **Platform → Settings →
+  Mail server** (blank uses the built-in default, which the field prints).
+- **Five new email templates**, seeded on migration and editable like every other: `billing.plan_changed`
+  and `ticket.reopened_digest` in the workspace catalogue, `sales.lead`, `sales.ack` and
+  `platform.alert_digest` in the platform relay's.
+- **No environment variables were added, removed, or changed meaning.**
+
 ## 4.0.0 — the control plane becomes a product surface — 2026-08-29
 
 **Why this is a major.** One behaviour a customer already relied on has changed: a workspace can no

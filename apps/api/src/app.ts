@@ -45,6 +45,7 @@ import { mcpRouter } from "./controllers/mcp.controller.js";
 import { publicApiRouter } from "./controllers/public-api.controller.js";
 import { scimRouter } from "./controllers/scim.controller.js";
 import { emailIntakeRouter } from "./controllers/email-intake.controller.js";
+import { findingRoutingRouter } from "./controllers/finding-routing.controller.js";
 import { faceRouter } from "./controllers/face.controller.js";
 import { emailTemplatesRouter } from "./controllers/email-templates.controller.js";
 import { practiceUpdateRouter } from "./controllers/practice-update.controller.js";
@@ -87,6 +88,7 @@ import { AppError, errorHandler, notFound } from "./middleware/error.js";
 import { recordApiRequest } from "./middleware/request-telemetry.js";
 import { resolveTenant } from "./middleware/tenant.js";
 import { signupRouter } from "./controllers/signup.controller.js";
+import { salesLeadRouter } from "./controllers/sales-lead.controller.js";
 
 export const app = express();
 
@@ -203,6 +205,18 @@ app.use("/api/auth/workspaces/verify", authLimiter);
 // CRUD, plan-tier edits) — it must never be less protected than a regular tenant login, but
 // it's mounted after the blanket limiter below so it needs its own explicit guard here too.
 app.use("/api/platform-admin/auth/login", authLimiter);
+/*
+ * The second factor gets its OWN, tighter limiter rather than leaning on the line above.
+ *
+ * `app.use("/…/auth/login")` does match `/…/auth/login/totp` by prefix, so the challenge route is
+ * not literally unguarded — but inheriting a limiter by URL-shape accident is not a control. It
+ * shares the login budget, it evaporates the day somebody moves the route to `/auth/totp`, and
+ * `skipSuccessfulRequests` means a correct-but-replayed code costs an attacker nothing. A
+ * six-digit code has a million values and a 30-second life; 10 attempts a minute per IP, counting
+ * the successes, is what makes guessing it hopeless rather than merely slow.
+ */
+const mfaLimiter = rateLimit({ windowMs: 60_000, limit: 10, standardHeaders: true });
+app.use("/api/platform-admin/auth/login/totp", mfaLimiter);
 
 // This ceiling has been raised twice on EVIDENCE, so mind the reasoning before lowering it:
 // 120/min (2 req/s) tripped on a single admin's tabs; 300/min still tripped on legitimate
@@ -427,6 +441,15 @@ app.use("/api/git", gitConnectionRouter);
 const signupLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 5, standardHeaders: true });
 app.use("/api/signup", signupLimiter, signupRouter);
 
+// The public contact form. Mounted here for the same reason signup is — there is no tenant, and for
+// most of these rows there never will be one — and given its OWN limiter rather than a path on
+// /api/public: the routes there are addressed by a signed token and sized for somebody clicking a
+// link they were sent, while this is an open write with two emails behind it. Sharing a mount would
+// mean the next person to relax the retention doors relaxed this too. Five an hour, in the spirit of
+// signup's limiter above; a company sends one enquiry, a script sends thousands.
+const salesLeadLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 5, standardHeaders: true });
+app.use("/api/contact", salesLeadLimiter, salesLeadRouter);
+
 // Every other /api/* route needs to know which tenant it's serving before it can touch
 // `prisma` — mounted after /health, /uploads, and the SSO routes (none of which need the
 // normal resolved-tenant path) and before every controller router below (all of which do).
@@ -486,6 +509,10 @@ app.use("/api/ai", aiRouter);
 app.use("/api/ai-chat", aiChatRouter);
 app.use("/api/email-intake", emailIntakeRouter);
 app.use("/api/chat-integrations", chatIntegrationsRouter);
+// Where an ingested security finding belongs: repository -> project, file path -> module.
+// Mounted next to the other two intake-routing surfaces because it is the third one, and an admin
+// who has met email/chat routing rules already knows how these order themselves.
+app.use("/api/finding-routing", findingRoutingRouter);
 app.use("/api/labels", labelRouter);
 // Planning layer (V6) — workspace planning toggles, plan-tier entitlements, custom workflows and
 // custom fields. An ordinary per-tenant router: nothing here needs to precede tenant resolution.

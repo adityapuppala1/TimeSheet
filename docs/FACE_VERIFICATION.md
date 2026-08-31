@@ -376,8 +376,8 @@ A flag that nobody reads is not a control, so the review pipeline is push, not p
 - **Weekly identity digest** (Monday morning, off-by-default email toggle) → checks run,
   failures, repeat failers, signal counts. Deliberately deterministic — no AI writes emails
   about named employees' identity checks.
-- **AI review summary** (optional, off by default: Workspace Settings → AI → *AI identity-review
-  summaries*) — a one-click brief on any attempt: 30 days of history, device/network novelty,
+- **AI review summary** (optional, off by default: Workspace Settings → AI → *Identity review
+  summary*) — a one-click brief on any attempt: 30 days of history, device/network novelty,
   timing pattern, cross-referenced against the person's timesheet pattern, ending in a
   LOW/MEDIUM/HIGH read and one concrete next step. **Only attempt metadata enters the prompt**
   — captured images and embeddings never leave the server, and the human still decides.

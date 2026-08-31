@@ -20,7 +20,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, Building2, Check, ChevronLeft, ChevronRight, Copy, Globe, LifeBuoy, MoreHorizontal, Plus, Search, SlidersHorizontal } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Building2, Check, ChevronLeft, ChevronRight, Copy, Download, Globe, LifeBuoy, MoreHorizontal, Plus, Search, SlidersHorizontal } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
@@ -33,6 +33,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
 import { cn } from "../../lib/utils";
 import { platformAdminOrgApi, type OrgListRow, type OrgStatus, type PlanTier, type ResetAdminPasswordResult } from "../../services/platform-admin-api";
+import { exportCsv, type CsvColumn } from "../../utils/console-csv";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, FieldGrid, OrgStatusPill, PRIMARY_BTN, TierPill, Toolbar } from "./console-ui";
 
 /* The status pill is `console-ui.tsx`'s `OrgStatusPill` now — one map for the whole console. The
@@ -66,6 +67,17 @@ const SORT_VALUE: Record<SortKey, (row: OrgListRow) => string> = {
   planTier: (r) => r.planTier,
   database: databaseLabel
 };
+
+/** The export's columns, mirroring the table's — `databaseLabel` is shared with the cell and the
+ *  sort so all three say the same thing about the same workspace. */
+const ORG_CSV_COLUMNS: Array<CsvColumn<OrgListRow>> = [
+  { header: "Name", value: (row) => row.name },
+  { header: "Slug", value: (row) => row.slug },
+  { header: "Status", value: (row) => row.status },
+  { header: "Plan tier", value: (row) => row.planTier },
+  { header: "Database", value: databaseLabel },
+  { header: "Created", value: (row) => row.createdAt }
+];
 
 export function PlatformAdminOrganizations() {
   const queryClient = useQueryClient();
@@ -142,6 +154,17 @@ export function PlatformAdminOrganizations() {
                 className="h-9 pl-9"
               />
             </div>
+            {/*
+             * `rows`, NOT `orgs.data`. `rows` is what the search box and the sort have already
+             * produced — the array the table below renders from — so the file contains exactly what
+             * the operator is looking at. An export that quietly dumps the whole table instead is a
+             * support ticket: somebody filters to twelve suspended workspaces, opens four hundred
+             * rows in a spreadsheet, and either stops trusting the button or sends the wrong list.
+             */}
+            <Button variant="outline" size="sm" className="gap-2" disabled={rows.length === 0} onClick={() => exportCsv("organizations", ORG_CSV_COLUMNS, rows)}>
+              <Download className="h-4 w-4" />
+              Export CSV
+            </Button>
           </Toolbar>
         }
       >

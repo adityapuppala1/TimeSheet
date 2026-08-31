@@ -35,7 +35,8 @@ import { AnimatedThemeToggler } from "../../components/ui/animated-theme-toggler
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "../../components/ui/form";
 import { Input } from "../../components/ui/input";
 import { toast } from "../../components/ui/toaster";
-import { platformAdminAuthApi } from "../../services/platform-admin-api";
+import { Button } from "../../components/ui/button";
+import { platformAdminAuthApi, type PlatformAdminUser } from "../../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../../store/platform-admin-auth";
 
 const schema = z.object({
@@ -105,19 +106,102 @@ function ConsoleBrandPanel() {
   );
 }
 
+/**
+ * The second step, shown only after the password was right.
+ *
+ * IT CANNOT BE REACHED BY GUESSING AN ADDRESS. The server issues the challenge token this form
+ * consumes only after a successful password check, so a wrong password produces the same 401 for an
+ * enrolled account, an unenrolled one, and an address that does not exist. If the challenge could
+ * be provoked without the password it would be an account-enumeration oracle of exactly the kind
+ * tests/unit/auth-login-enumeration.test.ts exists to prevent.
+ *
+ * THE RECOVERY-CODE TOGGLE IS HERE RATHER THAN BEHIND A LINK because the person who needs it has
+ * lost their phone and is already having a bad day at 2am.
+ */
+function SecondFactorStep({ challengeToken, onDone }: { challengeToken: string; onDone: (admin: PlatformAdminUser, token: string) => void }) {
+  const [code, setCode] = useState("");
+  const [recovery, setRecovery] = useState(false);
+
+  const verify = useMutation({
+    mutationFn: () => platformAdminAuthApi.verifyMfa(challengeToken, code.trim(), recovery),
+    onSuccess: (data) => onDone(data.admin, data.accessToken),
+    onError: (error: any) => toast.error("Not accepted", { description: error?.response?.data?.message ?? "Try the next code." })
+  });
+
+  return (
+    <form
+      className="grid gap-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        verify.mutate();
+      }}
+    >
+      <div>
+        <h1 className="text-2xl font-black tracking-tight">One more thing</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {recovery ? "Type one of the recovery codes you saved when you enrolled. Each works once." : "Type the six digits from your authenticator."}
+        </p>
+      </div>
+
+      <label className="grid gap-1.5 text-sm font-medium" htmlFor="pa-mfa-code">
+        {recovery ? "Recovery code" : "Authentication code"}
+        <Input
+          id="pa-mfa-code"
+          autoFocus
+          autoComplete="one-time-code"
+          inputMode={recovery ? "text" : "numeric"}
+          placeholder={recovery ? "ABCDE-FGHJK" : "123456"}
+          className="text-center font-mono text-lg tracking-[0.3em]"
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+        />
+      </label>
+
+      <Button type="submit" className="w-full bg-accent text-accent-foreground hover:bg-accent/90" disabled={code.trim().length < 6 || verify.isPending}>
+        {verify.isPending ? "Checking…" : "Sign in"}
+      </Button>
+
+      <button
+        type="button"
+        className="text-center text-xs text-muted-foreground underline-offset-4 hover:underline"
+        onClick={() => {
+          setRecovery((r) => !r);
+          setCode("");
+        }}
+      >
+        {recovery ? "Use my authenticator instead" : "I have lost my authenticator — use a recovery code"}
+      </button>
+    </form>
+  );
+}
+
 export function PlatformAdminLogin() {
   const navigate = useNavigate();
   const setSession = usePlatformAdminAuthStore((s) => s.setSession);
   const form = useForm<FormData>({ resolver: zodResolver(schema), defaultValues: { email: "", password: "" } });
   const [sealState, setSealState] = useState<SealState>("idle");
+  /** Set only when the server asked for a second factor. Its presence swaps the whole right-hand
+   *  pane — there is deliberately no half-signed-in state here and no session behind it. */
+  const [challengeToken, setChallengeToken] = useState<string | null>(null);
+
+  const finish = (admin: PlatformAdminUser, accessToken: string) => {
+    setSealState("success");
+    setSession(admin, accessToken);
+    navigate("/platform-admin");
+  };
 
   const mutation = useMutation({
     mutationFn: (values: FormData) => platformAdminAuthApi.login(values.email, values.password),
     onMutate: () => setSealState("scanning"),
     onSuccess: (data) => {
-      setSealState("success");
-      setSession(data.admin, data.accessToken);
-      navigate("/platform-admin");
+      if (data.mfaRequired) {
+        // NOT a session. The refresh cookie is deliberately not set on this response, so nothing
+        // here can mint an access token until the code checks out.
+        setSealState("idle");
+        setChallengeToken(data.challengeToken);
+        return;
+      }
+      finish(data.admin, data.accessToken);
     },
     onError: (error: any) => {
       setSealState("error");
@@ -153,6 +237,10 @@ export function PlatformAdminLogin() {
             </div>
           </div>
 
+          {challengeToken ? (
+            <SecondFactorStep challengeToken={challengeToken} onDone={finish} />
+          ) : (
+            <>
           <h1 className="text-2xl font-black tracking-tight">Sign in</h1>
           <p className="mb-6 mt-1 text-sm text-muted-foreground">With a platform-admin account — not a workspace account.</p>
 
@@ -198,6 +286,8 @@ export function PlatformAdminLogin() {
               </p>
             </form>
           </Form>
+            </>
+          )}
         </div>
       </main>
     </div>

@@ -67,6 +67,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import { AiFeatureUsagePanel } from "../components/AiFeatureUsagePanel";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
@@ -84,6 +85,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Switch } from "../components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { toast } from "../components/ui/toaster";
+import { initialSettingsTab } from "../utils/settings-tabs";
 import {
   emailIntakeApi,
   labelApi,
@@ -201,11 +203,11 @@ const emailRows = [
   { group: "Timesheets", key: "emailDailyReminder", label: "Daily reminder (4 PM)", description: "Nudge employees who haven't logged today's time.", icon: <Clock className="h-4 w-4 text-primary" /> },
   { group: "Timesheets", key: "emailDailyEscalation", label: "Next-morning escalation (9 AM)", description: "Email both the employee and their manager when yesterday's log was missed.", icon: <Timer className="h-4 w-4 text-destructive" /> },
   { group: "Timesheets", key: "emailDeadlineReminder", label: "Monthly deadline reminder", description: "Email employees a few days before the monthly cutoff.", icon: <CalendarClock className="h-4 w-4 text-warning" /> },
-  { group: "Digests", key: "emailWeeklyDigest", label: "Weekly digest", description: "AI-authored Monday-morning recap of your ticket and timesheet activity. Requires the AI weekly digest toggle in the AI tab.", icon: <BellRing className="h-4 w-4 text-info" /> },
+  { group: "Digests", key: "emailWeeklyDigest", label: "Weekly digest", description: "AI-authored Monday-morning recap of your ticket and timesheet activity. Requires the \"Weekly digest\" capability in the AI tab.", icon: <BellRing className="h-4 w-4 text-info" /> },
   { group: "Digests", key: "emailPracticeUpdate", label: "Weekly AI/ML practice update", description: "The consolidated leadership update — products, POCs, bugs, security, training, metrics, risks and decisions required. Sent on demand from Practice Update, and optionally every Monday. Recipients are set there by a super admin.", icon: <BellRing className="h-4 w-4 text-primary" /> },
-  { group: "Digests", key: "emailSecurityWeeklyDigest", label: "Weekly security digest", description: "AI-authored Monday-morning (08:30) org-wide security recap for every admin — open findings, risk score, tickets past SLA. Requires the AI weekly security digest toggle in the AI tab.", icon: <ShieldAlert className="h-4 w-4 text-destructive" /> },
-  { group: "Digests", key: "emailBugPatternDigest", label: "Monthly bug-pattern digest", description: "AI-authored \"what kept breaking\" recap on the 1st of every month — recurring CI failures and security-finding hotspots. Requires the AI monthly bug-pattern digest toggle in the AI tab.", icon: <BellRing className="h-4 w-4 text-info" /> },
-  { group: "Tickets", key: "emailTicketStaleNudge", label: "Stale-ticket nudge", description: "AI-suggested next action when the SLA sweep flags a ticket as stale. Requires the AI stale-ticket nudge toggle in the AI tab.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
+  { group: "Digests", key: "emailSecurityWeeklyDigest", label: "Weekly security digest", description: "AI-authored Monday-morning (08:30) org-wide security recap for every admin — open findings, risk score, tickets past SLA. Requires the \"Security weekly digest\" capability in the AI tab.", icon: <ShieldAlert className="h-4 w-4 text-destructive" /> },
+  { group: "Digests", key: "emailBugPatternDigest", label: "Monthly bug-pattern digest", description: "AI-authored \"what kept breaking\" recap on the 1st of every month — recurring CI failures and security-finding hotspots. Requires the \"Bug pattern digest\" capability in the AI tab.", icon: <BellRing className="h-4 w-4 text-info" /> },
+  { group: "Tickets", key: "emailTicketStaleNudge", label: "Stale-ticket nudge", description: "AI-suggested next action when the SLA sweep flags a ticket as stale. Requires the \"Stale ticket nudge\" capability in the AI tab.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
   { group: "Workspace", key: "emailMaintenanceScheduled", label: "Maintenance warning", description: "\"Save your work\" email when a super admin sends the maintenance-window notice from the Maintenance tab. The in-app notification always fires — this only gates the email copy.", icon: <Wrench className="h-4 w-4 text-warning" /> },
   { group: "Workspace", key: "emailAiAutonomyApplied", label: "Assistant acted on its own", description: "Tells the person a change was made for them when a capability set to Apply or Act freely in the AI tab applies its own change set. On by default — those levels move your job from approving a change to vetoing it, and a veto nobody is told about is not a veto.", icon: <Bot className="h-4 w-4 text-primary" /> },
   { group: "Workspace", key: "emailWorkflowApproval", label: "A workflow is waiting for a decision", description: "Sent to the person a workflow's approval step names, when a run stops at that step. On by default: a gate blocks everything after it, sometimes for days, and an approval request nobody sees is a workflow that looks broken rather than blocked.", icon: <Workflow className="h-4 w-4 text-primary" /> },
@@ -227,7 +229,8 @@ const emailRows = [
   { group: "Tickets", key: "emailTicketCommented", label: "Ticket commented", description: "Email the ticket's participants when someone adds a comment.", icon: <Pencil className="h-4 w-4 text-info" /> },
   { group: "Tickets", key: "emailTicketSlaBreach", label: "Ticket SLA breached", description: "Email the assignee when a ticket passes its priority's SLA window.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
   { group: "Tickets", key: "emailTicketEscalation", label: "Ticket escalation", description: "Email the assignee's manager when a breached ticket escalates.", icon: <ShieldX className="h-4 w-4 text-destructive" /> },
-  { group: "Tickets", key: "emailTicketClosedDigest", label: "Ticket-closed security digest", description: "Security/test-status recap to whoever closed a ticket, their manager, and this org's admins. Needs a connected scan source to be meaningful.", icon: <ShieldCheck className="h-4 w-4 text-success" /> }
+  { group: "Tickets", key: "emailTicketClosedDigest", label: "Ticket-closed security digest", description: "Security/test-status recap to whoever closed a ticket, their manager, and this org's admins. Needs a connected scan source to be meaningful.", icon: <ShieldCheck className="h-4 w-4 text-success" /> },
+  { group: "Tickets", key: "emailTicketReopenedDigest", label: "A fix did not hold", description: "When a scan still reports a finding that was marked fixed: goes to whoever closed the ticket, the current assignee and everyone who logged time on it, cc the closer's manager and the module owner. On by default — it can only fire when verified remediation is switched on in Security & DevOps, and it is the one message that whole feature exists to send.", icon: <ShieldX className="h-4 w-4 text-destructive" /> }
 ,
   /* --- Change management. Every one of these except the digest is the direct consequence of an
      action somebody took, which is why they ship enabled — see the schema comments. Muting one
@@ -306,8 +309,10 @@ export function WorkspaceSettingsPage() {
   const isSuperAdmin = user?.role === "SUPER_ADMIN";
   /* Controlled rather than `defaultValue` so one panel can send an admin to another — the
      Integrations tab points at Single sign-on now that SCIM lives there, and a pointer nobody can
-     follow is just an apology. */
-  const [tab, setTab] = useState("reminders");
+     follow is just an apology. Seeded from the URL for the same reason: a link that names a tab and
+     doesn't open it is the same broken promise, just made by an email instead of a card. */
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState(() => initialSettingsTab(searchParams));
 
   return (
     <div className="grid min-w-0 gap-5">
@@ -1116,6 +1121,23 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
                   checked={settings.data?.blockResolveOnFailingTests ?? false}
                   disabled={readOnly}
                   onCheckedChange={(v) => update.mutate({ blockResolveOnFailingTests: v })}
+                />
+              </div>
+              {/* Directly beneath its sibling, deliberately. The two are the same decision about two
+                  different signals, and an admin who is choosing one wants to see the other. */}
+              <div className="flex items-start gap-4 rounded-lg border border-border bg-muted/30 p-4">
+                <div className="flex-1">
+                  <Label>Block resolve on failing quality gate</Label>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    A ticket can't move to Resolved while the latest SonarQube quality gate on a branch linked to it (Ticket →
+                    Branches) has failed. Off by default — has no effect until Sonar's webhook actually posts a gate. Point it at
+                    the quality-gate URL in Security &amp; DevOps.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.data?.blockResolveOnFailingQualityGate ?? false}
+                  disabled={readOnly}
+                  onCheckedChange={(v) => update.mutate({ blockResolveOnFailingQualityGate: v })}
                 />
               </div>
 

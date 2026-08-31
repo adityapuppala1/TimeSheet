@@ -398,13 +398,13 @@ model MaintenanceSettings {
   /// it is a suggestion — and the migration it protects would then run against a live database.
   /// `updateMaintenanceSettings` refuses a tenant-sourced write while this holds; the platform's
   /// own clear is what releases it.
-  managedByPlatform Boolean  @default(false)
+  managedByPlatform Boolean @default(false)
   /// Who to name in the workspace's read-only notice ("TimeSphere platform operations"). Free
   /// text, because the actor has no user row in this database.
-  managedByLabel    String?  @db.VarChar(255)
+  managedByLabel    String? @db.VarChar(255)
   /// The broadcast this window came from, so a support conversation can join the workspace's side
   /// of the story to the platform's without guessing from timestamps.
-  managedReference  String?  @db.VarChar(64)
+  managedReference  String? @db.VarChar(64)
 }
 
 model PasswordResetToken {
@@ -484,6 +484,8 @@ model Project {
   chatIntegrationDefaultFor ChatIntegration[]
   ingestionFallbackFor      IngestionSettings[]
   ticketRules               TicketRule[]
+  repositoryMaps            RepositoryMap[]
+  modulePathRules           ModulePathRule[]
   attestations              WorkAttestation[]
   customFieldValues         CustomFieldValue[]
   resourceBookings          ResourceBooking[]
@@ -511,6 +513,8 @@ model ProjectModule {
   emailRoutingRules EmailRoutingRule[]
   chatRoutingRules  ChatRoutingRule[]
   assigneeRule      ModuleAssigneeRule?
+  pathRules         ModulePathRule[]
+  securityFindings  SecurityFinding[]
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
@@ -518,14 +522,16 @@ model ProjectModule {
 }
 
 model ProjectSubmodule {
-  id         String        @id @default(uuid())
-  moduleId   String
-  module     ProjectModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
-  name       String
-  status     String        @default("ACTIVE")
-  timesheets Timesheet[]
-  createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @updatedAt
+  id               String            @id @default(uuid())
+  moduleId         String
+  module           ProjectModule     @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  name             String
+  status           String            @default("ACTIVE")
+  timesheets       Timesheet[]
+  pathRules        ModulePathRule[]
+  securityFindings SecurityFinding[]
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
   @@unique([moduleId, name])
 }
@@ -1156,6 +1162,16 @@ model GlobalTicketSettings {
   /// status route enforces this). Default false — orgs that don't ingest test runs yet, or
   /// that want this as a warning rather than a hard gate, are unaffected either way.
   blockResolveOnFailingTests Boolean @default(false)
+  /// The sibling of the switch above, for SonarQube's quality gate. When true, a ticket cannot move
+  /// to RESOLVED while the most recent QualityGateRun on any branch linked to it (TicketBranch)
+  /// reports ERROR. Default false, for the same reason: an org that does not send quality-gate
+  /// webhooks is unaffected, and an org that does should opt into having it stop people.
+  ///
+  /// WHY IT IS A SECOND COLUMN and not a widening of `blockResolveOnFailingTests`: a failing test
+  /// suite and a failed quality gate are different claims with different tolerances. Plenty of teams
+  /// will hard-block on a red build and only warn on coverage slipping below 80%, and collapsing the
+  /// two would take that answer away from every one of them.
+  blockResolveOnFailingQualityGate Boolean @default(false)
 
   /// --- Verified Work Attestation (see services/attestation.service.ts) --------------------
   /// ISO-4217 fallback when a project sets no billingCurrency of its own.
@@ -2020,6 +2036,15 @@ model GlobalNotificationSettings {
   /// ticket, their manager, and this org's own admins — see services/security-report.service.ts.
   /// Off by default: irrelevant noise for an org that hasn't connected any scan source yet.
   emailTicketClosedDigest   Boolean @default(false)
+  /// Sends the reopen digest when a scan proves a claimed fix did not hold — see
+  /// services/security-report.service.ts#sendTicketReopenedDigest. Reaches further than the close
+  /// digest above (the closer, the current assignee, and everyone who logged time against the
+  /// ticket; the closer's manager and the module owner in Cc), because the people who need to know
+  /// a fix failed are the people who worked on it, not only the person who ticked the box. ON by
+  /// default, unlike its sibling: this is not a periodic recap somebody opted into, it is the
+  /// direct consequence of a scan contradicting a decision the workspace already acted on, and this
+  /// codebase's rule is that those ship enabled.
+  emailTicketReopenedDigest Boolean @default(true)
   /// Sends the AI weekly security digest (see workers/security-weekly-digest.worker.ts) to every
   /// ADMIN/SUPER_ADMIN. Gated alongside GlobalAISettings.securityWeeklyDigestEnabled — the AI
   /// toggle decides whether the worker runs at all, this decides whether email actually sends,
@@ -2292,6 +2317,79 @@ model TicketRule {
   @@index([isActive, order])
 }
 
+/// ── WHERE A SECURITY FINDING BELONGS ──────────────────────────────────────────────────────────
+///
+/// The two models below are the missing map between a REPOSITORY PATH — the only location a
+/// scanner can report — and this app's work breakdown (`Project` → `ProjectModule` →
+/// `ProjectSubmodule`). Without them, every auto-created security ticket landed in
+/// `IngestionSettings.fallbackProjectId` and was assigned via whichever module on that project
+/// happened to have a `ModuleAssigneeRule` first. That is not routing; it is a coin toss with one
+/// side. A finding in `services/billing-*.ts` should reach the people who own billing.
+///
+/// BOTH REUSE `TicketRule`'S RULE SEMANTICS EXACTLY, deliberately and not by coincidence:
+/// conditions are AND'd, rules are evaluated in `order` ascending, and the FIRST MATCH WINS —
+/// never merge-all-matches. An admin who has learned how ticket automation orders its rules now
+/// knows how these order theirs, in all three places. `createdAt` breaks a tie on equal `order` so
+/// the winner is deterministic rather than whatever the storage engine returned first.
+///
+/// MATCHING IS DONE IN APPLICATION CODE, never in SQL, and both patterns are therefore matched
+/// CASE-SENSITIVELY — see utils/path-pattern.ts for the argument. The short version: MySQL's
+/// default collation is case-insensitive, so a `LIKE` in a WHERE clause would quietly disagree
+/// with the matcher about whether `src/Billing.ts` and `src/billing.ts` are the same file. They
+/// are not, on every Linux host a scanner runs on. Same reasoning the verification verdict gives
+/// for comparing tool names outside the index.
+///
+/// Neither model is required. A workspace that configures neither keeps exactly the behaviour it
+/// had: findings still ingest, tickets still open in the fallback project, nothing is routed.
+
+/// Repository pattern → the project that owns it. A workspace's findings arrive carrying a
+/// free-text `repository` (e.g. `acme/web-app`), and this is the only thing that can turn that
+/// into a project — everything before it fell back to one. No match falls back to
+/// `IngestionSettings.fallbackProjectId`, exactly as before this existed.
+model RepositoryMap {
+  id        String  @id @default(uuid())
+  /// The glob dialect in utils/path-pattern.ts: `*` within a segment, `**` across segments, a
+  /// trailing `/` for "this and everything under it", and a wildcard-free pattern as a plain
+  /// prefix. A pattern that cannot be compiled never matches and is logged once per load — it is
+  /// admin-supplied text and must never be able to fail an ingest.
+  pattern   String  @db.VarChar(255)
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  isActive  Boolean @default(true)
+  order     Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, order])
+}
+
+/// Path pattern → module (+ optional submodule), scoped to one project. Evaluated only against the
+/// rules belonging to the project the repository step already resolved, which is what makes
+/// `src/api/**` mean different things in two different projects without the admin having to
+/// disambiguate it.
+model ModulePathRule {
+  id          String            @id @default(uuid())
+  projectId   String
+  project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Matched against `SecurityFinding.filePath`. Same dialect and same case-sensitivity as
+  /// `RepositoryMap.pattern` above — one matcher, one rule, no second dialect to learn.
+  pattern     String            @db.VarChar(500)
+  moduleId    String
+  module      ProjectModule     @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  /// Optional finer grain. A rule may route to a module only; a submodule with no module would be
+  /// meaningless, which is why the module is required and this is not.
+  submoduleId String?
+  submodule   ProjectSubmodule? @relation(fields: [submoduleId], references: [id], onDelete: SetNull)
+  isActive    Boolean           @default(true)
+  order       Int               @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId, isActive, order])
+}
+
 /// One row per (platform) this org has connected — same "one wide table, nullable
 /// per-platform columns" convention as the control plane's OrgSsoConfig, since each platform's
 /// credential shape is different (Slack bot token + signing secret; Teams app id + password;
@@ -2422,12 +2520,24 @@ model TicketChecklistItem {
 /// per-push automated scan, so it arrives via a structured-JSON upload in Workspace Settings
 /// instead (see settings.controller.ts's POST /security-ingestion/vapt-report) — but lands in
 /// this same table so the per-ticket report/digest render it identically to the other 4 types.
+/// Mirrors `securityFindingTypes` in packages/shared — member for member AND order for order.
+/// QUALITY and LINT are APPENDED rather than filed next to SAST for the same reason
+/// PENDING_VERIFICATION sits at the end of SecurityFindingStatus: MySQL stores an ENUM as its
+/// member's ordinal, so only an appended member makes `MODIFY … ENUM(…)` an in-place alter instead
+/// of a full table copy of the one table an org's scanners append to every night.
+///
+/// Which of these count as SECURITY exposure is NOT decided here — it is decided once, in
+/// `securityFindingTypeDisciplines` (packages/shared), because the risk score, the insights page,
+/// the weekly digest and the per-ticket verdict all have to agree about it. Deriving it from this
+/// column rather than storing a second one means no row can ever disagree with itself.
 enum SecurityFindingType {
   SAST
   DAST
   SSAT
   SSCT
   VAPT
+  QUALITY
+  LINT
 }
 
 enum SecurityFindingSeverity {
@@ -2437,11 +2547,19 @@ enum SecurityFindingSeverity {
   CRITICAL
 }
 
+/// Mirrors `securityFindingStatuses` in packages/shared — member for member AND order for order.
+/// PENDING_VERIFICATION is last rather than in life-cycle position on purpose: MySQL stores an
+/// ENUM as its member's ordinal, and only an APPENDED member makes `MODIFY … ENUM(…)` an in-place
+/// alter instead of a full table copy. See the shared constant's comment for the argument.
+///
+/// Which of these count as "still a problem" is NOT decided here — it is decided once, in
+/// `securityFindingStatusBuckets`, because six different reports used to decide it separately.
 enum SecurityFindingStatus {
   OPEN
   ACKNOWLEDGED
   FIXED
   ACCEPTED_RISK
+  PENDING_VERIFICATION
 }
 
 /// AI's exploitability verdict on a finding — see ai.service.ts#classifySecurityFinding.
@@ -2452,6 +2570,18 @@ enum SecurityFindingAiVerdict {
   TRUE_POSITIVE
   FALSE_POSITIVE
   NEEDS_REVIEW
+}
+
+/// Mirrors `securityFindingVerificationStates` in packages/shared — member for member and order for
+/// order. See that constant for why the evidence gets its own column instead of more
+/// `SecurityFindingStatus` members: `status` records a DECISION, this records what a scanner
+/// actually observed, and collapsing the two would make "somebody said it is fixed" and "a scan
+/// confirmed it is gone" the same value.
+enum SecurityFindingVerificationState {
+  AWAITING_PROOF
+  VERIFIED_FIXED
+  REFUTED_BY_SCAN
+  UNVERIFIED
 }
 
 model SecurityFinding {
@@ -2478,6 +2608,25 @@ model SecurityFinding {
   branch     String? @db.VarChar(255)
   prUrl      String? @db.VarChar(500)
 
+  /// WHICH PART OF THE PRODUCT THIS FINDING IS IN, resolved once at ingest from `repository` +
+  /// `filePath` through `RepositoryMap` and `ModulePathRule` — see services/finding-routing.service.ts.
+  ///
+  /// WHY IT LIVES ON THE FINDING AND NOT ONLY ON THE TICKET: most findings never become a ticket
+  /// (only CRITICAL/HIGH with no `ticketKey` do), and "which module carries our open risk" has to
+  /// answer for all of them or it answers for a biased sample. The insights breakdown reads this
+  /// column directly.
+  ///
+  /// NULL IS THE ORDINARY CASE, not a defect: a workspace with no rules configured, a DAST finding
+  /// with no file path, or a path nothing matched. Nothing about the ingest changes when this stays
+  /// null, which is what lets an existing workspace upgrade and notice nothing.
+  ///
+  /// SET NULL on delete, like every other pointer on this row: retiring a module must not delete
+  /// the vulnerabilities that were found in it.
+  moduleId    String?
+  module      ProjectModule?    @relation(fields: [moduleId], references: [id], onDelete: SetNull)
+  submoduleId String?
+  submodule   ProjectSubmodule? @relation(fields: [submoduleId], references: [id], onDelete: SetNull)
+
   /// Opt-in AI exploitability triage (GlobalAISettings.findingTriageEnabled) — see
   /// ai.service.ts#classifySecurityFinding. Null until triaged (or if the toggle is off/the
   /// finding's severity didn't qualify — only CRITICAL/HIGH are triaged, same bar
@@ -2487,11 +2636,150 @@ model SecurityFinding {
   aiFixSuggestion  String?                   @db.Text
   aiTriagedAt      DateTime?
 
+  /// STABLE IDENTITY FOR ONE PROBLEM, across every scan that reports it.
+  ///
+  /// WHY: ingestion used to be an unconditional `create`, so a nightly scan that found the same
+  /// 200 issues inserted 200 new rows every night. The risk score climbed, the insights trend
+  /// showed a workspace getting worse while it stood still, the weekly digest counted the same
+  /// vulnerability seven times, and auto-ticket-creation opened seven tickets for it. Nothing was
+  /// wrong with any single row; there was simply no answer to "have we seen this before?".
+  ///
+  /// NOT `Ticket.errorFingerprint`, which is a DIFFERENT identity for a different thing and must
+  /// never be compared to this one. That one identifies a CRASH (a stack trace posted to the
+  /// /error-events route), lives on the ticket, is written once and never again, and exists to
+  /// route repeat crashes to one ticket. This one identifies a STATIC FINDING, lives on the
+  /// finding, and is derived — see utils/finding-fingerprint.ts for the exact recipe, which is
+  /// the thing every reader of this column trusts.
+  ///
+  /// NULLABLE, and null is a normal value, not a defect: a finding with no file path or no rule
+  /// identity has nothing stable to hash, and rows created before this column existed were left
+  /// null by the migration because the recipe is not expressible in SQL. Both keep the old
+  /// create-always behaviour. Every reader must tolerate null rather than assume it.
+  fingerprint String? @db.VarChar(128)
+
+  /// When this exact problem was first reported, and when a scan last still reported it.
+  /// `firstSeenAt` is what "how long has this been open" should measure — `createdAt` is the row's
+  /// birthday, which for a deduplicated finding is the same thing, but says so by accident.
+  /// `lastSeenAt` is the column the verification work reads: a finding a scan has stopped
+  /// reporting is a finding that may be fixed.
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  /// How many scans have reported this same problem. 1 means "seen once", never 0.
+  occurrences Int      @default(1)
+
+  /// The scan that most recently reported this finding. Nullable: VAPT findings arrive from a
+  /// human assessment rather than a scan, findings ingested before ScanRun existed have none, and
+  /// `onDelete: SetNull` means pruning old runs must never delete findings.
+  scanRunId String?
+  scanRun   ScanRun? @relation("ScanRunFindings", fields: [scanRunId], references: [id], onDelete: SetNull)
+
+  /// WHAT THE EVIDENCE SAYS, as opposed to what `status` says somebody decided. See
+  /// `securityFindingVerificationStates` in packages/shared for the four values and why this is not
+  /// folded into `status`. Null for every finding that has never been through the resolution gate,
+  /// which is the ordinary case and not a defect.
+  verificationState SecurityFindingVerificationState?
+
+  /// When the gate marked this AWAITING_PROOF — i.e. when a ticket carrying it was resolved or
+  /// closed. The grace window is measured FROM here rather than stored as a deadline, deliberately:
+  /// `IngestionSettings.verificationWindowDays` is a knob an admin turns, and a stored deadline
+  /// would leave every already-waiting finding on the old window while the setting claimed
+  /// otherwise. Cleared when a verdict lands.
+  awaitingVerificationSince DateTime?
+
+  /// THE ANSWER `meanTimeToRemediateHours` WAS APPROXIMATING. When a qualifying scan — same tool,
+  /// same repository, same branch — ran and did not report this finding. Set only by the verdict
+  /// pass, never by a human action, which is the whole point: a timestamp somebody can set by
+  /// closing a ticket measures willingness to close tickets, not remediation.
+  verifiedFixedAt     DateTime?
+  /// The run that proved it, and the commit that run scanned. The commit is COPIED rather than read
+  /// through the relation because `ScanRun` is a log and logs get pruned — the evidence has to
+  /// survive its own source row being deleted, and `onDelete: SetNull` guarantees it will not.
+  verifiedByScanRunId String?
+  verifiedByScanRun   ScanRun?  @relation("ScanRunVerifications", fields: [verifiedByScanRunId], references: [id], onDelete: SetNull)
+  verifiedByCommitSha String?   @db.VarChar(64)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([ticketId])
   @@index([type, severity, status])
+  /// The verdict pass's own query, in the order it asks it: "which findings on this repository and
+  /// branch are waiting on proof?". The tool is matched afterwards in application code rather than
+  /// here — see security-report.service.ts for why that comparison is deliberately not a SQL one.
+  @@index([verificationState, repository, branch])
+  @@index([verifiedByScanRunId])
+  /// The dedup lookup, in the exact order the ingest asks it: "have I already got this
+  /// fingerprint on this repo and branch?". Deliberately NOT `@@unique` — MySQL treats NULLs as
+  /// distinct in a unique index, and `repository`/`branch` are both optional, so the constraint
+  /// would silently fail to apply to most ingested findings while turning the cases where it DID
+  /// apply into a P2002 that fails the whole batch. See the ingest for the race this leaves open
+  /// and why its worst case is exactly today's behaviour.
+  @@index([fingerprint, repository, branch])
+  @@index([scanRunId])
+  /// The insights breakdown's own query — "how many still-open findings per module?" — and, because
+  /// `moduleId` is leftmost, also the index MySQL requires on the referencing column of the foreign
+  /// key. One index, both jobs.
+  @@index([moduleId, status])
+  @@index([submoduleId])
+}
+
+/// One execution of one scanner against one repo+branch — the record that a scan HAPPENED and
+/// what it contained.
+///
+/// WHY THIS EXISTS. Findings alone can only ever answer "what did we hear about?". They cannot
+/// answer "is this specific problem still there?", because the absence of a finding from a payload
+/// is indistinguishable from nobody having run the scanner. A run row makes absence meaningful:
+/// with two runs of the same tool on the same repo+branch, a fingerprint present in the older and
+/// missing from the newer is a problem the scanner has stopped reporting.
+///
+/// This model RECORDS that data. Acting on it — deciding a disappeared finding is fixed — is
+/// deliberately not here yet; that judgement needs its own rules about how much evidence is
+/// enough, and shipping half of it would be worse than shipping none.
+///
+/// ONE RUN PER (tool, type, repository, branch) WITHIN A BATCH, not one per HTTP request: a CI job
+/// may well post semgrep's and gitleaks' output in a single call, and "the most recent run of this
+/// tool on this repo" has to mean one tool or it means nothing.
+model ScanRun {
+  id String @id @default(uuid())
+
+  /// Same free text as SecurityFinding.tool ("semgrep", "gitleaks", "syft") and the same
+  /// reasoning — ingest-only means whatever scanner the org already runs.
+  tool String              @db.VarChar(80)
+  type SecurityFindingType
+
+  /// Free text, same as the finding columns of these names — no live git-provider integration.
+  repository String? @db.VarChar(255)
+  branch     String? @db.VarChar(255)
+  /// The commit the scan ran against, when the CI job tells us. Optional because most scanner
+  /// output does not carry it and the ingest must not start rejecting payloads that worked
+  /// yesterday. Comparing two runs of the same commit is a strong signal the code did not move
+  /// between them; comparing two runs of different commits is the ordinary case.
+  commitSha  String? @db.VarChar(64)
+
+  /// When the scan itself began, per whoever reported it, vs. when we recorded it. Equal today —
+  /// nothing in the ingest payload carries a scanner's own clock — and kept separate so that when
+  /// something does, a run's age is judged by the scan rather than by our receipt of it.
+  startedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  /// How many findings this run reported, including ones that deduplicated onto an existing row.
+  /// Stored rather than counted from the relation because a run of zero findings is the single
+  /// most interesting kind — "the scanner ran and found nothing" — and it has no findings to
+  /// count.
+  findingCount Int @default(0)
+
+  findings         SecurityFinding[] @relation("ScanRunFindings")
+  /// The findings this run PROVED GONE — the other direction of the same table. Two relations to
+  /// one model have to be named in Prisma; the constraint names in the database are derived from
+  /// the columns, so naming them changes nothing that already exists.
+  verifiedFindings SecurityFinding[] @relation("ScanRunVerifications")
+
+  /// "The most recent run of this tool on this repo+branch", left to right in exactly that order.
+  /// This is the query the verification work is built on, so it gets its own index rather than
+  /// relying on a scan of a table every nightly build appends to. `type` is left OUT of the index
+  /// on purpose: a tool posts one type in practice, so it is a cheap filter after the seek and not
+  /// worth 2 more bytes on every key.
+  @@index([tool, repository, branch, startedAt])
 }
 
 enum TestRunStatus {
@@ -2522,6 +2810,77 @@ model TestRun {
   createdAt DateTime @default(now())
 
   @@index([ticketId, createdAt])
+}
+
+/// SonarQube's own three quality-gate verdicts, stored verbatim. OK = passed, ERROR = failed,
+/// WARN = the deprecated middle state older Sonar versions still emit. Kept as its own enum rather
+/// than folded into TestRunStatus because the two are different judgements from different systems:
+/// a test run is PASSED/FAILED/RUNNING and belongs to a ticket, a quality gate is a verdict about a
+/// BRANCH at one analysis.
+enum QualityGateStatus {
+  OK
+  WARN
+  ERROR
+}
+
+/// One SonarQube quality-gate webhook, stored as it arrived.
+///
+/// WHY A SEPARATE MODEL from ScanRun, which is also "a tool looked at some code once": a ScanRun is
+/// a container for FINDINGS and the verification machinery compares one to the next to decide
+/// whether a finding is gone. A quality gate reports no findings at all — it is a pass/fail verdict
+/// about a branch, with the conditions that produced it. Storing it as a ScanRun with zero findings
+/// would make it evidence that every finding on that branch had been fixed, which is exactly the
+/// opposite of what it says. Sonar's ISSUES arrive separately, on /findings/sonar, and those DO
+/// become findings with a real ScanRun.
+///
+/// Nothing here is a foreign key: Sonar knows a project key and a branch name, and this app knows
+/// repositories and tickets. The resolve gate (ticket.controller.ts) joins the two on BRANCH NAME,
+/// which is why `branch` is indexed and `projectKey` is not.
+model QualityGateRun {
+  id String @id @default(uuid())
+
+  /// Free text, same reasoning as SecurityFinding.tool — "sonarqube" today, and this receiver is
+  /// shaped by Sonar's payload, but nothing here is Sonar-specific enough to be an enum.
+  provider String @db.VarChar(40)
+
+  /// Straight from the payload: `serverUrl`, `taskId`, `project.key`, `project.name`,
+  /// `branch.name`, `revision`. Everything except the project key is optional because Sonar has
+  /// emitted payloads without each of them across versions (a failed analysis carries no branch, an
+  /// older server carries no revision), and an ingest that rejects a real webhook is worse than one
+  /// that stores it with a hole.
+  serverUrl   String? @db.VarChar(500)
+  taskId      String? @db.VarChar(120)
+  projectKey  String  @db.VarChar(255)
+  projectName String? @db.VarChar(255)
+  branch      String? @db.VarChar(255)
+  /// Sonar calls it `revision`; it is a commit sha, and it is named like every other commit column
+  /// in this schema so a reader does not have to know Sonar's vocabulary.
+  commitSha   String? @db.VarChar(64)
+
+  /// `status` at the top of Sonar's payload — did the ANALYSIS run, as opposed to did the gate
+  /// pass. SUCCESS/FAILED. A FAILED analysis has no meaningful gate status, and the resolve gate
+  /// ignores those runs rather than treating "Sonar crashed" as "your code is bad".
+  analysisStatus String @db.VarChar(20)
+
+  /// `qualityGate.name` and `qualityGate.status` — the verdict itself.
+  gateName String?           @db.VarChar(255)
+  status   QualityGateStatus
+
+  /// `qualityGate.conditions[]`, stored whole. JSON rather than a child table because nothing
+  /// queries an individual condition: they are read back together, to show a human WHY the gate
+  /// failed. A table would buy a join and cost a migration every time Sonar adds a field.
+  conditions Json?
+
+  /// Sonar's own clock (`analysedAt`) vs. ours. Same split, and the same reason, as ScanRun's
+  /// startedAt/createdAt: a run's age should be judged by when it ran, not by when we heard.
+  analysedAt DateTime
+  createdAt  DateTime @default(now())
+
+  /// "The most recent gate on this branch", which is the only query the resolve gate asks. Branch
+  /// leftmost, then the clock. `projectKey` is deliberately out of it: a branch name is what a
+  /// ticket carries, and adding the project key would make the index useless for the one lookup it
+  /// exists for.
+  @@index([branch, analysedAt])
 }
 
 /// A single component row from an ingested SBOM (SPDX or CycloneDX) — see
@@ -2584,6 +2943,25 @@ model IngestionSettings {
   /// reason: an automated ticket-creation is a real state change an admin should opt into, not a
   /// surprise the first time CI fails without a ticketKey attached.
   autoCreateTicketOnCiFailureEnabled Boolean  @default(false)
+
+  /// VERIFIED REMEDIATION. When a ticket carrying security findings is resolved or closed, hold its
+  /// still-open findings as AWAITING_PROOF and let the next qualifying scan decide — see
+  /// services/security-report.service.ts#markFindingsAwaitingVerification and
+  /// #verifyFindingsAgainstScanRun.
+  ///
+  /// THIS IS THE FIRST RUNG OF A LADDER, and `autoReopenEnabled` above is the second — the same
+  /// observe/propose/apply shape the AI autonomy levels already use. Verification ON with
+  /// auto-reopen OFF is a deliberate, supported configuration and NOT a half-installed feature: it
+  /// means "tell me the fix did not hold, send the digest, but do not move my tickets". Collapsing
+  /// the two into one switch would take that answer away from every workspace that wants evidence
+  /// without automation. Off by default, like every other automated decision in this model.
+  verifyResolutionEnabled Boolean @default(false)
+  /// How long a claimed fix waits for a scan to confirm it before the finding is called UNVERIFIED
+  /// and the assignee is nudged. NOT a reopen: absence of proof is not proof of failure, and a
+  /// system that accuses people because nobody ran a scanner is a system that gets switched off.
+  /// 14 days is two sprints for most teams and comfortably longer than a nightly or per-PR scan
+  /// cadence, so hitting it means the pipeline stopped rather than that the fix is suspect.
+  verificationWindowDays  Int     @default(14)
 
   updatedAt DateTime @updatedAt
 }

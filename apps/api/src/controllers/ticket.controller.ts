@@ -34,7 +34,7 @@ import { audit } from "../services/audit.service.js";
 import { buildTicketMetricSeriesFor } from "../services/ticket-metrics.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
-import { buildTicketSecurityReport, sendTicketClosedDigest } from "../services/security-report.service.js";
+import { buildTicketSecurityReport, markFindingsAwaitingVerification, sendTicketClosedDigest } from "../services/security-report.service.js";
 import { renderSecurityReportPdf } from "../services/security-report-pdf.service.js";
 import { buildTicketLineage } from "../services/ticket-lineage.service.js";
 import { explainAssigneeSuggestion } from "../services/ai.service.js";
@@ -43,6 +43,7 @@ import { emitDomainEvent, emitTicketStatusChanged } from "../services/domain-eve
 import { createGitHubBranch, getGitAccessTokenOrNull, listGitHubRepos } from "../services/git-provider.service.js";
 import {
   applyTicketRules,
+  assertQualityGateAllowsResolve,
   assertTicketVisible,
   assertValidTicketType,
   canReassignTicket,
@@ -857,6 +858,11 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
         );
       }
     }
+    // The quality-gate sibling — its own setting, off by default, checked after the CI gate so the
+    // build failure (the more urgent of the two) is the message somebody sees first. Written once in
+    // ticket.service.ts and called from all three surfaces that can resolve a ticket; see that
+    // function's header for why this one is not copy-pasted the way the CI gate above is.
+    await assertQualityGateAllowsResolve(existing);
   }
 
   const data: Record<string, unknown> = { status: nextStatus };
@@ -938,6 +944,27 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
         }
       }
     });
+  }
+
+  // THE RESOLUTION GATE — see services/security-report.service.ts#markFindingsAwaitingVerification.
+  //
+  // Resolving or closing a ticket used to retire its security findings by implication: they stopped
+  // counting because somebody decided they were done, and nothing ever asked the scanner whether the
+  // vulnerability was actually gone. From here the findings become a CLAIM (PENDING_VERIFICATION,
+  // still counted as unresolved everywhere) and the next scan by the tool that found them settles
+  // it. No-ops entirely unless IngestionSettings.verifyResolutionEnabled is on.
+  //
+  // AWAITED, unlike the digest below, because it sends no mail and renders no report — it is a few
+  // indexed writes, and detaching it would mean the whole feature silently not happening for a
+  // ticket with nothing to show for it. WRAPPED, because the reverse is worse: refusing to close
+  // somebody's ticket over a failed security bookkeeping write would be its own defect. A failure
+  // here logs and lets the status change stand.
+  if (nextStatus === "RESOLVED" || nextStatus === "CLOSED") {
+    try {
+      await markFindingsAwaitingVerification({ id: ticket.id, key: ticket.key }, req.user!.id);
+    } catch (error) {
+      console.error(`[ticket] could not mark findings awaiting verification for ${ticket.key}:`, (error as Error).message);
+    }
   }
 
   // Security/test-status digest — see services/security-report.service.ts. Separate from the

@@ -692,7 +692,7 @@ Four features let a **workspace admin** type a URL that the **API server** then 
 
 | Feature | Where it is set | Fetched by |
 | --- | --- | --- |
-| Outbound webhooks | Workspace Settings → Webhooks | `services/webhook-dispatch.service.ts` |
+| Outbound webhooks | Workspace Settings → Public API | `services/webhook-dispatch.service.ts` |
 | Google Chat incoming webhook | Workspace Settings → Integrations | `services/chat-outbound.service.ts` |
 | Bot Framework reply endpoint | the inbound Teams activity itself | `services/chat-outbound.service.ts` |
 | BYOK OpenAI-compatible base URL | Workspace Settings → AI | `services/ai.service.ts` |

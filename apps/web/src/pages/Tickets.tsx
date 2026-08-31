@@ -19,11 +19,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   permissions,
+  securityFindingTypes,
+  securityFindingVerificationLabels,
   ticketBranchPrStatuses,
   ticketPriorities,
   ticketStatusTransitions,
   ticketStatuses,
   type SecurityFindingSeverity,
+  type SecurityFindingVerificationState,
   type TicketBranchPrStatus,
   type TicketPriority,
   type TicketStatus
@@ -2235,8 +2238,95 @@ const FINDING_TYPE_LABEL: Record<SecurityFindingRow["type"], string> = {
   DAST: "Dynamic analysis (DAST)",
   SSAT: "Secrets scanning (SSAT)",
   SSCT: "Supply-chain testing (SSCT)",
-  VAPT: "Penetration test (VAPT)"
+  VAPT: "Penetration test (VAPT)",
+  QUALITY: "Code quality",
+  LINT: "Lint"
 };
+
+/**
+ * The badge for where a claimed fix stands with the scanner. Exhaustive on purpose, like the two
+ * Records above: a new verification state fails to compile here until somebody decides how a reader
+ * should be told about it.
+ *
+ * `securityFindingVerificationLabels` supplies the words — shared with the digest email, so the
+ * screen and the inbox cannot describe the same row differently.
+ */
+const VERIFICATION_VARIANT: Record<SecurityFindingVerificationState, BadgeProps["variant"]> = {
+  AWAITING_PROOF: "info",
+  VERIFIED_FIXED: "success",
+  REFUTED_BY_SCAN: "destructive",
+  // Not destructive, deliberately. Nobody proved this fix failed — a scan simply never ran. Colouring
+  // it like a failure would make the screen say what the product carefully refuses to say.
+  UNVERIFIED: "warning"
+};
+
+/**
+ * What proved (or failed to prove) a claimed fix, in its own box under the finding.
+ *
+ * WHY IT SHOWS ITS WORKING rather than just the badge above it. "Verified fixed" is a claim this
+ * product is making, and a security engineer's first and entirely correct reaction to a machine
+ * telling them a vulnerability is gone is to ask who says so. Which tool, which commit, when — the
+ * same three facts the reopen digest leads with, for the same reason.
+ *
+ * Modelled on the AI-triage box below it: a dashed sub-box, so evidence about a finding reads as
+ * annotation rather than as another finding.
+ *
+ * A Record rather than a ternary chain, for the same reason `SEVERITY_VARIANT` and
+ * `FINDING_TYPE_LABEL` above are: a fifth verification state fails to compile here until somebody
+ * writes the sentence a reader should see for it, instead of quietly falling through to whichever
+ * branch happened to be last.
+ */
+const VERIFICATION_EVIDENCE: Record<
+  SecurityFindingVerificationState,
+  { tone: string; detail: (finding: SecurityFindingRow) => string }
+> = {
+  AWAITING_PROOF: {
+    tone: "border-info/30 bg-info/5 text-info",
+    detail: (f) => {
+      const since = f.awaitingVerificationSince ? ` on ${new Date(f.awaitingVerificationSince).toLocaleDateString()}` : "";
+      return `Claimed fixed${since}. Waiting for the next ${f.tool} scan on this repository and branch to confirm it — only that tool counts.`;
+    }
+  },
+  VERIFIED_FIXED: {
+    tone: "border-success/30 bg-success/5 text-success",
+    detail: (f) => {
+      const commit = f.verifiedByCommitSha ? ` at commit ${f.verifiedByCommitSha.slice(0, 12)}` : "";
+      const when = f.verifiedFixedAt ? `, on ${new Date(f.verifiedFixedAt).toLocaleString()}` : "";
+      return `A ${f.tool} scan on this repository and branch no longer reports it${commit}${when}.`;
+    }
+  },
+  REFUTED_BY_SCAN: {
+    tone: "border-destructive/30 bg-destructive/5 text-destructive",
+    detail: (f) => `A later ${f.tool} scan still reported this after it was marked fixed, so it was put back to OPEN.`
+  },
+  UNVERIFIED: {
+    tone: "border-warning/30 bg-warning/5 text-warning",
+    detail: (f) =>
+      `No ${f.tool} scan has run on this repository and branch since the fix was claimed. Nothing has been proven either way — this is not a failed fix, and nothing was reopened because of it.`
+  }
+};
+
+function VerificationEvidence({ finding }: { finding: SecurityFindingRow }) {
+  const state = finding.verificationState;
+  if (!state) return null;
+
+  const { tone, detail } = VERIFICATION_EVIDENCE[state];
+
+  return (
+    <div className={`mt-1 grid gap-0.5 rounded-md border border-dashed px-2.5 py-2 text-xs ${tone}`}>
+      <div className="flex flex-wrap items-center gap-1.5 font-semibold">
+        <ShieldCheck className="h-3 w-3" />
+        Verification: {securityFindingVerificationLabels[state]}
+      </div>
+      <p className="text-muted-foreground">{detail(finding)}</p>
+      <p className="text-muted-foreground">
+        First seen {new Date(finding.firstSeenAt).toLocaleDateString()} · reported by {finding.occurrences} scan
+        {finding.occurrences === 1 ? "" : "s"}
+        {finding.verifiedByScanRunId ? ` · run ${finding.verifiedByScanRunId.slice(0, 8)}` : ""}
+      </p>
+    </div>
+  );
+}
 
 /** Ingest-only — see docs/ROADMAP.md's "Security assessment suite". Every finding/test-run row
  *  here was POSTed by an external CI/security tool via /api/devops/:orgSlug/*, never generated
@@ -2276,6 +2366,12 @@ function SecurityPanel({ ticketId }: { ticketId: string }) {
   }
 
   const verdictNeedsAttention = data.riskVerdict.startsWith("Needs attention");
+  // Optional-chained because this field crossed the wire: an API build older than this one does not
+  // send it, and a panel that throws is worse than one that omits a line.
+  const qualityOpenCount = (["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const).reduce(
+    (sum, severity) => sum + (data.openQualityCountBySeverity?.[severity] ?? 0),
+    0
+  );
 
   return (
     <div className="grid gap-3">
@@ -2289,6 +2385,17 @@ function SecurityPanel({ ticketId }: { ticketId: string }) {
         </Button>
       </div>
 
+      {/* Said out loud so the verdict above cannot be misread. The verdict and the severity counts
+          behind it are SECURITY findings only; the code-quality ones on this ticket are listed in
+          their own sections below and are deliberately not part of it. Rendered only when there are
+          some — "0 code-quality findings" on a ticket nobody lints is noise. */}
+      {qualityOpenCount > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Plus {qualityOpenCount} open code-quality/lint finding{qualityOpenCount === 1 ? "" : "s"} — listed below, and not counted
+          in the verdict above.
+        </p>
+      )}
+
       {data.latestTestRun && (
         <div className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm">
           <span className="text-muted-foreground">Latest test run ({data.latestTestRun.provider})</span>
@@ -2298,7 +2405,11 @@ function SecurityPanel({ ticketId }: { ticketId: string }) {
         </div>
       )}
 
-      {(["SAST", "DAST", "SSAT", "SSCT", "VAPT"] as const).map((type) => {
+      {/* Sections come from the shared constant, in its order — not from a literal list that
+          compiled fine while quietly dropping a whole type's findings out of the panel. The
+          `?? []` below stays because this data crossed the wire: an older API build genuinely may
+          not have the key, and that is a different situation from this file forgetting it exists. */}
+      {securityFindingTypes.map((type) => {
         const items = data.findingsByType[type] ?? [];
         if (items.length === 0) return null;
         return (
@@ -2306,13 +2417,21 @@ function SecurityPanel({ ticketId }: { ticketId: string }) {
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{FINDING_TYPE_LABEL[type]}</p>
             {items.map((finding) => (
               <div key={finding.id} className="grid gap-0.5 rounded-md border border-border px-3 py-2">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Badge variant={SEVERITY_VARIANT[finding.severity]}>{finding.severity}</Badge>
                   <span className="text-sm font-medium">{finding.title}</span>
+                  {finding.verificationState && (
+                    <Badge variant={VERIFICATION_VARIANT[finding.verificationState]} className="text-[10px]">
+                      {securityFindingVerificationLabels[finding.verificationState]}
+                    </Badge>
+                  )}
                   <span className="ml-auto text-xs text-muted-foreground">{finding.tool}{finding.status !== "OPEN" ? ` · ${finding.status}` : ""}</span>
                 </div>
                 {finding.filePath && (
                   <p className="text-xs text-muted-foreground">{finding.filePath}{finding.lineNumber ? `:${finding.lineNumber}` : ""}</p>
+                )}
+                {finding.verificationState && (
+                  <VerificationEvidence finding={finding} />
                 )}
                 {finding.aiVerdict && (
                   <div className="mt-1 grid gap-0.5 rounded-md border border-dashed border-primary/30 bg-primary/5 px-2.5 py-2 text-xs">

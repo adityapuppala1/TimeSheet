@@ -10,6 +10,7 @@
  * an AI-authored "nothing interesting happened" email erodes trust in the feature.
  */
 import cron from "node-cron";
+import { unresolvedSecurityFindingStatuses } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { generateBugPatternDigest, getGlobalAISettings } from "../services/ai.service.js";
 import { templates } from "../services/mail-templates.js";
@@ -60,7 +61,11 @@ export async function runBugPatternDigest(now: Date = new Date()): Promise<{ sen
     }),
     prisma.securityFinding.groupBy({
       by: ["repository"],
-      where: { status: { in: ["OPEN", "ACKNOWLEDGED"] }, repository: { not: null }, createdAt: { gte: cutoff } },
+      // A FIFTH copy of the open-status list lived here, unmentioned by any of the other four.
+      // THE DECISION THIS DIGEST MAKES: `unresolved` (open + pending), matching the Security
+      // Insights page — this section names the repositories that keep producing findings, and a
+      // repo whose findings are all "claimed fixed, unconfirmed" is precisely the one worth naming.
+      where: { status: { in: unresolvedSecurityFindingStatuses }, repository: { not: null }, createdAt: { gte: cutoff } },
       _count: true,
       orderBy: { _count: { repository: "desc" } },
       take: 5

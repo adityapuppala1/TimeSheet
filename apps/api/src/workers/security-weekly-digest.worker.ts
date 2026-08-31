@@ -20,6 +20,7 @@
  * garnish on top of them, and its absence costs a paragraph rather than the report.
  */
 import cron from "node-cron";
+import { resolvedSecurityFindingStatuses, securityDisciplineFindingTypes, unresolvedSecurityFindingStatuses } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { generateSecurityWeeklyDigest, getGlobalAISettings } from "../services/ai.service.js";
 import { emailBlocks, templates } from "../services/mail-templates.js";
@@ -30,7 +31,35 @@ let started = false;
 let running = false;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const OPEN_STATUSES = ["OPEN", "ACKNOWLEDGED"] as const;
+/**
+ * Read from the shared bucket map rather than typed out here — see `securityFindingStatusBuckets`
+ * for the four hand-maintained copies of this list and why they were a hazard.
+ *
+ * THE DECISION THIS WORKER MAKES: it mirrors the Security Insights page exactly, because the two
+ * are read side by side — the Monday email quotes an open count and a risk score, and an admin who
+ * clicks through must land on the same numbers. So `unresolved` (open + pending) drives both the
+ * count and the score, and RESOLVED_STATUSES (confirmed + accepted only) drives "resolved this
+ * week". A pending finding therefore appears in neither the resolved tally nor a quiet week: it is
+ * still counted as outstanding until a scan says otherwise.
+ */
+const OPEN_STATUSES = unresolvedSecurityFindingStatuses;
+const RESOLVED_STATUSES = resolvedSecurityFindingStatuses;
+
+/**
+ * SECURITY findings only — the same filter the Security Insights page applies, for the same reason
+ * and with the same consequence if it is dropped.
+ *
+ * This is a SECURITY digest: an email that opens with an open-finding count and a risk score, sent
+ * to every admin on a Monday morning. Sonar and ESLint post into the same table through the same
+ * webhook, so without this filter the first number an admin reads each week would be a code-smell
+ * backlog wearing a security headline — and the week a real CRITICAL arrived, it would move that
+ * number by a tenth of a percent. The quality backlog is worth reporting; it is not worth reporting
+ * HERE, under this subject line, in this position.
+ *
+ * Written as a spread-in `where` fragment rather than repeated per query so a future number added to
+ * this worker cannot quietly skip it.
+ */
+const SECURITY_DISCIPLINE = { type: { in: securityDisciplineFindingTypes } };
 
 function startOfLocalDay(date: Date): Date {
   const d = new Date(date);
@@ -84,14 +113,19 @@ export async function runSecurityWeeklyDigest(now: Date = new Date()): Promise<{
   const weekLabel = `${weekStart.toLocaleDateString(undefined, { month: "short", day: "numeric" })} - ${new Date(weekEnd.getTime() - DAY_MS).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 
   const [openFindings, newCriticalOrHigh, resolvedThisWeek, topRepos, stuckTickets] = await Promise.all([
-    prisma.securityFinding.findMany({ where: { status: { in: [...OPEN_STATUSES] } }, select: { severity: true, createdAt: true } }),
-    prisma.securityFinding.count({
-      where: { createdAt: { gte: weekStart, lt: weekEnd }, severity: { in: ["CRITICAL", "HIGH"] } }
+    prisma.securityFinding.findMany({
+      where: { status: { in: OPEN_STATUSES }, ...SECURITY_DISCIPLINE },
+      select: { severity: true, createdAt: true }
     }),
-    prisma.securityFinding.count({ where: { status: { in: ["FIXED", "ACCEPTED_RISK"] }, updatedAt: { gte: weekStart, lt: weekEnd } } }),
+    prisma.securityFinding.count({
+      where: { createdAt: { gte: weekStart, lt: weekEnd }, severity: { in: ["CRITICAL", "HIGH"] }, ...SECURITY_DISCIPLINE }
+    }),
+    prisma.securityFinding.count({
+      where: { status: { in: RESOLVED_STATUSES }, updatedAt: { gte: weekStart, lt: weekEnd }, ...SECURITY_DISCIPLINE }
+    }),
     prisma.securityFinding.groupBy({
       by: ["repository"],
-      where: { status: { in: [...OPEN_STATUSES] }, repository: { not: null } },
+      where: { status: { in: OPEN_STATUSES }, repository: { not: null }, ...SECURITY_DISCIPLINE },
       _count: true,
       orderBy: { _count: { repository: "desc" } },
       take: 5
@@ -101,7 +135,10 @@ export async function runSecurityWeeklyDigest(now: Date = new Date()): Promise<{
         deletedAt: null,
         status: { notIn: ["RESOLVED", "CLOSED"] },
         dueAt: { lt: now },
-        securityFindings: { some: {} }
+        // "Overdue tickets carrying SECURITY findings" — a ticket whose only findings are lint
+        // results is overdue for reasons this digest is not about, and listing it here would send an
+        // admin looking for a vulnerability that was never there.
+        securityFindings: { some: SECURITY_DISCIPLINE }
       }
     })
   ]);

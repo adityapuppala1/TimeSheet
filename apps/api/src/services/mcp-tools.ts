@@ -37,6 +37,7 @@ import { saveTimesheet } from "../controllers/timesheet.controller.js";
 import { emitTicketStatusChanged } from "./domain-events.js";
 import {
   addTicketCommentForActor,
+  assertQualityGateAllowsResolve,
   canWorkOnTicket,
   createTicketForActor,
   resolveVisibleProjectByCode,
@@ -669,6 +670,9 @@ const TOOLS: readonly McpToolRegistration[] = [
             throw new AppError(422, `Cannot resolve ${existing.key} — its latest CI run (${latestRun.provider}) is failing.`);
           }
         }
+        // And the quality-gate sibling, for the same reason: a workspace that opted into blocking
+        // on a failing gate must not have it bypassed by whichever surface makes the call.
+        await assertQualityGateAllowsResolve(existing);
       }
 
       const data: Record<string, unknown> = { status: nextStatus };

@@ -354,7 +354,7 @@ practiceUpdateRouter.post(
     if (!settings.emailPracticeUpdate) {
       throw new AppError(
         422,
-        "The weekly practice update email is switched off for this workspace. Turn it on under Workspace Settings → Notifications → Digests."
+        "The weekly practice update email is switched off for this workspace. Turn it on under Workspace Settings → Email channels → Digests."
       );
     }
 

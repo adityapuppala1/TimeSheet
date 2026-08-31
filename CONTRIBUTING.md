@@ -140,11 +140,23 @@ echo "controllers $(ls apps/api/src/controllers/*.ts | wc -l)"
 echo "models      $(grep -c '^model ' apps/api/prisma/schema.prisma)"
 echo "enums       $(grep -c '^enum ' apps/api/prisma/schema.prisma)"
 echo "migrations  $(ls apps/api/prisma/migrations | grep -c '^2')"
+# The control plane migrates SEPARATELY from the tenants and its count moves on its own — the two
+# have drifted in the README before, because one command runs both and nothing prints the split.
+echo "ctrl migr   $(ls apps/api/prisma/control/migrations | grep -c '^2')"
 echo "services    $(ls apps/api/src/services/*.ts | wc -l)"
 echo "workers     $(ls apps/api/src/workers/*.ts | wc -l)"
 echo "web pages   $(find apps/web/src/pages -name '*.tsx' | wc -l)"
 echo "e2e specs   $(find tests -name '*.spec.ts' | wc -l)"
-echo "permissions $(grep -cE '^\s+[A-Z_]+:\s*\"' packages/shared/src/index.ts)"
+# SCOPED TO THE OBJECT'S OWN BRACES, and that is not a nicety. The unscoped version of this line
+# matched every `KEY: "value"` in the whole FILE and answered 88 — it had already swept up the
+# plan-tier and status-bucket records, and 5.0.0's `platformCapabilities` block made the gap
+# impossible to miss. The RBAC answer is 20. Same failure shape as the email-template note below:
+# a pattern that happens to agree with the truth once, and is never checked again.
+echo "permissions $(sed -n '/^export const permissions = {/,/^} as const;/p' packages/shared/src/index.ts | grep -cE '^\s+[A-Z_]+:\s*\"')"
+# The platform console's operator capabilities are a SECOND, separate authority model — five
+# capabilities over five console roles, in the control plane, never mixed with the tenant RBAC keys
+# above. Counted apart because adding the two together would describe a role nobody holds.
+echo "console cap $(sed -n '/^export const platformCapabilities = {/,/^} as const;/p' packages/shared/src/index.ts | grep -cE '^\s+[A-Z_]+:\s*\"')"
 # Ask the script that enumerates them, rather than pattern-matching the source. Two patterns have
 # already under-counted this: one that only matched the SEED file (22, while the editor lists every
 # registered key), and one that only matched QUOTED keys (32, missing the three bare ones like

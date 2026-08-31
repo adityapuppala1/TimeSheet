@@ -55,7 +55,7 @@ export function AccountMenuContent() {
   const unseenRelease = hasUnseenRelease(updates.data?.currentVersion);
 
   // Only ever shown when a super admin has explicitly granted this account more than one role
-  // (Workspace Settings → User Management) — the common case renders nothing here at all.
+  // (the Users page) — the common case renders nothing here at all.
   const switchRole = useMutation({
     mutationFn: (role: RoleName) => authApi.switchRole(role),
     onSuccess: (updated) => {

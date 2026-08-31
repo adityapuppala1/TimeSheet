@@ -35,6 +35,78 @@ export async function getGlobalTicketSettings() {
   });
 }
 
+/**
+ * THE QUALITY-GATE RESOLVE GATE — the sibling of the failing-tests gate, and the reason it lives
+ * here rather than being typed out at each call site.
+ *
+ * WHAT IT DOES: refuses a RESOLVED transition while the most recent SonarQube quality gate on any
+ * branch linked to the ticket reports ERROR. Off by default
+ * (`GlobalTicketSettings.blockResolveOnFailingQualityGate`), so a workspace that does not receive
+ * quality-gate webhooks — or that wants the gate as information rather than as a stop — is
+ * unaffected either way.
+ *
+ * ONLY THE LATEST RUN COUNTS, exactly as with the CI gate beside it: an older passing analysis does
+ * not excuse a newer failure, and a newer passing one settles an older failure. A gate is a
+ * statement about the code as it stands, not a history to be searched for the answer you want.
+ *
+ * WHY IT IS A FUNCTION AND THE TEST GATE IS THREE COPIES. Three surfaces move a ticket to RESOLVED:
+ * this app's own route (ticket.controller.ts), the public REST API (public-api.controller.ts) and
+ * the MCP tool an assistant calls (services/mcp-tools.ts). The test gate is written out in all
+ * three, which works because it is four lines; this one has to resolve the ticket's branches first,
+ * and a rule enforced in one caller and forgotten in another is not a rule — it is a bypass with a
+ * changelog entry. So it is written once and called three times.
+ *
+ * HOW A TICKET AND A GATE ARE MATCHED: on BRANCH NAME, via `TicketBranch`. Sonar knows a project key
+ * and a branch; this app knows repositories and tickets, and nothing maps a Sonar project key onto a
+ * repository (that would need another rule table, and the routing rules deliberately map
+ * repositories onto MODULES, not onto scanner projects). Branch names are what both systems already
+ * agree on, and the ticket-branch convention most teams use (`feature/WEB-123-…`) makes them
+ * effectively ticket-specific.
+ *
+ * BE HONEST ABOUT WHAT THAT COSTS: a ticket linked to a branch called `main`, in a workspace running
+ * several Sonar projects, is judged by whichever project analysed a branch called `main` most
+ * recently. That is a real limitation and it is why this is off by default and why the message names
+ * the project the failing gate came from — so somebody who hits it can see immediately whether it is
+ * about their code.
+ *
+ * A ticket with NO linked branch is never blocked. There is nothing to judge it against, and
+ * blocking on the absence of evidence is the failure mode the whole verification design refuses.
+ */
+export async function assertQualityGateAllowsResolve(ticket: { id: string; key: string }): Promise<void> {
+  const settings = await prisma.globalTicketSettings.findUnique({ where: { id: GLOBAL_ID } });
+  if (!settings?.blockResolveOnFailingQualityGate) return;
+
+  const branches = await prisma.ticketBranch.findMany({ where: { ticketId: ticket.id }, select: { branch: true } });
+  const branchNames = Array.from(new Set(branches.map((b) => b.branch).filter(Boolean)));
+  if (branchNames.length === 0) return;
+
+  const latestGate = await prisma.qualityGateRun.findFirst({
+    where: {
+      branch: { in: branchNames },
+      // A FAILED ANALYSIS IS NOT A FAILED GATE. Sonar reports `status: "FAILED"` when the analysis
+      // task itself died, and its `qualityGate` block is then absent or meaningless. Blocking
+      // somebody's ticket because Sonar's own job crashed would make this gate a source of outages
+      // rather than of quality.
+      analysisStatus: "SUCCESS"
+    },
+    orderBy: { analysedAt: "desc" }
+  });
+  if (latestGate?.status !== "ERROR") return;
+
+  const failed = Array.isArray(latestGate.conditions)
+    ? (latestGate.conditions as Array<Record<string, unknown>>)
+        .filter((condition) => String(condition?.status ?? "").toUpperCase() === "ERROR")
+        .map((condition) => String(condition?.metric ?? "condition"))
+    : [];
+  // The failing METRICS are named in the message, not just "the gate failed": the whole value of a
+  // gate to the person it stops is knowing which line to go and fix.
+  const detail = failed.length > 0 ? ` Failing: ${failed.slice(0, 5).join(", ")}.` : "";
+  throw new AppError(
+    422,
+    `Cannot resolve ${ticket.key} — the latest quality gate on ${latestGate.branch} (${latestGate.projectKey}) failed.${detail} Fix the gate or ask an admin to disable the quality gate in Workspace Settings.`
+  );
+}
+
 type TicketSlaHours = { slaLowHours: number; slaMediumHours: number; slaHighHours: number; slaCriticalHours: number };
 
 /** Due date for a ticket, computed from its priority against the workspace's configured SLA hours. */

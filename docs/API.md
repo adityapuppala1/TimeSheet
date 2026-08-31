@@ -1254,8 +1254,8 @@ its detail sheet — so a truncated export can never ship a summary that does no
 
 ### Email
 
-Two templates, `changeSubmitted` and `changeDecided`, editable in **Workspace Settings → Email
-templates** like every other outbound mail, with the same delivery analytics and failure triage.
+Two templates, `changeSubmitted` and `changeDecided`, editable on the **Email templates** page
+like every other outbound mail, with the same delivery analytics and failure triage.
 
 The submission mail carries project, title, type, risk, activity window, description, requester and
 approver; the decision mail adds who decided it and their comments. Both go **to** the requester,
@@ -2009,6 +2009,103 @@ app then writes to is close enough to arbitrary file write, and the static mount
 into arbitrary file read; and compromising one super-admin account must not also yield a filesystem
 foothold. Applying a new path is one `.env` line and a restart.
 
+## Billing (5.0.0)
+
+Base URL `/api/billing`, mounted **twice** — see ARCHITECTURE.md's tenant-resolution table. The
+webhook receiver is mounted before `express.json()` because Stripe's signature is computed over the
+exact raw bytes; the ordinary router below is mounted after tenant resolution. Everything except
+`GET /status` is `SUPER_ADMIN`.
+
+| Route | Notes |
+|---|---|
+| `GET /billing/status` | `requireAuth`. Plan tier, active seats against the limit, `hasStripeCustomer`, `hasSubscription`, and which tiers are self-serve-purchasable on this deployment. |
+| `POST /billing/checkout-session` | `{ tier }`. Returns **one of two shapes**: `{ mode: "checkout", url }` or `{ mode: "updated" }`. |
+| `POST /billing/portal-session` | Returns `{ url }` for Stripe's Customer Portal — card, billing address, tax ids, invoices, cancellation. `return_url` is `/app/settings`, with no `?billing=` marker, because nothing happened that the page needs to announce. |
+| `GET /billing/invoices` | The last **12** invoices (`limit: 12`, no date filter), each with `hostedInvoiceUrl` and `invoicePdf`. `[]` — with no Stripe call at all — when the workspace has no Stripe customer. Amounts stay in minor units. |
+| `POST /billing/webhook` | Stripe's. Raw body, signature-verified. Writes control-plane state only. |
+
+**`checkout-session` changes an existing subscription rather than creating a second one.** This is
+the 5.0.0 fix and the reason that route has two return shapes. If `Organization.stripeSubscriptionId`
+is set, the existing subscription's single item is updated to the new price and seat count with
+`proration_behavior: "create_prorations"`, and the answer is `{ mode: "updated" }` — no redirect, no
+second subscription. Before this, every press created a **new** subscription and the webhook then
+overwrote the stored id, leaving the first one live, billing, and referenced by nothing.
+
+**A stored id Stripe no longer recognises is not a dead end.** A `404`/`resource_missing`, a status
+of `canceled` or `incomplete_expired`, or a subscription with no items, all mean "no usable
+subscription": the column is cleared and the caller falls through to Checkout. A *transient* Stripe
+failure re-throws instead — "Stripe is down" and "this subscription is gone" must not produce the
+same action, and a 503 that silently started a second subscription would be the original bug wearing
+a different hat.
+
+**`planTier` is never written by the checkout route** — only by the webhook, which is the only place
+that knows a payment actually succeeded. `customer.subscription.updated` compares the incoming tier
+against the stored one and sends the `billing.plan_changed` receipt **only when they differ**, so a
+seat-count sync (a quantity change on the same price) is silent. Recipients are the workspace's
+active, non-agent super admins, linked to `/app/settings?tab=billing`.
+
+## Contact and the sales pipeline (5.0.0)
+
+`POST /api/contact` — **public, unauthenticated**, mounted before tenant resolution because a
+prospect has no workspace yet. Its own rate limiter: 5 per hour per IP, the same budget signup gets.
+Returns **201** `{ received: true, responseWindow }`.
+
+Body (all `.strict()`): `name`, `email`, `company`, `message`, plus the qualifying fields
+`teamSize` (`1-10` … `500+`), `deploymentInterest` (`SAAS` | `PRIVATE_CLOUD` | `ON_PREM` | `UNSURE`),
+`timeline` (`NOW` | `THIS_QUARTER` | `EXPLORING`) and `interests[]`; optional `role`, `country`,
+`phone`, `sourcePage`, `referrer`, `utm*`. The vocabularies live in `packages/shared` so the form,
+the Zod schema and the console read one list.
+
+**Anti-spam is three cheap things and deliberately no captcha.** A honeypot field (`website`), a
+minimum fill time of 4 seconds measured on the browser's **monotonic** clock and sent as an elapsed
+interval rather than a timestamp — a wrong system clock cannot reject a real person — and the rate
+limiter above. There is no third-party captcha because the FAQ printed beside the form promises the
+app never calls out, and a page that loads a vendor script while saying that is contradicted by its
+own network tab. A submission failing either check gets an ordinary 201 and is dropped; only
+human-fixable problems get a 422.
+
+A **free-mail address is flagged, never rejected** here — the opposite of `POST /signup/start`,
+which refuses one outright. Both read the same `FREE_MAIL_DOMAINS` list; the verdicts differ because
+a personal address is disqualifying for "this workspace belongs to a company" and merely interesting
+for "somebody is evaluating us".
+
+Two platform emails go out and **neither can fail the request**: `sales.lead` to the configured
+inbox with **`Reply-To` set to the prospect**, so pressing Reply answers the customer; and
+`sales.ack` to them. The inbox is `PlatformMailSettings.salesInboxAddress`, edited under
+Platform → Settings → Mail server (`platform:operate`), falling back to a built-in default the field
+prints. An audit row `sales_lead.created` is written with the qualifying fields and **without** the
+message body.
+
+Console side: `GET /api/platform-admin/sales-leads` (any signed-in operator — every figure is
+aggregate or a lead somebody sent us) and `PATCH /api/platform-admin/sales-leads/:id`
+(`platform:support`) accepting only `{ status?, ownerLabel?, notes? }`. `contactedAt` is stamped on
+the first move off `NEW`, and a second audit row `sales_lead.updated` records the transition.
+
+## Finding routing (5.0.0)
+
+Base URL `/api/finding-routing`. Every route is `requireAuth` + `SUPER_ADMIN`.
+
+| Route | Notes |
+|---|---|
+| `GET`/`POST /repository-maps`, `PATCH`/`DELETE /repository-maps/:id` | Repository pattern → project. |
+| `GET`/`POST /module-path-rules`, `PATCH`/`DELETE /module-path-rules/:id` | Path glob → module (+ optional submodule), scoped to one project. |
+| `POST /test` | The dry-run. `{ repository, filePath }` → `{ project, module, submodule, matchedRepositoryMapId, matchedModulePathRuleId, usedFallbackProject }`. |
+
+Both tables are ordered by `order` then `createdAt`, and **the first match wins** — the semantics
+`TicketRule` already uses, so this codebase has one rule-evaluation model rather than two that
+behave subtly differently. No repository match falls back to `IngestionSettings.fallbackProjectId`,
+and the response says so rather than leaving the caller to infer it.
+
+**The pattern matcher never compiles to a RegExp** (`utils/path-pattern.ts`). A user-supplied glob
+translated into a regex is a user-supplied pattern handed to a backtracking engine, and every
+mitigation for that is a guess about input. Instead the pattern is simulated as an automaton over a
+boolean array of reachable positions: one linear pass per token, total work bounded by pattern
+length × subject length, and no backtracking that could blow up. Dialect: `*` within a segment, `**`
+across them, a trailing `/` meaning that directory and everything below, no wildcard meaning a plain
+prefix. Limits are 500 characters and 20 wildcards, and an unusable pattern is a **422 at write
+time** rather than a rule that silently never matches. `POST /test` runs the same resolver ingestion
+does — not a second implementation of it, which would be one more thing to keep in step.
+
 ## Verified work attestations
 
 A client-facing record that approved hours map to real tickets, done by identity-verified people,
@@ -2080,6 +2177,70 @@ state with the tenant app.
   and what it *would* be once `ROOT_DOMAIN` is set.
 - `GET /plan-tier-limits`, `PATCH /plan-tier-limits/:tier`, `GET /billing-settings`,
   `PATCH /billing-settings`, `GET /analytics` (aggregate numbers only, never row-level tenant content).
+  Since 5.0.0 a tier also carries `listPricePerSeatMinor` / `listPriceCurrency` — the operator-editable
+  **list price** every revenue figure in the console is derived from. `null` means the tier is priced
+  per contract and is excluded from MRR; `0` means free and is counted. `GET /analytics` is now the
+  live "as of right now" path only: everything historical reads the nightly snapshot below.
+
+### Governance: roles, MFA, two-person actions and reasons (5.0.0)
+
+Until this release the console had exactly one role, and it could do everything. It now has five —
+`OWNER`, `OPERATOR`, `SUPPORT`, `BILLING`, `READ_ONLY` (`platformRoles` in `packages/shared`, stored
+as a `VARCHAR` rather than a MySQL `ENUM` so adding one is not an `ALTER`) — over five capabilities:
+`platform:read`, `:support`, `:billing`, `:operate`, `:owner`. The matrix
+(`PLATFORM_ROLE_CAPABILITIES`) is written out per role rather than derived from a ladder, because
+**SUPPORT and BILLING are siblings, not rungs**: a ladder hands a finance operator the break-glass
+that resets a customer's super-admin password, and hands a support operator the plan tiers. OPERATOR
+is the union below OWNER because it is the on-call role.
+
+**The role is read from `PlatformAdminUser` on every request, never from the JWT** — the token
+carries only `sub` and `sid`. A demotion therefore binds on the next request rather than whenever a
+token happens to expire, which is the only version of "we removed their access" that is true when
+you say it. An unrecognised stored value fails closed to `READ_ONLY`.
+
+- `POST /auth/login` may now answer `{ mfaRequired: true, challengeToken, expiresInSeconds }`
+  instead of a session. **No session row and no refresh cookie exist at that point** — the challenge
+  sits between the password check and `establishSession`, so no refresh credential can be minted
+  without the second factor.
+- `POST /auth/login/totp` `{ challengeToken, code }` — completes it. A recovery code is accepted in
+  place of a TOTP code and is consumed atomically.
+- `GET /auth/mfa`, `POST /auth/mfa/begin`, `POST /auth/mfa/confirm`, `POST /auth/mfa/disable` —
+  enrolment. **Opt-in**: nothing at login enforces `mfaEnabled`; the console nags instead. TOTP is
+  hand-rolled on `node:crypto` (6 digits, 30s step, ±1 window) and pinned in tests against RFC
+  6238's own published vectors — the only way to know an authenticator implementation is right is to
+  check it against the numbers in the specification. Recovery codes are bcrypt-hashed one row each,
+  and `mfaLastUsedStep` refuses a step already consumed.
+
+**Two-person actions.** Five of them, listed once in `platformTwoPersonActions` because the API
+enforces the list and the console has to describe what it queued: `retention.delete`,
+`snapshot.restore`, `snapshot.delete`, `admin.create`, `admin.role_change`. Membership is decided by
+"can it be undone", not by "is it dangerous" — a suspended workspace can be un-suspended; a deleted
+one, a restored-over one, and an account quietly promoted to OWNER cannot.
+
+- The **live route becomes the request**: `POST /retention/:orgId/delete`, `POST /admins`,
+  `PATCH /admins/:id` (the `role` branch only — a status-only deactivation runs immediately, and is
+  deliberately not two-person), `POST /backups/:id/restore` and `DELETE /backups/:id` answer **202**
+  with a queued `PendingPlatformAction` instead of acting.
+- `GET /governance/requests` (any operator), `POST /governance/requests/:id/approve` (`OWNER`),
+  `POST /governance/requests/:id/reject` (the requester withdrawing, or an `OWNER`).
+- **Approval replays through the same handler.** The executor is looked up by *action*, never by the
+  stored route string, and is the same closure the live route registered — so every guard re-runs
+  against live data rather than against what was true when the request was queued. Self-approval is
+  403, a non-pending row 409, and an expired one 409 after flipping to `EXPIRED` (24-hour TTL). A
+  failed replay records `FAILED` and does **not** re-arm.
+
+**Reason for access.** `requirePlatformReason` gates twenty routes; the reason travels in the
+`X-Platform-Reason` header (8–500 chars, truncated rather than refused) rather than a body field,
+because the `.strict()` schemas would 422 an extra key and because `GET /backups/:id/download` has
+no body at all. `PlatformAuditLog` gained `reason`, `before`, `after` and `ipAddress`, and **eight
+destructive routes that previously wrote no audit row at all** now write one — provisioning a
+database, suspending a workspace, resetting a customer's super-admin password, retuning a plan tier,
+setting the merchant credentials, sweeping backups. The control plane's trail used to begin after
+the most consequential things had already happened.
+
+**`GET /backups/:id/download` is `platform:operate`, despite the verb.** It streams an entire
+customer database as SQL. It is the least read-only `GET` in this codebase, and the capability it
+carries says so rather than relying on the method to imply safety.
 
 ### Console (3.12.0)
 
@@ -2240,6 +2401,109 @@ with a user interface.
   were right, which is only answerable if the wrong ones are still there.
 - `POST /ai/advice/:adviceId/decision` `{ status: "APPLIED" | "DISMISSED", note? }` — `422` on a
   dismissal with no reason.
+
+### Revenue, retention and account health (5.0.0)
+
+Every screen in this block reads **one nightly snapshot**, not the fleet. `OrgUsageSnapshot` holds
+one row per workspace per day — seats (human and agent, counted separately), tickets by status, AI
+spend month-to-date against the ceiling in force, outbound mail counts, database size copied from
+the hourly sampler, last sign-in, and the plan/status/trial columns *as they stood that day*. It is
+written at 03:40 UTC by `org-usage-snapshot.worker.ts`, whose whole logic lives in
+`platform-admin-analytics.service.ts#captureOrgUsageSnapshots` — the single audited place in this
+codebase allowed to loop tenant databases for reporting, and still aggregate-only: counts, sums and
+timestamps, never a ticket title, a comment or a person.
+
+That is the fix for two structural faults. `GET /analytics` opened a connection to every tenant
+database on every page load, so it got slower with each customer won; and because nothing was ever
+kept, **no trend, cohort, churn or retention question could be asked at all**. There is no backfill
+and there cannot be one — every figure is a point-in-time count of mutable tenant state — so the
+series starts the night this ships and every reader below returns `null` rather than a number when
+the window it was asked about is too short to divide by.
+
+**Every money figure is LIST PRICE, and the payload says so** (`basis: "list-price"`). The one price
+in this product is `PlanTierLimit.listPricePerSeatMinor`, operator-editable through
+`PATCH /plan-tier-limits/:tier` (`platform:billing`) and seeded from the same `PLAN_TIER_LIST_PRICES`
+constant the landing page's pricing cards render — so the page a buyer reads and the MRR an operator
+quotes cannot disagree. A discounted, annual or negotiated customer pays something else. **A null
+price is not zero:** Enterprise has no list price, those workspaces are excluded from the MRR total,
+and the count of exclusions travels with it as `unpricedAccounts` so the gap is visible rather than
+silently under-reported.
+
+- `GET /analytics/revenue?days=30` — `mrr` (list MRR/ARR/ARPA, per-tier breakdown, paying/free/
+  unpriced counts, billable seats), `churn` (logo and revenue churn, NRR and GRR, expansion and
+  contraction, new logos), `trials` (started/converted/lapsed/still running, conversion over
+  *decided* trials only, median days to convert), `cohorts` (retention by signup month, cells `null`
+  where no snapshot covers the month), `seatOverage`, `coverage` (what the series actually spans)
+  and `stripe`. Agent identities are never priced: an agent's identity is a real `User` row so
+  assignment and audit keep working, and billing it would make the roster a per-agent upsell.
+- `GET /analytics/health?days=30` — per-workspace account health. A band (`AT_RISK` / `HEALTHY` /
+  `EXPANSION`) **always arrives with the signals that produced it**, each carrying a label and a
+  measured detail with its number in it; `signals` is never empty, and when nothing fired the row
+  says what was checked. Combines seat pressure, AI budget burn, days since last sign-in, ticket
+  velocity across snapshots, mail failure rate and backup failures. Scoring is a pure function
+  (`platform-account-health.ts`) with no database in the way. Also returns `seatOverage` — the
+  workspaces at or above 90% of a **real** seat ceiling, warmest first; unlimited tiers are excluded
+  rather than listed at 0%, because there is nothing for them to press against.
+- `GET /analytics/usage-trend?days=90` — seats, agents, backlog, ticket total and AI spend summed
+  across the fleet, per day.
+- `GET /analytics/org/:orgId?days=60` — one workspace's snapshot series, its health, the scorer's
+  own inputs for the latest day, and its list MRR. The usage half of the Org 360 page, which
+  *composes* the endpoints above with `/organizations/:id`, `/monitoring/:orgId/trend`,
+  `/backups/overview`, `/email-log`, `/audit` and `/ai/advice/:orgId` rather than reimplementing any
+  of them.
+- `POST /analytics/snapshot` — take today's snapshot now instead of waiting for 03:40 UTC.
+  `platform:operate`, matching `POST /monitoring/sample`, because it opens a connection to every
+  tenant database in the fleet — a load decision, not a reporting one. Safe to run twice: the pass
+  upserts on `(organizationId, day)`, so a second run corrects the day rather than doubling every
+  workspace inside every fleet total that sums it. One unreachable workspace is recorded and skipped,
+  never aborting the sweep, and still gets a row with `reachable: false` — a gap a reader can see is
+  honest, a false zero looks like a customer who stopped working.
+
+The four reads are `platform:read`: every figure is aggregate, carries no customer content, and an
+operator who cannot see the business cannot run it. Account health is also fed to the AI advisor's
+fact sheet as **facts, not conclusions** — the same band and the same named signals an operator sees,
+so there is one set of findings to argue about rather than two.
+
+### Fleet alerts, schema drift, feature overrides and the org timeline (5.0.0)
+
+`deriveAlerts` has computed severity-tiered fleet alerts since 4.0.0, and every one of them existed
+only while somebody had the Monitoring page open. These routes are the alerts leaving the room.
+
+- `GET /alerts` — the current sweep. `PUT /alerts/settings` (`platform:operate`) configures the
+  severity floor, the digest recipients and the webhook. `POST /alerts/digest/run`
+  (`platform:operate`, `dryRun` powers the Preview button) and `POST /alerts/webhook/test`.
+- **The digest reports a diff, not a state.** Every six hours (`45 */6 * * *`) the sweep is compared
+  against `PlatformAlertState` and only `appeared` / `escalated` / `cleared` are sent; a standing
+  alert is never re-sent, which is the whole difference between a digest people read and a digest
+  people filter. `reportedSeverity` and `lastReportedAt` are written **only when a channel accepted
+  the message**, so a failed delivery self-heals on the next pass rather than being marked done.
+- The optional webhook posts `X-TimeSphere-Event: platform.alert_digest` with an
+  `X-TimeSphere-Signature: sha256=<hex>` HMAC over the raw body — the same scheme the tenant webhook
+  dispatcher uses, reused as a shape rather than as code (that dispatcher writes against the tenant
+  Prisma client). `assertPublicEgressTarget` is re-checked **on every attempt**, never trusted from
+  the moment the URL was saved. There is no retry table: the six-hour schedule is the retry.
+- `GET /fleet/schema-drift` (`platform:read`) — which migration each workspace is on against the
+  `latest` this build expects, plus `behind`, `unregistered`, and the exact fix command
+  (`TENANT_MIGRATE_COMMAND`) printed in a `<code>` block. Mounted at `/fleet/…` rather than
+  `/monitoring/…` so `GET /monitoring/:orgId` does not swallow it. **Deliberately read-only** — a
+  per-tenant migration fan-out needs a terminal and a human watching it, and a button that starts
+  one from a browser tab is a button that eventually gets pressed by accident. Drift also folds into
+  the alert sweep, so it inherits the digest for free.
+- `GET`/`PUT /organizations/:orgId/feature-overrides` (`platform:operate` **plus** a reason —
+  deliberately not `platform:billing`, which covers the commercial dials, not the product's shape).
+  Stored as `Organization.featureOverrides`, SQL `NULL` when empty rather than `{}`, restricted to a
+  17-key allowlist. `PUT` **replaces**; `{}` clears. Granting past what the tier includes is allowed
+  and must be deliberate: without `acknowledgeGrants` it is a **422 `OVERRIDE_GRANTS_BEYOND_PLAN`**
+  naming the keys, and the audit row `organization.feature_overrides_set` carries the reason, the
+  IP, and the before and after — awaited, not detached, because an override that is not on the
+  record is an override nobody can explain later.
+- `GET /organizations/:orgId/timeline?days=` (`platform:read`) — one merged incident timeline per
+  workspace, from audit rows, backup runs, alert conditions appearing and clearing, maintenance
+  broadcasts and failed platform email. It is the Org 360 page's narrative half, and like the rest
+  of that page it composes existing sources rather than adding another writer.
+- Growth forecasting refuses twice, and says which: **too few points** (fewer than 6 samples, or a
+  span under 3 days) and **too noisy** (an R² below 0.5). Both answers name the shortfall with its
+  number in it. A confident projection that describes nothing is worse than no projection.
 
 ## Public retention doors
 

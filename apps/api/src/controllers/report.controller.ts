@@ -13,7 +13,13 @@
  */
 import { Router, type Request } from "express";
 import PDFDocument from "pdfkit";
-import { permissions } from "@timesheet/shared";
+import {
+  permissions,
+  qualityDisciplineFindingTypes,
+  resolvedSecurityFindingStatuses,
+  securityDisciplineFindingTypes,
+  unresolvedSecurityFindingStatuses
+} from "@timesheet/shared";
 import type { Prisma, TicketStatus } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { DAY_MS, parseDayWindow, resolveTimestampWindow, windowDays } from "../utils/date-window.js";
@@ -643,9 +649,45 @@ reportRouter.get("/ticket-insights", async (_req, res) => {
 });
 
 const SECURITY_SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
-const SECURITY_TYPES = ["SAST", "DAST", "SSAT", "SSCT", "VAPT"] as const;
-const OPEN_FINDING_STATUSES = ["OPEN", "ACKNOWLEDGED"] as const;
-const RESOLVED_FINDING_STATUSES = ["FIXED", "ACCEPTED_RISK"] as const;
+/** The by-type breakdown iterates a shared constant rather than a literal copy of one: a type this
+ *  list did not know about was ingested, stored, counted in `totalOpen` — and then missing from the
+ *  chart that is supposed to say where the risk is. It is the SECURITY slice of
+ *  `securityFindingTypes`, because this chart sits under the security totals; the quality types get
+ *  their own list in the `quality` block below. */
+const SECURITY_TYPES = securityDisciplineFindingTypes;
+/**
+ * This page's definition of "still a problem" and "done with", read from the shared bucket map
+ * (`securityFindingStatusBuckets`) rather than typed out here — see that map's comment for the
+ * four hand-maintained copies this replaced and what a missing status did to them.
+ *
+ * THE DECISION THIS PAGE MAKES: `unresolved` = open + pending, so a finding somebody has marked
+ * fixed but no scan has confirmed still counts on every number below — the open totals, the
+ * severity breakdown, the per-repo table and the risk score. The alternative would let a
+ * workspace's headline security figure be improved by closing tickets rather than by fixing code.
+ * `resolved` stays strictly the confirmed-or-accepted set, which is what
+ * `meanTimeToRemediateHours` should measure: time until a fix was PROVEN, not until it was
+ * claimed.
+ */
+const OPEN_FINDING_STATUSES = unresolvedSecurityFindingStatuses;
+const RESOLVED_FINDING_STATUSES = resolvedSecurityFindingStatuses;
+
+/**
+ * THE OTHER DECISION THIS PAGE MAKES, and the one SonarQube/ESLint ingestion forced: every headline
+ * number on this page is SECURITY-discipline only.
+ *
+ * Quality findings (Sonar's bugs and code smells, lint results) arrive through the same webhook into
+ * the same table, and a busy monorepo produces them by the thousand. Counted here they would climb
+ * the risk score, fill the by-severity chart with MEDIUMs, dominate the per-repo and per-module
+ * tables, and bury the one CRITICAL that actually matters. Nothing about that would be a bug — every
+ * row is a real thing a real tool found — which is exactly why it is dangerous: the page would keep
+ * working and quietly stop measuring security.
+ *
+ * They are NOT dropped. `quality` in the response below carries their own totals, severity mix and
+ * type breakdown, so the page can show them in their own section — see SecurityInsights.tsx. One
+ * table, two questions, answered separately.
+ */
+const SECURITY_DISCIPLINE = { type: { in: securityDisciplineFindingTypes } };
+const QUALITY_DISCIPLINE = { type: { in: qualityDisciplineFindingTypes } };
 
 /** Weighted, age-decayed org-wide risk score — see docs/ROADMAP.md's "Competitive parity"
  *  section (Phase 2). Deliberately simple (not trying to match Black Duck's CVSS-aware BDSA
@@ -667,15 +709,33 @@ function computeRiskScore(openFindings: Array<{ severity: (typeof SECURITY_SEVER
 
 /**
  * Security & DevOps analytics — findings-over-time trend, open-by-severity/type breakdown,
- * mean-time-to-remediate, top repos by finding count, and the org-wide risk score. Powers the
- * Security insights page (Phase 2 of the "Competitive parity" roadmap section) the same way
- * /ticket-insights powers the Insights page — one batched call, everything the page needs.
+ * mean-time-to-remediate, top repos by finding count, open findings per MODULE, and the org-wide
+ * risk score. Powers the Security insights page (Phase 2 of the "Competitive parity" roadmap
+ * section) the same way /ticket-insights powers the Insights page — one batched call, everything
+ * the page needs.
  *
- * WHY "mean time to remediate" uses `updatedAt - createdAt` rather than a dedicated
- * resolvedAt-style column: SecurityFinding has no separate status-change timestamp (unlike
- * Ticket.resolvedAt) — updatedAt is bumped on any field change, so this is an approximation,
- * not an exact remediation-time measurement. Documented here rather than silently treated as
- * precise; a dedicated `resolvedAt` column is a reasonable follow-up if this proves too noisy.
+ * The per-module breakdown is the one figure here no scanner vendor can produce: it needs the work
+ * breakdown (Project → ProjectModule) and the map from repository paths onto it, and a scanner owns
+ * neither. It is only as complete as the routing rules an admin has written, which is why
+ * `openWithoutModuleCount` is reported beside it rather than left for somebody to infer.
+ *
+ * WHAT "MEAN TIME TO REMEDIATE" NOW MEASURES, per finding, in this order:
+ *
+ *   1. `verifiedFixedAt - firstSeenAt` when a scan PROVED the fix — the real answer. That column is
+ *      written only by the verification verdict (security-report.service.ts), never by any human
+ *      action, so this half of the average measures remediation rather than measuring how willing
+ *      somebody was to close a ticket.
+ *   2. `updatedAt - createdAt` otherwise — the old approximation, kept deliberately so that findings
+ *      resolved before verification existed, and findings an admin accepted as risk (which no scan
+ *      will ever confirm), still report SOMETHING instead of vanishing from the figure the day this
+ *      shipped.
+ *
+ * BE HONEST ABOUT (2). `updatedAt` moves on every re-sighting, so a FIXED finding a scanner keeps
+ * reporting inflates its own remediation time — a flaw the deduplication work made worse, and the
+ * reason (1) exists. The two are averaged together rather than reported separately because a
+ * workspace's history is mostly (2) and would otherwise read as a step change on the day it turned
+ * verification on. `verifiedFixedCount` beside it is what says how much of this figure is real:
+ * when that number approaches the resolved count, the average is measurement rather than estimate.
  */
 // Broadened to every authenticated member (was reports:view). NOTE: this deliberately exposes the workspace's security findings / SBOM to all staff — an internal-transparency decision, reversible by restoring requirePermission(REPORTS_VIEW).
 reportRouter.get("/security-insights", async (_req, res) => {
@@ -691,44 +751,104 @@ reportRouter.get("/security-insights", async (_req, res) => {
     resolvedFindings,
     byType,
     topRepos,
-    openYesterday
+    openYesterday,
+    awaitingVerificationCount,
+    openByModuleRows,
+    openWithoutModuleCount,
+    openQualityFindings,
+    qualityByType
   ] = await Promise.all([
     prisma.securityFinding.findMany({
-      where: { status: { in: [...OPEN_FINDING_STATUSES] } },
+      where: { status: { in: OPEN_FINDING_STATUSES }, ...SECURITY_DISCIPLINE },
       select: { severity: true, createdAt: true }
     }),
     prisma.securityFinding.findMany({
-      where: { createdAt: { gte: rangeStart } },
+      where: { createdAt: { gte: rangeStart }, ...SECURITY_DISCIPLINE },
       select: { createdAt: true, severity: true }
     }),
     prisma.securityFinding.findMany({
-      where: { status: { in: [...RESOLVED_FINDING_STATUSES] }, updatedAt: { gte: rangeStart } },
-      select: { createdAt: true, updatedAt: true }
+      where: { status: { in: RESOLVED_FINDING_STATUSES }, updatedAt: { gte: rangeStart }, ...SECURITY_DISCIPLINE },
+      // `firstSeenAt` is when this exact problem was FIRST reported, which is what "how long did it
+      // take to remediate" should be measured from — `createdAt` is the row's birthday and only
+      // happens to be the same thing for a finding that was never deduplicated.
+      select: { createdAt: true, updatedAt: true, firstSeenAt: true, verifiedFixedAt: true }
     }),
-    prisma.securityFinding.groupBy({ by: ["type"], where: { status: { in: [...OPEN_FINDING_STATUSES] } }, _count: true }),
+    prisma.securityFinding.groupBy({ by: ["type"], where: { status: { in: OPEN_FINDING_STATUSES }, ...SECURITY_DISCIPLINE }, _count: true }),
     prisma.securityFinding.groupBy({
       by: ["repository"],
-      where: { status: { in: [...OPEN_FINDING_STATUSES] }, repository: { not: null } },
+      where: { status: { in: OPEN_FINDING_STATUSES }, repository: { not: null }, ...SECURITY_DISCIPLINE },
       _count: true,
       orderBy: { _count: { repository: "desc" } },
       take: 10
     }),
-    prisma.securityFinding.count({ where: { status: { in: [...OPEN_FINDING_STATUSES] }, createdAt: { lt: sinceLocal } } })
+    prisma.securityFinding.count({ where: { status: { in: OPEN_FINDING_STATUSES }, createdAt: { lt: sinceLocal }, ...SECURITY_DISCIPLINE } }),
+    // Claimed fixed, waiting on a scan to agree. A LIVE count rather than a windowed one, because
+    // unlike everything else on this page it is a queue somebody can act on right now — and it is
+    // the number that says whether verification is actually running or just switched on.
+    prisma.securityFinding.count({ where: { verificationState: "AWAITING_PROOF", ...SECURITY_DISCIPLINE } }),
+    // WHICH PART OF THE PRODUCT CARRIES THE RISK — grouped on the module the ingest resolved from
+    // the finding's repository and path (see services/finding-routing.service.ts). Uses the same
+    // `OPEN_FINDING_STATUSES` as every other number on this page, so a module's count and the
+    // headline total are answering the same question.
+    prisma.securityFinding.groupBy({
+      by: ["moduleId"],
+      where: { status: { in: OPEN_FINDING_STATUSES }, moduleId: { not: null }, ...SECURITY_DISCIPLINE },
+      _count: true,
+      orderBy: { _count: { moduleId: "desc" } },
+      take: 10
+    }),
+    // Reported beside the breakdown rather than hidden by it: a table of five modules means
+    // something very different when four hundred findings are routed nowhere. This is also the
+    // number that tells an admin their rule set has a hole in it.
+    prisma.securityFinding.count({ where: { status: { in: OPEN_FINDING_STATUSES }, moduleId: null, ...SECURITY_DISCIPLINE } }),
+    // --- The quality discipline, counted entirely separately ------------------------------------
+    // Two queries, not nine: this section answers "how big is the code-quality backlog and what is
+    // in it", which is all the page needs to render it beside the security numbers. Everything the
+    // security half computes and this one does not — a risk score, a remediation average, a per-repo
+    // table — is deliberately absent, because those figures are claims about EXPOSURE and a code
+    // smell is not one.
+    prisma.securityFinding.findMany({
+      where: { status: { in: OPEN_FINDING_STATUSES }, ...QUALITY_DISCIPLINE },
+      select: { severity: true }
+    }),
+    prisma.securityFinding.groupBy({ by: ["type"], where: { status: { in: OPEN_FINDING_STATUSES }, ...QUALITY_DISCIPLINE }, _count: true })
   ]);
 
-  const openBySeverity = Object.fromEntries(
-    SECURITY_SEVERITIES.map((s) => [s, openFindings.filter((f) => f.severity === s).length])
-  ) as Record<(typeof SECURITY_SEVERITIES)[number], number>;
+  // Names are looked up after the aggregation rather than joined into it — `groupBy` cannot include
+  // a relation, and this is one small query against at most ten ids. Skipped entirely when the
+  // breakdown is empty, which is every workspace that has not written routing rules yet: there is
+  // nothing to name, so there is no reason to ask.
+  const breakdownModuleIds = openByModuleRows.map((row) => row.moduleId).filter((id): id is string => Boolean(id));
+  const breakdownModules = breakdownModuleIds.length
+    ? await prisma.projectModule.findMany({
+        where: { id: { in: breakdownModuleIds } },
+        select: { id: true, name: true, project: { select: { name: true, code: true } } }
+      })
+    : [];
+  const moduleById = new Map(breakdownModules.map((module) => [module.id, module]));
+
+  const countBySeverity = (rows: Array<{ severity: (typeof SECURITY_SEVERITIES)[number] }>) =>
+    Object.fromEntries(SECURITY_SEVERITIES.map((s) => [s, rows.filter((f) => f.severity === s).length])) as Record<
+      (typeof SECURITY_SEVERITIES)[number],
+      number
+    >;
+  const openBySeverity = countBySeverity(openFindings);
 
   const findingsOverTime = weeks.map((weekStart) => ({
     weekStart: weekStart.toISOString().slice(0, 10),
     count: findingsInRange.filter((f) => weekIndexFor(f.createdAt, weeks) === weeks.indexOf(weekStart)).length
   }));
 
+  // Proof where there is proof, the old approximation where there is not — see this route's header
+  // for why the two are averaged together rather than reported as separate figures.
+  const remediationHours = resolvedFindings.map((f) =>
+    f.verifiedFixedAt
+      ? (f.verifiedFixedAt.getTime() - f.firstSeenAt.getTime()) / (1000 * 60 * 60)
+      : (f.updatedAt.getTime() - f.createdAt.getTime()) / (1000 * 60 * 60)
+  );
   const meanTimeToRemediateHours =
-    resolvedFindings.length > 0
-      ? resolvedFindings.reduce((sum, f) => sum + (f.updatedAt.getTime() - f.createdAt.getTime()) / (1000 * 60 * 60), 0) / resolvedFindings.length
-      : 0;
+    remediationHours.length > 0 ? remediationHours.reduce((sum, hours) => sum + hours, 0) / remediationHours.length : 0;
+  const verifiedFixedCount = resolvedFindings.filter((f) => f.verifiedFixedAt).length;
 
   const riskScore = computeRiskScore(openFindings);
   const riskScoreYesterday = computeRiskScore(openFindings.filter((f) => f.createdAt < sinceLocal));
@@ -740,9 +860,48 @@ reportRouter.get("/security-insights", async (_req, res) => {
     byType: SECURITY_TYPES.map((type) => ({ type, count: byType.find((row) => row.type === type)?._count ?? 0 })),
     findingsOverTime,
     meanTimeToRemediateHours: Number(meanTimeToRemediateHours.toFixed(1)),
+    /** How many of the findings behind that average were confirmed gone by a scan rather than
+     *  estimated from `updatedAt`. Reported beside the average, never folded into it, so a reader can
+     *  see how much of the number is measurement. */
+    verifiedFixedCount,
+    awaitingVerificationCount,
     topRepositories: topRepos.map((row) => ({ repository: row.repository ?? "Unknown", count: row._count })),
+    /** Open findings per module of the work breakdown. A module whose row has vanished between the
+     *  aggregation and the name lookup (deleted mid-request) is reported as "Unknown" rather than
+     *  dropped — its findings are still open and still counted in `totalOpen`. */
+    openByModule: openByModuleRows.map((row) => {
+      const module = row.moduleId ? moduleById.get(row.moduleId) : undefined;
+      return {
+        moduleId: row.moduleId,
+        moduleName: module?.name ?? "Unknown",
+        projectName: module?.project.name ?? "Unknown",
+        projectCode: module?.project.code ?? null,
+        count: row._count
+      };
+    }),
+    /** Open findings no path rule has claimed. Not an error — it is every finding in a workspace
+     *  that has not written a rule yet, and it is what makes the breakdown above honest. */
+    openWithoutModuleCount,
     riskScore,
-    riskScoreYesterday
+    riskScoreYesterday,
+    /**
+     * THE CODE-QUALITY BACKLOG, in its own block so the page can render it in its own section.
+     *
+     * Every number above this line is security-only (see `SECURITY_DISCIPLINE`). These three are the
+     * quality equivalent, and they are deliberately fewer: a count, a severity mix and a type
+     * split — no risk score, no trend, no remediation average. Those figures are statements about
+     * exposure, and giving code smells one would be exactly the conflation this split exists to
+     * prevent. `totalOpen` here plus `totalOpen` above is the whole open backlog, which is a number
+     * nothing on this page reports, on purpose: adding them together answers no question anyone has.
+     */
+    quality: {
+      totalOpen: openQualityFindings.length,
+      openBySeverity: countBySeverity(openQualityFindings),
+      byType: qualityDisciplineFindingTypes.map((type) => ({
+        type,
+        count: qualityByType.find((row) => row.type === type)?._count ?? 0
+      }))
+    }
   });
 });
 

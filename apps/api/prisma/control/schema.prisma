@@ -62,6 +62,28 @@ model Organization {
   seatLimitOverride              Int?
   aiMonthlyBudgetCeilingOverride Decimal? @db.Decimal(10, 2)
 
+  /// The GENERAL per-org escape from the tier defaults (5.0.0), as `{ "goalsEnabled": true }`.
+  ///
+  /// WHY A JSON COLUMN AND NOT TWENTY MORE `*Override` COLUMNS. The two above are the whole of the
+  /// per-org escape hatch, and they cover seats and AI budget. Everything else — every planning
+  /// capability, every quota, face verification — had no escape at all, so enabling one beta for
+  /// one design partner meant moving their entire tier and quietly handing them nine other
+  /// features nobody agreed to. A column per entitlement would be a migration every time a
+  /// capability is added, which is the reason the escape never got built.
+  ///
+  /// KEYS ARE AN ALLOWLIST, NOT FREE TEXT. `services/platform-feature-overrides.service.ts` owns
+  /// the set, and a key outside it is DROPPED on read rather than honoured — a typo, or a key from
+  /// a build that has been rolled back, must not silently entitle anybody.
+  ///
+  /// SEATS AND AI BUDGET ARE DELIBERATELY NOT OVERRIDABLE HERE. They already have their own
+  /// columns, read by `plan-limits.service.ts`, and a second place to set the same number is a bug
+  /// waiting for the day the two disagree.
+  ///
+  /// AN OVERRIDE THAT GRANTS BEYOND THE PLAN IS A DECISION, NOT A SETTING. The route that writes
+  /// this refuses a body that grants a capability the tier forbids unless the operator explicitly
+  /// acknowledges that is what they are doing, and the `platformAudit` row names every granting key.
+  featureOverrides               Json?
+
   /// Self-serve billing (see docs/ROADMAP.md's "Monetization readiness" theme and
   /// billing.controller.ts) — set once the org's own SUPER_ADMIN completes a Stripe Checkout
   /// session. Null for every org that's never gone through checkout (manually-provisioned or
@@ -125,6 +147,8 @@ model Organization {
   backupRuns         BackupRun[]
   dbSamples          TenantDbSample[]
   aiAdvice           PlatformAiAdvice[]
+  usageSnapshots     OrgUsageSnapshot[]
+  alertStates        PlatformAlertState[]
 
   @@index([status])
 }
@@ -143,6 +167,12 @@ model PlatformMailSettings {
   encryptedPassword String?  @db.Text
   fromAddress       String?  @db.VarChar(255)
   replyTo           String?  @db.VarChar(255)
+  /// Where a `sales.lead` notification is delivered. It lives HERE rather than as a constant at the
+  /// send site because the inbox a deployment wants sales enquiries in is a per-deployment fact,
+  /// not a property of the product — a self-hosted install's sales address is not ours. Null means
+  /// "use the shipped default" (services/sales-lead.service.ts#DEFAULT_SALES_INBOX), so the form
+  /// works on day one and is still reconfigurable without a redeploy.
+  salesInboxAddress String?  @db.VarChar(255)
   updatedAt         DateTime @updatedAt
 }
 
@@ -179,7 +209,10 @@ model PlatformEmailLog {
   errorMessage   String?             @db.Text
   dayMarker      String?             @db.VarChar(24)
   isTest         Boolean             @default(false)
-  /// The rendered message, kept so a FAILED row can be resent exactly as it was.
+  /// The rendered message, kept so a FAILED row can be resent exactly as it was. `{ html }`, plus
+  /// `replyTo` when the message named a per-message reply address (a sales-lead notification
+  /// replies to the prospect, not to the deployment) — that is part of "as it was" and has no
+  /// column of its own on purpose. Older rows carry `{ html }` alone and resend without one.
   payload        Json?
   metadata       Json?
   createdAt      DateTime            @default(now())
@@ -224,6 +257,68 @@ model TrialFeedback {
   @@index([organizationId, createdAt])
 }
 
+/// Somebody who asked to talk to us through the public contact form, and where that conversation
+/// got to.
+///
+/// WHY THE CONTROL PLANE AND NOT A TENANT: a lead has no workspace. That is the whole point of one
+/// — the person filling the form is deciding whether to become a customer, so there is no tenant
+/// database to write to and no `resolveTenant` that could find one. Deliberately NO relation to
+/// `Organization` for the same reason (the same shape as `PlatformMailSettings`): if a lead ever
+/// does become a workspace, the link worth having is the audit trail, not a foreign key that would
+/// be null for every row that matters most.
+///
+/// `interests` is JSON because it is a multi-select whose options are a marketing decision that
+/// changes faster than a migration should. Everything else that looks like an enum is a short
+/// string, exactly like `TrialFeedback.stage`: these are values a sales process renames, and
+/// renaming a MySQL enum is a table rewrite.
+///
+/// `isFreeMailDomain` is a FLAG, never a gate. Signup refuses a free-mail address because a trial
+/// is per organisation; a sales enquiry from a founder's Gmail is a real lead, and refusing it
+/// would lose the enquiry to protect nothing. See services/sales-lead.service.ts.
+model SalesLead {
+  id String @id @default(uuid())
+
+  // Who they are.
+  name    String  @db.VarChar(255)
+  email   String  @db.VarChar(255)
+  company String  @db.VarChar(255)
+  role    String? @db.VarChar(120)
+  country String? @db.VarChar(120)
+  phone   String? @db.VarChar(40)
+
+  // What they are asking for — the qualification block the notification email leads with.
+  teamSize           String @db.VarChar(24)
+  deploymentInterest String @db.VarChar(24)
+  timeline           String @db.VarChar(24)
+  interests          Json
+  message            String @db.Text
+
+  /// Free-mail address: shown in the console, never acted on by the server.
+  isFreeMailDomain Boolean @default(false)
+
+  // Where the enquiry came from. Captured because "which page and which campaign produces leads
+  // that close" is the only question the marketing pages can be judged on, and it cannot be
+  // reconstructed later from the row itself.
+  sourcePage  String? @db.VarChar(255)
+  referrer    String? @db.VarChar(500)
+  utmSource   String? @db.VarChar(120)
+  utmMedium   String? @db.VarChar(120)
+  utmCampaign String? @db.VarChar(120)
+
+  // The pipeline. Owned by a human in the console; nothing here is ever set by the public route
+  // except the initial NEW.
+  status      String    @default("NEW") @db.VarChar(16)
+  ownerLabel  String?   @db.VarChar(255)
+  notes       String?   @db.Text
+  contactedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
 /// The control plane's own audit trail — who provisioned, rescued, held, deleted, changed a tier.
 /// Tenant audit logs live in tenant databases and cannot record an action taken ON the tenant
 /// from outside it; this is where those go. Never contains tenant content.
@@ -237,8 +332,86 @@ model PlatformAuditLog {
   metadata   Json?
   createdAt  DateTime @default(now())
 
+  /// WHY the operator says they did it. The tenant `AuditLog` grew `before`/`after` because "an
+  /// autonomous change nobody can reconstruct is an autonomous change nobody can review"; this
+  /// column exists for the harder half of the same problem. The control plane's rows record an
+  /// action taken ON a customer from outside their workspace, where the customer cannot see the
+  /// context and the reviewer six months later has no ticket to read. A free-text line typed at
+  /// the moment of the action is the only thing that survives.
+  ///
+  /// Nullable, because the routes that require one enforce it at the door (middleware
+  /// `requirePlatformReason`) and the rows written by workers and by the customer themselves
+  /// genuinely have no operator to ask.
+  reason String? @db.Text
+
+  /// The state that changed, same contract and same reasoning as the tenant AuditLog's pair:
+  /// `metadata` is freeform and every call site invented its own shape, so it can describe an
+  /// action but cannot be diffed.
+  before Json?
+  after  Json?
+
+  /// The column the tenant AuditLog has had since its first migration and never wrote. Here it is
+  /// written from the start: an administrative change made across tenant boundaries is exactly the
+  /// row where "from where" matters.
+  ipAddress String? @db.VarChar(64)
+
   @@index([createdAt])
   @@index([entity, entityId])
+}
+
+/// An irreversible console action, queued for a second operator to countersign.
+///
+/// WHY REPLAY AND NOT A FLAG. The obvious design is a boolean on the target ("approved: true") that
+/// the destructive service checks. That fails the moment the world moves between the request and
+/// the approval: an org that started paying, a snapshot that has since been deleted, a tier that
+/// changed. Storing the REQUEST — the route, its params and its body — and re-running the ordinary
+/// handler on approval means every guard the handler already has runs again, against the database
+/// as it is at approval time. An approval is therefore a decision to run the action now, not a
+/// stored decision replayed blind. Nothing in the destructive services changed to support this;
+/// they already take `(id…, { actorLabel })` and re-derive everything else themselves.
+///
+/// `params`/`body` are JSON rather than columns because five different actions have five different
+/// shapes, and the only consumer is the executor registered for `action`, which validates them.
+model PendingPlatformAction {
+  id String @id @default(uuid())
+
+  /// One of `@timesheet/shared`'s `platformTwoPersonActions`. VARCHAR, not an ENUM — same reason
+  /// as everywhere else in this schema.
+  action String @db.VarChar(40)
+  /// Recorded for the console and the audit trail. The executor is looked up by `action`, never by
+  /// this — a stored path must not be able to choose which code runs.
+  route  String @db.VarChar(255)
+  method String @db.VarChar(8)
+  params Json
+  body   Json
+
+  /// Required. A request nobody explained is a request nobody can approve.
+  reason String @db.Text
+
+  requestedById    String
+  requestedByLabel String   @db.VarChar(255)
+  requestedAt      DateTime @default(now())
+  requestedIp      String?  @db.VarChar(64)
+
+  /// PENDING | APPROVED | REJECTED | EXPIRED | FAILED.
+  status String @default("PENDING") @db.VarChar(16)
+
+  /// Never equal to `requestedById`: the whole guarantee is that two people were involved, and a
+  /// two-person rule one person can satisfy alone is decoration. Enforced in the service, not by a
+  /// constraint, because the check needs to produce an explanation.
+  approvedById    String?
+  approvedByLabel String?   @db.VarChar(255)
+  approvedAt      DateTime?
+
+  /// Why it was refused, or what went wrong when the replayed handler threw. A queue that silently
+  /// swallows failures is a queue that quietly does nothing.
+  resolutionNote String? @db.Text
+
+  /// After this, the request can only be read, never approved. See PLATFORM_APPROVAL_TTL_HOURS.
+  expiresAt DateTime
+
+  @@index([status, expiresAt])
+  @@index([requestedById])
 }
 
 /// The physical database a tenant's data lives in. `encryptedDsn` uses the same AES-256-GCM
@@ -410,7 +583,61 @@ model PlatformAdminUser {
   createdAt    DateTime            @default(now())
   lastLoginAt  DateTime?
 
-  sessions PlatformAdminSession[]
+  /// Which of `@timesheet/shared`'s `platformRoles` this operator holds. VARCHAR, not a MySQL
+  /// ENUM, for the reason stated all over this schema: renaming an ENUM value is a table rewrite.
+  ///
+  /// THE DEFAULT IS THE RESTRICTIVE ONE, AND THE MIGRATION MUST CONTRADICT IT. A column added by
+  /// migration has to default to the least power, because a row that misses its initialisation
+  /// should be under-privileged rather than over-privileged — the same rule `PlanTierLimit`'s
+  /// entitlement blocks state. But `prisma/control/seed.ts` creates the bootstrap admin with an
+  /// upsert whose `update` branch is `{}`, and the seed never re-runs on upgrade. So on every
+  /// existing install this default would silently demote the only account that can reach the
+  /// console — including the one running the upgrade — and there would be nobody left able to
+  /// promote anyone. The migration that introduces this column therefore carries idempotent SQL
+  /// promoting every pre-existing admin to OWNER: they already had unrestricted power, and an
+  /// upgrade must preserve what people had, not quietly take it away.
+  role String @default("READ_ONLY") @db.VarChar(16)
+
+  /// --- Second factor ---------------------------------------------------------------------
+  /// TOTP (RFC 6238), verified in-house — see utils/totp.ts for why there is no dependency here.
+  ///
+  /// `mfaEnabled` is the gate; `mfaSecret` is the shared secret, stored with
+  /// utils/encryption.ts#encryptSecret (AES-256-GCM) because unlike a password it MUST be read
+  /// back to verify a code. A secret is written at enrolment and only becomes live once the
+  /// operator has proved they can generate a code from it — enrolling somebody into a factor
+  /// they cannot produce is how a console locks out its own owner.
+  mfaEnabled    Boolean   @default(false)
+  mfaSecret     String?   @db.Text
+  mfaEnrolledAt DateTime?
+
+  /// The last 30-second time step this account successfully consumed. A TOTP code stays valid for
+  /// its whole step (plus the skew window), so without this a code observed in transit — over the
+  /// operator's shoulder, in a screen share, in a proxy log — can be replayed for up to a minute.
+  /// Refusing any step at or below the last one used costs one column and closes that window.
+  mfaLastUsedStep BigInt?
+
+  sessions      PlatformAdminSession[]
+  recoveryCodes PlatformAdminRecoveryCode[]
+}
+
+/// A single-use way back in when the authenticator is gone — a lost phone must not mean a lost
+/// console.
+///
+/// HASHED, NOT ENCRYPTED. `mfaSecret` above is encrypted because the server has to read it back to
+/// compute a code. A recovery code is the opposite: it is only ever COMPARED against what somebody
+/// typed, exactly like a password or a refresh secret, so it is stored with utils/security.ts's
+/// `hashToken` and is unreadable even to us. One row per code rather than a JSON array, so
+/// "consume exactly one, atomically" is an UPDATE with a WHERE rather than a read-modify-write two
+/// sign-ins can race.
+model PlatformAdminRecoveryCode {
+  id          String            @id @default(uuid())
+  adminUserId String
+  adminUser   PlatformAdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  codeHash    String
+  usedAt      DateTime?
+  createdAt   DateTime          @default(now())
+
+  @@index([adminUserId, usedAt])
 }
 
 enum PlatformAdminStatus {
@@ -520,6 +747,28 @@ model PlanTierLimit {
   /// one document rolling up every project, everyone's hours and every open security finding, then
   /// mailed to addresses with no account here — rather than for what it costs to produce.
   practiceUpdateEnabled Boolean @default(false)
+
+  /// --- List price (5.0.0) ------------------------------------------------------------------
+  /// What a seat on this tier COSTS, per month, in minor units of `listPriceCurrency`.
+  ///
+  /// WHY IT IS HERE AT ALL: until 5.0.0 no price existed anywhere in this database.
+  /// `PlatformBillingSettings` holds Stripe Price IDs, whose amounts live in Stripe, and the very
+  /// common deployment that assigns tiers by hand has no Stripe account at all. So the console
+  /// could report seats, tickets and AI spend and could not report a single unit of revenue.
+  ///
+  /// NULLABLE, AND NULL IS NOT ZERO. Null means "this tier has no list price" — Enterprise, which
+  /// is priced per contract. A null must never be rendered or summed as 0: an operator who reads a
+  /// confident $0 next to their largest customers will quote that number to somebody. The console
+  /// shows "Not set", excludes those workspaces from the MRR total, and says how many it excluded.
+  ///
+  /// IT IS A LIST PRICE, NOT BILLED REVENUE. A discount, an annual commitment or a negotiated
+  /// contract all differ from it. Seeded from `PLAN_TIER_LIST_PRICES` in @timesheet/shared, which
+  /// is the same constant the landing page's pricing cards render — so the page and the operator's
+  /// own MRR cannot disagree about what a seat costs.
+  listPricePerSeatMinor Int?
+  /// ISO-4217, one currency per deployment. VARCHAR rather than an enum for the reason every
+  /// enum-shaped column in this schema is: renaming a MySQL ENUM is a table rewrite.
+  listPriceCurrency     String @default("USD") @db.VarChar(3)
 }
 
 /// Platform-wide Stripe configuration (id = "global") — one Stripe account across every org on
@@ -762,10 +1011,121 @@ model TenantDbSample {
   bufferPoolHitRate    Float?
   slowQueries          Float?
 
+  /// --- Schema-shape findings (5.0.0) ---------------------------------------------------------
+  /// `getDatabaseMetrics` has always computed these two, raised an alert from them and then thrown
+  /// them away, so the only question an operator ever actually asks about them — "when did this
+  /// start?" — had no answer anywhere. Two counts make the trend; the names make it actionable.
+  ///
+  /// NULLABLE, AND NULL IS NOT ZERO. Every sample taken before this column existed genuinely does
+  /// not know, and a backfilled 0 would read as "we checked that hour and the schema was clean",
+  /// which is precisely the false history the chart is being built to avoid.
+  tablesWithoutPrimaryKey Int?
+  indexHeavyTables        Int?
+  /// The names behind those two counts, `{ "tablesWithoutPrimaryKey": [...], "indexHeavyTables": [...] }`,
+  /// capped so one pathological schema cannot make an hourly row enormous. Table NAMES only —
+  /// still aggregate, still nothing about what any row says, the same line every other
+  /// cross-tenant column in this schema holds.
+  schemaFindings          Json?
+
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, sampledAt])
   @@index([sampledAt])
+}
+
+/// One row per workspace per day: what the business looked like that day.
+///
+/// WHY THIS EXISTS (5.0.0). `platform-admin-analytics.service.ts` opened a connection to EVERY
+/// tenant database on EVERY page load and returned a live snapshot with no history. Two faults in
+/// one design: it got slower with every customer won, and because nothing was ever kept, no trend,
+/// cohort, churn or retention question could be asked AT ALL. Not "was hard to answer" — could not
+/// be asked, because the data to answer it was never written down. A nightly worker writes this
+/// table and the console reads it, so the fleet loop happens once a night instead of once a click.
+///
+/// THERE IS NO BACKFILL AND THERE CANNOT BE ONE. Every figure below is a point-in-time count of
+/// mutable tenant state; yesterday's is simply gone. The series therefore starts on the day this
+/// ships, and every reader must survive a one-row history without dividing by zero or rendering a
+/// confident percentage off two points.
+///
+/// STILL AGGREGATE-ONLY, and that is not negotiable. Counts, sums and timestamps. No ticket title,
+/// no comment, no person, no email address — the same guarantee `platform-admin-analytics.service`
+/// exists to uphold, now written down once a night instead of read once a click. A future need for
+/// row-level tenant content does not belong in this table.
+model OrgUsageSnapshot {
+  id             String   @id @default(uuid())
+  organizationId String
+  /// Midnight UTC of the day this row describes. The unique key with `organizationId`, so a
+  /// re-run of the nightly sweep UPDATES the day instead of appending a second row — which is what
+  /// stops a retried pass double-counting every workspace into the fleet totals.
+  day            DateTime
+  /// When the reading was actually taken, which is not `day` on a re-run or a manual sweep.
+  capturedAt     DateTime @default(now())
+
+  /// Active, non-agent users — the same predicate `countActiveSeats()` uses, because this is the
+  /// number that gets BILLED. Agents are a real `User` row so assignment and audit keep working;
+  /// charging for them would make the roster a per-agent upsell by accident.
+  activeSeats Int
+  /// Automation identities, counted SEPARATELY rather than folded in. Adoption of the agent roster
+  /// is worth seeing, and keeping the two columns apart is what makes "MRR never bills a robot" a
+  /// property a test can break rather than a comment nobody re-reads.
+  agentSeats  Int  @default(0)
+  /// The ceiling in force that day — the org's override, else the tier's. Kept per-row because the
+  /// tier's limit is editable, and a seat-pressure chart drawn against TODAY's ceiling would
+  /// silently rewrite history the moment somebody retunes a plan.
+  seatLimit   Int
+
+  /// Tickets by status, as `{ "OPEN": 12, … }`. JSON rather than a column per status because the
+  /// status vocabulary is admin-extensible (see the tenant schema's custom workflows) and a column
+  /// per status would need a migration every time a customer invents one.
+  ticketCountsByStatus Json
+  /// The same map summed, denormalised so "total work in the fleet" is one aggregate rather than a
+  /// JSON walk over every row in the window.
+  ticketsTotal         Int
+  /// OPEN + IN_PROGRESS + IN_REVIEW + REOPENED — the backlog, which is the half that trends.
+  ticketsOpen          Int
+
+  /// Month-to-date at the moment of capture, in USD. Month-to-date rather than same-day because
+  /// that is the figure the AI budget ceiling is enforced against, so the two are comparable.
+  aiSpendMonthToDateUsd Decimal @db.Decimal(12, 4)
+  /// The ceiling that spend is measured against, same reasoning as `seatLimit`.
+  aiBudgetCeilingUsd    Decimal @db.Decimal(10, 2)
+
+  /// Outbound tenant mail, month-to-date, counts only. Never a recipient, subject or body.
+  emailsSentMonthToDate   Int
+  emailsFailedMonthToDate Int
+
+  /// Total size of the workspace's database, if a `TenantDbSample` was taken recently. Read from
+  /// THIS database rather than by opening the tenant's — the hourly sampler already paid that cost,
+  /// and there is no reason to pay it twice. Null when the sampler has not reached the org yet.
+  databaseBytes Float?
+
+  /// The most recent sign-in in the workspace. The one field that answers "have they gone quiet",
+  /// which is the leading indicator of every churn conversation.
+  lastActivityAt DateTime?
+
+  /// The commercial state AS IT STOOD THAT DAY. All VARCHAR rather than the `PlanTier`/`OrgStatus`
+  /// enums above, deliberately: this is a historical record, and an enum value that is later
+  /// renamed or retired would either rewrite the past or make old rows unreadable. The migration
+  /// rule this schema follows for the same reason — enum-shaped columns are VARCHAR, because
+  /// renaming a MySQL ENUM is a table rewrite.
+  planTier             String    @db.VarChar(24)
+  status               String    @db.VarChar(24)
+  trialStartedAt       DateTime?
+  trialEndsAt          DateTime?
+  trialTier            String?   @db.VarChar(24)
+  /// Whether a Stripe subscription existed that day. The lifecycle signal that separates "paid" from
+  /// "on a tier somebody set by hand", which are the same `planTier` and very different businesses.
+  stripeSubscriptionId String?   @db.VarChar(255)
+
+  /// False when the tenant database could not be read. The row is still written, with the control
+  /// plane's own facts (plan, status, trial clock) intact and the tenant counts left null-ish — a
+  /// gap in a chart is honest, and a false zero looks like a customer who stopped working.
+  reachable Boolean @default(true)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, day])
+  @@index([day])
 }
 
 /// The platform operator's OWN model configuration, entirely separate from any workspace's.
@@ -833,4 +1193,100 @@ model PlatformAiAdvice {
 
   @@index([organizationId, createdAt])
   @@index([createdAt])
+}
+
+/// How the fleet's alerts LEAVE the console (5.0.0), id = "global".
+///
+/// WHY THIS EXISTS. `platform-tenant-health.service.ts#deriveAlerts` has computed real, severity-
+/// tiered fleet alerts since 4.0.0, and every one of them only existed if an operator remembered to
+/// open the Monitoring page. A monitoring system nobody is looking at is a log file with charts.
+/// This row is the operator's answer to "where should these go, and how loud".
+///
+/// SAME "DATABASE ROW, ELSE NOTHING" SHAPE as PlatformMailSettings and PlatformAiSettings, with one
+/// difference: there is no env fallback, deliberately. An alert destination is a deployment
+/// decision somebody must make on purpose; inventing one from an environment variable would send a
+/// customer's workspace name somewhere nobody chose.
+model PlatformAlertSettings {
+  id String @id
+
+  /// The scheduled email. On by default — the whole point is that it does not need switching on
+  /// before it can help — but it sends nothing until something is actually wrong.
+  digestEnabled Boolean @default(true)
+  /// The floor a change has to clear to be worth a message: "critical", "warning" or "info".
+  /// VARCHAR rather than an enum for the reason every enum-shaped column in this schema is.
+  minSeverity   String  @default("warning") @db.VarChar(16)
+  /// Explicit recipients, as a JSON array of addresses. Null or empty means "every ACTIVE platform
+  /// admin", which is the right default and the one that survives somebody leaving.
+  recipients    Json?
+
+  /// The optional outbound webhook — a Slack incoming webhook, a PagerDuty Events URL, anything
+  /// that takes a POST. Null means NOT CONFIGURED, which is a first-class state everywhere that
+  /// reads it: the console says so, the digest skips it silently, and nothing pretends to have
+  /// delivered anywhere.
+  webhookUrl             String? @db.VarChar(500)
+  /// AES-256-GCM (utils/encryption.ts). Optional: when set, every delivery carries
+  /// `X-TimeSphere-Signature: sha256=<hex>` over the raw body, the same scheme
+  /// `webhook-dispatch.service.ts` signs tenant webhooks with, so a receiver can verify us.
+  encryptedWebhookSecret String? @db.Text
+
+  /// Observability for the thing that provides observability. `lastRunAt` moves on every sweep and
+  /// `lastSentAt` only when a message actually went out, so "quiet because nothing changed" and
+  /// "quiet because the worker is dead" are distinguishable from the console.
+  lastRunAt         DateTime?
+  lastSentAt        DateTime?
+  lastWebhookAt     DateTime?
+  lastWebhookStatus String?   @db.VarChar(64)
+
+  updatedAt DateTime @updatedAt
+  updatedBy String?  @db.VarChar(255)
+}
+
+/// What has already been reported, per workspace per condition. This table IS the anti-noise rule.
+///
+/// THE PROBLEM IT SOLVES. A digest that arrives every morning saying the same three things is a
+/// digest people filter into a folder, and the morning it says a fourth thing nobody reads it
+/// either. So the worker reports CHANGES — a condition that is new, one whose severity has gone up,
+/// one that has cleared — and a standing alert that is exactly as it was yesterday is recorded here
+/// and NOT re-sent.
+///
+/// `alertKey` IS THE IDENTITY OF THE CONDITION, NOT OF THE MESSAGE. "Database connections at 84%"
+/// and "…at 87%" are the same condition with different words, so the key is derived from the alert's
+/// area and its stable shape and never from the number in its title — otherwise every percentage
+/// tick would look like a brand-new alert and the noise this table prevents would come back through
+/// the front door.
+///
+/// `reportedSeverity` IS SEPARATE FROM `severity` ON PURPOSE, and it is what makes a failed delivery
+/// self-healing. `severity` is what the last sweep saw; `reportedSeverity` is what somebody was
+/// actually told, and it is only written when a channel accepted the message. A relay that was down
+/// therefore leaves the alert looking new on the next run instead of being silently swallowed.
+///
+/// ROWS ARE RESOLVED, NEVER DELETED (until the workspace is): `firstSeenAt` on a row that has been
+/// through three cycles is the answer to "when did this start", which is the question the org
+/// profile's incident timeline is built to answer.
+model PlatformAlertState {
+  id             String @id @default(uuid())
+  organizationId String
+  alertKey       String @db.VarChar(191)
+
+  /// What the most recent sweep saw.
+  severity String @db.VarChar(16)
+  title    String @db.VarChar(255)
+  detail   String @db.Text
+  area     String @db.VarChar(24)
+
+  firstSeenAt DateTime  @default(now())
+  lastSeenAt  DateTime
+  /// When a message about this condition was last DELIVERED, and at what severity. Both null until
+  /// one actually leaves the building.
+  lastReportedAt   DateTime?
+  reportedSeverity String?   @db.VarChar(16)
+  /// Set on the first sweep the condition is gone. A later recurrence clears it again rather than
+  /// creating a second row, so the timeline reads as one condition coming and going.
+  resolvedAt DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, alertKey])
+  @@index([resolvedAt, severity])
+  @@index([organizationId, lastSeenAt])
 }

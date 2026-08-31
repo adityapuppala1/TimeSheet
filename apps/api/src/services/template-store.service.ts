@@ -17,6 +17,7 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "billing.trial_ending": ["workspace", "billingUrl", "appUrl"],
   "billing.trial_ended": ["workspace", "billingUrl", "appUrl"],
   "billing.payment_failed": ["workspace", "billingUrl", "appUrl"],
+  "billing.plan_changed": ["workspace", "plan", "billingUrl", "appUrl"],
   "timesheet.submitted": ["name", "hours", "date", "project", "managerName", "module", "submodule", "activity", "description", "ticketRef", "appUrl"],
   "timesheet.approved": ["name", "hours", "date", "reviewer", "project", "module", "submodule", "activity", "description", "appUrl"],
   "timesheet.rejected": ["name", "date", "project", "reviewer", "reason", "module", "submodule", "activity", "description", "appUrl"],
@@ -40,6 +41,7 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "digest.weekly": ["name", "weekLabel", "summary", "tablesHtml", "appUrl"],
   "digest.practice_update": ["periodLabel", "headline", "sectionsHtml", "appUrl"],
   "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "appUrl"],
+  "ticket.reopened_digest": ["ticketKey", "title", "closedBy", "scanSummary", "riskVerdict", "survivedText", "fixedText", "slaText", "ticketId", "appUrl"],
   "digest.security_weekly": ["weekLabel", "summary", "riskScore", "appUrl"],
   // Both of these were being SENT and were missing from this registry, so the editor did not list
   // them and no administrator could change a word of them. Reconciled by a test now, not by care.
@@ -69,6 +71,7 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "billing.trial_ending": "Sent 7, 3 and 1 days before a free trial ends, to the workspace's super admins.",
   "billing.trial_ended": "Sent when a free trial expires and the workspace enters its grace window.",
   "billing.payment_failed": "Sent when a renewal payment fails — the workspace is paused, not deleted.",
+  "billing.plan_changed": "The receipt for a plan change — sent to the workspace's super admins when a tier actually changes, not when a seat count syncs.",
   "workspace.find": "Verification code for \"find my workspaces\" — sent only when the address matches one, and expires in 10 minutes.",
   "timesheet.submitted": "Confirmation to the employee when a timesheet enters the approval queue.",
   "timesheet.approved": "Sent when a manager approves a timesheet.",
@@ -95,6 +98,8 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "goal.digest": "Weekly, to a goal's OWNER: which of their goals are off track and which periods close soon. Off by default.",
   "workflow.approval": "A workflow stopped at a gate and is waiting for this person to approve or decline. On by default — it blocks.",
   "ticket.closed_digest": "Security/test-status digest sent when a ticket with ingested findings closes — to the closer + their manager, cc this workspace's admins.",
+  "ticket.reopened_digest":
+    "Sent when a scan proves a claimed fix did not hold — to whoever closed the ticket, the current assignee, and everyone who logged time on it; cc the closer's manager and the module owner.",
   "digest.security_weekly": "Monday-morning AI-authored org-wide security recap (open findings, risk score, tickets past SLA) sent to every ADMIN/SUPER_ADMIN.",
   "maintenance.scheduled": "\"Save your work\" warning a super admin sends to online users before a maintenance window — quotes the window and the admin's message.",
 
@@ -150,6 +155,7 @@ export function sampleVariables(key: string): Record<string, string> {
     "billing.trial_ending": { workspace: "Acme", billingUrl: "https://timesphere.local/app/settings?tab=billing", appUrl: "https://timesphere.local" },
     "billing.trial_ended": { workspace: "Acme", billingUrl: "https://timesphere.local/app/settings?tab=billing", appUrl: "https://timesphere.local" },
     "billing.payment_failed": { workspace: "Acme", billingUrl: "https://timesphere.local/app/settings?tab=billing", appUrl: "https://timesphere.local" },
+    "billing.plan_changed": { workspace: "Acme", plan: "Enterprise", billingUrl: "https://timesphere.local/app/settings?tab=billing", appUrl: "https://timesphere.local" },
     "timesheet.submitted": {
       module: "Payments", submodule: "Checkout", activity: "Development",
       description: "Reworked the retry path so a declined card no longer double-charges.\n\nBlocked for an hour on the sandbox being down.",
@@ -267,6 +273,18 @@ export function sampleVariables(key: string): Record<string, string> {
       findingsText: "Static analysis (SAST):<br />  - [CRITICAL] SQL injection in login handler (semgrep)<br /><br />Secrets scanning (SSAT):<br />  - [HIGH] Hardcoded AWS key (gitleaks)",
       testStatus: "FAILED", appUrl: "https://timesphere.local"
     },
+    "ticket.reopened_digest": {
+      ticketKey: "HICS-OPS-140", title: "SQL injection in the login handler", closedBy: "Avery Stone",
+      scanSummary: "semgrep on acme/api (main), commit 4f2a91c0be31",
+      riskVerdict: "Needs attention — 1 open CRITICAL finding.",
+      survivedText: "  - [CRITICAL] SQL injection in login handler (semgrep) — open 23 days, reported by 14 scans",
+      fixedText: "  - [HIGH] Hardcoded AWS key (semgrep) — open 23 days, reported by 14 scans",
+      slaText: "Reopened. The SLA clock has been restarted — due Wed, 02 Sep 2026 17:00:00 GMT.",
+      // A real-looking id, because the sample set is also what renders the editor's preview — and the
+      // preview's "Open ticket" button is built from it.
+      ticketId: "6f1f0b4e-8d2a-4d55-9b1e-0f2c7a5d31aa",
+      appUrl: "https://timesphere.local"
+    },
     // The face family and the identity digest had NO sample values at all, so their previews rendered
     // the design with every field blank — which reads as a broken template rather than as an
     // unfilled one. Deliberately kept free of scores, images and anything biometric, matching what
@@ -362,8 +380,8 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
   reset: { subject: "Reset your TimeSphere password", html: compiledTemplates.reset(V("resetUrl")) },
   "workspace.find": {
     // THE CODE IS NOT IN THE SUBJECT, deliberately. `sensitive: true` keeps the rendered BODY out
-    // of EmailLog, but the subject is always stored — and Workspace Settings → Email templates
-    // shows recent sends to any workspace admin. A code in the subject would therefore be a live,
+    // of EmailLog, but the subject is always stored — and the Email templates page shows recent
+    // sends to any workspace admin. A code in the subject would therefore be a live,
     // readable credential for ten minutes to an admin of an unrelated workspace, which is exactly
     // the cross-workspace disclosure this whole flow is built to prevent. Caught by reading the
     // EmailLog rows a real send produced.
@@ -373,6 +391,7 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
   "billing.trial_ending": { subject: "Your TimeSphere trial ends soon", html: compiledTemplates.trialEnding(V("workspace"), 3, V("billingUrl")) },
   "billing.trial_ended": { subject: "Your TimeSphere trial has ended", html: compiledTemplates.trialEnded(V("workspace"), 14, V("billingUrl")) },
   "billing.payment_failed": { subject: "A payment for TimeSphere didn't go through", html: compiledTemplates.paymentFailed(V("workspace"), 14, V("billingUrl")) },
+  "billing.plan_changed": { subject: "Your TimeSphere plan is now {{plan}}", html: compiledTemplates.planChanged(V("workspace"), V("plan"), V("billingUrl")) },
 
   "timesheet.submitted": {
     subject: "Timesheet submitted - {{date}}",
@@ -486,6 +505,14 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
     html: compiledTemplates.ticketClosedDigest({
       ticketKey: V("ticketKey"), title: V("title"), closedBy: V("closedBy"), riskVerdict: V("riskVerdict"),
       findingsText: V("findingsText"), testStatus: V("testStatus")
+    })
+  },
+  "ticket.reopened_digest": {
+    subject: "[{{ticketKey}}] A fix did not hold",
+    html: compiledTemplates.ticketReopenedDigest({
+      ticketKey: V("ticketKey"), title: V("title"), closedBy: V("closedBy"), scanSummary: V("scanSummary"),
+      riskVerdict: V("riskVerdict"), survivedText: V("survivedText"), fixedText: V("fixedText"),
+      slaText: V("slaText"), ticketId: V("ticketId")
     })
   },
 

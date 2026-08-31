@@ -405,7 +405,7 @@ export function Team() {
               data={reports.data ?? []}
               isLoading={reports.isLoading}
               searchPlaceholder="Search direct reports..."
-              emptyMessage="No direct reports yet. Assign a manager to teammates from Users → Edit → Manager."
+              emptyMessage="No direct reports yet. Assign a manager to teammates from Users → Edit → Reports to."
               pageSize={10}
             />
           </div>

@@ -26,7 +26,7 @@
  *
  * WHO renders this: `App.tsx`'s `/` (public, unauthenticated) route.
  */
-import { PLAN_TIER_LIMITS, type PlanTier, type PlanTierLimits } from "@timesheet/shared";
+import { PLAN_TIER_LIMITS, planTierPriceLabel, type PlanTier, type PlanTierLimits } from "@timesheet/shared";
 import {
   Brain,
   Activity,
@@ -42,11 +42,13 @@ import {
   ClipboardCheck,
   Clock,
   Coins,
+  CreditCard,
   Eye,
   FileCheck2,
   FileSpreadsheet,
   FileText,
   FlaskConical,
+  FolderTree,
   GanttChartSquare,
   Gauge,
   GitBranch,
@@ -68,6 +70,7 @@ import {
   Sparkles,
   Target,
   TrendingUp,
+  UsersRound,
   Wallet,
   WifiOff,
   Workflow,
@@ -80,6 +83,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { DeploymentDialog } from "../components/marketing/DeploymentDialog";
+import { FAQ } from "../components/marketing/faq";
 import { PricingDialog } from "../components/marketing/PricingDialog";
 import { Reveal, useScrollProgress, useSectionSpy } from "../components/marketing/Reveal";
 import { ScreenshotFrame } from "../components/marketing/ScreenshotFrame";
@@ -153,8 +157,8 @@ const TOUR = [
     id: "security",
     label: "Security",
     icon: ShieldCheck,
-    title: "Findings become tickets with owners",
-    body: "Your CI posts SAST, DAST, secrets and supply-chain findings to your own webhook. They land as triaged, routed tickets with a risk rollup — this product never runs a scanner itself, so nothing new gets access to your code.",
+    title: "A fix isn't fixed until a scan says so",
+    body: "Your CI posts SAST, DAST, secrets, supply-chain, SonarQube and lint results to your own webhook. They route to the module that owns the file, and resolving one is a claim: the next scan by that same tool either proves it or reopens the ticket with the evidence. This product never runs a scanner itself, so nothing new gets access to your code.",
     image: "/product/security.png"
   },
   {
@@ -382,7 +386,19 @@ const FEATURES: Feature[] = [
     icon: GitBranch,
     group: "Report & prove",
     title: "Security & DevOps ingestion",
-    body: "Your CI POSTs SAST/DAST/secrets/supply-chain findings to a per-organization webhook. VAPT reports upload as structured JSON. Every ticket gets a Security tab with a verdict and a PDF export. Nothing here runs a scanner — this product is the inbox, not the tool."
+    body: "Your CI POSTs SAST/DAST/secrets/supply-chain findings to a per-organization webhook. SonarQube's quality gate and issue search, and eslint --format json, are accepted verbatim — code smells and lint results are tracked and verified like anything else, and deliberately never counted in your security risk score. VAPT reports upload as structured JSON. Every ticket gets a Security tab with a verdict and a PDF export. Nothing here runs a scanner — this product is the inbox, not the tool."
+  },
+  {
+    icon: ShieldCheck,
+    group: "Report & prove",
+    title: "A fix isn't fixed because somebody said so",
+    body: "Resolving a ticket that carries security findings records a claim, not a conclusion. The next scan by the same tool, on the same repository and branch, decides: the finding gone means fixed, stamped with the run and the commit that proved it; still there means the fix didn't hold, and the ticket reopens with that evidence attached and its SLA clock restarted. No scan inside the window marks it unverified and never reopens anything — absence of proof isn't proof of failure. Verification without auto-reopen is a supported setting, because \"tell me, don't move my tickets\" is a real answer."
+  },
+  {
+    icon: FolderTree,
+    group: "Report & prove",
+    title: "Findings that land on the team that owns the code",
+    body: "Repository patterns map to projects and path globs map to modules — ordered, first match wins — so a finding under your billing services opens its ticket in the billing project, with that project's key prefix, on that module's owner. A \"Test a path\" box runs the real resolver before a scanner does. And every finding carries a fingerprint, so a nightly scan reporting the same two hundred issues raises an occurrence count instead of inserting two hundred more rows, which is what \"how long has this been open\" needs to be answerable at all."
   },
 
   {
@@ -477,6 +493,24 @@ const FEATURES: Feature[] = [
     group: "AI, governed",
     title: "An advisor that proposes, never executes",
     body: "The operator's console can ask a model to read one workspace's metrics and rank what is worth doing. It is shown sizes, rates, growth and statement shapes — never a row, a name or an address, and a test plants identifying strings in the input and fails if any reach the model. Findings may only name actions from a fixed list, the two that run anything go through the same guarded endpoint you would use by hand, and every advisory is closed by a person with a note. The dismissals are kept too: an advisor whose failures are not written down cannot be evaluated, only believed."
+  },
+  {
+    icon: UsersRound,
+    group: "Platform & security",
+    title: "Operator access with roles, not one master key",
+    body: "Five console roles over a capability matrix where support and billing are siblings rather than rungs — a ladder would hand finance the break-glass that resets a customer's admin password. The role is read from the database on every request, never from a token, so a demotion binds immediately. Optional TOTP checked against RFC 6238's own published vectors, with the challenge before any session exists. The five irreversible actions — delete a workspace, restore or delete a snapshot, create an admin, change an admin's role — need a second person, and the countersignature replays through the same handler so every guard re-runs against live data. Sensitive routes ask why, and the answer is on the audit row beside the before, the after and the IP."
+  },
+  {
+    icon: TrendingUp,
+    group: "Platform & security",
+    title: "The business, without a connection per page load",
+    body: "A nightly per-workspace snapshot is what makes a trend, a cohort or a churn rate answerable at all — and it replaced an analytics page that opened a connection to every tenant database every time somebody looked at it. MRR, ARR, ARPA, revenue by tier, trial conversion, logo and revenue churn, NRR/GRR and signup cohorts, every figure labelled list price rather than billed revenue, with unpriced tiers excluded from the total and the exclusion counted beside it. Account health names the signal that produced it, and a clean workspace says what was checked instead of showing a bare score."
+  },
+  {
+    icon: CreditCard,
+    group: "Platform & security",
+    title: "Billing a customer can run themselves",
+    body: "Stripe's own customer portal for card, invoices and cancellation, the last twelve invoices listed in settings linking to Stripe's hosted pages, and a plan-change receipt that fires on a real tier change and stays quiet when a seat count syncs. An upgrade modifies the subscription you already have, with proration, rather than opening a second one beside it — and a stored subscription id Stripe no longer recognises falls back to checkout and clears itself rather than staying broken."
   }
 ];
 
@@ -562,10 +596,17 @@ const ONE_RECORD = {
   readers: ["Manager approval", "The SLA timer", "Cost, budget and forecast", "Insights and exports", "The client's attestation PDF"]
 };
 
+/*
+ * The three cards. `price` is DERIVED, never typed here: `PLAN_TIER_LIST_PRICES` in
+ * @timesheet/shared is the same constant the control plane seeds `PlanTierLimit.listPricePerSeat`
+ * from and the platform console's revenue screen prices its MRR with, so this page and the
+ * operator's own figures cannot say different things about what a seat costs. That was the whole
+ * failure mode this file's header describes, applied to money rather than to features.
+ */
 const PRICING = [
   {
     name: "Starter",
-    price: "$0",
+    price: planTierPriceLabel("STARTER"),
     cadence: "per seat / month",
     description: "Small teams getting timesheets and tickets out of spreadsheets and inboxes.",
     cta: "Start free",
@@ -573,7 +614,7 @@ const PRICING = [
   },
   {
     name: "Team",
-    price: "$8",
+    price: planTierPriceLabel("TEAM"),
     cadence: "per seat / month",
     description: "The default for growing engineering and consulting teams.",
     highlight: true,
@@ -601,7 +642,9 @@ const PRICING = [
   },
   {
     name: "Enterprise",
-    price: "Custom",
+    // `planTierPriceLabel` renders an unset list price as "Custom" — the same word, from the same
+    // constant, so "Enterprise has no list price" is stated once rather than in two places.
+    price: planTierPriceLabel("ENTERPRISE"),
     cadence: "billed annually",
     description: "Compliance-heavy organizations with hundreds of contributors.",
     cta: "Talk to sales",
@@ -619,36 +662,10 @@ const PRICING = [
   }
 ];
 
-const FAQ = [
-  {
-    q: "Do you charge for AI usage?",
-    a: "No. You bring your own provider key and pay that provider directly. We never resell inference, and the monthly budget cap is enforced on every call so a misconfigured automation can't run up a bill."
-  },
-  {
-    q: "Does anything leave our servers?",
-    a: "AI prompts go to whichever provider you configured, and nowhere else. Face verification is the strict exception: images and embeddings never leave your server at all, and the AI features that touch identity review are sent metadata only — never a face."
-  },
-  {
-    q: "Can we turn AI off entirely?",
-    a: "Yes, and it ships that way. There's a master switch plus a toggle per capability, all off by default. With them off, the app never contacts a model."
-  },
-  {
-    q: "What can the AI actually change on its own?",
-    a: "Only what you grant per capability, on a ladder — observe, propose, or apply — and a run that reads text from outside the workspace (an email, a chat message, a scanner finding) drops to proposing for the rest of that run. Every change lands as a reviewable row with undo, on the same audit ledger as human work, under the teammate's own name."
-  },
-  {
-    q: "How is this different from Jira plus a timesheet tool?",
-    a: "The hours and the tickets are the same records, so approvals, SLA timers, cost and attestations all read from one source. You don't reconcile two systems, and a client-facing proof of work doesn't require exporting from both."
-  },
-  {
-    q: "Can we run it on our own infrastructure?",
-    a: "Yes. The same codebase deploys as a single-organization on-premise install or as multi-organization SaaS — Docker Compose with overlays for an external database and HTTPS, or a Helm chart with autoscaling. Nothing calls home: your AI key, your OAuth apps, your database."
-  },
-  {
-    q: "What happens when the backend goes down?",
-    a: "The app notices and says so. One dropped request shows a warning strip; a sustained outage pauses the interface rather than accepting input that would be silently lost. It resumes on its own, without a reload, and keeps what you had typed."
-  }
-];
+/* The FAQ moved to components/marketing/faq.ts in 5.0.0, when /contact needed to reassure a buyer
+   about three of these answers. Copying the three would have left two versions of a promise, and
+   the second one to be edited would have been the one nobody remembered. Same array, same order,
+   rendered below exactly as before. */
 
 const NAV_SECTIONS = [
   { id: "tour", label: "Tour" },
@@ -659,12 +676,31 @@ const NAV_SECTIONS = [
   { id: "faq", label: "FAQ" }
 ];
 
+/**
+ * What the phone menu lists: the sections above, plus the standalone ROUTES that have no section on
+ * this page. `to` is the only thing that tells the two apart — an entry with one is a `<Link>`, one
+ * without is a `#hash`.
+ *
+ * The routes are deliberately kept OUT of `NAV_SECTIONS` rather than special-cased inside it. Every
+ * other consumer of that array treats an entry as a hash anchor, and `useSectionSpy` scrolls
+ * looking for an element with that id — an entry with no section would simply never light up, and
+ * the desktop bar would grow a link that goes nowhere. It was already special-cased once for
+ * `/pitch`; a second one made it a list, which is what this is.
+ */
+const MOBILE_NAV: Array<{ id: string; label: string; to?: string }> = [
+  ...NAV_SECTIONS,
+  { id: "pitch", label: "Why we built it", to: "/pitch" },
+  { id: "contact", label: "Talk to us", to: "/contact" }
+];
+
 /* ------------------------------------------------------------------ */
 
 export function Landing() {
   const [pricingOpen, setPricingOpen] = useState(false);
-  // "Talk to sales" used to point at /login, which is neither a sales flow nor an answer to the
-  // first question an Enterprise buyer asks: how would we run this, and where does the data sit?
+  // The deployment-model comparison. It was the Enterprise tier's primary action while there was
+  // nowhere to send a buyer; since 5.0.0 "Talk to sales" goes to /contact and this sits underneath
+  // it, because "how would we run this, and where does the data sit?" is a question somebody should
+  // be able to answer for themselves without writing to us first.
   const [deploymentOpen, setDeploymentOpen] = useState(false);
   const [tourId, setTourId] = useState(TOUR[0].id);
   const [group, setGroup] = useState<FeatureGroup | "all">("all");
@@ -736,6 +772,15 @@ export function Landing() {
               >
                 Why we built it
               </Link>
+              {/* A ROUTE, NOT A SECTION, which is why it lives in this cluster beside "Why we built
+                  it" rather than in NAV_SECTIONS: every consumer of that array treats an entry as a
+                  hash anchor, and `useSectionSpy` looks for a DOM element with that id. */}
+              <Link
+                to="/contact"
+                className="focus-ring hidden rounded-md px-3 py-2 text-sm font-semibold text-muted-foreground hover:text-foreground lg:inline"
+              >
+                Talk to us
+              </Link>
               <Button asChild size="sm" className="sm:h-10 sm:px-4 sm:text-sm">
                 <Link to="/login">Sign in <ArrowRight className="h-4 w-4" /></Link>
               </Button>
@@ -761,11 +806,11 @@ export function Landing() {
             }`}
           >
             <ul className="min-h-0 pb-2">
-              {[...NAV_SECTIONS, { id: "pitch", label: "Why we built it" }].map((section) => (
+              {MOBILE_NAV.map((section) => (
                 <li key={section.id}>
-                  {section.id === "pitch" ? (
+                  {section.to ? (
                     <Link
-                      to="/pitch"
+                      to={section.to}
                       onClick={() => setMenuOpen(false)}
                       className="focus-ring block rounded-md px-3 py-2.5 text-sm font-semibold text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
@@ -1260,13 +1305,23 @@ export function Landing() {
                         </li>
                       ))}
                     </ul>
-                    {/* The trial tiers point at /signup. Enterprise opens the deployment-model
-                        comparison instead — "Talk to sales" is not a self-serve flow, and the
-                        question it is really asking is which of the three ways to run it fits. */}
+                    {/* The trial tiers point at /signup. Enterprise now goes to /contact, where a
+                        person answers — which is what "Talk to sales" has always claimed and, until
+                        5.0.0, was not: it opened the deployment-model comparison, because there was
+                        nowhere to send anyone.
+                        THE COMPARISON IS STILL OFFERED, underneath, because it answers a real
+                        question (which of the three ways to run it fits) and a buyer who wanted
+                        that answer should not have to send an email to get it. Primary is the
+                        conversation; secondary is the reading. */}
                     {tier.name === "Enterprise" ? (
-                      <Button className="mt-6 w-full" variant="outline" onClick={() => setDeploymentOpen(true)}>
-                        {tier.cta}
-                      </Button>
+                      <div className="mt-6 grid gap-2">
+                        <Button asChild className="w-full">
+                          <Link to="/contact">{tier.cta}</Link>
+                        </Button>
+                        <Button variant="ghost" size="sm" className="w-full" onClick={() => setDeploymentOpen(true)}>
+                          Compare deployment models
+                        </Button>
+                      </div>
                     ) : (
                       <Button asChild className="mt-6 w-full" variant={tier.highlight ? "default" : "outline"}>
                         <Link to="/signup">{tier.cta}</Link>
@@ -1357,6 +1412,7 @@ export function Landing() {
             <a href="#pricing" className="focus-ring rounded hover:text-foreground">Pricing</a>
             <a href="#faq" className="focus-ring rounded hover:text-foreground">FAQ</a>
             <Link to="/pitch" className="focus-ring rounded hover:text-foreground">Why we built it</Link>
+            <Link to="/contact" className="focus-ring rounded hover:text-foreground">Talk to us</Link>
             <Link to="/login" className="focus-ring rounded hover:text-foreground">Sign in</Link>
           </nav>
           <p className="text-xs">

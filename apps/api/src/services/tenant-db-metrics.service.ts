@@ -42,6 +42,10 @@ import { platformAudit } from "./platform-audit.service.js";
  *  it is what makes "this time last year" answerable during a capacity conversation. */
 export const SAMPLE_RETENTION_DAYS = 400;
 
+/** How many table names a sample keeps beside each schema-finding count. A schema with four hundred
+ *  keyless tables has a problem the first twenty names already describe; the count carries the rest. */
+const SCHEMA_FINDING_NAME_CAP = 20;
+
 export interface SampleResult {
   sampled: number;
   failed: Array<{ slug: string; error: string }>;
@@ -80,7 +84,23 @@ export async function sampleAllTenantDatabases(now = new Date()): Promise<Sample
           queryMs: metrics.queryMs,
           connectionUsePercent: metrics.server.connectionUsePercent,
           bufferPoolHitRate: metrics.server.bufferPoolHitRate,
-          slowQueries: metrics.server.slowQueries
+          slowQueries: metrics.server.slowQueries,
+          /*
+           * THE SCHEMA FINDINGS, KEPT (5.0.0). `getDatabaseMetrics` has always computed these two,
+           * raised an alert from them and then discarded them — so the only question an operator
+           * ever actually asks about a schema finding, "when did this start?", could not be
+           * answered by any route in the product. The counts make the trend; the names make a count
+           * actionable. Both are aggregate: table NAMES, never a row.
+           *
+           * The name list is capped because it is unbounded in principle — a schema with four
+           * hundred keyless tables must not turn an hourly row into a document.
+           */
+          tablesWithoutPrimaryKey: metrics.schema.tablesWithoutPrimaryKey.length,
+          indexHeavyTables: metrics.schema.indexHeavyTables.length,
+          schemaFindings: {
+            tablesWithoutPrimaryKey: metrics.schema.tablesWithoutPrimaryKey.slice(0, SCHEMA_FINDING_NAME_CAP),
+            indexHeavyTables: metrics.schema.indexHeavyTables.slice(0, SCHEMA_FINDING_NAME_CAP)
+          }
         }
       });
       sampled += 1;
@@ -112,6 +132,12 @@ export interface TrendPoint {
   queryMs: number;
   connectionUsePercent: number | null;
   bufferPoolHitRate: number | null;
+  /** NULL on every sample taken before 5.0.0, and deliberately not backfilled to 0 — null means
+   *  "that hour did not record this", 0 means "we looked and the schema was clean". The chart draws
+   *  a gap rather than a floor, so the first real finding does not look like a regression that
+   *  happened the day this shipped. */
+  tablesWithoutPrimaryKey: number | null;
+  indexHeavyTables: number | null;
 }
 
 export interface GrowthSummary {
@@ -134,7 +160,17 @@ export interface GrowthSummary {
  *  reasonable backup strategy and the conversation becomes about snapshots. */
 const PROJECTION_TARGET_BYTES = 50 * 1024 ** 3;
 
-export async function getTenantDbTrend(orgId: string, days = 30): Promise<{ points: TrendPoint[]; growth: GrowthSummary }> {
+export interface SchemaFindingTrend {
+  tablesWithoutPrimaryKey: number | null;
+  indexHeavyTables: number | null;
+  names: { tablesWithoutPrimaryKey?: string[]; indexHeavyTables?: string[] } | null;
+  firstSeen: { tablesWithoutPrimaryKey: string | null; indexHeavyTables: string | null };
+}
+
+export async function getTenantDbTrend(
+  orgId: string,
+  days = 30
+): Promise<{ points: TrendPoint[]; growth: GrowthSummary; forecast: GrowthForecast; schemaFindings: SchemaFindingTrend }> {
   const since = new Date(Date.now() - days * 86_400_000);
   const rows = await controlPrisma.tenantDbSample.findMany({
     where: { organizationId: orgId, sampledAt: { gte: since } },
@@ -151,10 +187,33 @@ export async function getTenantDbTrend(orgId: string, days = 30): Promise<{ poin
     tableCount: row.tableCount,
     queryMs: row.queryMs,
     connectionUsePercent: row.connectionUsePercent,
-    bufferPoolHitRate: row.bufferPoolHitRate
+    bufferPoolHitRate: row.bufferPoolHitRate,
+    tablesWithoutPrimaryKey: row.tablesWithoutPrimaryKey,
+    indexHeavyTables: row.indexHeavyTables
   }));
 
-  return { points, growth: summariseGrowth(points) };
+  // TWO ANSWERS, ON PURPOSE, and the page shows both. `summariseGrowth` says what the series DID
+  // between its two ends; `forecastGrowth` says what it is likely to do next and, far more often,
+  // refuses to say. Neither replaces the other: the first is a measurement and cannot be wrong, the
+  // second is an inference and mostly declines to make one.
+  const latest = rows[rows.length - 1];
+  return {
+    points,
+    growth: summariseGrowth(points),
+    forecast: forecastGrowth(points),
+    schemaFindings: {
+      tablesWithoutPrimaryKey: latest?.tablesWithoutPrimaryKey ?? null,
+      indexHeavyTables: latest?.indexHeavyTables ?? null,
+      names: (latest?.schemaFindings as { tablesWithoutPrimaryKey?: string[]; indexHeavyTables?: string[] } | null) ?? null,
+      /** When each count was first non-zero in this window — the "when did this start" the counts
+       *  were persisted for. Null when the finding is absent, or when no sample in the window
+       *  recorded it at all (every row before 5.0.0). */
+      firstSeen: {
+        tablesWithoutPrimaryKey: points.find((point) => (point.tablesWithoutPrimaryKey ?? 0) > 0)?.at ?? null,
+        indexHeavyTables: points.find((point) => (point.indexHeavyTables ?? 0) > 0)?.at ?? null
+      }
+    }
+  };
 }
 
 /**
@@ -195,6 +254,187 @@ export function summariseGrowth(points: TrendPoint[]): GrowthSummary {
     percentChange,
     // Only project forward, and only while there is somewhere to project to.
     daysToTarget: bytesPerDay > 0 && remaining > 0 ? remaining / bytesPerDay : null
+  };
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* The forecast                                                                                */
+/* ------------------------------------------------------------------------------------------ */
+
+/**
+ * How confident the fit is, and it is `"none"` far more often than anything else — by design.
+ *
+ * A capacity forecast is only worth having if it is willing to say "I don't know". "Acme reaches
+ * its ceiling in about six weeks" is a decision an operator can act on; the same sentence produced
+ * from three samples taken on a Tuesday afternoon is a decision an operator acts on WRONGLY, and
+ * they have no way to tell the two apart unless the number arrives carrying its own confidence.
+ */
+export type ForecastConfidence = "none" | "low" | "moderate" | "high";
+
+export interface GrowthForecast {
+  confidence: ForecastConfidence;
+  /** Always populated, in plain words. Why there is a projection, or why there is not. */
+  reason: string;
+  /** Least-squares slope. Null whenever the fit was refused. */
+  bytesPerDay: number | null;
+  /** Coefficient of determination, 0–1. Null when it could not be computed. */
+  r2: number | null;
+  samples: number;
+  spanDays: number;
+  targetBytes: number;
+  latestBytes: number | null;
+  /** Days until `targetBytes` at the fitted rate. Null unless the fit was accepted AND the slope
+   *  actually points at the target. */
+  daysToTarget: number | null;
+  /** The same answer as an absolute date, because "in 43 days" is a number people mis-add. */
+  reachesTargetAt: string | null;
+}
+
+/** The floor for a fit. Six hourly samples is a quarter of a day; the SPAN is what actually
+ *  matters, and three days is where a weekday/weekend cycle stops dominating the slope. */
+const FORECAST_MIN_SAMPLES = 6;
+const FORECAST_MIN_SPAN_DAYS = 3;
+/** Below this, the line explains so little of the series that quoting its slope is a fiction with
+ *  a decimal point on it. Half the variance is a deliberately generous bar: this is not science,
+ *  it is a capacity conversation, and the alternative to a rough answer here is no answer. */
+const FORECAST_MIN_R2 = 0.5;
+
+/**
+ * A LEAST-SQUARES FIT over the whole series, unlike `summariseGrowth` above, which reads only the
+ * two ends — and the two functions coexist on purpose.
+ *
+ * `summariseGrowth` is a MEASUREMENT: "it grew 4 GB between these two samples" is true whatever the
+ * shape in between, and it is the honest thing to show beside a chart. Its own comment says why it
+ * is not a regression: one migration-shaped step makes a least-squares slope confidently describe
+ * nothing. That objection is entirely right, and it is why this function reports r² and refuses the
+ * projection when the line does not fit — the step that would have silently corrupted a slope now
+ * shows up as a low r² and a "too noisy to project" answer instead.
+ *
+ * PURE, AND TAKING ONLY WHAT IT NEEDS. No clock, no database, no Prisma row type: a fixed series in,
+ * a verdict out. Extrapolation is exactly the kind of arithmetic that looks right in review and is
+ * wrong at the third decimal place, so it is tested directly against fixed series — one point, two
+ * points, flat, shrinking, noisy, and cleanly growing.
+ *
+ * THE REFUSALS, IN THE ORDER THEY ARE CHECKED, each of them a real failure mode:
+ *   1. Too few samples, or too short a span — the "extrapolate from three points" trap.
+ *   2. A slope that is flat or negative — projecting a shrinking database at a ceiling is arithmetic
+ *      pointed backwards.
+ *   3. Already past the target — there is nothing to count down to, and "in -12 days" is not a
+ *      sentence.
+ *   4. A poor fit — the series moves, but not along this line.
+ */
+/**
+ * The ordinary-least-squares fit itself, separated from the JUDGEMENT above it.
+ *
+ * `x` is in DAYS from the first sample rather than in milliseconds: the slope is then already bytes
+ * per day, and the sums stay in a range where a double is exact rather than merely close.
+ *
+ * Returns null when every sample shares one timestamp — there is no time axis, and `sxx` is zero.
+ */
+function leastSquares(points: Array<{ at: string; totalBytes: number }>): { slope: number; r2: number } | null {
+  const originMs = new Date(points[0].at).getTime();
+  const xs = points.map((point) => (new Date(point.at).getTime() - originMs) / 86_400_000);
+  const ys = points.map((point) => point.totalBytes);
+  const n = points.length;
+  const meanX = xs.reduce((sum, x) => sum + x, 0) / n;
+  const meanY = ys.reduce((sum, y) => sum + y, 0) / n;
+
+  let sxy = 0;
+  let sxx = 0;
+  for (let i = 0; i < n; i += 1) {
+    sxy += (xs[i] - meanX) * (ys[i] - meanY);
+    sxx += (xs[i] - meanX) ** 2;
+  }
+  if (sxx === 0) return null;
+
+  const slope = sxy / sxx;
+  const intercept = meanY - slope * meanX;
+
+  let ssRes = 0;
+  let ssTot = 0;
+  for (let i = 0; i < n; i += 1) {
+    ssRes += (ys[i] - (intercept + slope * xs[i])) ** 2;
+    ssTot += (ys[i] - meanY) ** 2;
+  }
+  // A perfectly flat series has zero variance, and r² is 0/0 there. Reported as 1 — the line
+  // describes it exactly — which is correct and also irrelevant, because the caller refuses a zero
+  // slope regardless.
+  return { slope, r2: ssTot === 0 ? 1 : 1 - ssRes / ssTot };
+}
+
+/** How much of the variation the line has to explain to earn each word. Named rather than written
+ *  as a chain of ternaries so the thresholds are greppable from the console's copy. */
+function confidenceFor(r2: number): ForecastConfidence {
+  if (r2 >= 0.9) return "high";
+  if (r2 >= 0.7) return "moderate";
+  return "low";
+}
+
+export function forecastGrowth(
+  points: Array<{ at: string; totalBytes: number }>,
+  targetBytes: number = PROJECTION_TARGET_BYTES
+): GrowthForecast {
+  const first = points[0];
+  const last = points[points.length - 1];
+  const spanDays = first && last ? (new Date(last.at).getTime() - new Date(first.at).getTime()) / 86_400_000 : 0;
+
+  const base: GrowthForecast = {
+    confidence: "none",
+    reason: "",
+    bytesPerDay: null,
+    r2: null,
+    samples: points.length,
+    spanDays,
+    targetBytes,
+    latestBytes: last?.totalBytes ?? null,
+    daysToTarget: null,
+    reachesTargetAt: null
+  };
+
+  if (points.length < FORECAST_MIN_SAMPLES || spanDays < FORECAST_MIN_SPAN_DAYS) {
+    return {
+      ...base,
+      reason: `Not enough history — ${points.length} sample${points.length === 1 ? "" : "s"} over ${spanDays.toFixed(1)} day${spanDays === 1 ? "" : "s"}. A projection needs at least ${FORECAST_MIN_SAMPLES} samples spanning ${FORECAST_MIN_SPAN_DAYS} days.`
+    };
+  }
+
+  const fit = leastSquares(points);
+  // Every sample at the same instant. Impossible from the hourly sampler, trivially producible by a
+  // test or by a manual sweep run twice, and a division by zero either way.
+  if (!fit) return { ...base, reason: "Every sample was taken at the same moment — there is no time axis to fit against." };
+
+  const { slope, r2 } = fit;
+  const withFit = { ...base, bytesPerDay: slope, r2 };
+
+  if (slope <= 0) {
+    return {
+      ...withFit,
+      reason:
+        slope === 0
+          ? "Flat — the database has not grown across this window, so there is nothing to project."
+          : `Shrinking by ${Math.abs(slope / 1024 ** 2).toFixed(1)} MB/day across this window. A projection off a negative slope is arithmetic pointed backwards.`
+    };
+  }
+  if (last.totalBytes >= targetBytes) {
+    return { ...withFit, reason: "Already at or past the projection target — this is a capacity conversation to have now, not a countdown." };
+  }
+  if (r2 < FORECAST_MIN_R2) {
+    return {
+      ...withFit,
+      reason: `Too noisy to project — the trend line explains only ${(r2 * 100).toFixed(0)}% of the variation (needs ${FORECAST_MIN_R2 * 100}%). The database is moving, but not along a straight line.`
+    };
+  }
+
+  const daysToTarget = (targetBytes - last.totalBytes) / slope;
+
+  return {
+    ...withFit,
+    confidence: confidenceFor(r2),
+    reason: `Growing ${(slope / 1024 ** 2).toFixed(1)} MB/day across ${spanDays.toFixed(1)} days of samples; the trend line explains ${(r2 * 100).toFixed(0)}% of the variation.`,
+    daysToTarget,
+    // Derived from the LAST SAMPLE's clock rather than from `Date.now()`, so the function stays pure
+    // and a stale series does not quietly report a date that keeps sliding forward on its own.
+    reachesTargetAt: new Date(new Date(last.at).getTime() + daysToTarget * 86_400_000).toISOString()
   };
 }
 

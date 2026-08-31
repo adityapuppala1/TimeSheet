@@ -20,6 +20,7 @@
  * House style comes from `pdf-kit.ts`, shared with the attestation, timesheet and requirements
  * exports — including the watermark and running header this document did not have.
  */
+import { securityFindingTypes, type SecurityFindingType } from "@timesheet/shared";
 import type { TicketSecurityReport } from "./security-report.service.js";
 import {
   AMBER,
@@ -48,21 +49,35 @@ const { breakIfNeeded, pill, rule, sectionHeading } = kit;
  *  shared palette rather than a fifth private copy of the same four colours. */
 const SEVERITY_COLOR = PRIORITY_COLOR;
 
-const TYPE_LABEL: Record<string, string> = {
+/**
+ * EXHAUSTIVE, not `Record<string, string>` as it was.
+ *
+ * A loose record compiled perfectly with a missing key and then printed the literal word
+ * `undefined` into a section heading of a document that leaves the building — the one place in this
+ * app where a gap is least recoverable, because nobody can fix a PDF a customer already has. Keyed
+ * on `SecurityFindingType`, a new type stops this file compiling until somebody writes its name.
+ */
+const TYPE_LABEL: Record<SecurityFindingType, string> = {
   SAST: "Static analysis (SAST)",
   DAST: "Dynamic analysis (DAST)",
   SSAT: "Secrets scanning (SSAT)",
   SSCT: "Supply-chain testing (SSCT)",
-  VAPT: "Penetration test (VAPT)"
+  VAPT: "Penetration test (VAPT)",
+  QUALITY: "Code quality",
+  LINT: "Lint"
 };
 
-/** The appendix a non-security reader needs — what each assessment type actually proves. */
-const TYPE_EXPLAINER: Record<string, string> = {
+/** The appendix a non-security reader needs — what each assessment type actually proves. Exhaustive
+ *  for the same reason `TYPE_LABEL` above is: this text is printed, not logged. */
+const TYPE_EXPLAINER: Record<SecurityFindingType, string> = {
   SAST: "Source code scanned for vulnerable patterns without running it — catches injection risks, unsafe APIs and logic flaws at the line level.",
   DAST: "The running application probed from outside, the way an attacker would — catches issues only visible at runtime.",
   SSAT: "Repository and history scanned for committed credentials, tokens and keys.",
   SSCT: "Dependencies checked against known-vulnerable versions and license risks (supply chain).",
-  VAPT: "A human-led penetration test — periodic, adversarial, and broader than any automated scan."
+  VAPT: "A human-led penetration test — periodic, adversarial, and broader than any automated scan.",
+  QUALITY:
+    "Maintainability issues a quality gate reported — bugs and code smells (SonarQube and similar). Tracked and remediated like any other finding, and deliberately excluded from the security counts above: a code smell is a cost, not an exposure.",
+  LINT: "Lint rules a linter reported (ESLint and similar). Listed for completeness on this ticket; never counted as security exposure."
 };
 
 function truncate(input: string, max: number): string {
@@ -105,7 +120,9 @@ export function renderSecurityReportPdf(doc: PDFKit.PDFDocument, report: TicketS
   // ---- 2. Executive summary ---------------------------------------------------------------
   verdictBanner(doc, report.riskVerdict);
 
-  // Severity strip — four fixed cells.
+  // Severity strip — four fixed cells. SECURITY-discipline counts only, which is what the labels
+  // say ("OPEN CRITICAL" on a Security Assessment Report) and what the banner above was computed
+  // from. The quality backlog gets its own line below rather than a share of these cells.
   const stripY = doc.y;
   const cellW = WIDTH / 4;
   (["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const).forEach((severity, i) => {
@@ -114,6 +131,26 @@ export function renderSecurityReportPdf(doc: PDFKit.PDFDocument, report: TicketS
   doc.y = stripY + 40;
   rule(doc);
   doc.moveDown(0.4);
+
+  // The other discipline, stated once and plainly. It prints only when there IS a quality backlog:
+  // a line reading "0 open code-quality findings" on a ticket nobody lints is noise, whereas the
+  // absence of the line is not a claim about anything. Deliberately NOT a severity strip of its own
+  // — giving code smells the same visual weight as open vulnerabilities is the mixing this whole
+  // separation exists to prevent.
+  const openQualityTotal = (["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const).reduce(
+    (sum, severity) => sum + (report.openQualityCountBySeverity[severity] ?? 0),
+    0
+  );
+  if (openQualityTotal > 0) {
+    doc.font(BOLD).fontSize(9).fillColor(INK).text("Code quality:  ", LEFT, doc.y, { continued: true });
+    doc
+      .font(REGULAR)
+      .fillColor(MUTED)
+      .text(
+        `${openQualityTotal} open code-quality/lint finding${openQualityTotal === 1 ? "" : "s"} on this ticket — listed below, and deliberately not counted in the security figures above.`
+      );
+    doc.moveDown(0.2);
+  }
 
   // Latest CI run — provider, colored status, counts, duration. "none recorded" is a statement
   // about coverage, not an error, and prints as such.
@@ -139,7 +176,9 @@ export function renderSecurityReportPdf(doc: PDFKit.PDFDocument, report: TicketS
     doc.font(REGULAR).fontSize(10).fillColor(MUTED).text("No findings have been ingested for this ticket.", LEFT);
   }
 
-  for (const type of ["SAST", "DAST", "SSAT", "SSCT", "VAPT"] as const) {
+  // Sections in the shared constant's own order — the same list `buildTicketSecurityReport` built
+  // the buckets from, so the document cannot silently omit a type the report actually carries.
+  for (const type of securityFindingTypes) {
     const items = report.findingsByType[type];
     if (!items || items.length === 0) continue;
 
@@ -202,7 +241,7 @@ export function renderSecurityReportPdf(doc: PDFKit.PDFDocument, report: TicketS
 
   // ---- 4. Methodology appendix -------------------------------------------------------------
   sectionHeading(doc, "About the assessment types");
-  for (const type of ["SAST", "DAST", "SSAT", "SSCT", "VAPT"] as const) {
+  for (const type of securityFindingTypes) {
     breakIfNeeded(doc, PAGE_BREAK_Y - 20);
     doc.font(BOLD).fontSize(8.5).fillColor(INK).text(`${TYPE_LABEL[type]}.  `, LEFT, doc.y, { continued: true });
     doc.font(REGULAR).fillColor(MUTED).text(TYPE_EXPLAINER[type]);

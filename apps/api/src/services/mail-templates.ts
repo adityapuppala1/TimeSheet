@@ -266,6 +266,25 @@ export const templates = {
         paragraph(button("Update payment method", billingUrl, ACCENT))
     ),
 
+  /**
+   * The receipt for a plan change — the only thing that arrives in an inbox when money moves here.
+   *
+   * Says WHICH plan and WHERE the invoice is, and nothing else. It is deliberately not a marketing
+   * email about the features just unlocked: this is the mail a finance team forwards, and the one a
+   * customer opens when they are trying to work out what a line on a card statement was. It carries
+   * no amount, because the amount lives on the invoice and a prorated charge quoted here would
+   * disagree with the one Stripe actually took.
+   */
+  planChanged: (workspace: string, plan: string, billingUrl: string) =>
+    shell(
+      { title: "Your plan has changed", preheader: `${workspace} is now on ${plan}.`, accentColor: SUCCESS },
+      heading("Your plan has changed") +
+        paragraph(`<strong>${escape(workspace)}</strong> is now on the <strong>${escape(plan)}</strong> plan. It's active right away — nobody has to sign out and back in.`) +
+        infoCard([["Workspace", escape(workspace)], ["Plan", escape(plan)]], SUCCESS) +
+        paragraph("Your invoices, receipts and payment method are all in Billing, and any change to a plan mid-month is prorated on your next one.") +
+        paragraph(button("View billing", billingUrl, SUCCESS))
+    ),
+
   /** The "find my workspace" verification code. Deliberately terse: the code IS the content, and a
    *  wall of explanation around a six-digit number is how a phishing template reads. */
   workspaceFind: (code: string) =>
@@ -589,6 +608,64 @@ export const templates = {
     ),
 
   /**
+   * The other half of the pair above: a scan proved a claimed fix did not hold. See
+   * services/security-report.service.ts#sendTicketReopenedDigest for the audience — this one goes
+   * far wider than the close digest (the closer, the current assignee and everyone who logged time
+   * on the ticket, with the closer's manager and the module owner in Cc), because the people who
+   * can do something about a failed fix are the people who worked on it.
+   *
+   * WHY IT IS STRUCTURED RATHER THAN A SENTENCE: "your fix didn't work" is an accusation until it
+   * shows its evidence. Which scan, which tool, which commit; what survived and for how long; what
+   * the same run DID confirm fixed; and where the SLA now stands. A reader has to be able to check
+   * the claim, and disagree with it if it is wrong.
+   *
+   * `slaText` is a full sentence written by the caller rather than a flag, because there are three
+   * genuinely different things to say — reopened with a restarted clock, reopened with no SLA
+   * configured, and deliberately not reopened because auto-reopen is off — and a template that
+   * inferred which from a boolean would eventually tell somebody their clock restarted when it did
+   * not.
+   *
+   * NOTE THE LINK: `ticketUrl(params.ticketId)`, not the bare list `ticketClosedDigest` still uses.
+   * A digest about ONE ticket that lands the reader on a page of seventeen hundred is a digest they
+   * open the app to escape.
+   */
+  ticketReopenedDigest: (params: {
+    ticketKey: string;
+    title: string;
+    closedBy: string;
+    scanSummary: string;
+    riskVerdict: string;
+    survivedText: string;
+    fixedText: string;
+    slaText: string;
+    ticketId?: string | null;
+  }) =>
+    shell(
+      {
+        title: `A fix did not hold — ${params.ticketKey}`,
+        preheader: `${params.scanSummary} still reports findings that were marked fixed.`,
+        // Same load-bearing "Needs attention" prefix the close digest keys its accent off — see
+        // buildRiskVerdict in security-report.service.ts. Do not reword either end of this.
+        accentColor: params.riskVerdict.startsWith("Needs attention") ? DESTRUCTIVE : ACCENT
+      },
+      heading(`${params.ticketKey} — a fix did not hold`) +
+        paragraph(
+          `A scan ran and still reports findings that were marked fixed when ${escape(params.closedBy)} resolved "<strong>${escape(params.title)}</strong>".`
+        ) +
+        infoCard(
+          [
+            ["Proved by", escape(params.scanSummary)],
+            ["Current verdict", escape(params.riskVerdict)],
+            ["Ticket", escape(params.slaText)]
+          ],
+          params.riskVerdict.startsWith("Needs attention") ? DESTRUCTIVE : ACCENT
+        ) +
+        paragraph(`<strong>Still reported</strong><br />${escape(params.survivedText).replace(/\n/g, "<br />")}`) +
+        paragraph(`<strong>Confirmed fixed by the same scan</strong><br />${escape(params.fixedText).replace(/\n/g, "<br />")}`) +
+        paragraph(button("Open ticket", ticketUrl(params.ticketId), DESTRUCTIVE))
+    ),
+
+  /**
    * WHAT CHANGED: this said that somebody had commented and did not say what they wrote, so every
    * recipient had to open the app to find out whether it concerned them. The comment itself is the
    * entire content of the event; an email about a comment that omits the comment is a notification
@@ -863,7 +940,7 @@ export const templates = {
         ) +
         (params.notes ? paragraph(escape(params.notes)) : "") +
         paragraph(button("Open the review log", appUrl("/app/settings"))) +
-        paragraph(`<span style="color:${MUTED};">Computed directly from this week's verification attempts — no AI involved. Turn it off in Workspace Settings → Notifications.</span>`)
+        paragraph(`<span style="color:${MUTED};">Computed directly from this week's verification attempts — no AI involved. Turn it off in Workspace Settings → Email channels.</span>`)
     ),
 
   /** The "wrap up, maintenance is coming" warning a SUPER_ADMIN sends from the Maintenance tab

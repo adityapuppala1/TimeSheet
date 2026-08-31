@@ -8,7 +8,7 @@
  * from the URL path (`/:orgSlug/v2/...`).
  *
  * Auth: one shared bearer token per org (ScimSettings.encryptedToken, generated from Workspace
- * Settings → Integrations), compared with `constantTimeEqual` — same pattern as
+ * Settings → Single sign-on), compared with `constantTimeEqual` — same pattern as
  * IngestionSettings' token. A 404 (not 401) when SCIM was never enabled for the org, same
  * "never configured" signal every other webhook receiver in this app gives.
  *

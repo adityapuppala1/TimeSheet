@@ -31,6 +31,7 @@ import { startTicketEscalationWorker } from "./workers/ticket-escalation.worker.
 import { startWeeklyDigestWorker } from "./workers/weekly-digest.worker.js";
 import { startPracticeUpdateWorker } from "./workers/practice-update.worker.js";
 import { startSecurityWeeklyDigestWorker } from "./workers/security-weekly-digest.worker.js";
+import { startVerificationSweepWorker } from "./workers/verification-sweep.worker.js";
 import { startFaceRetentionWorker } from "./workers/face-retention.worker.js";
 import { startWebhookRetryWorker } from "./workers/webhook-retry.worker.js";
 import { startBugPatternDigestWorker } from "./workers/bug-pattern-digest.worker.js";
@@ -42,6 +43,8 @@ import { startTrialLifecycleWorker } from "./workers/trial-lifecycle.worker.js";
 import { startPlatformRetentionWorker } from "./workers/platform-retention.worker.js";
 import { startBackupWorker } from "./workers/backup.worker.js";
 import { startTenantDbSampleWorker } from "./workers/tenant-db-sample.worker.js";
+import { startOrgUsageSnapshotWorker } from "./workers/org-usage-snapshot.worker.js";
+import { startPlatformAlertDigestWorker } from "./workers/platform-alert-digest.worker.js";
 import { startAIRetentionWorker } from "./workers/ai-retention.worker.js";
 import { runForEveryOrg } from "./workers/run-for-every-org.js";
 import { registerFlowDispatch } from "./services/automation-dispatch.service.js";
@@ -230,6 +233,7 @@ server.on("listening", async () => {
   startWeeklyDigestWorker();
   startPracticeUpdateWorker();
   startSecurityWeeklyDigestWorker();
+  startVerificationSweepWorker();
   startFaceRetentionWorker();
   startIdentityWeeklyDigestWorker();
   startWebhookRetryWorker();
@@ -243,6 +247,12 @@ server.on("listening", async () => {
   startPlatformRetentionWorker();
   startBackupWorker();
   startTenantDbSampleWorker();
+  // Nightly, at 03:40 UTC — the daily business snapshot the console's revenue, churn, cohort and
+  // account-health screens all read instead of reopening every tenant database on every click.
+  startOrgUsageSnapshotWorker();
+  // Every six hours — the fleet's alerts, to the people who are not looking at the console. Sends
+  // only when something has CHANGED, so running it four times a day costs nothing in noise.
+  startPlatformAlertDigestWorker();
   startApiTelemetryRetentionWorker();
 
   // The Studio's event triggers. Registered once, for the whole internal event vocabulary — which

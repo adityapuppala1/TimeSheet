@@ -159,15 +159,40 @@ explicit authorization TimeSphere has no standing to grant on a customer's behal
 | **VAPT** — Vulnerability Assessment & Penetration Testing | A periodic, human-led assessment (not per-PR — this app's own VAPT report in [README § Security](../README.md#security) is exactly this pattern) | A structured report (PDF/JSON) uploaded through Workspace Settings, parsed into the same `SecurityFinding` rows as the automated types |
 
 - **Data model**: one generalized `SecurityFinding` table (ticket-linked where applicable, plus
-  a repo/branch/PR reference) with a `type` enum (`SAST`/`DAST`/`SSAT`/`SSCT`/`VAPT`), `tool`,
-  `severity`, `cwe`/rule ID, `file`/`line` where relevant, and `status`
-  (`OPEN`/`ACKNOWLEDGED`/`FIXED`/`ACCEPTED_RISK`) — one table because a PR report needs to
-  render all five types side by side, not five separate query shapes.
+  a repo/branch/PR reference) with a `type` enum, `tool`, `severity`, `cwe`/rule ID, `file`/`line`
+  where relevant, and a `status` — one table because a PR report needs to render every type side by
+  side, not one query shape per type.
+
+  > **As built, and as of 5.0.0** — this bullet described five types and four statuses when it was
+  > written, and both grew. `SecurityFindingType` now has **seven** members:
+  > `SAST`, `DAST`, `SSAT`, `SSCT`, `VAPT`, **`QUALITY`**, **`LINT`**. The two new ones are appended
+  > rather than filed beside `SAST` on purpose — MySQL stores an enum by ordinal, and reordering one
+  > rewrites the column. They also carry a **discipline** (`securityFindingTypeDisciplines` in
+  > `packages/shared`, a compile-enforced `Record` over the enum): the first five are `security`, the
+  > last two are `quality`, and every security figure — the risk score, the by-severity chart, the
+  > weekly digest — filters on it. Without that, connecting SonarQube would bury one critical SQL
+  > injection under a thousand code smells on the day a workspace gained a linter.
+  >
+  > `SecurityFindingStatus` now has **five**: `OPEN`, `ACKNOWLEDGED`, `FIXED`, `ACCEPTED_RISK`,
+  > **`PENDING_VERIFICATION`** (also last, same ordinal reasoning — not lifecycle order). Which
+  > statuses count as open, resolved or pending is `securityFindingStatusBuckets`, one
+  > compile-enforced `Record` replacing six hand-written copies; `PENDING_VERIFICATION` buckets as
+  > *pending* and is counted **unresolved**, which is the point of it. A separate
+  > `SecurityFindingVerificationState` column (`AWAITING_PROOF`, `VERIFIED_FIXED`,
+  > `REFUTED_BY_SCAN`, `UNVERIFIED`) records what a scanner observed, deliberately apart from the
+  > `status` a person set.
 - **Auto-ticket creation**: a CRITICAL/HIGH finding of any type on a merged PR auto-creates a
-  `SECURITY`-type ticket (severity mapped to priority, auto-assigned via the existing
-  `ModuleAssigneeRule` mechanism) — high-confidence by construction (the scanning tool already
-  did the classification), so this skips the AI-triage `needsReview` gate that email/chat intake
-  needs; a finding is not an ambiguous natural-language message.
+  `SECURITY`-type ticket (severity mapped to priority) — high-confidence by construction (the
+  scanning tool already did the classification), so this skips the AI-triage `needsReview` gate that
+  email/chat intake needs; a finding is not an ambiguous natural-language message.
+
+  > **As built**: assignment was originally "via the existing `ModuleAssigneeRule` mechanism", and
+  > that was wrong in a way this document did not anticipate — a finding names a *file*, not a
+  > module, so the code took the first module on the fallback project that happened to have a rule.
+  > 5.0.0 removed it and routes on the path instead (`RepositoryMap` → project, `ModulePathRule` →
+  > module/submodule, ordered, first match wins), then uses that module's own `ModuleAssigneeRule`,
+  > then CODEOWNERS, then unassigned. See the 5.0.0 changelog entry — it is the release's breaking
+  > change.
 - **Per-PR structured security report**: the actual deliverable the user asked for — one report
   per PR aggregating every finding type above (plus the linked `TestRun` status from theme #2),
   rendered as an in-app page on the ticket's **Dev** tab and exportable as a PDF using the
@@ -4768,6 +4793,187 @@ the answer at the time was 31/17/13. All three were corrected before being super
   that *lacked* the guard, which is the only reason this was noticed. Enabling planning in the CI
   seed step would light all fourteen up — deliberately not done in the same change as the fix, since
   it will surface failures that deserve their own pass.
+
+## v5.0.0 — a claimed fix now has to be proven (2026-08-31)
+
+### The assignment rule that was assignment as a formality
+
+Auto-created security tickets were assigned by asking "does any module on the fallback project have
+a `ModuleAssigneeRule`?" and taking the first answer. It was written to reuse email intake's routing
+and it reused it badly, because a finding names a **file** and a module rule keys on a module. In
+practice a vulnerability in the billing service went to whoever owned whichever module was created
+first, in a project chosen because it was the fallback. Nobody could rely on **which** person; they
+could reasonably rely on **someone**, which is why removing it is a major and not a patch.
+
+`RepositoryMap` and `ModulePathRule` replace it, ordered and first-match-wins — the semantics
+`TicketRule` already had, so the codebase has one rule-evaluation model rather than two that behave
+subtly differently. Assignment then runs in one order: the routed module's own rule, CODEOWNERS
+where enabled, unassigned. **Unassigned is a deliberate third answer**: a ticket in the queue of
+somebody with no idea why is worse than one in a triage list, because the first one looks handled.
+
+The path matcher does not compile to a RegExp. A glob handed to a backtracking engine is a
+user-supplied pattern handed to a backtracking engine, and every mitigation for that is a guess
+about input; this simulates the pattern as an automaton over a boolean array, so the blowup is
+impossible rather than unlikely. The dry-run calls `resolveFindingLocation` — the same function the
+ingest calls, not a preview reimplementation of it, which would have been the next thing to drift.
+
+### Verified remediation, and the three answers a scan can give
+
+The headline. Resolving a ticket carrying findings no longer marks them fixed; it records a claim,
+and the next qualifying scan settles it. The design decision that everything else follows from is
+that **`verificationState` is a separate column from `status`** — status is a decision a person
+made, `verificationState` is what a scanner observed, and collapsing them means either a machine
+overwriting a human's judgement or a human's judgement hiding a machine's. Neither reads correctly a
+month later.
+
+The predicate is narrow on purpose: same tool, same repository, same branch, **same type**. The
+fourth was added after a test asked whether one tool's SAST run should be allowed to speak for its
+own QUALITY findings; it should not. And the tool comparison is done in JS rather than in the SQL
+`where`, because case-insensitivity in MySQL is a property of the column's collation and this rule
+should be a property of the rule.
+
+Three outcomes, and the third is the one that took the most argument:
+
+- **Gone from a qualifying run** → fixed, stamped with the run and commit that proved it. This is
+  why a zero-finding scan is still recorded as a `ScanRun`: an empty run is the only kind of row
+  that can prove an absence, and the create-always ingest never had a reason to keep one.
+- **Still present** → refuted; the ticket reopens with the evidence, the SLA clock restarts.
+- **No qualifying scan inside the window** → unverified, a nudge, and **no reopen ever**. The
+  tempting shortcut is to treat silence as failure. A repository whose nightly job broke last
+  Tuesday would then produce a wave of reopened tickets attributed to engineers who did nothing
+  wrong, and the feature would be switched off within a week by the first team it happened to.
+
+The two toggles are a **ladder**: verification on with auto-reopen off is a supported configuration
+and the schema says so, because "tell me, don't move my tickets" is a real answer for a team whose
+board is a commitment rather than a queue.
+
+The reopen digest's audience is the part that could not have been built by a scanner vendor. It
+reaches whoever *closed* the ticket — recovered from the audit log, because nothing else in the
+schema records who made that call — the current assignee, and **everyone who logged time against
+it**, cc'ing the closer's manager and the routed module's owner. The time loggers are the entry
+nobody would think to add and the one that matters: they are the people who know what the fix was
+supposed to do. Four systems have to be in one product for that list to exist at all — the ticket,
+the timesheet, the reporting line and the module map.
+
+### Findings that were multiplying, and a discipline that had to be enforced by the compiler
+
+Ingest was create-always. A nightly scan reporting 200 issues inserted 200 rows a night, which
+inflated the risk score, bent the trend chart, padded the digest and opened a duplicate ticket every
+morning — a data problem that looked exactly like a security problem getting worse.
+
+The fingerprint buckets the line number in fifties rather than using it exactly, so an edit above a
+vulnerability does not read as a new one. It is versioned (`v1:`) so the recipe can change later
+without silently re-deduplicating history against a different rule, and it returns `null` rather
+than guessing when a finding carries no path or rule identity — the caller then falls back to
+create-always, which is honest about what it does not know.
+
+SonarQube and ESLint are taken verbatim, which is the difference between an integration somebody
+sets up and one somebody maintains. The consequence needed a guard rather than a convention:
+`securityFindingTypeDisciplines` is a `Record` over the type enum, so a new type cannot compile
+without deciding whether it is security or quality, and the regression test asserts a thousand
+quality findings move the risk score by **exactly zero**. Without it, the day a workspace connected
+a linter would look like the day its security posture collapsed.
+
+### The console stops being one master key
+
+Five roles, five capabilities, and the shape that took the most thought is that **SUPPORT and
+BILLING are siblings rather than rungs**. The obvious model is one ordered ladder, and it is wrong
+in both directions: it hands a finance operator the break-glass that resets a customer's super-admin
+password, and hands a support operator the plan tiers. Neither is authority the other job needs, and
+granting authority nobody asked for is the thing splitting the role was meant to stop.
+
+Three implementation choices worth keeping:
+
+- The role is read from the database row on **every request**, never from a JWT claim. It is the
+  only version of "we removed their access" that is true at the moment you say it.
+- The MFA challenge sits **before** `establishSession`, so a challenged login has minted nothing.
+  TOTP is hand-rolled on `node:crypto` and pinned against RFC 6238's own published vectors — the
+  only way to know an authenticator implementation is correct is to check it against the numbers in
+  the specification rather than against another implementation.
+- A two-person action **replays through the same handler**. Approval looks the executor up by
+  action, never by the stored route string, so every guard re-runs against live data. Re-deriving
+  what to do from a serialised request is how a countersigned action ends up bypassing a check added
+  after it was queued.
+
+Membership of the two-person list is decided by "can it be undone", not by "is it dangerous". And
+`GET /backups/:id/download` is operator-only despite its verb, because it streams an entire customer
+database as SQL — the method implies safety and the classification has to say otherwise.
+
+### The business the console could not see, and the alerts that never left the room
+
+Two structural faults with one fix. `GET /analytics` opened a connection to every tenant database on
+every page load, so it got slower with each customer won; and because nothing was ever kept, no
+trend, cohort, churn or retention question could be asked at all. A nightly `OrgUsageSnapshot`
+answers both. **There is no backfill and there cannot be one** — every figure is a point-in-time
+count of mutable tenant state — so the series starts the night it ships and every ratio returns
+`null` rather than 0% while its denominator is empty.
+
+Every money figure is list price and says so, in the payload (`basis: "list-price"`) and in the
+first sentence of the page. A null price is not zero: Enterprise is excluded from MRR and the count
+of exclusions travels with the total, because a visible gap is honest and a silent under-report is
+not. Account health returns the **signals** rather than a score, and `signals` is never empty — a
+clean workspace says what was checked, because a band nobody can explain is a band nobody maintains.
+
+`deriveAlerts` had computed real fleet alerts since 4.0.0 and every one of them existed only while
+somebody had the page open. The digest sends a **diff** — appeared, escalated, cleared — never a
+standing alert, which is the whole difference between a digest people read and one they filter.
+Delivery state is written only when a channel accepted the message, so a failed send self-heals
+instead of being recorded as done.
+
+Fleet schema drift is read-only on purpose. It shows which workspaces are behind and prints the
+command that fixes it, and it does not offer a button, because a per-tenant migration fan-out needs
+a terminal and a human watching it — and a button that starts one from a browser tab is a button
+that eventually gets pressed by accident.
+
+### The upgrade that billed you twice
+
+`POST /billing/checkout-session` never read `Organization.stripeSubscriptionId`. It always created a
+new subscription and the webhook then overwrote the stored id, so a paying Team customer pressing
+"Upgrade to Enterprise" ended up with two live subscriptions, charged for both, the first referenced
+by nothing in our database — invisible to us and perfectly visible on their card statement.
+
+The fix is an in-place update with proration, and the interesting half is the failure taxonomy: a
+`404`/`resource_missing`, a `canceled`/`incomplete_expired` status, or a subscription with no items
+all mean "no usable subscription" and clear the column, while a transient Stripe failure re-throws.
+"Stripe is down" and "this subscription is gone" must not produce the same action — a 503 that
+quietly started a second subscription would be the original bug wearing a different hat.
+
+`/app/settings?billing=success` was in the redirect URL the whole time and nothing read it: the
+customer paid and landed on a page that said nothing had happened. And `?tab=` now works, which
+every billing email has assumed for months while landing its reader on the Reminders tab.
+
+### A contact page that keeps a promise it prints
+
+`/contact` has a honeypot, a fill-time floor read from the browser's **monotonic** clock, and a rate
+limiter — and deliberately no third-party captcha, because the FAQ rendered beside the form promises
+the app never calls out, and a page loading a vendor script while saying that is contradicted by its
+own network tab. The floor sends an elapsed interval rather than a timestamp, so a wrong system
+clock cannot reject a real person.
+
+The free-mail list is now shared with signup, with deliberately different verdicts: signup rejects,
+sales flags. A founder evaluating from a personal address is a real lead, and refusing them would be
+optimising a spam metric at the cost of the pipeline. The notification's `Reply-To` is the prospect,
+so Reply answers the customer rather than the robot — and neither email can fail the request,
+because losing the lead to protect the notification is exactly backwards.
+
+### Still open
+
+- [ ] **Verification is security-only.** A change request claiming a defect is fixed and a test run
+  claiming a regression is gone are the same argument, and neither is wired to the ladder. Not
+  generalised on day one on purpose: the security case is the one with a fingerprint stable enough
+  to prove an absence, and building the abstraction before the second instance exists is how it gets
+  built wrong.
+- [ ] **The snapshot series cannot be backfilled**, so every cohort and churn figure is blind before
+  the night 5.0.0 shipped. Nothing can fix this retroactively; it is stated so nobody spends a day
+  trying.
+- [ ] **Revenue is list price, never billed.** `reconcileAgainstStripe` exists and returns
+  `billedMrrMinor: null` — the reconciliation against what customers are actually charged is scoped
+  and not built.
+- [ ] **Schema drift has no remediation path in the console.** Read-only was the right call for
+  1.0 of it; a supervised, per-tenant, one-at-a-time migration runner with live output is the
+  version that would be safe, and it does not exist.
+- [ ] **The two-person queue has no notification.** A request sits until an OWNER happens to open
+  Approvals, and expires after 24 hours. It should email the owners when one is raised.
 
 ## v3.8.0 — scan before you store, and one tab for identity (2026-08-28)
 

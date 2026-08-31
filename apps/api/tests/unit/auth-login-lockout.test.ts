@@ -9,6 +9,21 @@
  * login route locked the address out of every org for five minutes, repeatable forever.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+/*
+ * A BUDGET SIZED FOR BCRYPT, not for an assertion.
+ *
+ * Every login path under test hashes or verifies a password, `bcryptjs` is pure JavaScript, and its
+ * cost factor is deliberately expensive — that is the control, not a slow test. This file spends
+ * ~18 seconds of CPU on seven tests with nothing else running, so vitest's 10s default is already
+ * close in isolation and is exceeded under a full parallel suite on a loaded machine.
+ *
+ * The failure that produced is the worst kind: red on one run, green on the next, on a file nobody
+ * had touched. That teaches people to re-run the suite instead of reading it, which is how a real
+ * regression gets waved through. Nothing here hangs — it is bcrypt doing its job — so the honest
+ * fix is a budget that says so, kept local to the files that hash rather than raised globally,
+ * where it would also hide a genuine deadlock somewhere else.
+ */
+vi.setConfig({ testTimeout: 45_000, hookTimeout: 45_000 });
 import { createFakeTenantClient } from "../helpers/fake-prisma-client.js";
 import { runInTenant } from "../helpers/tenant-context.js";
 

@@ -27,6 +27,7 @@
  *    model chose is not reproducible in the meeting where someone asks why their project is red.
  */
 import type { TicketStatus } from "@prisma/client";
+import { securityDisciplineFindingTypes } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { isChangeManagementOn } from "./change.service.js";
 
@@ -100,6 +101,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // tuple is rejected. Typed through the generated enum so a renamed status is a compile error
 // here rather than a silently-zero count.
 const CLOSED_TICKET: TicketStatus[] = ["RESOLVED", "CLOSED"];
+
+/** The three finding counts in this update are labelled "security" where they are read, so they are
+ *  filtered to the security discipline — see `securityFindingTypeDisciplines` in packages/shared.
+ *  Code-quality and lint findings share the table and would otherwise be counted as vulnerabilities
+ *  in a governance report. */
+const SECURITY_DISCIPLINE = { type: { in: securityDisciplineFindingTypes } };
 
 /** Timesheets store `workDate` as a UTC-midnight day, so a range built from local dates has to be
  *  converted the same way or a Monday-morning run drops a day at each edge — the same trap
@@ -223,9 +230,13 @@ async function metricsFor(from: Date, to: Date): Promise<PracticeMetrics> {
     changesOn
       ? prisma.changeRequest.count({ where: { closedAt: { gte: start, lt: endExclusive }, releaseVersion: { not: null } } })
       : Promise.resolve(0),
-    prisma.securityFinding.count({ where: { status: "OPEN", severity: "CRITICAL" } }),
-    prisma.securityFinding.count({ where: { status: "OPEN", severity: "HIGH" } }),
-    prisma.securityFinding.count({ where: { createdAt: { gte: start, lt: endExclusive } } }),
+    // SECURITY-discipline findings only. These three are rendered as "Open security findings:
+    // N critical, N high" and "New security findings" (practice-update-mail.service.ts), so a code
+    // smell reaching them would make that sentence false — see `securityFindingTypeDisciplines` in
+    // packages/shared for the argument and the Security Insights page for the same filter.
+    prisma.securityFinding.count({ where: { status: "OPEN", severity: "CRITICAL", ...SECURITY_DISCIPLINE } }),
+    prisma.securityFinding.count({ where: { status: "OPEN", severity: "HIGH", ...SECURITY_DISCIPLINE } }),
+    prisma.securityFinding.count({ where: { createdAt: { gte: start, lt: endExclusive }, ...SECURITY_DISCIPLINE } }),
     prisma.timesheet.groupBy({
       by: ["activityType"],
       where: { deletedAt: null, workDate: { gte: start, lte: end } },

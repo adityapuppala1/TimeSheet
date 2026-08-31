@@ -235,7 +235,11 @@ describe("the @rerunnable marker", () => {
   // This is the safety-critical one. The marker tells `npm run setup` it may clear a failed
   // migration record and re-apply the file UNATTENDED, against a database with real data. A
   // marker on a migration that cannot survive a re-run turns an auto-heal into an outage.
-  const marked = migrations.filter((migration) => migration.sql.includes(RERUNNABLE_MARKER));
+  // Asks the SHIPPING function, not a second copy of its rule. When this filter was its own
+  // `sql.includes(...)`, the test and the doctor could disagree about which migrations were
+  // marked — and they did: a migration whose prose merely mentions the marker satisfied one and
+  // not the other, which is the difference between a guarded file and an unattended re-run.
+  const marked = migrations.filter((migration) => isRerunnable(MIGRATIONS_DIR, migration.name));
 
   it("is carried only by migrations that guard their DDL", () => {
     for (const migration of marked) {
@@ -271,6 +275,33 @@ describe("the @rerunnable marker", () => {
     expect(isRerunnable(MIGRATIONS_DIR, "20260817100000_session_device_identity")).toBe(true);
     // A migration without the marker must never be auto-recovered.
     expect(isRerunnable(MIGRATIONS_DIR, "20260802171943_user_onboarding_completed_at")).toBe(false);
+  });
+
+  it("is a declaration, not a mention — prose about the marker does not carry it", () => {
+    // A real file in this repo, kept as the fixture because it is the exact shape that caused the
+    // bug: its header explains the marker in order to say it is NOT claiming it. Under the old
+    // "any comment containing the token" rule the doctor read that sentence as consent and would
+    // have cleared and re-applied the file unattended against live data.
+    const discussesMarker = fs.readFileSync(
+      path.join(MIGRATIONS_DIR, "20260831090000_verified_remediation_gate", "migration.sql"),
+      "utf8"
+    );
+    expect(discussesMarker, "fixture no longer mentions the marker; pick another discussing migration").toContain(RERUNNABLE_MARKER);
+    expect(isRerunnable(MIGRATIONS_DIR, "20260831090000_verified_remediation_gate")).toBe(false);
+  });
+
+  it("accepts a declaration that carries a reason after a colon", () => {
+    // Authors should be able to say WHY without losing the marker, which is half of why the old
+    // loose match existed. `-- @rerunnable: guarded by information_schema` still declares.
+    const declare = (line: string) => {
+      const body = line.trim().slice(2).trim();
+      return body === RERUNNABLE_MARKER || body.startsWith(`${RERUNNABLE_MARKER}:`);
+    };
+    expect(declare("-- @rerunnable")).toBe(true);
+    expect(declare("  --   @rerunnable  ")).toBe(true);
+    expect(declare("-- @rerunnable: every statement guards on information_schema")).toBe(true);
+    expect(declare("-- The file is NOT marked `@rerunnable` — that marker authorises")).toBe(false);
+    expect(declare("-- see @rerunnable in docs/DATABASE.md")).toBe(false);
   });
 
   it("refuses names that are not migration directories, and migrations this checkout lacks", () => {

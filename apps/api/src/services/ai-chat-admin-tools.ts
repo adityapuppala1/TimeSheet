@@ -19,7 +19,7 @@
  *
  * WHO CALLS THIS: `ai.service.ts#askWorkspaceChat`, through the merged registry in ai-chat-tools.ts.
  */
-import { permissions } from "@timesheet/shared";
+import { permissions, securityFindingStatuses, type SecurityFindingStatus } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
@@ -282,11 +282,19 @@ export const AI_CHAT_ADMIN_TOOLS: ReadonlyArray<AdminTool> = [
       // where a correctable message belonged. A free string cast to `never` is a promise the caller
       // cannot keep — the model writes these arguments, and it writes them the way prose reads.
       const requested = typeof args.status === "string" && args.status.trim() ? args.status.trim().toUpperCase().replace(/[\s-]+/g, "_") : "OPEN";
-      const known = ["OPEN", "ACKNOWLEDGED", "FIXED", "ACCEPTED_RISK"];
+      // The list of valid statuses comes from the shared enum, not a copy kept by hand here. The
+      // copy was the same list written a fifth time (see `securityFindingStatusBuckets`), and this
+      // one had the nastiest failure mode of the five: a status the product had gained but this
+      // array had not would be REJECTED TO THE USER'S FACE — the model asks a legitimate question,
+      // the admin is told their own product's status does not exist, and nothing anywhere logs a
+      // defect. Reading the enum makes that impossible by construction.
+      const known: readonly string[] = securityFindingStatuses;
       if (!known.includes(requested)) return `"${args.status}" is not a finding status. Use one of: ${known.join(", ")}.`;
       const rows = await prisma.securityFinding.groupBy({
         by: ["severity", "type"],
-        where: { status: requested as never },
+        // Narrowed by the `known.includes` guard above, so this is a checked cast rather than the
+        // `as never` it replaced — that one was a promise about a free string that nothing kept.
+        where: { status: requested as SecurityFindingStatus },
         _count: true
       });
       if (rows.length === 0) return `No ${requested.toLowerCase()} findings.`;

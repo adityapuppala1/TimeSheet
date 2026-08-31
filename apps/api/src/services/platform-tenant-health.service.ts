@@ -379,12 +379,29 @@ export async function getDatabaseMetrics(orgId: string): Promise<DatabaseMetrics
 /* Derived alerts                                                                              */
 /* ------------------------------------------------------------------------------------------ */
 
+export type HealthAlertSeverity = "critical" | "warning" | "info";
+
 export interface HealthAlert {
-  severity: "critical" | "warning" | "info";
+  severity: HealthAlertSeverity;
   title: string;
   detail: string;
   /** Which panel to look at, so an alert is a destination rather than only a statement. */
   area: "database" | "services" | "api" | "server" | "maintenance";
+  /**
+   * The stable identity of the CONDITION, which is not the identity of the message (5.0.0).
+   *
+   * `platform-alerts.service.ts` keeps one row per workspace per key so that a standing alert is
+   * reported once rather than every six hours. That only works if "Database connections at 84%"
+   * and "…at 87%" are the same thing, and if "1 fragmented table" and "2 fragmented tables" are
+   * too. Deriving a key by normalising the title was tried and is exactly as fragile as it sounds
+   * — the plural `s` alone splits one condition into two. So the key is written HERE, beside the
+   * rule that produced the alert, where changing one without the other is visible in the diff.
+   *
+   * CHANGING A KEY RE-ANNOUNCES THE CONDITION to every deployment on the next sweep, because the
+   * old row no longer matches and the new one has never been reported. That is the right
+   * behaviour for a genuinely new rule and an avoidable nuisance for a reworded one.
+   */
+  key: string;
 }
 
 /**
@@ -407,19 +424,20 @@ export function deriveAlerts(input: {
   const alerts: HealthAlert[] = [];
 
   if (input.downServices.length) {
-    alerts.push({ severity: "critical", title: `${input.downServices.length} service down`, detail: input.downServices.join(", "), area: "services" });
+    alerts.push({ key: "services.down", severity: "critical", title: `${input.downServices.length} service down`, detail: input.downServices.join(", "), area: "services" });
   }
   if (input.degradedServices.length) {
-    alerts.push({ severity: "warning", title: `${input.degradedServices.length} service degraded`, detail: input.degradedServices.join(", "), area: "services" });
+    alerts.push({ key: "services.degraded", severity: "warning", title: `${input.degradedServices.length} service degraded`, detail: input.degradedServices.join(", "), area: "services" });
   }
   if (input.openIncidents > 0) {
-    alerts.push({ severity: "warning", title: `${input.openIncidents} open incident${input.openIncidents === 1 ? "" : "s"}`, detail: "Still unresolved on this workspace's status page.", area: "services" });
+    alerts.push({ key: "services.open_incidents", severity: "warning", title: `${input.openIncidents} open incident${input.openIncidents === 1 ? "" : "s"}`, detail: "Still unresolved on this workspace's status page.", area: "services" });
   }
 
   const db = input.database;
   if (db) {
     if (db.server.connectionUsePercent !== null && db.server.connectionUsePercent >= 80) {
       alerts.push({
+        key: "db.connections",
         severity: db.server.connectionUsePercent >= 90 ? "critical" : "warning",
         title: `Database connections at ${db.server.connectionUsePercent.toFixed(0)}%`,
         detail: `${db.server.threadsConnected} of ${db.server.maxConnections} on ${db.host}. Server-wide — every workspace on this box shares it. Threshold: 80%.`,
@@ -428,6 +446,7 @@ export function deriveAlerts(input: {
     }
     if (db.server.bufferPoolHitRate !== null && db.server.bufferPoolHitRate < 99) {
       alerts.push({
+        key: "db.buffer_pool",
         severity: db.server.bufferPoolHitRate < 95 ? "warning" : "info",
         title: `Buffer pool hit rate ${db.server.bufferPoolHitRate.toFixed(2)}%`,
         detail: "Reads are going to disk more than they should. Server-wide. Threshold: 99%.",
@@ -435,10 +454,10 @@ export function deriveAlerts(input: {
       });
     }
     if (db.schema.totalBytes > 20 * 1024 ** 3) {
-      alerts.push({ severity: "info", title: "Large workspace database", detail: `${(db.schema.totalBytes / 1024 ** 3).toFixed(1)} GB across ${db.schema.tableCount} tables. Threshold: 20 GB.`, area: "database" });
+      alerts.push({ key: "db.size", severity: "info", title: "Large workspace database", detail: `${(db.schema.totalBytes / 1024 ** 3).toFixed(1)} GB across ${db.schema.tableCount} tables. Threshold: 20 GB.`, area: "database" });
     }
     if (db.queryMs > 2000) {
-      alerts.push({ severity: "warning", title: "Slow metadata query", detail: `information_schema took ${db.queryMs} ms to answer — the server is busy or the schema is very large. Threshold: 2000 ms.`, area: "database" });
+      alerts.push({ key: "db.metadata_slow", severity: "warning", title: "Slow metadata query", detail: `information_schema took ${db.queryMs} ms to answer — the server is busy or the schema is very large. Threshold: 2000 ms.`, area: "database" });
     }
 
     /* ---- schema-shape findings, all of them things a rebuild or an index would fix ---- */
@@ -448,6 +467,7 @@ export function deriveAlerts(input: {
     const fragmented = db.schema.largestTables.filter((table) => (table.fragmentation ?? 0) >= 0.3 && table.freeBytes > 50 * 1024 ** 2);
     if (fragmented.length) {
       alerts.push({
+        key: "db.fragmentation",
         severity: "info",
         title: `${fragmented.length} fragmented table${fragmented.length === 1 ? "" : "s"}`,
         detail: `${fragmented.map((table) => table.name).join(", ")} — ${(db.schema.freeBytes / 1024 ** 3).toFixed(2)} GB is allocated and unused across the schema. Reclaiming it rebuilds the table, which locks it, so run it inside a maintenance window. Threshold: 30% free and over 50 MB.`,
@@ -457,6 +477,7 @@ export function deriveAlerts(input: {
 
     if (db.schema.tablesWithoutPrimaryKey.length) {
       alerts.push({
+        key: "db.no_primary_key",
         severity: "warning",
         title: `${db.schema.tablesWithoutPrimaryKey.length} table${db.schema.tablesWithoutPrimaryKey.length === 1 ? "" : "s"} without a primary key`,
         detail: `${db.schema.tablesWithoutPrimaryKey.slice(0, 6).join(", ")}. Row-based replication and chunked migrations both need one; without it a large table can only be copied whole.`,
@@ -469,6 +490,7 @@ export function deriveAlerts(input: {
     if (nearlyFull.length) {
       const worst = Math.max(...nearlyFull.map((table) => table.autoIncrementUsePercent ?? 0));
       alerts.push({
+        key: "db.auto_increment",
         severity: worst >= 90 ? "critical" : "warning",
         title: `Auto-increment ${worst.toFixed(0)}% consumed`,
         detail: `${nearlyFull.map((table) => table.name).join(", ")} — against a signed INT key. At 100% every insert fails, and the fix (widening to BIGINT) is a full table rebuild that wants planning, not an outage. Threshold: 70%.`,
@@ -478,6 +500,7 @@ export function deriveAlerts(input: {
 
     if (db.schema.indexHeavyTables.length) {
       alerts.push({
+        key: "db.index_heavy",
         severity: "info",
         title: `${db.schema.indexHeavyTables.length} index-heavy table${db.schema.indexHeavyTables.length === 1 ? "" : "s"}`,
         detail: `${db.schema.indexHeavyTables.join(", ")} carry more than twice as much index as data. Usually an index nobody queries — each one costs on every write. Threshold: 2:1 on tables over 1 MB.`,
@@ -487,6 +510,7 @@ export function deriveAlerts(input: {
 
     if (db.server.tmpDiskTablePercent !== null && db.server.tmpDiskTablePercent >= 25) {
       alerts.push({
+        key: "db.tmp_disk_tables",
         severity: "info",
         title: `${db.server.tmpDiskTablePercent.toFixed(0)}% of temporary tables spill to disk`,
         detail: "Sorts and group-bys are exceeding the in-memory limit. Server-wide. Threshold: 25%.",
@@ -499,6 +523,7 @@ export function deriveAlerts(input: {
     const stuck = db.activeQueries.filter((query) => query.seconds >= 60);
     if (stuck.length) {
       alerts.push({
+        key: "db.long_running_queries",
         severity: stuck.some((query) => query.seconds >= 300) ? "critical" : "warning",
         title: `${stuck.length} long-running quer${stuck.length === 1 ? "y" : "ies"}`,
         detail: `Longest ${Math.max(...stuck.map((query) => query.seconds))}s: ${stuck[0].digest ?? stuck[0].command}. Threshold: 60s.`,
@@ -509,6 +534,7 @@ export function deriveAlerts(input: {
 
   if (input.apiErrorRate !== null && input.apiErrorRate >= 2) {
     alerts.push({
+      key: "api.error_rate",
       severity: input.apiErrorRate >= 5 ? "critical" : "warning",
       title: `API error rate ${input.apiErrorRate.toFixed(1)}%`,
       detail: "Share of sampled requests answering 5xx. Threshold: 2%.",
@@ -516,11 +542,11 @@ export function deriveAlerts(input: {
     });
   }
   if (input.apiP95Ms !== null && input.apiP95Ms >= 1500) {
-    alerts.push({ severity: "warning", title: `API p95 ${Math.round(input.apiP95Ms)} ms`, detail: "Slowest 5% of sampled requests. Threshold: 1500 ms.", area: "api" });
+    alerts.push({ key: "api.p95", severity: "warning", title: `API p95 ${Math.round(input.apiP95Ms)} ms`, detail: "Slowest 5% of sampled requests. Threshold: 1500 ms.", area: "api" });
   }
 
   if (input.maintenancePhase === "active") {
-    alerts.push({ severity: "info", title: "In maintenance", detail: "Everyone below super admin is locked out of this workspace right now.", area: "maintenance" });
+    alerts.push({ key: "maintenance.active", severity: "info", title: "In maintenance", detail: "Everyone below super admin is locked out of this workspace right now.", area: "maintenance" });
   }
 
   return alerts;

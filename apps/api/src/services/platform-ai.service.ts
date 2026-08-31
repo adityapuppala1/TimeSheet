@@ -37,7 +37,9 @@ import { controlPrisma } from "../config/control-prisma.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret, encryptSecret } from "../utils/encryption.js";
 import { callAnthropic, callOpenAICompatible } from "./ai.service.js";
+import type { AccountHealth } from "./platform-account-health.js";
 import { getTenantHealth } from "./platform-tenant-health.service.js";
+import { getOrgUsageProfile } from "./platform-revenue.service.js";
 import { getTenantDbTrend } from "./tenant-db-metrics.service.js";
 import { platformAudit } from "./platform-audit.service.js";
 
@@ -174,6 +176,33 @@ export interface AdvisorFacts {
   api: { windowHours: number; requests: number; errorRatePercent: number | null; p95Ms: number | null; slowestEndpoints: Array<{ name: string; p95Ms: number; calls: number; errorRatePercent: number }> } | null;
   services: { down: string[]; degraded: string[]; openIncidents: number } | null;
   maintenance: { phase: string; managedByPlatform: boolean } | null;
+  /**
+   * Commercial and engagement health — the SAME band and the SAME named signals the console shows
+   * an operator, never a second private opinion the advisor forms on its own. Feeding the existing
+   * scorer in here rather than building a parallel advisory surface is the point: an operator and
+   * the model must be able to argue about one set of findings, and `platform-account-health.ts` is
+   * where that set is defined and tested.
+   *
+   * EVERY STRING IN HERE WAS WRITTEN BY THIS CODEBASE. A signal's `label` and `detail` are fixed
+   * sentences with numbers interpolated into them — a seat count, a day count, a dollar figure —
+   * and there is no path by which a customer's own text reaches either. Null when the nightly
+   * snapshot has not covered this workspace yet, which is the honest answer on day one.
+   */
+  account: {
+    band: string;
+    score: number;
+    signals: Array<{ id: string; direction: string; label: string; detail: string }>;
+    seatsUsed: number;
+    /** Null on an unlimited tier — there is no ceiling, and reporting 1,000,000 invites the model
+     *  to reason about a number that does not mean what it looks like. */
+    seatLimit: number | null;
+    aiSpendMonthToDateUsd: number;
+    aiBudgetCeilingUsd: number;
+    daysSinceLastActivity: number | null;
+    /** How many daily snapshots this was derived from, so "low confidence" is grounded in a count
+     *  rather than in the model's mood. */
+    snapshots: number;
+  } | null;
   /** Statement SHAPES only — literals were stripped before they reached this service. */
   longRunningQueries: Array<{ seconds: number; shape: string | null }>;
   /** The thresholds the console already crossed, so the model is not asked to re-derive them. */
@@ -195,6 +224,9 @@ export function buildAdvisorFacts(input: {
   health: Awaited<ReturnType<typeof getTenantHealth>>;
   trend: Awaited<ReturnType<typeof getTenantDbTrend>>;
   trendDays: number;
+  /** Optional: absent when there is no usage snapshot yet, and absent in tests that only exercise
+   *  the database half of the fact sheet. */
+  account?: { health: AccountHealth | null; seatsUsed: number; seatLimit: number; aiSpendUsd: number; aiBudgetCeilingUsd: number; daysSinceLastActivity: number | null; snapshots: number } | null;
 }): AdvisorFacts {
   const { health, trend } = input;
   const db = health.database.data;
@@ -270,6 +302,22 @@ export function buildAdvisorFacts(input: {
     // person, a phone number or a customer's name. `platform-ai-guardrails.test.ts` plants exactly
     // that string in the input and fails if it appears in the fact sheet.
     maintenance: health.maintenance.data ? { phase: health.maintenance.data.phase, managedByPlatform: false } : null,
+    account:
+      input.account && input.account.health
+        ? {
+            band: input.account.health.band,
+            score: input.account.health.score,
+            signals: input.account.health.signals.map((signal) => ({ id: signal.id, direction: signal.direction, label: signal.label, detail: signal.detail })),
+            seatsUsed: input.account.seatsUsed,
+            // UNLIMITED_SEATS is a sentinel, not a ceiling. Sending it as a number would invite a
+            // finding about a workspace being "0.001% of its limit", which is arithmetic, not advice.
+            seatLimit: input.account.seatLimit > 0 && input.account.seatLimit < 1_000_000 ? input.account.seatLimit : null,
+            aiSpendMonthToDateUsd: round(input.account.aiSpendUsd, 2) ?? 0,
+            aiBudgetCeilingUsd: round(input.account.aiBudgetCeilingUsd, 2) ?? 0,
+            daysSinceLastActivity: input.account.daysSinceLastActivity,
+            snapshots: input.account.snapshots
+          }
+        : null,
     longRunningQueries: (db?.activeQueries ?? []).filter((query) => query.seconds >= 10).slice(0, 5).map((query) => ({ seconds: query.seconds, shape: query.digest })),
     existingAlerts: health.alerts.map((alert) => ({ severity: alert.severity, title: alert.title, detail: alert.detail }))
   };
@@ -346,6 +394,8 @@ export function buildAdvisorPrompt(facts: AdvisorFacts): string {
     actions,
     "- `tables` may only contain table names that appear in the facts. Leave it empty when the action is not table-level.",
     "- Use `confidence: low` when the data is thin (few trend samples, no API traffic). Do not hide uncertainty.",
+    "- `account` is the platform's OWN health scoring, already computed and already visible to the operator. Do not restate a signal it lists; use it as context, and say when a database finding and a commercial signal are the same story (a dormant workspace whose data stopped growing is one finding, not two).",
+    "- A workspace at or over its seat limit, or its AI budget, is a COMMERCIAL conversation and not a fault. Say so plainly and use CONTACT_WORKSPACE; never propose a database operation as the answer to a plan that no longer fits.",
     "- The summary is one short paragraph: what state this workspace is in, and what you would do first.",
     "",
     "FACTS (JSON):",
@@ -427,8 +477,34 @@ export async function adviseWorkspace(orgId: string, actorLabel: string, trendDa
   const apiKey = row.encryptedApiKey ? decryptSecret(row.encryptedApiKey) : "";
   if (row.provider === "ANTHROPIC" && !apiKey) throw new AppError(409, "The advisor has no API key. Add one under Settings → AI advisor.");
 
-  const [health, trend] = await Promise.all([getTenantHealth(orgId, trendDays), getTenantDbTrend(orgId, trendDays)]);
-  const facts = buildAdvisorFacts({ health, trend, trendDays });
+  // The usage profile is fetched alongside, and its failure is not fatal: an advisor that refuses
+  // to run because the nightly snapshot has not happened yet would be off for the first day of
+  // every install. It degrades to `account: null`, which the prompt handles.
+  const [health, trend, usage] = await Promise.all([
+    getTenantHealth(orgId, trendDays),
+    getTenantDbTrend(orgId, trendDays),
+    getOrgUsageProfile(orgId, trendDays).catch(() => null)
+  ]);
+  // `usage.latest` is exactly what the scorer was given, returned by the service rather than
+  // re-derived here — a second derivation is a second chance to disagree with the band beside it.
+  const latest = usage?.latest ?? null;
+  const facts = buildAdvisorFacts({
+    health,
+    trend,
+    trendDays,
+    account:
+      usage && latest
+        ? {
+            health: usage.health,
+            seatsUsed: latest.seatsUsed,
+            seatLimit: latest.seatLimit,
+            aiSpendUsd: latest.aiSpendUsd,
+            aiBudgetCeilingUsd: latest.aiBudgetCeilingUsd,
+            daysSinceLastActivity: latest.daysSinceLastActivity,
+            snapshots: usage.coverage.snapshots
+          }
+        : null
+  });
   const prompt = buildAdvisorPrompt(facts);
 
   const params = {

@@ -7,6 +7,7 @@
  * on the very next check, not after some cache/reconciliation job catches up.
  */
 import { controlPrisma } from "../config/control-prisma.js";
+import { readFeatureOverrides, resolveEntitlement } from "../utils/feature-overrides.js";
 
 /**
  * The tier a workspace is entitled to RIGHT NOW, which is not always what it has paid for.
@@ -25,10 +26,27 @@ export function effectiveTier(org: { planTier: "STARTER" | "TEAM" | "ENTERPRISE"
   return org.planTier;
 }
 
+/**
+ * THE RESOLUTION POINT (5.0.0).
+ *
+ * `Organization.featureOverrides` is the general per-org escape from the tier defaults, and this is
+ * the one place it is applied — the same reasoning that put `effectiveTier` here rather than in
+ * each caller. Every capability and quota check in the product already goes through this function,
+ * so all seventeen of them inherit overrides without a single caller changing.
+ *
+ * TWO THINGS IT IS DELIBERATELY NOT. It is not cached, for the reason at the top of this file: an
+ * override set at 09:00 must take effect on the next check. And it does NOT cover `seatLimit` or
+ * the AI budget ceiling — those have their own columns and their own readers below, and two places
+ * to set one number is a bug waiting for the day they disagree.
+ *
+ * An override key this build does not recognise is DROPPED by `readFeatureOverrides` rather than
+ * honoured or thrown — see that function for why a malformed column must cost the workspace its
+ * override and nothing else.
+ */
 async function getOrgAndTierLimit(orgId: string) {
   const org = await controlPrisma.organization.findUniqueOrThrow({ where: { id: orgId } });
   const tierLimit = await controlPrisma.planTierLimit.findUniqueOrThrow({ where: { tier: effectiveTier(org) } });
-  return { org, tierLimit };
+  return { org, tierLimit, overrides: readFeatureOverrides(org.featureOverrides) };
 }
 
 export async function getEffectiveSeatLimit(orgId: string): Promise<number> {
@@ -66,8 +84,8 @@ export async function getAllowedChatPlatforms(orgId: string): Promise<string[]> 
  * Getting those backwards turns a billing event into a company-wide outage.
  */
 export async function isFaceVerificationAllowed(orgId: string): Promise<boolean> {
-  const { tierLimit } = await getOrgAndTierLimit(orgId);
-  return Boolean(tierLimit.faceVerificationEnabled);
+  const { tierLimit, overrides } = await getOrgAndTierLimit(orgId);
+  return Boolean(resolveEntitlement(tierLimit, overrides, "faceVerificationEnabled"));
 }
 
 /* ------------------------------------------------------------------ *
@@ -107,36 +125,40 @@ export type PlanningQuota =
 
 /** One boolean capability. Callers should 403 with an upgrade message when this is false. */
 export async function isPlanningCapabilityAllowed(orgId: string, capability: PlanningCapability): Promise<boolean> {
-  const { tierLimit } = await getOrgAndTierLimit(orgId);
-  return Boolean(tierLimit[capability]);
+  const { tierLimit, overrides } = await getOrgAndTierLimit(orgId);
+  return Boolean(resolveEntitlement(tierLimit, overrides, capability));
 }
 
 /** Every capability at once — for the settings screen, which needs to render the whole matrix
  *  and would otherwise make six round trips to the control plane on one page load. */
 export async function getPlanningEntitlements(orgId: string): Promise<Record<PlanningCapability, boolean> & Record<PlanningQuota, number>> {
-  const { tierLimit } = await getOrgAndTierLimit(orgId);
+  const { tierLimit, overrides } = await getOrgAndTierLimit(orgId);
+  // Through the same resolver as the single-capability reads above, not a second copy of the
+  // lookup: this is the matrix the settings screen renders, and a matrix that disagrees with the
+  // check that runs a second later is the worst possible way to ship an override.
+  const value = <T extends boolean | number>(key: PlanningCapability | PlanningQuota) => resolveEntitlement<T>(tierLimit, overrides, key);
   return {
-    ganttEnabled: Boolean(tierLimit.ganttEnabled),
-    resourceMgmtEnabled: Boolean(tierLimit.resourceMgmtEnabled),
-    approvalsEnabled: Boolean(tierLimit.approvalsEnabled),
-    proofingEnabled: Boolean(tierLimit.proofingEnabled),
-    customWorkflowsEnabled: Boolean(tierLimit.customWorkflowsEnabled),
-    aiPmCopilotEnabled: Boolean(tierLimit.aiPmCopilotEnabled),
-    goalsEnabled: Boolean(tierLimit.goalsEnabled),
-    changeManagementEnabled: Boolean(tierLimit.changeManagementEnabled),
-    practiceUpdateEnabled: Boolean(tierLimit.practiceUpdateEnabled),
-    maxPortfolios: tierLimit.maxPortfolios,
-    maxRequestForms: tierLimit.maxRequestForms,
-    maxBlueprints: tierLimit.maxBlueprints,
-    maxCustomFields: tierLimit.maxCustomFields,
-    maxDashboards: tierLimit.maxDashboards,
-    maxGoals: tierLimit.maxGoals,
-    maxChangePolicies: tierLimit.maxChangePolicies
+    ganttEnabled: Boolean(value("ganttEnabled")),
+    resourceMgmtEnabled: Boolean(value("resourceMgmtEnabled")),
+    approvalsEnabled: Boolean(value("approvalsEnabled")),
+    proofingEnabled: Boolean(value("proofingEnabled")),
+    customWorkflowsEnabled: Boolean(value("customWorkflowsEnabled")),
+    aiPmCopilotEnabled: Boolean(value("aiPmCopilotEnabled")),
+    goalsEnabled: Boolean(value("goalsEnabled")),
+    changeManagementEnabled: Boolean(value("changeManagementEnabled")),
+    practiceUpdateEnabled: Boolean(value("practiceUpdateEnabled")),
+    maxPortfolios: value<number>("maxPortfolios"),
+    maxRequestForms: value<number>("maxRequestForms"),
+    maxBlueprints: value<number>("maxBlueprints"),
+    maxCustomFields: value<number>("maxCustomFields"),
+    maxDashboards: value<number>("maxDashboards"),
+    maxGoals: value<number>("maxGoals"),
+    maxChangePolicies: value<number>("maxChangePolicies")
   };
 }
 
 /** Ceiling on how many of a countable planning resource this org may have. */
 export async function getPlanningQuota(orgId: string, quota: PlanningQuota): Promise<number> {
-  const { tierLimit } = await getOrgAndTierLimit(orgId);
-  return tierLimit[quota];
+  const { tierLimit, overrides } = await getOrgAndTierLimit(orgId);
+  return resolveEntitlement<number>(tierLimit, overrides, quota);
 }

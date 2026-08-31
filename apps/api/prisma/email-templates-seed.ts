@@ -629,5 +629,51 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
       ].join("\n"),
       footerNote: "Ingest-only — findings reflect whatever CI/security tools this workspace has connected. See Workspace Settings → Security & DevOps."
     })
+  },
+
+  /**
+   * The one email in this file that contradicts a decision somebody already made — a scan ran and
+   * the vulnerability they marked fixed is still there. That shapes every choice below.
+   *
+   * IT LEADS WITH THE EVIDENCE, not the accusation: which tool, which repository and branch, which
+   * commit. A reader has to be able to check the claim and push back on it, and "your fix didn't
+   * work" with nothing attached is unanswerable.
+   *
+   * IT SHOWS BOTH LISTS. The same scan usually confirms other findings as genuinely fixed, and
+   * omitting those turns a factual report into a complaint. "Two of the four came back" is the
+   * sentence that makes the situation legible.
+   *
+   * ITS BUTTON OPENS THE TICKET, not the ticket list — `?open={{ticketId}}`, the same deep link the
+   * in-app notification uses. The close digest above still points at the bare list, which is a wart
+   * it is welcome to keep; a mail sent to five people about ONE failed fix must not make each of
+   * them search a workspace of seventeen hundred tickets for it.
+   */
+  "ticket.reopened_digest": {
+    subject: "[{{ticketKey}}] A fix did not hold",
+    bodyHtml: shell({
+      preheader: "{{scanSummary}} still reports findings that were marked fixed.",
+      accent: COLORS.destructive,
+      body: [
+        heading("{{ticketKey}} — a fix did not hold"),
+        lead(
+          "A scan ran and still reports findings that were marked fixed when {{closedBy}} resolved \"<strong>{{title}}</strong>\"."
+        ),
+        infoCard(
+          [
+            { label: "Proved by", value: "{{scanSummary}}", emphasize: true },
+            { label: "Current verdict", value: "{{riskVerdict}}" },
+            { label: "Ticket", value: "{{slaText}}" }
+          ],
+          COLORS.destructive
+        ),
+        calloutBox("Still reported", "{{survivedText}}", COLORS.destructive),
+        calloutBox("Confirmed fixed by the same scan", "{{fixedText}}", COLORS.success),
+        button("Open ticket", "{{appUrl}}/app/tickets?open={{ticketId}}", COLORS.destructive),
+        muted(
+          "Only a scan by the same tool, on the same repository and branch, can confirm or refute a finding — a different scanner not reporting it proves nothing either way."
+        )
+      ].join("\n"),
+      footerNote: "Verified remediation is opt-in per workspace. See Workspace Settings → Security & DevOps."
+    })
   }
 };

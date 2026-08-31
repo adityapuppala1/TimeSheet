@@ -32,6 +32,7 @@ import {
   Layers,
   Lock,
   ServerCog,
+  ShieldCheck,
   PieChart,
   Target,
   TrendingUp,
@@ -110,6 +111,12 @@ const MOATS = [
     why: "A planning vendor cannot bolt this on: they would need timesheet capture, an approval chain and rate history in production first. A timesheet vendor has the data and no plan to compare it against. The fusion is the product, and it is only available to whoever owns both halves."
   },
   {
+    icon: ShieldCheck,
+    title: "The only place a fix can be proven",
+    body: "Resolving a ticket that carries security findings records a claim, and the next scan by the same tool on the same repository and branch settles it: gone means verified, stamped with the run and commit that proved it; still there means the ticket reopens with that evidence and everyone who logged time on it hears why. No scan in the window means unverified — and never a reopen, because absence of proof is not proof of failure.",
+    why: "No scanner vendor can ship this, and it is not a matter of effort. Proving a fix held requires owning the ticket that claimed it, the timesheet that says who worked on it, the reporting line that decides who to tell, and the module map that routes it — four things a scanner has none of. A scanner can only ever say what it sees today; it cannot say a promise was kept."
+  },
+  {
     icon: FileCheck2,
     title: "Proof as a first-class output",
     body: "Most tools stop at reporting. This one produces a signed, page-numbered attestation of approved, identity-verified work — with the rate that applied at approval frozen into the record, so a rate change next quarter can't rewrite last quarter's invoice.",
@@ -124,7 +131,7 @@ const MOATS = [
   {
     icon: Building2,
     title: "The operator's console is part of the product",
-    body: "Whoever runs the deployment gets a real control plane, not a spreadsheet and a shell: one maintenance window armed across every workspace — which the workspaces themselves cannot switch off — plus per-tenant database monitoring, a year of growth history, and two guarded operations where a rebuild is refused outside a maintenance window.",
+    body: "Whoever runs the deployment gets a real control plane, not a spreadsheet and a shell: one maintenance window armed across every workspace — which the workspaces themselves cannot switch off — plus per-tenant database monitoring, a year of growth history, and two guarded operations where a rebuild is refused outside a maintenance window. It now carries its own authority model too: five operator roles read from the database on every request, optional TOTP, a second pair of eyes on the five actions that cannot be undone, and a recorded reason on every sensitive one.",
     why: "Every multi-tenant product eventually needs this and most build it privately, badly, after the first incident. Shipping it means the same install runs as somebody's own on-premise deployment, as our SaaS, and as a partner's — because operating it is a product surface rather than tribal knowledge."
   },
   {
@@ -171,14 +178,16 @@ const SURFACES = [
   { title: "Plan", body: "Gantt with four dependency types, baselines, critical path, portfolios, capacity, budgets, and a risk score from six measured signals." },
   { title: "Track", body: "Timesheets and Jira-style ticketing on the same rows, with saved views, custom fields and admin-defined workflows." },
   { title: "Intake", body: "Email, Slack, Teams, Google Chat, Telegram and public request forms — all landing as routed, prioritized tickets." },
-  { title: "Connect", body: "GitHub repo, branch and PR pickers; webhooks from GitLab, Bitbucket, Gitea, Forgejo and Azure DevOps; an optional CI gate on Resolved." },
+  { title: "Connect", body: "GitHub repo, branch and PR pickers; webhooks from GitLab, Bitbucket, Gitea, Forgejo and Azure DevOps; SonarQube's quality gate and issues, and eslint --format json, taken verbatim; an optional CI or quality gate on Resolved." },
+  { title: "Verify", body: "A resolved security ticket is a claim the next scan settles — verified fixed with the run and commit that proved it, or reopened with the evidence and the SLA clock restarted. Findings are fingerprinted so a nightly scan stops multiplying them, and routed by repository and path to the module that owns the code." },
   { title: "Report", body: "Insights, a 22-column CSV, a real Excel workbook, and dashboards scheduled to people with no account — with one date filter driving every card on the home page, compared against the previous equal-length period." },
   { title: "Prove", body: "Approved, identity-verified work as a signed attestation PDF, shareable by link, priced from the rate that applied at approval." },
   { title: "Brief", body: "A weekly leadership update nobody fills in: products, POCs, bugs, security and training, each initiative carrying an owner, an arithmetic status colour and what moved — counted from this workspace, drafted around the figures, reviewed before it sends." },
   { title: "Specify", body: "An AI interview turns an idea, or a PRD the client already wrote, into a structured requirements document — and then into the tickets and goals that build it." },
   { title: "Govern", body: "Change management with risk derived from impact × likelihood, the workspace's own approval chain, and a register that reports its own change-failure rate and approval turnaround." },
   { title: "Automate", body: "Named AI teammates and reviewable flows — assembled from capabilities the workspace already runs, propose-by-default, priced per run on the same ledger as human work." },
-  { title: "Operate", body: "A control plane for whoever runs the deployment: one maintenance window armed across every workspace and read-only inside them, per-tenant database monitoring with a year of growth history, and an AI advisor that reads the metrics and proposes — never executes." }
+  { title: "Operate", body: "A control plane for whoever runs the deployment: one maintenance window armed across every workspace and read-only inside them, per-tenant database monitoring with a year of growth history, five operator roles with a two-person rule on what cannot be undone, and an AI advisor that reads the metrics and proposes — never executes." },
+  { title: "Account", body: "A nightly per-workspace snapshot behind list-price MRR, churn, NRR/GRR, trial conversion and signup cohorts, plus account health that names the signal rather than returning a score — and a fleet alert digest that only reports what changed." }
 ];
 
 /** Deployment posture. All of it is a property of the repository, not a plan. */
@@ -215,9 +224,14 @@ const NEXT = [
     status: "Next"
   },
   {
-    title: "Deeper billing surface",
-    body: "Rate snapshots and cost analytics are in. Invoicing on top of attestations is the obvious extension, and the record it would bill from already exists.",
+    title: "Invoicing on top of attestations",
+    body: "Subscription billing is done: Stripe checkout, in-place plan changes with proration, the customer portal and invoice history. What is still missing is the other direction — invoicing a client for the approved, rate-snapshotted, identity-verified hours the attestation PDF already proves. The record it would bill from exists; the billing document does not.",
     status: "Under consideration"
+  },
+  {
+    title: "Verification beyond the scanner",
+    body: "A resolved security ticket is now settled by the next scan. The same argument applies to a change request that claims a defect is fixed and to a test run that claims a regression is gone, and neither is wired to the verification ladder yet. Deliberately not generalised on day one: the security case is the one with a fingerprint stable enough to prove absence, and building the abstraction before the second instance exists is how it gets built wrong.",
+    status: "Scoped, not started"
   }
 ];
 

@@ -32,11 +32,12 @@ import {
   ChevronLeft,
   ChevronRight,
   DollarSign,
+  Download,
   RefreshCw,
   Search,
   Users
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -44,7 +45,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Skeleton } from "../../components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { cn } from "../../lib/utils";
-import { platformAdminAnalyticsApi, type OrgAnalyticsSummary } from "../../services/platform-admin-api";
+import { Link } from "react-router";
+import { platformAdminAnalyticsApi, platformRevenueApi, type AccountHealthRow, type OrgAnalyticsSummary } from "../../services/platform-admin-api";
+import { exportCsv, type CsvColumn } from "../../utils/console-csv";
+import { HealthBandPill, HealthSignalLine } from "./health-ui";
 import {
   ConsolePage,
   ConsoleSection,
@@ -89,10 +93,44 @@ const NUMERIC_COLUMNS = new Set([
   "aiSpendThisMonthUsd",
   "mail",
   "practiceUpdatesSentThisMonth",
-  "lastActivityAt"
+  "lastActivityAt",
+  "health"
 ]);
 
-const columns: ColumnDef<OrgAnalyticsRow, any>[] = [
+/**
+ * A FACTORY, not a constant, since 5.0.0.
+ *
+ * The health column needs the snapshot-scored band for each row, which arrives from a second query.
+ * Closing over that map here — and memoising the result in the component — keeps the column
+ * definitions declarative without smuggling a hook into a module-level array.
+ */
+/**
+ * The export's columns — a FACTORY for the same reason `buildColumns` is one: the health band comes
+ * from a second query, and a spreadsheet of workspaces without it is missing the column an operator
+ * would sort by first.
+ *
+ * Two things the table shows as pills or badges are written out as words here. A CSV read in a
+ * spreadsheet has no colour, so "AT_RISK" has to be a value in a cell rather than a red dot.
+ */
+const ANALYTICS_CSV_COLUMNS = (healthByOrg: Map<string, AccountHealthRow>): Array<CsvColumn<OrgAnalyticsRow>> => [
+  { header: "Organization", value: (row) => row.name },
+  { header: "Slug", value: (row) => row.slug },
+  { header: "Status", value: (row) => row.status },
+  { header: "Plan tier", value: (row) => row.planTier },
+  { header: "Reachable", value: (row) => row.reachable },
+  { header: "Seats", value: (row) => row.seatCount },
+  { header: "Open tickets", value: (row) => (row.ticketCountsByStatus.OPEN ?? 0) + (row.ticketCountsByStatus.IN_PROGRESS ?? 0) },
+  { header: "Total tickets", value: (row) => Object.values(row.ticketCountsByStatus).reduce((a, b) => a + b, 0) },
+  { header: "AI spend this month (USD)", value: (row) => row.aiSpendThisMonthUsd.toFixed(2) },
+  { header: "Emails sent", value: (row) => row.emailsSentThisMonth },
+  { header: "Emails failed", value: (row) => row.emailsFailedThisMonth },
+  { header: "Practice updates", value: (row) => row.practiceUpdatesSentThisMonth },
+  { header: "Last activity", value: (row) => row.lastActivityAt },
+  { header: "Health band", value: (row) => healthByOrg.get(row.orgId)?.health.band ?? "" },
+  { header: "Health score", value: (row) => healthByOrg.get(row.orgId)?.health.score ?? "" }
+];
+
+const buildColumns = (healthByOrg: Map<string, AccountHealthRow>): ColumnDef<OrgAnalyticsRow, any>[] => [
   {
     accessorKey: "name",
     header: "Organization",
@@ -101,7 +139,11 @@ const columns: ColumnDef<OrgAnalyticsRow, any>[] = [
       // baseline and pushed it around whenever it appeared. A badge in a flex row leaves the
       // name where it is on every line of the column.
       <div className="flex min-w-0 items-center gap-2">
-        <span className="truncate font-medium text-foreground">{row.original.name}</span>
+        {/* The name is the way in to Org 360 — the page that answers "what is going on with this
+            one" without opening five others. */}
+        <Link to={`/platform-admin/organizations/${row.original.orgId}`} className="truncate font-medium text-foreground hover:text-accent hover:underline">
+          {row.original.name}
+        </Link>
         {!row.original.reachable && (
           <Badge variant="warning" className="shrink-0 gap-1 whitespace-nowrap">
             <AlertTriangle className="h-3 w-3" />
@@ -110,6 +152,26 @@ const columns: ColumnDef<OrgAnalyticsRow, any>[] = [
         )}
       </div>
     )
+  },
+  {
+    id: "health",
+    // Sorts on the SCORE so a column of bands orders sensibly, but never renders the score alone:
+    // the cell is a band plus the signal that produced it, which is the rule the whole feature
+    // rests on. A workspace with no snapshot yet gets an em dash, not a reassuring "Healthy".
+    accessorFn: (row) => healthByOrg.get(row.orgId)?.health.score ?? 101,
+    header: "Health",
+    cell: ({ row }) => {
+      const scored = healthByOrg.get(row.original.orgId);
+      if (!scored) return <span className="text-muted-foreground/60" title="No usage snapshot for this workspace yet">—</span>;
+      return (
+        <span className="inline-flex flex-col items-end gap-0.5">
+          <HealthBandPill band={scored.health.band} score={scored.health.score} />
+          <span className="max-w-[18rem] truncate text-left text-xs font-normal text-muted-foreground" title={scored.health.primarySignal.detail}>
+            {scored.health.primarySignal.label}
+          </span>
+        </span>
+      );
+    }
   },
   { accessorKey: "seatCount", header: "Seats", cell: (info) => info.getValue() },
   {
@@ -175,11 +237,26 @@ function SortIcon({ direction }: { direction: false | "asc" | "desc" }) {
 /** The only screen in the console that surfaces cross-tenant NUMBERS (seat counts, ticket
  *  counts by status, AI spend, outbound mail health, practice-update adoption) — never row-level
  *  content. Backed by the single
- *  cross-tenant-loop service (platform-admin-analytics.service.ts) by design. */
+ *  cross-tenant-loop service (platform-admin-analytics.service.ts) by design.
+ *
+ *  5.0.0 adds one column that is NOT live: account health, which is scored from the nightly usage
+ *  snapshot rather than from this page's sweep. It arrives as its own query so a slow fleet loop
+ *  never blocks it and a workspace with no snapshot yet simply has no band, rather than a
+ *  reassuring default. The band is always rendered WITH the signal that produced it — a bare score
+ *  in a column is the thing account health was written not to be. */
 export function PlatformAdminAnalytics() {
   const analytics = useQuery({ queryKey: ["platform-admin", "analytics"], queryFn: platformAdminAnalyticsApi.get });
+  // Its own query on purpose: health comes from the nightly snapshot, not from the live fleet
+  // sweep, so a slow sweep must not hold it up and a failed sweep must not blank it.
+  const health = useQuery({ queryKey: ["platform-admin", "account-health"], queryFn: () => platformRevenueApi.health(30) });
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
+
+  const healthByOrg = useMemo(() => new Map((health.data?.rows ?? []).map((row) => [row.orgId, row])), [health.data]);
+  // The server already sorted at-risk first, then expansion, then healthy. Capped at eight: a list
+  // of forty is a list nobody works through, and the full set is one column away in the table.
+  const attention = useMemo(() => (health.data?.rows ?? []).filter((row) => row.health.band !== "HEALTHY").slice(0, 8), [health.data]);
+  const columns = useMemo(() => buildColumns(healthByOrg), [healthByOrg]);
 
   const table = useReactTable({
     data: analytics.data?.orgs ?? NO_ORGS,
@@ -195,7 +272,11 @@ export function PlatformAdminAnalytics() {
   });
 
   const rows = table.getRowModel().rows;
-  const totalRows = table.getFilteredRowModel().rows.length;
+  /* What the SEARCH matched, across every page — not `analytics.data.orgs` and not the twenty rows
+     currently rendered. This is what the CSV button exports and what "Showing x–y of n" counts, so
+     the file and the sentence under the table cannot disagree about how many rows there are. */
+  const filteredOrgs = table.getFilteredRowModel().rows.map((row) => row.original);
+  const totalRows = filteredOrgs.length;
   const { pageIndex, pageSize } = table.getState().pagination;
   const firstRowShown = totalRows === 0 ? 0 : pageIndex * pageSize + 1;
   const lastRowShown = Math.min((pageIndex + 1) * pageSize, totalRows);
@@ -205,7 +286,7 @@ export function PlatformAdminAnalytics() {
     <ConsolePage
       eyebrow="Tenants"
       title="Analytics"
-      description="Aggregate metrics across every organization — seat counts, ticket volume, AI spend, outbound mail health and practice-update adoption. Counts only: no ticket, comment, timesheet or email content ever surfaces here."
+      description="Aggregate metrics across every organization — seat counts, ticket volume, AI spend, outbound mail health, practice-update adoption, and snapshot-scored account health. Counts only: no ticket, comment, timesheet or email content ever surfaces here."
       actions={
         // A read-only snapshot has exactly one action, so refetching IS this page's primary one.
         <Button size="sm" className={PRIMARY_BTN} onClick={() => analytics.refetch()} disabled={analytics.isFetching}>
@@ -241,6 +322,35 @@ export function PlatformAdminAnalytics() {
             />
           </KpiGrid>
 
+          {/* The list an operator can act on, above the table they have to read. Every entry names
+              its signals in full — a band with no reason attached is the thing this feature exists
+              not to be. Rendered only when there IS something: an empty "needs attention" card
+              trains people to scroll past the section. */}
+          {attention.length > 0 && (
+            <ConsoleSection
+              title="Needs attention"
+              description="Scored from the nightly usage snapshot. At risk first, then expansion candidates — each with the signals that put it there."
+              bodyClassName="grid gap-4"
+            >
+              {attention.map((row) => (
+                <div key={row.orgId} className="grid min-w-0 gap-2 rounded-lg border border-border p-3">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <Link to={`/platform-admin/organizations/${row.orgId}`} className="truncate font-medium text-foreground hover:text-accent hover:underline">
+                      {row.name}
+                    </Link>
+                    <span className="font-mono text-xs text-muted-foreground">{row.slug}</span>
+                    <HealthBandPill band={row.health.band} score={row.health.score} />
+                  </div>
+                  <ul className="grid min-w-0 gap-1.5">
+                    {row.health.signals.map((signal) => (
+                      <HealthSignalLine key={signal.id} signal={signal} />
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </ConsoleSection>
+          )}
+
           <ConsoleSection
             title="Per-organization breakdown"
             description="This month, aggregated per org."
@@ -262,6 +372,16 @@ export function PlatformAdminAnalytics() {
                       />
                     </div>
                   </Field>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    disabled={filteredOrgs.length === 0}
+                    onClick={() => exportCsv("platform-analytics", ANALYTICS_CSV_COLUMNS(healthByOrg), filteredOrgs)}
+                  >
+                    <Download className="h-4 w-4" />
+                    Export CSV
+                  </Button>
                 </Toolbar>
               ) : undefined
             }
@@ -276,7 +396,7 @@ export function PlatformAdminAnalytics() {
               <>
                 {/* 1040px: eight columns, one of which carries a name plus a badge. Below that the
                     grid scrolls INSIDE this card — the page body never moves sideways. */}
-                <ConsoleTable minWidth={1040}>
+                <ConsoleTable minWidth={1240}>
                   <TableHeader>
                     {table.getHeaderGroups().map((headerGroup) => (
                       <TableRow key={headerGroup.id} className="hover:bg-transparent">

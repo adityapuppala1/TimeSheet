@@ -2,7 +2,9 @@ import axios, { type AxiosRequestConfig } from "axios";
 /* TYPE-ONLY, and erased at build: the platform console reads the very same tenant health
    services a workspace's own Maintenance tab does, so a second copy of these shapes could
    only drift out of step with the first. No runtime coupling to the tenant axios client. */
+import type { PlatformRole } from "@timesheet/shared";
 import type { ApiPerformanceOverview, StatusPage, SystemHealthSnapshot } from "./api";
+import { askPlatformReason, PLATFORM_REASON_HEADER, PLATFORM_REASON_MIN, reasonRequirementFor } from "./platform-reason";
 
 /**
  * A completely separate axios instance from services/api.ts's tenant `api` — different base
@@ -21,8 +23,32 @@ export function setPlatformAdminAccessToken(token: string | null) {
   inMemoryToken = token;
 }
 
-platformAdminApi.interceptors.request.use((config) => {
+/**
+ * Bearer token, and — for the console actions that touch a customer or destroy something — a
+ * reason, asked for BEFORE the request leaves the browser.
+ *
+ * The interceptor is async and that is the point: it suspends the request while the operator
+ * types, so every existing call site gets the prompt without knowing it exists. Backing out of the
+ * dialog throws, which axios surfaces to the caller's `onError` exactly like a refusal — the
+ * action does not happen, which is the correct outcome of "actually, never mind".
+ *
+ * See services/platform-reason.ts for which routes are on the list and why the server, not this
+ * table, is the authority.
+ */
+platformAdminApi.interceptors.request.use(async (config) => {
   if (inMemoryToken) config.headers.Authorization = `Bearer ${inMemoryToken}`;
+
+  const label = reasonRequirementFor(config.method ?? "get", config.url ?? "");
+  if (label && !config.headers[PLATFORM_REASON_HEADER]) {
+    const reason = await askPlatformReason(label);
+    if (!reason || reason.trim().length < PLATFORM_REASON_MIN) {
+      throw new axios.Cancel(`Cancelled — "${label}" is recorded against a customer and needs a reason.`);
+    }
+    // PERCENT-ENCODED. A header value is ASCII-only, and an operator's sentence is not: an accented
+    // customer name, a curly apostrophe, or the em dash this product's own copy is full of makes
+    // the browser refuse to send the request at all. The server decodes it back.
+    config.headers[PLATFORM_REASON_HEADER] = encodeURIComponent(reason.trim());
+  }
   return config;
 });
 
@@ -68,6 +94,15 @@ export interface PlatformAdminUser {
   id: string;
   name: string;
   email: string;
+  /**
+   * Which of `@timesheet/shared`'s `platformRoles` this operator holds. Used ONLY to decide what
+   * the console offers — never as the authorization itself. The server re-reads the role from the
+   * database on every single request (see middleware/platform-admin-auth.ts), so a value tampered
+   * with here buys a person a menu item and a 403, not access.
+   */
+  role: PlatformRole;
+  /** Whether this account has a second factor enrolled. Drives the nag in Settings. */
+  mfaEnabled?: boolean;
   /** True while the account still verifies against the password the control seed ships with. Drives the console banner. */
   usingSeededPassword?: boolean;
 }
@@ -136,6 +171,11 @@ export type PlanTierLimitRow = {
   backupFrequency: "NONE" | "WEEKLY" | "DAILY" | "HOURLY";
   maxBackupDestinations: number;
   backupPitrEnabled: boolean;
+  /** What a seat on this tier COSTS, per month, in minor units. `null` means the tier has no list
+   *  price — Enterprise, priced per contract — and is NOT the same thing as 0, which means free.
+   *  Every renderer must show "Not set" for null rather than a confident $0. */
+  listPricePerSeatMinor: number | null;
+  listPriceCurrency: string;
 } & Record<PlanCapabilityKey, boolean> &
   Record<PlanQuotaKey, number>;
 
@@ -163,15 +203,40 @@ export interface PlatformAnalytics {
   totals: { orgCount: number; seatCount: number; aiSpendThisMonthUsd: number };
 }
 
+/**
+ * A sign-in either completes or asks for a second factor. Modelled as a union so a caller cannot
+ * read `accessToken` off a challenge response without TypeScript objecting — the whole security
+ * property here is that no session exists until the code is verified.
+ */
+export type PlatformAdminLoginResponse =
+  | { mfaRequired: true; challengeToken: string; expiresInSeconds: number }
+  | { mfaRequired?: false; accessToken: string; admin: PlatformAdminUser };
+
+export interface PlatformAdminMfaStatus {
+  enabled: boolean;
+  enrolledAt: string | null;
+  recoveryCodesRemaining: number;
+}
+
 export const platformAdminAuthApi = {
-  login: async (email: string, password: string) =>
-    (await platformAdminApi.post<{ accessToken: string; admin: PlatformAdminUser }>("/auth/login", { email, password })).data,
+  login: async (email: string, password: string) => (await platformAdminApi.post<PlatformAdminLoginResponse>("/auth/login", { email, password })).data,
+  /** Act two. `recovery` swaps the authenticator code for one of the single-use recovery codes. */
+  verifyMfa: async (challengeToken: string, code: string, recovery = false) =>
+    (await platformAdminApi.post<{ accessToken: string; admin: PlatformAdminUser; usedRecoveryCode: boolean }>("/auth/login/totp", { challengeToken, code, recovery }))
+      .data,
   refresh: refreshPlatformAdminAccessToken,
   me: async () => (await platformAdminApi.get<PlatformAdminUser>("/auth/me")).data,
   logout: async () => platformAdminApi.post("/auth/logout"),
   /** Re-verifies the current password server-side; every OTHER console session is revoked on success. */
   changePassword: async (currentPassword: string, newPassword: string) =>
-    (await platformAdminApi.post<{ otherSessionsRevoked: number; usingSeededPassword: false }>("/auth/change-password", { currentPassword, newPassword })).data
+    (await platformAdminApi.post<{ otherSessionsRevoked: number; usingSeededPassword: false }>("/auth/change-password", { currentPassword, newPassword })).data,
+
+  mfaStatus: async () => (await platformAdminApi.get<PlatformAdminMfaStatus>("/auth/mfa")).data,
+  /** Mints the secret and returns the `otpauth://` URI to render as a QR code. Nothing is switched
+   *  on until `mfaConfirm` proves a code from it. */
+  mfaBegin: async () => (await platformAdminApi.post<{ secret: string; otpauthUri: string }>("/auth/mfa/begin")).data,
+  mfaConfirm: async (code: string) => (await platformAdminApi.post<{ recoveryCodes: string[] }>("/auth/mfa/confirm", { code })).data,
+  mfaDisable: async (currentPassword: string) => (await platformAdminApi.post<{ mfaEnabled: false }>("/auth/mfa/disable", { currentPassword })).data
 };
 
 export interface ProvisionOrgResult {
@@ -247,6 +312,8 @@ export const platformAdminPlanTierApi = {
         aiMonthlyBudgetCeilingUsd: number;
         allowedSsoProviders: Array<SsoProvider>;
         allowedChatPlatforms: Array<ChatPlatform>;
+        listPricePerSeatMinor: number | null;
+        listPriceCurrency: string;
       } & Record<PlanCapabilityKey, boolean> &
         Record<PlanQuotaKey, number>
     >
@@ -331,6 +398,16 @@ export interface PlatformAuditRow {
   entity: string;
   entityId: string | null;
   metadata: Record<string, unknown> | null;
+  /**
+   * WHY the operator said they did it, captured at the moment of the action by
+   * `requirePlatformReason`. The route has always returned it — the whole row is sent — and this
+   * type simply never declared it. Null on the rows written by workers and by customers, which
+   * genuinely have no operator to ask.
+   *
+   * Not shown in the console's audit TABLE (five columns already fill the width) but it is the most
+   * valuable field in the CSV export, which is where an audit trail actually gets reviewed.
+   */
+  reason?: string | null;
   createdAt: string;
 }
 
@@ -342,6 +419,10 @@ export interface PlatformMailSettings {
   passwordSet: boolean;
   fromAddress: string;
   replyTo: string;
+  /** Where a contact-form notification goes. Empty means "the shipped default". */
+  salesInboxAddress: string;
+  /** The address that would actually be used, so the field can say what leaving it blank means. */
+  salesInboxEffective: string;
   updatedAt: string | null;
   effective: { configured: boolean; source: "database" | "env"; host: string | null; port: number; secure: boolean; user: string | null; from: string; replyTo: string | null };
 }
@@ -488,6 +569,50 @@ export interface TrialFeedbackAnalytics {
   rows: TrialFeedbackRow[];
 }
 
+/* ------------------------------------------------------------------------------------------ *
+ * Sales leads (4.0.0) — what the public contact form captured, and where the conversation got to.
+ * ------------------------------------------------------------------------------------------ */
+
+export type SalesLeadStatus = "NEW" | "CONTACTED" | "QUALIFIED" | "WON" | "LOST";
+
+export interface SalesLeadRow {
+  id: string;
+  name: string;
+  email: string;
+  company: string;
+  role: string | null;
+  country: string | null;
+  phone: string | null;
+  teamSize: string;
+  deploymentInterest: string;
+  timeline: string;
+  /** A JSON column: an array of interest codes, but typed honestly because the server sends JSON. */
+  interests: unknown;
+  message: string;
+  /** A personal email domain. Shown, never acted on — see apps/api/src/utils/free-mail-domains.ts. */
+  isFreeMailDomain: boolean;
+  sourcePage: string | null;
+  referrer: string | null;
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  status: SalesLeadStatus;
+  ownerLabel: string | null;
+  notes: string | null;
+  contactedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SalesLeadListing {
+  count: number;
+  counts: Record<SalesLeadStatus, number>;
+  freeMailCount: number;
+  newThisWeek: number;
+  statuses: SalesLeadStatus[];
+  rows: SalesLeadRow[];
+}
+
 export interface PlatformAuditPage {
   rows: PlatformAuditRow[];
   total: number;
@@ -542,16 +667,51 @@ export interface PlatformAdminAccountRow {
   email: string;
   name: string;
   status: "ACTIVE" | "INACTIVE";
+  role: PlatformRole;
+  mfaEnabled: boolean;
   createdAt: string;
   lastLoginAt: string | null;
+  /** Doubles as "could this person countersign right now" — see the handler's comment. */
   liveSessions: number;
+}
+
+/** What a two-person action returns INSTEAD of doing the thing. 202, not 200. */
+export interface PlatformActionQueued {
+  pending: true;
+  requestId: string;
+  action: string;
+  label: string;
+  expiresAt: string;
+  approvers: { id: string; name: string; email: string; liveSessions: number }[];
+  message: string;
+}
+
+export interface PendingPlatformActionRow {
+  id: string;
+  action: string;
+  label: string;
+  route: string;
+  method: string;
+  params: Record<string, string>;
+  body: Record<string, unknown>;
+  reason: string;
+  requestedByLabel: string;
+  requestedAt: string;
+  status: "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED" | "FAILED";
+  expiresAt: string;
+  expired: boolean;
+  approvedByLabel: string | null;
+  approvedAt: string | null;
+  resolutionNote: string | null;
+  /** The console hides the Approve button on your own request. The server refuses it regardless. */
+  isMine: boolean;
 }
 
 export const platformAdminConsoleApi = {
   overview: async () => (await platformAdminApi.get<PlatformOverview>("/overview")).data,
 
   mailSettings: async () => (await platformAdminApi.get<PlatformMailSettings>("/mail-settings")).data,
-  updateMailSettings: async (payload: { host: string; port: number; secure: boolean; user?: string; password?: string; clearPassword?: boolean; fromAddress?: string; replyTo?: string }) =>
+  updateMailSettings: async (payload: { host: string; port: number; secure: boolean; user?: string; password?: string; clearPassword?: boolean; fromAddress?: string; replyTo?: string; salesInboxAddress?: string }) =>
     (await platformAdminApi.put<{ ok: true; updatedAt: string; effective: PlatformMailSettings["effective"] }>("/mail-settings", payload)).data,
   testMail: async (to: string) => (await platformAdminApi.post<{ sent: true; to: string; emailLogId: string | null }>("/mail-settings/test", { to })).data,
 
@@ -582,12 +742,32 @@ export const platformAdminConsoleApi = {
 
   feedback: async () => (await platformAdminApi.get<TrialFeedbackAnalytics>("/feedback")).data,
 
+  salesLeads: async () => (await platformAdminApi.get<SalesLeadListing>("/sales-leads")).data,
+  /** Pipeline only. Nothing the customer submitted is editable — see the handler's comment. */
+  updateSalesLead: async (id: string, patch: { status?: SalesLeadStatus; ownerLabel?: string | null; notes?: string | null }) =>
+    (await platformAdminApi.patch<SalesLeadRow>(`/sales-leads/${encodeURIComponent(id)}`, patch)).data,
+
   audit: async (params?: { entity?: string; actorType?: string; limit?: number; page?: number }) =>
     (await platformAdminApi.get<PlatformAuditPage>("/audit", { params })).data,
 
   admins: async () => (await platformAdminApi.get<PlatformAdminAccountRow[]>("/admins")).data,
-  createAdmin: async (payload: { email: string; name: string }) => (await platformAdminApi.post<{ id: string; email: string; name: string; temporaryPassword: string }>("/admins", payload)).data,
-  setAdminStatus: async (id: string, status: "ACTIVE" | "INACTIVE") => (await platformAdminApi.patch<{ id: string; status: string }>(`/admins/${id}`, { status })).data,
+  /** Two-person: this returns a QUEUED request, not an account. The temporary password comes back
+   *  to whoever approves it, which is why there is no password in this response type. */
+  createAdmin: async (payload: { email: string; name: string; role: PlatformRole }) =>
+    (await platformAdminApi.post<PlatformActionQueued>("/admins", payload)).data,
+  /** Immediate, deliberately — deactivation is how a compromised credential gets cut off, and
+   *  making that wait for a second operator would be protecting the attacker. */
+  setAdminStatus: async (id: string, status: "ACTIVE" | "INACTIVE") =>
+    (await platformAdminApi.patch<{ id: string; status: string; role: PlatformRole }>(`/admins/${id}`, { status })).data,
+  /** Two-person, unlike the status change above: a promotion to OWNER hands somebody the ability
+   *  to grant themselves anything. */
+  setAdminRole: async (id: string, role: PlatformRole) => (await platformAdminApi.patch<PlatformActionQueued>(`/admins/${id}`, { role })).data,
+
+  approvals: async (limit = 50) => (await platformAdminApi.get<{ rows: PendingPlatformActionRow[] }>("/governance/requests", { params: { limit } })).data.rows,
+  approveRequest: async (id: string) =>
+    (await platformAdminApi.post<{ approved: true; requestId: string; action: string; result: unknown }>(`/governance/requests/${encodeURIComponent(id)}/approve`)).data,
+  rejectRequest: async (id: string, note: string) =>
+    (await platformAdminApi.post<{ rejected: true; requestId: string }>(`/governance/requests/${encodeURIComponent(id)}/reject`, { note })).data,
   sessions: async (params?: { page?: number; limit?: number }) => (await platformAdminApi.get<PlatformSessionPage>("/auth/sessions", { params })).data,
   endSession: async (id: string) => platformAdminApi.delete(`/auth/sessions/${id}`),
   /** Ends every session except the caller's own — the "a machine I no longer have" button. */
@@ -616,6 +796,41 @@ export const platformPublicApi = {
   reactivateInfo: async (token: string) =>
     (await axios.get<{ workspace: string; slug: string; url: string; status: OrgStatus; alreadyActive: boolean; eligible: boolean; deleteDate: string | null }>(`${API_BASE_URL.replace(/\/$/, "")}/public/reactivate/${encodeURIComponent(token)}`)).data,
   reactivate: async (token: string) => (await axios.post<{ restored: boolean; alreadyActive: boolean; url: string }>(`${API_BASE_URL.replace(/\/$/, "")}/public/reactivate/${encodeURIComponent(token)}`)).data
+};
+
+/** What the public contact form posts. Mirrors the schema in controllers/sales-lead.controller.ts. */
+export interface SalesLeadSubmission {
+  name: string;
+  email: string;
+  company: string;
+  role?: string;
+  country?: string;
+  phone?: string;
+  teamSize: string;
+  deploymentInterest: string;
+  timeline: string;
+  interests?: string[];
+  message: string;
+  sourcePage?: string;
+  referrer?: string;
+  utmSource?: string;
+  utmMedium?: string;
+  utmCampaign?: string;
+  /** The honeypot. Always sent, always empty — a bot that fills it in is dropped in silence. */
+  website?: string;
+  /** How long the form was on screen, measured on a monotonic clock. See MIN_FILL_MS on the server. */
+  elapsedMs?: number;
+}
+
+/**
+ * The contact form's door. Bare `axios` and its OWN mount rather than the `/public` family above:
+ * this one carries no token, has no prior relationship with the caller, and is rate-limited far
+ * more tightly (see app.ts). `withCredentials` is deliberately absent — there is no session here
+ * and a signed-in visitor's cookies have no business on a marketing form.
+ */
+export const salesLeadApi = {
+  submit: async (body: SalesLeadSubmission) =>
+    (await axios.post<{ received: true; responseWindow: string }>(`${API_BASE_URL.replace(/\/$/, "")}/contact`, body)).data
 };
 
 /* ================================================================================================
@@ -955,6 +1170,38 @@ export interface DbTrendPoint {
   queryMs: number;
   connectionUsePercent: number | null;
   bufferPoolHitRate: number | null;
+  /** NULL on every sample taken before 5.0.0, and never backfilled to 0 — the chart draws a gap
+   *  rather than a floor, so the first real finding does not look like a regression that happened
+   *  the day the columns shipped. */
+  tablesWithoutPrimaryKey: number | null;
+  indexHeavyTables: number | null;
+}
+
+/**
+ * The least-squares forecast, and — far more often — its refusal.
+ *
+ * `confidence: "none"` is the common answer and the honest one: a projection off three points reads
+ * exactly like one off three months, so the number arrives carrying its own confidence and a
+ * `reason` in plain words. The console must render the reason whenever there is no projection.
+ */
+export interface DbForecast {
+  confidence: "none" | "low" | "moderate" | "high";
+  reason: string;
+  bytesPerDay: number | null;
+  r2: number | null;
+  samples: number;
+  spanDays: number;
+  targetBytes: number;
+  latestBytes: number | null;
+  daysToTarget: number | null;
+  reachesTargetAt: string | null;
+}
+
+export interface SchemaFindingTrend {
+  tablesWithoutPrimaryKey: number | null;
+  indexHeavyTables: number | null;
+  names: { tablesWithoutPrimaryKey?: string[]; indexHeavyTables?: string[] } | null;
+  firstSeen: { tablesWithoutPrimaryKey: string | null; indexHeavyTables: string | null };
 }
 
 export interface DbGrowth {
@@ -1025,7 +1272,12 @@ export interface PlatformAiSettings {
 
 export const platformOpsExtrasApi = {
   trend: async (orgId: string, days = 30) =>
-    (await platformAdminApi.get<{ points: DbTrendPoint[]; growth: DbGrowth }>(`/monitoring/${orgId}/trend`, { params: { days } })).data,
+    (
+      await platformAdminApi.get<{ points: DbTrendPoint[]; growth: DbGrowth; forecast: DbForecast; schemaFindings: SchemaFindingTrend }>(
+        `/monitoring/${orgId}/trend`,
+        { params: { days } }
+      )
+    ).data,
   /** Take a reading of the whole fleet now rather than waiting for the hourly worker. */
   sampleNow: async () => (await platformAdminApi.post<{ sampled: number; failed: Array<{ slug: string; error: string }>; prunedRows: number }>("/monitoring/sample")).data,
   /** The caller names an operation and a table list; it never sends SQL. */
@@ -1040,4 +1292,342 @@ export const platformOpsExtrasApi = {
   advice: async (orgId: string) => (await platformAdminApi.get<{ advice: AdviceRow[] }>(`/ai/advice/${orgId}`)).data,
   decideAdvice: async (adviceId: string, status: "APPLIED" | "DISMISSED", note: string | null) =>
     (await platformAdminApi.post<AdviceRow>(`/ai/advice/${adviceId}/decision`, { status, note })).data
+};
+
+/* ====================== Revenue, account health and usage snapshots (5.0.0) ====================== */
+
+/**
+ * Everything on this block is derived from the NIGHTLY SNAPSHOT (`OrgUsageSnapshot`), not from a
+ * live sweep of every tenant database — which is what makes these screens cost the same whether the
+ * deployment has four workspaces or four hundred.
+ *
+ * `basis: "list-price"` travels with the money figures deliberately. A list-price MRR is not billed
+ * revenue, and every screen that renders one has to say so; carrying it in the payload rather than
+ * assuming it in the component means a future billed-revenue source cannot silently change what an
+ * existing number means.
+ */
+export type RevenueBasis = "list-price";
+
+export interface TierRevenue {
+  tier: string;
+  accounts: number;
+  seats: number;
+  /** Null when the tier has no list price. NEVER render this as 0. */
+  mrrMinor: number | null;
+  perSeatMinor: number | null;
+}
+
+export interface MrrBreakdown {
+  basis: RevenueBasis;
+  currency: string;
+  mixedCurrencies: boolean;
+  mrrMinor: number;
+  arrMinor: number;
+  arpaMinor: number | null;
+  payingAccounts: number;
+  freeAccounts: number;
+  /** Revenue-bearing workspaces whose tier has no list price — excluded from `mrrMinor` and shown
+   *  as an explicit exclusion rather than folded in as zero. */
+  unpricedAccounts: number;
+  unpricedSeats: number;
+  billableSeats: number;
+  trialingAccounts: number;
+  byTier: TierRevenue[];
+}
+
+export interface ChurnWindow {
+  basis: RevenueBasis;
+  windowDays: number;
+  startAccounts: number;
+  endAccounts: number;
+  churnedAccounts: number;
+  newAccounts: number;
+  startMrrMinor: number;
+  retainedMrrMinor: number;
+  expansionMinor: number;
+  contractionMinor: number;
+  churnedMrrMinor: number;
+  /** All null when the window has no span or no starting cohort — "not enough history", not 0%. */
+  logoChurnPercent: number | null;
+  revenueChurnPercent: number | null;
+  netRevenueRetentionPercent: number | null;
+  grossRevenueRetentionPercent: number | null;
+}
+
+export interface TrialConversion {
+  trialsStarted: number;
+  converted: number;
+  lapsed: number;
+  stillTrialing: number;
+  /** Over DECIDED trials only, so a running trial does not count as a failure. */
+  conversionPercent: number | null;
+  medianDaysToConvert: number | null;
+}
+
+export interface CohortCell {
+  monthOffset: number;
+  /** Null when no snapshot covers that month — the normal state for every month before this
+   *  feature shipped. A 0 here would report a churn event that never happened. */
+  retained: number | null;
+  percent: number | null;
+}
+
+export interface CohortTable {
+  rows: Array<{ cohort: string; signedUp: number; cells: CohortCell[] }>;
+  maxOffset: number;
+  observedFrom: string | null;
+  observedTo: string | null;
+}
+
+export interface SeatOverageRow {
+  orgId: string;
+  slug: string;
+  name: string;
+  planTier: string;
+  status: string;
+  seatsUsed: number;
+  seatLimit: number;
+  utilisation: number;
+  seatsRemaining: number;
+}
+
+export interface StripeReconciliation {
+  subscribedAccounts: number;
+  listMrrMinor: number;
+  /** Null means "not fetched" — the console renders that, never a zero gap. */
+  billedMrrMinor: number | null;
+  discountMinor: number | null;
+  note: string;
+}
+
+export interface RevenueOverview {
+  basis: RevenueBasis;
+  coverage: { days: number; firstDay: string | null; lastDay: string | null; snapshots: number };
+  mrr: MrrBreakdown;
+  churn: ChurnWindow;
+  trials: TrialConversion;
+  cohorts: CohortTable;
+  seatOverage: SeatOverageRow[];
+  stripe: StripeReconciliation | null;
+}
+
+/** A band always arrives with the signals that produced it. There is deliberately no shape here
+ *  that can carry a score on its own. */
+export interface HealthSignal {
+  id: string;
+  direction: "risk" | "expansion" | "neutral";
+  weight: number;
+  label: string;
+  detail: string;
+}
+
+export interface AccountHealth {
+  band: "AT_RISK" | "HEALTHY" | "EXPANSION";
+  score: number;
+  signals: HealthSignal[];
+  primarySignal: HealthSignal;
+  headline: string;
+}
+
+export interface AccountHealthRow {
+  orgId: string;
+  slug: string;
+  name: string;
+  planTier: string;
+  status: string;
+  seatsUsed: number;
+  seatLimit: number;
+  aiSpendUsd: number;
+  aiBudgetCeilingUsd: number;
+  daysSinceLastActivity: number | null;
+  health: AccountHealth;
+}
+
+export interface FleetUsagePoint {
+  day: string;
+  workspaces: number;
+  activeSeats: number;
+  agentSeats: number;
+  ticketsOpen: number;
+  ticketsTotal: number;
+  aiSpendUsd: number;
+  unreachable: number;
+}
+
+export interface OrgUsageProfile {
+  orgId: string;
+  series: Array<{
+    day: string;
+    activeSeats: number;
+    agentSeats: number;
+    seatLimit: number;
+    ticketsOpen: number;
+    ticketsTotal: number;
+    aiSpendUsd: number;
+    emailsSent: number;
+    emailsFailed: number;
+    databaseBytes: number | null;
+    reachable: boolean;
+  }>;
+  health: AccountHealth | null;
+  latest: {
+    day: string;
+    status: string;
+    planTier: string;
+    seatsUsed: number;
+    seatLimit: number;
+    aiSpendUsd: number;
+    aiBudgetCeilingUsd: number;
+    daysSinceLastActivity: number | null;
+    backupFailures: number;
+  } | null;
+  /** Null when the workspace's tier has no list price. Render "Not set", never $0. */
+  listMrrMinor: number | null;
+  currency: string;
+  coverage: { snapshots: number; firstDay: string | null; lastDay: string | null };
+}
+
+export const platformRevenueApi = {
+  overview: async (days = 30) => (await platformAdminApi.get<RevenueOverview>("/analytics/revenue", { params: { days } })).data,
+  health: async (days = 30) =>
+    (await platformAdminApi.get<{ rows: AccountHealthRow[]; coverage: { firstDay: string | null; lastDay: string | null }; seatOverage: SeatOverageRow[] }>("/analytics/health", { params: { days } })).data,
+  usageTrend: async (days = 90) => (await platformAdminApi.get<{ points: FleetUsagePoint[] }>("/analytics/usage-trend", { params: { days } })).data,
+  orgUsage: async (orgId: string, days = 60) => (await platformAdminApi.get<OrgUsageProfile>(`/analytics/org/${orgId}`, { params: { days } })).data,
+  /** Take today's snapshot now rather than waiting for 03:40 UTC. Safe to run twice — the sweep
+   *  upserts on (workspace, day). */
+  snapshotNow: async () =>
+    (await platformAdminApi.post<{ day: string; captured: number; failed: Array<{ slug: string; error: string }>; prunedRows: number }>("/analytics/snapshot")).data
+};
+
+/* ================== Fleet alerts, schema drift and the org timeline (5.0.0) ================== */
+
+export type AlertSeverity = "critical" | "warning" | "info";
+
+export interface FleetAlert {
+  organizationId: string;
+  slug: string;
+  name: string;
+  /** The stable identity of the CONDITION, not of the message — see the API service for why the
+   *  key is written beside the rule rather than derived from the wording. */
+  key: string;
+  severity: AlertSeverity;
+  title: string;
+  detail: string;
+  area: string;
+}
+
+export interface AlertSettings {
+  digestEnabled: boolean;
+  minSeverity: AlertSeverity | string;
+  recipients: string[];
+  webhookUrl: string | null;
+  /** Whether a signing secret is stored — never the secret itself. */
+  webhookSecretSet: boolean;
+  lastRunAt: string | null;
+  lastSentAt: string | null;
+  lastWebhookAt: string | null;
+  lastWebhookStatus: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+export interface AlertsOverview {
+  sweep: {
+    generatedAt: string;
+    alerts: FleetAlert[];
+    totals: { critical: number; warning: number; info: number; workspaces: number };
+    /** A workspace that could not be read produces NO alerts, which looks exactly like a healthy
+     *  one. Listed separately for that reason. */
+    unreachable: Array<{ organizationId: string; slug: string; name: string; error: string }>;
+  };
+  settings: AlertSettings;
+  /** How long each open condition has been standing, and whether anybody was told. */
+  open: Array<{ organizationId: string; alertKey: string; severity: string; firstSeenAt: string; lastReportedAt: string | null }>;
+}
+
+export interface DigestResult {
+  sent: boolean;
+  reason: string;
+  appeared: number;
+  escalated: number;
+  cleared: number;
+  unchanged: number;
+  recipients: number;
+  mailed: number;
+  webhook: { status: string; ok: boolean; error?: string } | null;
+  dryRun: boolean;
+}
+
+export interface FleetSchemaDrift {
+  latest: string;
+  rows: Array<{
+    organizationId: string;
+    name: string;
+    slug: string;
+    status: string;
+    databaseName: string | null;
+    schemaVersion: string | null;
+    migratedAt: string | null;
+    behind: boolean;
+  }>;
+  behind: number;
+  unregistered: number;
+  /** The exact command that fixes it. Printed, never wired to a button — see the page. */
+  command: string;
+}
+
+export interface TimelineEntry {
+  at: string;
+  kind: "alert" | "alert-cleared" | "backup" | "operator" | "maintenance" | "email";
+  severity: AlertSeverity;
+  title: string;
+  detail: string;
+  actor: string | null;
+}
+
+export type FeatureOverrideEffect = "grant" | "restrict" | "noop";
+
+export interface ClassifiedOverride {
+  key: string;
+  kind: "boolean" | "quota";
+  tierValue: boolean | number;
+  overrideValue: boolean | number;
+  effect: FeatureOverrideEffect;
+}
+
+export interface OrgOverrideView {
+  organizationId: string;
+  slug: string;
+  effectiveTier: string;
+  overrides: Record<string, boolean | number>;
+  classified: ClassifiedOverride[];
+  /** Every key that MAY be overridden, with what this workspace's tier gives it. Sent by the server
+   *  rather than hard-coded here: the allowlist is the authority, and a console copy of it would be
+   *  a list of switches that silently does nothing the first time the two drift. */
+  available: Array<{ key: string; kind: "boolean" | "quota"; tierValue: boolean | number }>;
+  /** The keys that hand out something the plan forbids. Non-empty means the operator has to say so
+   *  out loud before the write is accepted. */
+  grants: string[];
+}
+
+export const platformAlertsApi = {
+  overview: async () => (await platformAdminApi.get<AlertsOverview>("/alerts")).data,
+  saveSettings: async (payload: {
+    digestEnabled: boolean;
+    minSeverity: string;
+    recipients: string[];
+    webhookUrl: string | null;
+    /** Omit to keep the stored secret; "" clears it. */
+    webhookSecret?: string;
+  }) => (await platformAdminApi.put<AlertSettings>("/alerts/settings", payload)).data,
+  /** `dryRun` previews what WOULD go out without sending or recording anything, which is what makes
+   *  the button safe to press twice. */
+  runDigest: async (dryRun: boolean) => (await platformAdminApi.post<DigestResult>("/alerts/digest/run", { dryRun })).data,
+  testWebhook: async () => (await platformAdminApi.post<{ status: string; ok: boolean; error?: string }>("/alerts/webhook/test")).data,
+  schemaDrift: async () => (await platformAdminApi.get<FleetSchemaDrift>("/fleet/schema-drift")).data,
+  timeline: async (orgId: string, days = 90) =>
+    (await platformAdminApi.get<{ entries: TimelineEntry[]; since: string; truncated: boolean }>(`/organizations/${orgId}/timeline`, { params: { days } })).data,
+  featureOverrides: async (orgId: string) => (await platformAdminApi.get<OrgOverrideView>(`/organizations/${orgId}/feature-overrides`)).data,
+  saveFeatureOverrides: async (orgId: string, overrides: Record<string, boolean | number>, acknowledgeGrants: boolean) =>
+    (await platformAdminApi.put<OrgOverrideView>(`/organizations/${orgId}/feature-overrides`, { overrides, acknowledgeGrants })).data
 };

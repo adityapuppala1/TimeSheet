@@ -6,7 +6,7 @@
  * one Organization, its OrgDatabase DSN is the same database the app already talks to today,
  * so nothing behaves differently until a second, real organization is provisioned.
  */
-import { PLAN_TIER_LIMITS, planTiers } from "@timesheet/shared";
+import { PLAN_TIER_LIMITS, PLAN_TIER_LIST_PRICES, planTiers } from "@timesheet/shared";
 import { PrismaClient } from "../../src/generated/control-client/index.js";
 import { encryptSecret } from "../../src/utils/encryption.js";
 import { hashPassword } from "../../src/utils/security.js";
@@ -53,7 +53,19 @@ async function main() {
       // Still NOT spread into the `update` branch above, unlike faceVerificationEnabled: that
       // would give a platform admin's per-tier tuning a second chance to be silently reverted by a
       // re-seed. Create-only is the correct half of that trade.
-      create: { tier, ...limits }
+      //
+      // The list price (5.0.0) is passed EXPLICITLY beside the spread rather than folded into
+      // `PlanTierLimits`, because everything on that interface is something the server enforces and
+      // a price enforces nothing. It comes from the same shared constant the landing page's pricing
+      // cards render, so a buyer's page and the operator's MRR cannot disagree about what a seat
+      // costs. Enterprise's is `null` on purpose — priced per contract, shown as "Custom", and
+      // excluded from the MRR total rather than counted as zero.
+      create: {
+        tier,
+        ...limits,
+        listPricePerSeatMinor: PLAN_TIER_LIST_PRICES[tier].perSeatMinor,
+        listPriceCurrency: PLAN_TIER_LIST_PRICES[tier].currency
+      }
     });
   }
   console.log("Seeded PlanTierLimit rows (STARTER, TEAM, ENTERPRISE).");
@@ -85,9 +97,38 @@ async function main() {
   const platformAdminEmail = "platform-admin@timesphere.local";
   await controlPrisma.platformAdminUser.upsert({
     where: { email: platformAdminEmail },
+    /*
+     * `role: "OWNER"` ON THE CREATE BRANCH IS LOAD-BEARING, AND ITS ABSENCE WAS A REAL BUG.
+     *
+     * `PlatformAdminUser.role` defaults to READ_ONLY — the right default for a column added by
+     * migration, so a row that misses its initialisation is under-privileged rather than over.
+     * The migration that adds it promotes every PRE-EXISTING admin to OWNER, which covers every
+     * upgrade. A FRESH install has no pre-existing admin: the migration's UPDATE matches nothing
+     * because the table is empty, and then THIS create runs. Without the role named here the
+     * bootstrap admin lands READ_ONLY, the deployment has no owner at all, and nobody can grant
+     * one — because granting a role is the single thing only an owner can do.
+     *
+     * This is the same seed-versus-migration seam the PlanTierLimit entitlements were bitten by
+     * twice, in the same direction, and only ever visible on a fresh database.
+     */
     update: {},
-    create: { email: platformAdminEmail, name: "Platform Admin", passwordHash: await hashPassword("PlatformAdmin@12345"), status: "ACTIVE" }
+    create: { email: platformAdminEmail, name: "Platform Admin", role: "OWNER", passwordHash: await hashPassword("PlatformAdmin@12345"), status: "ACTIVE" }
   });
+
+  /*
+   * The one repair the update branch above deliberately does not do, done here instead.
+   *
+   * A create-only role is correct — re-seeding must never revert a demotion an operator chose,
+   * which is exactly why the entitlement values above are create-only too. But there is one state
+   * that is not a choice and cannot be recovered from inside the product: an install with no active
+   * OWNER anywhere. Guarded on precisely that, so it fires only when the alternative is a console
+   * nobody can administer, and matches the `NOT EXISTS` guard in the governance migration.
+   */
+  if ((await controlPrisma.platformAdminUser.count({ where: { status: "ACTIVE", role: "OWNER" } })) === 0) {
+    const repaired = await controlPrisma.platformAdminUser.updateMany({ where: { status: "ACTIVE" }, data: { role: "OWNER" } });
+    if (repaired.count > 0) console.log(`No active platform OWNER existed — promoted ${repaired.count} active admin(s), since nobody could have granted the role from the console.`);
+  }
+
   console.log(`Seeded PlatformAdminUser "${platformAdminEmail}" (password: PlatformAdmin@12345 — change in production).`);
 }
 

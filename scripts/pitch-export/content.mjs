@@ -86,14 +86,16 @@ export const SLIDES = [
       ["Plan", "Gantt with four dependency types, baselines, critical path, portfolios, capacity, budgets, and a risk score from six measured signals."],
       ["Track", "Timesheets and Jira-style ticketing on the same rows, with saved views, custom fields and admin-defined workflows."],
       ["Intake", "Email, Slack, Teams, Google Chat, Telegram and public request forms — all landing as routed, prioritized tickets."],
-      ["Connect", "GitHub repo, branch and PR pickers; webhooks from GitLab, Bitbucket, Gitea, Forgejo and Azure DevOps; an optional CI gate on Resolved."],
+      ["Connect", "GitHub repo, branch and PR pickers; webhooks from GitLab, Bitbucket, Gitea, Forgejo and Azure DevOps; SonarQube's quality gate and issues, and eslint --format json, taken verbatim; an optional CI or quality gate on Resolved."],
+      ["Verify", "A resolved security ticket is a claim the next scan settles — verified fixed with the run and commit that proved it, or reopened with the evidence and the SLA clock restarted. Findings are fingerprinted so a nightly scan stops multiplying them, and routed by repository and path to the module that owns the code."],
       ["Report", "Insights, a 22-column CSV, a real Excel workbook, and dashboards scheduled to people with no account."],
       ["Prove", "Approved, identity-verified work as a signed attestation PDF, shareable by link, priced from the rate that applied at approval."],
       ["Brief", "A weekly leadership update nobody fills in — counted from this workspace, drafted around the figures, reviewed before it sends."],
       ["Specify", "An AI interview turns an idea, or a PRD the client already wrote, into a structured requirements document — and then into tickets and goals."],
       ["Govern", "Change management with risk from impact × likelihood, the workspace's own approval chain, and a register reporting its own change-failure rate."],
       ["Automate", "Named AI teammates and reviewable flows — propose-by-default, priced per run on the same ledger as human work."],
-      ["Operate", "A control plane for whoever runs the deployment: one maintenance window armed across every workspace and read-only inside them, per-tenant database monitoring with a year of growth history, and an AI advisor that proposes rather than executes."]
+      ["Operate", "A control plane for whoever runs the deployment: one maintenance window armed across every workspace and read-only inside them, per-tenant database monitoring with a year of growth history, five operator roles with a two-person rule on what cannot be undone, and an AI advisor that proposes rather than executes."],
+      ["Account", "A nightly per-workspace snapshot behind list-price MRR, churn, NRR/GRR, trial conversion and signup cohorts, plus account health that names the signal rather than returning a score — and a fleet alert digest that only reports what changed."]
     ]
   },
   {
@@ -109,14 +111,15 @@ export const SLIDES = [
   {
     id: "moat",
     label: "Why it's hard to copy",
-    title: "Seven things that aren't a weekend's work",
+    title: "Eight things that aren't a weekend's work",
     image: "studio.png",
     imageCaption: "Requirements Studio — an interview that becomes tickets and goals.",
     points: [
       ["The only planner that can measure itself", "Every project tool compares a plan against another plan, because estimates are all it holds. This one owns the approved, rate-snapshotted timesheet too. A planning vendor cannot bolt this on; a timesheet vendor has the data and no plan to compare it against."],
+      ["The only place a fix can be proven", "Resolving a ticket carrying security findings records a claim; the next scan by the same tool on the same repository and branch settles it — verified, with the run and commit that proved it, or reopened with that evidence. No scanner vendor can ship this: proving a fix held needs the ticket, the timesheet, the reporting line and the module map at once, and a scanner owns none of them."],
       ["Proof as a first-class output", "A signed, page-numbered attestation of approved, identity-verified work, with the rate that applied at approval frozen into the record. Competitors need identity verification, approval workflow and rate history to exist together before they can ship the artefact at all."],
       ["An AI loop that closes", "Capture what the model was asked and answered, correct real failures into a golden set, version prompts without a deploy, then replay and score. This is infrastructure, not a feature."],
-      ["The operator's console is part of the product", "Whoever runs the deployment gets one maintenance window armed across every workspace — which the workspaces cannot switch off — plus per-tenant database monitoring, a year of growth history, and guarded operations where a rebuild is refused outside a maintenance window. Most products build this privately, badly, after the first incident."],
+      ["The operator's console is part of the product", "Whoever runs the deployment gets one maintenance window armed across every workspace — which the workspaces cannot switch off — plus per-tenant database monitoring, a year of growth history, and guarded operations where a rebuild is refused outside a maintenance window. It has its own authority model too: five operator roles read from the database on every request, and a second pair of eyes on the actions that cannot be undone. Most products build this privately, badly, after the first incident."],
       ["Bring-your-own-key as the default", "Every AI capability is off until switched on, and runs against the customer's own provider key under a budget the product enforces per call. We never resell inference."],
       ["Isolation you can point at", "A database per organization, not a shared table with a tenant column. There is no query to get wrong, because there is no shared connection for one to cross."],
       ["An agentic layer that adds no new power", "Teammates and flows compose capabilities that already exist, under the same review, undo and audit path. Switching one on grants nothing new — it only names who runs what, at what budget, with what authority."]
@@ -177,12 +180,13 @@ export const SLIDES = [
   {
     id: "next",
     label: "What's next",
-    title: "Four things, honestly labelled",
+    title: "Five things, honestly labelled",
     points: [
       ["Ambient identity verification — deliberately gated on consent design", "Face checks are hands-free inside the dialog today. Continuous background scanning is the obvious next step and is deliberately not built: a camera running unprompted during ordinary work is a different consent posture, and that is a customer's decision to opt into rather than ours to assume."],
       ["Retrieval for Ask AI — scoped, not started", "Today Ask AI stuffs the most recently updated tickets into the prompt and never uses the question to choose which ones. A ticket outside that window is invisible, and no amount of prompt tuning fixes that."],
       ["Evaluation-gated prompt rollout — next", "The pieces exist: golden sets, prompt versions, and a scoring runner. The next step is refusing to activate a prompt version that scores worse than the one it replaces."],
-      ["Deeper billing surface — under consideration", "Rate snapshots and cost analytics are in. Invoicing on top of attestations is the obvious extension, and the record it would bill from already exists."]
+      ["Invoicing on top of attestations — under consideration", "Subscription billing is done: Stripe checkout, in-place plan changes with proration, the customer portal and invoice history. What is missing is the other direction — invoicing a client for the approved, rate-snapshotted, identity-verified hours the attestation PDF already proves. The record exists; the billing document does not."],
+      ["Verification beyond the scanner — scoped, not started", "A resolved security ticket is now settled by the next scan. The same argument applies to a change request claiming a defect is fixed and a test run claiming a regression is gone, and neither is wired to the ladder yet. Deliberately not generalised on day one: building the abstraction before the second instance exists is how it gets built wrong."]
     ]
   },
   {

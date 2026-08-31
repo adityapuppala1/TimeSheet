@@ -24,7 +24,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PLAN_TIER_LIMITS, planTiers } from "@timesheet/shared";
+import { PLAN_TIER_LIMITS, PLAN_TIER_LIST_PRICES, planTiers } from "@timesheet/shared";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA = path.resolve(here, "..", "..", "prisma", "control", "schema.prisma");
@@ -43,14 +43,43 @@ function modelFields(model: string): string[] {
     .filter((name) => name !== "id" && name !== "createdAt" && name !== "updatedAt");
 }
 
+/**
+ * The two commercial columns (4.2.0), which are deliberately NOT entitlements.
+ *
+ * Everything `PlanTierLimits` describes is something the server ENFORCES — a ceiling, an
+ * allowlist, a capability that fails closed. A list price enforces nothing, so it is not on that
+ * interface and cannot be filled by the seed's spread. It is filled explicitly, from
+ * `PLAN_TIER_LIST_PRICES`, and the second assertion below is what keeps "every column has somewhere
+ * to be written" true for these two as well — excluding them without checking them would be exactly
+ * the hole this file exists to close.
+ */
+const COMMERCIAL_FIELDS = ["listPricePerSeatMinor", "listPriceCurrency"];
+
 describe("PlanTierLimits ↔ PlanTierLimit", () => {
   it("declares exactly the same entitlement fields, so the seed's spread is exhaustive", () => {
     const shared = Object.keys(PLAN_TIER_LIMITS.ENTERPRISE).sort();
     // `tier` is the model's own key and is passed explicitly by the seed, so it is the one field
-    // the shared shape does not carry.
-    const model = modelFields("PlanTierLimit").filter((f) => f !== "tier").sort();
+    // the shared shape does not carry. The commercial columns are passed explicitly too, and are
+    // checked on their own below.
+    const model = modelFields("PlanTierLimit")
+      .filter((f) => f !== "tier" && !COMMERCIAL_FIELDS.includes(f))
+      .sort();
 
     expect(model, "a column the shared limits cannot fill would be seeded at its schema default").toEqual(shared);
+  });
+
+  it("has a source for the commercial columns too, so nothing is excluded without a filler", () => {
+    const model = modelFields("PlanTierLimit");
+    for (const field of COMMERCIAL_FIELDS) {
+      expect(model, `${field} is excluded from the entitlement parity check but is not on the model`).toContain(field);
+    }
+    // The shape `PLAN_TIER_LIST_PRICES` supplies, which is what the seed spreads into those two
+    // columns. A third price column added to the model with nothing to fill it fails the check
+    // above instead of shipping at its schema default.
+    for (const tier of planTiers) {
+      expect(Object.keys(PLAN_TIER_LIST_PRICES[tier]).sort()).toEqual(["currency", "perSeatMinor"]);
+    }
+    expect(model.filter((f) => COMMERCIAL_FIELDS.includes(f)).length, "an unlisted commercial column").toBe(COMMERCIAL_FIELDS.length);
   });
 
   it("gives every tier the same key set, so no tier can omit an entitlement", () => {

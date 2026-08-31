@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import PDFDocument from "pdfkit";
+import { securityFindingTypes } from "@timesheet/shared";
 import { renderSecurityReportPdf } from "../../src/services/security-report-pdf.service.js";
 import type { TicketSecurityReport } from "../../src/services/security-report.service.js";
 
@@ -53,12 +54,19 @@ function finding(i: number, over: Partial<Record<string, unknown>> = {}) {
 
 function reportWith(findingCount: number): TicketSecurityReport {
   const findings = Array.from({ length: findingCount }, (_, i) => finding(i));
-  const types = ["SAST", "DAST", "SSAT", "SSCT", "VAPT"] as const;
+  // The shared constant, not a fixture copy of it — otherwise this test builds a report whose
+  // `findingsByType` is missing whichever type was added most recently, and then proves the renderer
+  // handles it. The renderer's real input always has every key.
+  const types = securityFindingTypes;
   return {
     ticket: { id: "t-1", key: "OPS-42", title: "Harden the intake endpoint" },
     findings,
     findingsByType: Object.fromEntries(types.map((t) => [t, findings.filter((f) => f.type === t)])),
     openCountBySeverity: { CRITICAL: 1, HIGH: 2, MEDIUM: 3, LOW: 4 },
+    // Non-zero so the quality line renders and the page-count assertions below cover it. The
+    // SEPARATION itself is asserted in devops-quality-discipline.test.ts; this fixture only has to
+    // make sure the renderer draws the line without falling off the page.
+    openQualityCountBySeverity: { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 0 },
     latestTestRun: {
       id: "r-1",
       ticketId: "t-1",

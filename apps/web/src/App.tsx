@@ -14,7 +14,7 @@ import type { ReactNode } from "react";
 import { lazy, Suspense, useEffect } from "react";
 import { AppLoader } from "./components/ui/app-loader";
 import { createBrowserRouter, Navigate, RouterProvider, useLocation, useSearchParams } from "react-router";
-import { permissions, type Permission } from "@timesheet/shared";
+import { permissions, type Permission, type PlatformRole } from "@timesheet/shared";
 import { AppLayout } from "./layouts/AppLayout";
 import { PlatformAdminLayout } from "./layouts/PlatformAdminLayout";
 import { authApi } from "./services/api";
@@ -30,6 +30,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const Landing = lazy(() => import("./pages/Landing").then((m) => ({ default: m.Landing })));
 const PitchDeck = lazy(() => import("./pages/PitchDeck").then((m) => ({ default: m.PitchDeck })));
+const Contact = lazy(() => import("./pages/Contact").then((m) => ({ default: m.Contact })));
 const Login = lazy(() => import("./pages/Login").then((m) => ({ default: m.Login })));
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword").then((m) => ({ default: m.ForgotPassword })));
 const FindWorkspace = lazy(() => import("./pages/FindWorkspace").then((m) => ({ default: m.FindWorkspace })));
@@ -90,14 +91,20 @@ const PlatformAdminLogin = lazy(() => import("./pages/platform-admin/PlatformAdm
 const PlatformAdminOrganizations = lazy(() => import("./pages/platform-admin/Organizations").then((m) => ({ default: m.PlatformAdminOrganizations })));
 const PlatformAdminPlanTiers = lazy(() => import("./pages/platform-admin/PlanTiers").then((m) => ({ default: m.PlatformAdminPlanTiers })));
 const PlatformAdminAnalytics = lazy(() => import("./pages/platform-admin/PlatformAnalytics").then((m) => ({ default: m.PlatformAdminAnalytics })));
+const PlatformAdminRevenue = lazy(() => import("./pages/platform-admin/Revenue").then((m) => ({ default: m.PlatformAdminRevenue })));
+const PlatformAdminOrgProfile = lazy(() => import("./pages/platform-admin/OrgProfile").then((m) => ({ default: m.PlatformAdminOrgProfile })));
 const PlatformAdminOverview = lazy(() => import("./pages/platform-admin/Overview").then((m) => ({ default: m.PlatformAdminOverview })));
 const PlatformAdminRetention = lazy(() => import("./pages/platform-admin/Retention").then((m) => ({ default: m.PlatformAdminRetention })));
 const PlatformAdminEmails = lazy(() => import("./pages/platform-admin/Emails").then((m) => ({ default: m.PlatformAdminEmails })));
 const PlatformAdminFeedback = lazy(() => import("./pages/platform-admin/Feedback").then((m) => ({ default: m.PlatformAdminFeedback })));
+const PlatformAdminSalesLeads = lazy(() => import("./pages/platform-admin/SalesLeads").then((m) => ({ default: m.PlatformAdminSalesLeads })));
 const PlatformAdminSettings = lazy(() => import("./pages/platform-admin/Settings").then((m) => ({ default: m.PlatformAdminSettings })));
+const PlatformAdminAccess = lazy(() => import("./pages/platform-admin/Access").then((m) => ({ default: m.PlatformAdminAccess })));
+const PlatformAdminApprovals = lazy(() => import("./pages/platform-admin/Approvals").then((m) => ({ default: m.PlatformAdminApprovals })));
 const PlatformAdminBackups = lazy(() => import("./pages/platform-admin/Backups").then((m) => ({ default: m.PlatformAdminBackups })));
 const PlatformAdminMaintenance = lazy(() => import("./pages/platform-admin/Maintenance").then((m) => ({ default: m.PlatformAdminMaintenance })));
 const PlatformAdminMonitoring = lazy(() => import("./pages/platform-admin/Monitoring").then((m) => ({ default: m.PlatformAdminMonitoring })));
+const PlatformAdminAlerts = lazy(() => import("./pages/platform-admin/Alerts").then((m) => ({ default: m.PlatformAdminAlerts })));
 const TrialFeedbackPage = lazy(() => import("./pages/TrialFeedback").then((m) => ({ default: m.TrialFeedbackPage })));
 const ReactivatePage = lazy(() => import("./pages/Reactivate").then((m) => ({ default: m.ReactivatePage })));
 
@@ -116,6 +123,10 @@ const router = createBrowserRouter([
   // The pitch — a public, standalone explanation of the product for prospects and reviewers.
   // Separate from `/` on purpose: the landing page sells the features, this one sells the thesis.
   { path: "/pitch", element: <PageShell><PitchDeck /></PageShell> },
+  // Talk to sales. NO auth guard and deliberately not wrapped in `RedirectIfAuthenticated`: a
+  // signed-in customer asking about an Enterprise upgrade is one of the enquiries this page most
+  // wants, and bouncing them to /app would be the product refusing to be sold.
+  { path: "/contact", element: <PageShell><Contact /></PageShell> },
   { path: "/login", element: <PageShell><RedirectIfAuthenticated><Login /></RedirectIfAuthenticated></PageShell> },
   { path: "/forgot-password", element: <PageShell><RedirectIfAuthenticated><ForgotPassword /></RedirectIfAuthenticated></PageShell> },
   // Public and unauthenticated, like the two beside it — a person who cannot remember their
@@ -234,15 +245,47 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <PageShell><PlatformAdminOverview /></PageShell> },
       { path: "organizations", element: <PageShell><PlatformAdminOrganizations /></PageShell> },
+      /* Org 360 — one page composed from the endpoints the other pages already use. Nested under
+         `organizations` rather than given a top-level path so the breadcrumb an operator has in
+         their head ("the workspace list, then this workspace") matches the URL. */
+      { path: "organizations/:orgId", element: <PageShell><PlatformAdminOrgProfile /></PageShell> },
       { path: "plan-tiers", element: <PageShell><PlatformAdminPlanTiers /></PageShell> },
       { path: "analytics", element: <PageShell><PlatformAdminAnalytics /></PageShell> },
+      /* Not role-gated: every figure on it is aggregate, and an operator who cannot see the
+         business cannot run it. Editing the list price the numbers are derived from IS gated —
+         `platform:billing`, on the plan-tiers page and on the server. */
+      { path: "revenue", element: <PageShell><PlatformAdminRevenue /></PageShell> },
       { path: "retention", element: <PageShell><PlatformAdminRetention /></PageShell> },
       { path: "emails", element: <PageShell><PlatformAdminEmails /></PageShell> },
       { path: "feedback", element: <PageShell><PlatformAdminFeedback /></PageShell> },
+      { path: "sales-leads", element: <PageShell><PlatformAdminSalesLeads /></PageShell> },
       { path: "backups", element: <PageShell><PlatformAdminBackups /></PageShell> },
       { path: "monitoring", element: <PageShell><PlatformAdminMonitoring /></PageShell> },
+      /* Not role-gated. Every figure on it is an operational aggregate about our own fleet, and the
+         delivery CONFIGURATION is readable for the same reason a firewall rule is — knowing where
+         alerts go is not the same as being able to change it. The writes are `platform:operate` on
+         the server, and the console shows the refusal rather than hiding the page. */
+      { path: "alerts", element: <PageShell><PlatformAdminAlerts /></PageShell> },
       { path: "maintenance", element: <PageShell><PlatformAdminMaintenance /></PageShell> },
-      { path: "settings", element: <PageShell><PlatformAdminSettings /></PageShell> }
+      { path: "settings", element: <PageShell><PlatformAdminSettings /></PageShell> },
+      /* Everyone sees the queue — a pending deletion of a customer's workspace is not a secret
+         from the operators who work on that customer, and the person best placed to say "wait,
+         wrong org" has to be able to see it. Only an OWNER gets the Approve button, and the
+         server refuses self-approval regardless of what the console offers. */
+      { path: "approvals", element: <PageShell><PlatformAdminApprovals /></PageShell> },
+      /* The one genuinely role-gated screen in the console: granting a colleague a role is the
+         only action here whose whole subject is who may do what, so a non-owner has nothing to
+         read on it. Every other page has a read-only core worth showing. */
+      {
+        path: "access",
+        element: (
+          <RequirePlatformRole allowed={["OWNER"]}>
+            <PageShell>
+              <PlatformAdminAccess />
+            </PageShell>
+          </RequirePlatformRole>
+        )
+      }
     ]
   },
   /* The two doors a retention email opens for a customer whose workspace is suspended or gone.
@@ -398,6 +441,32 @@ function RequirePlatformAdmin({ children }: { children: ReactNode }) {
   const hydrated = usePlatformAdminAuthStore((s) => s.hydrated);
   if (!hydrated) return null;
   if (!admin) return <Navigate to="/platform-admin/login" replace />;
+  return children;
+}
+
+/**
+ * `RequireRole`'s counterpart for the console (5.0.0) — and, exactly like `RedirectIfPlatformAdmin`
+ * above, A SEPARATE COMPONENT RATHER THAN A PARAMETER on the tenant guard.
+ *
+ * The reason is the one already written on that component and it has only got stronger: the two
+ * auth planes share no state by design, and the one thing that must never happen is a guard reading
+ * the wrong store. Making `RequireRole` generic over "which store" is precisely how that mistake
+ * gets made — and here the blast radius is not "an employee sees the wrong page", it is "a tenant
+ * user's role decides what happens to every customer's database". Twelve duplicated lines is a
+ * cheap price for a mistake that cannot be made.
+ *
+ * IT IS NOT THE AUTHORIZATION. The server re-reads the role from the control database on every
+ * single request (middleware/platform-admin-auth.ts), so this only decides what the console
+ * OFFERS. Tampering with the store buys somebody a screen full of 403s.
+ */
+function RequirePlatformRole({ allowed, children }: { allowed: PlatformRole[]; children: ReactNode }) {
+  const admin = usePlatformAdminAuthStore((s) => s.admin);
+  const hydrated = usePlatformAdminAuthStore((s) => s.hydrated);
+  if (!hydrated) return null;
+  if (!admin) return <Navigate to="/platform-admin/login" replace />;
+  // Back to the console's own overview, not to the tenant app's `/app` the tenant guard uses —
+  // an operator bounced off a page they cannot use should land somewhere they can.
+  if (!allowed.includes(admin.role)) return <Navigate to="/platform-admin" replace />;
   return children;
 }
 

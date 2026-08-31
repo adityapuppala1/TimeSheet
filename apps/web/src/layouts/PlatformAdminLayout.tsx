@@ -22,11 +22,12 @@
  * bug. Read the AccountFooter and column comments below before "simplifying" a `min-w-0` away —
  * each one is load-bearing and each one is there because something visibly broke without it.
  */
-import { Activity, BarChart3, Building2, DatabaseBackup, HeartHandshake, KeyRound, LayoutDashboard, LogOut, Mails, Menu, MessageSquareHeart, Radio, Settings2, ShieldAlert, ShieldCheck, SlidersHorizontal } from "lucide-react";
-import { useState } from "react";
+import { Activity, Banknote, BarChart3, BellRing, Building2, Command, DatabaseBackup, GitPullRequestArrow, Handshake, HeartHandshake, KeyRound, LayoutDashboard, LogOut, Mails, Menu, MessageSquareHeart, Radio, Settings2, ShieldAlert, ShieldCheck, SlidersHorizontal, UsersRound } from "lucide-react";
+import { useCallback, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { PlatformReasonPrompt } from "../components/PlatformReasonPrompt";
 import { AnimatedThemeToggler } from "../components/ui/animated-theme-toggler";
 import { Button } from "../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
@@ -36,18 +37,39 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../components
 /* The shell's own primary buttons come from the console's kit for the same reason the pages' do:
    one amber, defined once. It is the only thing this layout takes from the pages directory. */
 import { PRIMARY_BTN } from "../pages/platform-admin/console-ui";
+/* The console's own palette, NOT the tenant one — see its header for why the two are separate
+   components rather than one parameterised over "which store". */
+import { ConsoleCommandPalette, useConsolePaletteHotkey } from "../pages/platform-admin/console-command-palette";
 import { platformAdminAuthApi } from "../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../store/platform-admin-auth";
 import { cn } from "../lib/utils";
 
-const NAV: Array<{ heading?: string; items: Array<{ to: string; label: string; icon: typeof Building2; end?: boolean }> }> = [
+export interface ConsoleNavItem {
+  to: string;
+  label: string;
+  icon: typeof Building2;
+  end?: boolean;
+  ownerOnly?: true;
+}
+
+/**
+ * `ownerOnly` mirrors the `RequirePlatformRole` guard on the same route in App.tsx. It HIDES a
+ * destination rather than enforcing anything — the guard and the server do the enforcing — but an
+ * operator should not be shown a door that answers 403.
+ *
+ * EXPORTED SINCE 5.0.0 because the command palette navigates to the same fifteen places. A palette
+ * with its own hand-kept copy of this list is a palette that is missing the page added last week,
+ * and the person who notices is the operator who went looking for it under pressure.
+ */
+export const CONSOLE_NAV: Array<{ heading?: string; items: ConsoleNavItem[] }> = [
   { items: [{ to: "/platform-admin", label: "Overview", icon: LayoutDashboard, end: true }] },
   {
     heading: "Tenants",
     items: [
       { to: "/platform-admin/organizations", label: "Organizations", icon: Building2 },
       { to: "/platform-admin/plan-tiers", label: "Plan tiers", icon: SlidersHorizontal },
-      { to: "/platform-admin/analytics", label: "Analytics", icon: BarChart3 }
+      { to: "/platform-admin/analytics", label: "Analytics", icon: BarChart3 },
+      { to: "/platform-admin/revenue", label: "Revenue", icon: Banknote }
     ]
   },
   {
@@ -55,12 +77,17 @@ const NAV: Array<{ heading?: string; items: Array<{ to: string; label: string; i
     items: [
       { to: "/platform-admin/retention", label: "Trial retention", icon: HeartHandshake },
       { to: "/platform-admin/emails", label: "Platform emails", icon: Mails },
-      { to: "/platform-admin/feedback", label: "Feedback", icon: MessageSquareHeart }
+      { to: "/platform-admin/feedback", label: "Feedback", icon: MessageSquareHeart },
+      { to: "/platform-admin/sales-leads", label: "Sales leads", icon: Handshake }
     ]
   },
   {
     heading: "Operations",
     items: [
+      /* First in the group, above Monitoring, deliberately: Monitoring answers "how is this
+         workspace", Alerts answers "is anything wrong anywhere" — which is the question somebody
+         opening this group under pressure actually has. */
+      { to: "/platform-admin/alerts", label: "Alerts", icon: BellRing },
       { to: "/platform-admin/monitoring", label: "Monitoring", icon: Activity },
       { to: "/platform-admin/maintenance", label: "Maintenance", icon: Radio },
       { to: "/platform-admin/backups", label: "Backups", icon: DatabaseBackup }
@@ -68,7 +95,11 @@ const NAV: Array<{ heading?: string; items: Array<{ to: string; label: string; i
   },
   {
     heading: "Platform",
-    items: [{ to: "/platform-admin/settings", label: "Settings", icon: Settings2 }]
+    items: [
+      { to: "/platform-admin/approvals", label: "Approvals", icon: GitPullRequestArrow },
+      { to: "/platform-admin/access", label: "Access", icon: UsersRound, ownerOnly: true },
+      { to: "/platform-admin/settings", label: "Settings", icon: Settings2 }
+    ]
   }
 ];
 
@@ -87,15 +118,16 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
 }
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
+  const isOwner = usePlatformAdminAuthStore((s) => s.admin?.role) === "OWNER";
   return (
     /* `grid-cols-1`, not a bare `grid`: an implicit auto track is sized by its widest item and will
        happily grow past a fixed-width sidebar. `repeat(1, minmax(0, 1fr))` gives the track a zero
        floor, which is what lets the labels inside truncate instead of pushing the column open. */
     <nav className="grid min-w-0 grid-cols-1 gap-4">
-      {NAV.map((group, i) => (
+      {CONSOLE_NAV.map((group, i) => (
         <div key={group.heading ?? i} className="grid min-w-0 grid-cols-1 gap-1">
           {group.heading && <p className="px-3 pb-1 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{group.heading}</p>}
-          {group.items.map(({ to, label, icon: Icon, end }) => (
+          {group.items.filter((item) => !item.ownerOnly || isOwner).map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
@@ -123,7 +155,7 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-function AccountFooter({ email, name, onLogout, onChangePassword }: { email?: string; name?: string; onLogout: () => void; onChangePassword: () => void }) {
+function AccountFooter({ email, name, role, onLogout, onChangePassword }: { email?: string; name?: string; role?: string; onLogout: () => void; onChangePassword: () => void }) {
   const initials = (name ?? email ?? "?")
     .split(/[\s@._-]+/)
     .filter(Boolean)
@@ -146,7 +178,11 @@ function AccountFooter({ email, name, onLogout, onChangePassword }: { email?: st
         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent/15 font-mono text-xs font-bold text-accent">{initials}</span>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-foreground">{name ?? "Platform admin"}</p>
+          {/* The role, always in view. An operator who does not know which one they hold reads
+              every 403 as a bug in the console rather than as the policy working. */}
           <p className="truncate text-xs text-muted-foreground" title={email}>
+            {role ? <span className="font-mono uppercase tracking-wide text-accent">{role.replace("_", " ")}</span> : null}
+            {role ? " · " : ""}
             {email}
           </p>
         </div>
@@ -272,12 +308,18 @@ export function PlatformAdminLayout() {
   const logout = usePlatformAdminAuthStore((s) => s.logout);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   const handleLogout = async () => {
     await platformAdminAuthApi.logout().catch(() => undefined);
     logout();
     navigate("/platform-admin/login");
   };
+
+  // `useCallback`, because the hotkey hook subscribes to `window` in an effect keyed on this
+  // function — a new identity every render would tear down and re-add the listener on each one.
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  useConsolePaletteHotkey(openPalette);
 
   const openPassword = () => {
     setDrawerOpen(false);
@@ -286,6 +328,13 @@ export function PlatformAdminLayout() {
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
+      {/* Mounted in the shell rather than on each page: it answers the async request interceptor in
+          services/platform-admin-api.ts, which can fire from anywhere in the console. See the
+          component's header for why the prompt is global. */}
+      <PlatformReasonPrompt />
+      {/* Mounted in the shell, like the reason prompt, because Cmd-K has to work on every page and
+          a per-page copy is fifteen chances to forget one. */}
+      <ConsoleCommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} onSignOut={handleLogout} />
       {/* A strict 16rem column: fixed basis, never grows, never shrinks, and `overflow-x-clip` as
           the backstop so nothing inside can ever paint over the page again. `clip` and not
           `hidden` — `hidden` would turn the aside into a scroll container. */}
@@ -294,8 +343,20 @@ export function PlatformAdminLayout() {
         <div className="h-1 w-full bg-gradient-to-r from-accent via-accent/70 to-accent/20" aria-hidden />
         <div className="flex min-w-0 flex-1 flex-col gap-6 p-4">
           <BrandMark />
+          {/* A palette nobody knows about is not a feature. This is the discovery affordance, shaped
+              like the search field it opens rather than like a button, which is the convention every
+              application with a Cmd-K palette has settled on. */}
+          <button
+            type="button"
+            onClick={openPalette}
+            className="focus-ring -mt-2 flex min-w-0 items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <Command className="h-4 w-4 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">Jump to…</span>
+            <kbd className="shrink-0 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px]">⌘K</kbd>
+          </button>
           <NavList />
-          <AccountFooter email={admin?.email} name={admin?.name} onLogout={handleLogout} onChangePassword={openPassword} />
+          <AccountFooter email={admin?.email} name={admin?.name} role={admin?.role} onLogout={handleLogout} onChangePassword={openPassword} />
         </div>
       </aside>
 
@@ -333,7 +394,7 @@ export function PlatformAdminLayout() {
           <div className="mt-6">
             <NavList onNavigate={() => setDrawerOpen(false)} />
           </div>
-          <AccountFooter email={admin?.email} name={admin?.name} onLogout={handleLogout} onChangePassword={openPassword} />
+          <AccountFooter email={admin?.email} name={admin?.name} role={admin?.role} onLogout={handleLogout} onChangePassword={openPassword} />
         </SheetContent>
       </Sheet>
 

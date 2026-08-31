@@ -1,7 +1,8 @@
 /**
  * The second half of the platform-admin console's API (3.12.0): the overview, platform mail
  * settings, the platform email templates with preview/test/log/resend/analytics, the trial
- * retention programme, customer feedback, the control-plane audit trail, and platform-admin
+ * retention programme, customer feedback, the sales leads the public contact form captures
+ * (4.0.0), the control-plane audit trail, and platform-admin
  * account management. Mounted at the same `/api/platform-admin` prefix as
  * `platform-admin.controller.ts`, before tenant resolution, with the same auth.
  *
@@ -9,16 +10,30 @@
  * is about running the platform rather than one tenant.
  */
 import { createReadStream } from "node:fs";
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import { z } from "zod";
 import { controlPrisma } from "../config/control-prisma.js";
 import { AppError } from "../middleware/error.js";
-import { requirePlatformAdmin } from "../middleware/platform-admin-auth.js";
+import {
+  capturePlatformReason,
+  requirePlatformAdmin,
+  requirePlatformCapability,
+  requirePlatformReason,
+  requirePlatformRole
+} from "../middleware/platform-admin-auth.js";
 import { validate } from "../middleware/validate.js";
 import { encryptSecret } from "../utils/encryption.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
 import { sanitizeEmailHtml } from "../utils/sanitize.js";
-import { platformAudit } from "../services/platform-audit.service.js";
+import { platformAudit, platformAuditFor } from "../services/platform-audit.service.js";
+import {
+  approvePlatformAction,
+  listPendingPlatformActions,
+  queuePlatformAction,
+  registerTwoPersonAction,
+  rejectPlatformAction,
+  type TwoPersonContext
+} from "../services/platform-governance.service.js";
 import { PLATFORM_TEMPLATES, PLATFORM_TEMPLATE_KEYS, platformTemplateDef, RETENTION_MARKER_TEMPLATE } from "../services/platform-mail-templates.js";
 import {
   applyPlatformVars,
@@ -37,22 +52,89 @@ import {
   setRetentionHold,
   updateRetentionSettings
 } from "../services/retention.service.js";
-import { getPlatformAnalytics } from "../services/platform-admin-analytics.service.js";
+import { resolveSalesInbox, SALES_LEAD_STATUSES } from "../services/sales-lead.service.js";
+import { captureOrgUsageSnapshots, getPlatformAnalytics } from "../services/platform-admin-analytics.service.js";
+import { getFleetAccountHealth, getFleetUsageTrend, getOrgUsageProfile, getRevenueOverview } from "../services/platform-revenue.service.js";
 import { getPlatformEmailAnalytics } from "../services/platform-email-analytics.service.js";
 import { deleteSnapshot, listSnapshots, restoreSnapshot, snapshotPath } from "../services/platform-backup.service.js";
 import { broadcastMaintenance, getFleetMaintenance, listBroadcasts } from "../services/platform-maintenance.service.js";
 import { getDatabaseMetrics, getFleetHealth, getTenantHealth } from "../services/platform-tenant-health.service.js";
+import { ALERT_SEVERITIES, deliverAlertWebhook, getAlertsOverview, runAlertDigest, updateAlertSettings } from "../services/platform-alerts.service.js";
+import { getFleetSchemaDrift } from "../services/tenant-schema-check.service.js";
+import { getOrgTimeline } from "../services/platform-org-timeline.service.js";
+import { getOrgFeatureOverrides, setOrgFeatureOverrides } from "../services/platform-feature-overrides.service.js";
 import { getTenantDbTrend, runMaintenanceOperation, sampleAllTenantDatabases } from "../services/tenant-db-metrics.service.js";
 import { adviseWorkspace, decideAdvice, getPlatformAiSettings, listAdvice, updatePlatformAiSettings, ADVISOR_ACTIONS } from "../services/platform-ai.service.js";
 import { DESTINATION_FIELDS, describeSecret, encryptDestinationSecret, testDestination, type BackupDestinationKind, type DestinationRecord } from "../services/backup-destination.service.js";
 import { backupEntitlement, nextRunAt, planRetention, runBackup, runBackupTick, sweepRetention, testRestore } from "../services/backup.service.js";
-import { allowedBackupFrequencies, BACKUP_FREQUENCY_LABEL, backupFrequencyAllowed, type BackupFrequency } from "@timesheet/shared";
+import {
+  allowedBackupFrequencies,
+  BACKUP_FREQUENCY_LABEL,
+  backupFrequencyAllowed,
+  platformCapabilities,
+  platformRoles,
+  platformTwoPersonActions,
+  type BackupFrequency,
+  type PlatformRole,
+  type PlatformTwoPersonAction
+} from "@timesheet/shared";
 
 export const platformAdminConsoleRouter = Router();
+/** ONE `router.use`, unlike platform-admin.controller.ts's per-route repetition, because every
+ *  route on this router is authenticated — there is no `/auth/login` here to keep open. */
 platformAdminConsoleRouter.use(requirePlatformAdmin);
+platformAdminConsoleRouter.use(capturePlatformReason);
+
+/*
+ * The four capability gates, named once so a route reads as "who may do this" rather than as a
+ * function call. See @timesheet/shared's PLATFORM_ROLE_CAPABILITIES for what each role holds and
+ * why SUPPORT and BILLING are siblings rather than rungs on a ladder.
+ *
+ * Anything NOT carrying one of these is read-only by construction: `requirePlatformAdmin` above
+ * already proved the caller is an active operator, and READ_ONLY is what an operator is before
+ * anything else is granted. That is the correct default for a GET — with exactly one exception,
+ * `GET /backups/:id/download`, which is marked below and explains itself there.
+ */
+const support = requirePlatformCapability(platformCapabilities.PLATFORM_SUPPORT);
+const billing = requirePlatformCapability(platformCapabilities.PLATFORM_BILLING);
+const operate = requirePlatformCapability(platformCapabilities.PLATFORM_OPERATE);
+const owner = requirePlatformRole(["OWNER"]);
 
 const actorLabel = (req: { platformAdmin?: { email: string } }) => req.platformAdmin?.email ?? "platform-admin";
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Declares a two-person action once: the live route becomes "queue it", and the very same function
+ * is what runs on approval.
+ *
+ * Written as one helper rather than a route plus a separately-registered executor because the two
+ * halves drifting apart is the failure this whole mechanism cannot survive — an approval that runs
+ * something subtly different from what was requested is worse than no approval at all. Here they
+ * are the same closure, so they cannot.
+ *
+ * NOTHING BUSINESS-LEVEL IS CHECKED AT REQUEST TIME. The route's zod schema still runs (a
+ * malformed body should be refused immediately, not queued), but whether the workspace exists,
+ * whether the slug matches, whether the tier allows it — all of that happens inside `execute`, at
+ * approval, against the database as it is then. See the service header for why.
+ */
+function twoPerson(action: PlatformTwoPersonAction, execute: (ctx: TwoPersonContext) => Promise<unknown>): RequestHandler {
+  registerTwoPersonAction(action, execute);
+  return async (req, res) => {
+    const queued = await queuePlatformAction({
+      action,
+      route: req.originalUrl.split("?")[0],
+      method: req.method,
+      params: req.params as Record<string, string>,
+      body: req.body,
+      reason: req.platformReason!,
+      requester: { id: req.platformAdmin!.id, email: req.platformAdmin!.email },
+      ipAddress: req.ip
+    });
+    // 202, not 200: the request was accepted and nothing has happened yet, which is exactly what
+    // "Accepted" means and exactly what the console has to render differently from a success.
+    res.status(202).json(queued);
+  };
+}
 
 /* ================================== Overview ==================================== */
 
@@ -117,6 +199,10 @@ platformAdminConsoleRouter.get("/mail-settings", async (_req, res) => {
     passwordSet: Boolean(row?.encryptedPassword),
     fromAddress: row?.fromAddress ?? "",
     replyTo: row?.replyTo ?? "",
+    salesInboxAddress: row?.salesInboxAddress ?? "",
+    /* The address that would actually be used, so the field's placeholder can say what "leave it
+       blank" means rather than leaving the operator to guess. */
+    salesInboxEffective: await resolveSalesInbox(),
     updatedAt: row?.updatedAt ?? null,
     effective: status
   });
@@ -132,24 +218,28 @@ const mailSettingsSchema = z.object({
       password: z.string().max(500).optional(),
       clearPassword: z.boolean().optional(),
       fromAddress: z.string().max(255).optional(),
-      replyTo: z.string().max(255).optional()
+      replyTo: z.string().max(255).optional(),
+      /* Where a contact-form notification lands. Blank restores the shipped default rather than
+         switching the notification off — an unreachable sales inbox loses leads silently, which is
+         the one failure this whole feature exists to prevent. */
+      salesInboxAddress: z.string().max(255).optional()
     })
     .strict()
 });
 
-platformAdminConsoleRouter.put("/mail-settings", validate(mailSettingsSchema), async (req, res) => {
+platformAdminConsoleRouter.put("/mail-settings", operate, validate(mailSettingsSchema), async (req, res) => {
   const b = req.body;
   const passwordData = b.clearPassword ? { encryptedPassword: null } : b.password ? { encryptedPassword: encryptSecret(b.password) } : {};
   const row = await controlPrisma.platformMailSettings.upsert({
     where: { id: "global" },
-    update: { host: b.host.trim() || null, port: b.port, secure: b.secure, user: b.user?.trim() || null, fromAddress: b.fromAddress?.trim() || null, replyTo: b.replyTo?.trim() || null, ...passwordData },
-    create: { id: "global", host: b.host.trim() || null, port: b.port, secure: b.secure, user: b.user?.trim() || null, fromAddress: b.fromAddress?.trim() || null, replyTo: b.replyTo?.trim() || null, ...passwordData }
+    update: { host: b.host.trim() || null, port: b.port, secure: b.secure, user: b.user?.trim() || null, fromAddress: b.fromAddress?.trim() || null, replyTo: b.replyTo?.trim() || null, salesInboxAddress: b.salesInboxAddress?.trim() || null, ...passwordData },
+    create: { id: "global", host: b.host.trim() || null, port: b.port, secure: b.secure, user: b.user?.trim() || null, fromAddress: b.fromAddress?.trim() || null, replyTo: b.replyTo?.trim() || null, salesInboxAddress: b.salesInboxAddress?.trim() || null, ...passwordData }
   });
-  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "platform_mail.updated", "PlatformMailSettings", "global", { host: row.host, port: row.port, secure: row.secure });
-  res.json({ ok: true, updatedAt: row.updatedAt, effective: await getPlatformTransportStatus() });
+  await platformAuditFor(req)("platform_mail.updated", "PlatformMailSettings", "global", { host: row.host, port: row.port, secure: row.secure });
+  res.json({ ok: true, updatedAt: row.updatedAt, effective: await getPlatformTransportStatus(), salesInboxEffective: await resolveSalesInbox() });
 });
 
-platformAdminConsoleRouter.post("/mail-settings/test", validate(z.object({ body: z.object({ to: z.string().email() }).strict() })), async (req, res) => {
+platformAdminConsoleRouter.post("/mail-settings/test", support, validate(z.object({ body: z.object({ to: z.string().email() }).strict() })), async (req, res) => {
   const config = await resolvePlatformMailConfig();
   const result = await sendPlatformTemplate("platform.smtp_test", {
     to: req.body.to,
@@ -203,6 +293,7 @@ const requireKey = (key: string) => {
 
 platformAdminConsoleRouter.put(
   "/email-templates/:key",
+  operate,
   validate(z.object({ params: z.object({ key: z.string() }), body: z.object({ subject: z.string().min(3).max(255), bodyHtml: z.string().min(20), enabled: z.boolean().optional() }).strict() })),
   async (req, res) => {
     const key = requireKey(String(req.params.key));
@@ -213,21 +304,22 @@ platformAdminConsoleRouter.put(
       update: { subject: req.body.subject.trim(), bodyHtml: safe, enabled: req.body.enabled ?? true, updatedById: req.platformAdmin!.id },
       create: { key, subject: req.body.subject.trim(), bodyHtml: safe, enabled: req.body.enabled ?? true, updatedById: req.platformAdmin!.id }
     });
-    await platformAudit("PLATFORM_ADMIN", actorLabel(req), "platform_email_template.updated", "PlatformEmailTemplate", key);
+    await platformAuditFor(req)("platform_email_template.updated", "PlatformEmailTemplate", key);
     res.json(row);
   }
 );
 
-platformAdminConsoleRouter.delete("/email-templates/:key", validate(templateKeyParam), async (req, res) => {
+platformAdminConsoleRouter.delete("/email-templates/:key", operate, validate(templateKeyParam), async (req, res) => {
   const key = requireKey(String(req.params.key));
   await controlPrisma.platformEmailTemplate.deleteMany({ where: { key } });
-  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "platform_email_template.reverted", "PlatformEmailTemplate", key);
+  await platformAuditFor(req)("platform_email_template.reverted", "PlatformEmailTemplate", key);
   res.status(204).send();
 });
 
 /** Render for the editor: the SAVED version by default, or an unsaved draft passed in the body. */
 platformAdminConsoleRouter.post(
   "/email-templates/:key/preview",
+  support,
   validate(z.object({ params: z.object({ key: z.string() }), body: z.object({ subject: z.string().optional(), bodyHtml: z.string().optional(), vars: z.record(z.string()).optional() }).strict() })),
   async (req, res) => {
     const key = requireKey(String(req.params.key));
@@ -244,6 +336,7 @@ platformAdminConsoleRouter.post(
 
 platformAdminConsoleRouter.post(
   "/email-templates/:key/test",
+  support,
   validate(z.object({ params: z.object({ key: z.string() }), body: z.object({ to: z.string().email() }).strict() })),
   async (req, res) => {
     const key = requireKey(String(req.params.key));
@@ -286,9 +379,9 @@ platformAdminConsoleRouter.get("/email-log/:id", async (req, res) => {
   res.json({ ...row, html: (row.payload as { html?: string } | null)?.html ?? null, payload: undefined });
 });
 
-platformAdminConsoleRouter.post("/email-log/:id/resend", async (req, res) => {
+platformAdminConsoleRouter.post("/email-log/:id/resend", support, requirePlatformReason, async (req, res) => {
   const result = await resendPlatformEmail(String(req.params.id), actorLabel(req));
-  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "platform_email.resent", "PlatformEmailLog", String(req.params.id), { status: result.status });
+  await platformAuditFor(req)("platform_email.resent", "PlatformEmailLog", String(req.params.id), { status: result.status });
   if (!result.ok) throw new AppError(502, `Email NOT delivered: ${result.errorMessage ?? "the relay refused it"}`);
   res.json({ sent: true, emailLogId: result.emailLogId });
 });
@@ -331,25 +424,25 @@ const retentionSettingsSchema = z.object({
     .strict()
 });
 
-platformAdminConsoleRouter.put("/retention/settings", validate(retentionSettingsSchema), async (req, res) => {
+platformAdminConsoleRouter.put("/retention/settings", operate, validate(retentionSettingsSchema), async (req, res) => {
   res.json(await updateRetentionSettings(req.body, actorLabel(req)));
 });
 
-platformAdminConsoleRouter.post("/retention/run", validate(z.object({ body: z.object({ dryRun: z.boolean().optional(), simulateNow: z.string().datetime().optional() }).strict().optional() })), async (req, res) => {
+platformAdminConsoleRouter.post("/retention/run", operate, requirePlatformReason, validate(z.object({ body: z.object({ dryRun: z.boolean().optional(), simulateNow: z.string().datetime().optional() }).strict().optional() })), async (req, res) => {
   const now = req.body?.simulateNow ? new Date(req.body.simulateNow) : new Date();
   // A simulated clock is a DRY RUN by definition. Deleting a workspace because an operator typed a
   // date in the future is not a feature anybody wants.
   const dryRun = Boolean(req.body?.dryRun) || Boolean(req.body?.simulateNow);
   const result = await runRetentionTick(now, { dryRun, actorLabel: actorLabel(req) });
-  if (!dryRun) await platformAudit("PLATFORM_ADMIN", actorLabel(req), "retention.tick_run", "PlatformRetentionSettings", "global", { sent: result.sent.length, deleted: result.deleted.length });
+  if (!dryRun) await platformAuditFor(req)("retention.tick_run", "PlatformRetentionSettings", "global", { sent: result.sent.length, deleted: result.deleted.length });
   res.json(result);
 });
 
-platformAdminConsoleRouter.post("/retention/:orgId/hold", validate(z.object({ params: z.object({ orgId: z.string() }), body: z.object({ hold: z.boolean() }).strict() })), async (req, res) => {
+platformAdminConsoleRouter.post("/retention/:orgId/hold", operate, requirePlatformReason, validate(z.object({ params: z.object({ orgId: z.string() }), body: z.object({ hold: z.boolean() }).strict() })), async (req, res) => {
   res.json(await setRetentionHold(String(req.params.orgId), req.body.hold, actorLabel(req)));
 });
 
-platformAdminConsoleRouter.post("/retention/:orgId/send/:marker", async (req, res) => {
+platformAdminConsoleRouter.post("/retention/:orgId/send/:marker", support, requirePlatformReason, async (req, res) => {
   const marker = String(req.params.marker);
   if (!RETENTION_MARKER_TEMPLATE[marker]) throw new AppError(404, "Unknown retention stage");
   const result = await sendRetentionMarker(String(req.params.orgId), marker, { actorLabel: actorLabel(req), force: true });
@@ -357,13 +450,33 @@ platformAdminConsoleRouter.post("/retention/:orgId/send/:marker", async (req, re
   res.json(result);
 });
 
-platformAdminConsoleRouter.post("/retention/:orgId/delete", validate(z.object({ params: z.object({ orgId: z.string() }), body: z.object({ confirmSlug: z.string().min(1) }).strict() })), async (req, res) => {
-  const org = await controlPrisma.organization.findUnique({ where: { id: String(req.params.orgId) }, select: { slug: true } });
-  if (!org) throw new AppError(404, "Organization not found");
-  // Typing the slug is the only confirmation a destructive console action should accept.
-  if (org.slug !== req.body.confirmSlug.trim().toLowerCase()) throw new AppError(422, "The slug you typed does not match this workspace.");
-  res.json(await deleteWorkspaceUnderPolicy(String(req.params.orgId), { actorLabel: actorLabel(req), force: true }));
-});
+/**
+ * Delete a workspace and its database. The most irreversible thing this console can do, and the
+ * first of the five that now needs a second signature.
+ *
+ * Typing the slug is still required and is still not enough on its own: a confirmation dialog
+ * proves the operator meant it, and proves nothing about whether it should happen. The slug check
+ * has moved INTO the executor, so it runs against the org as it is at approval time — a workspace
+ * renamed between the request and the approval correctly fails to match.
+ */
+platformAdminConsoleRouter.post(
+  "/retention/:orgId/delete",
+  operate,
+  requirePlatformReason,
+  validate(z.object({ params: z.object({ orgId: z.string() }), body: z.object({ confirmSlug: z.string().min(1) }).strict() })),
+  twoPerson(platformTwoPersonActions.RETENTION_DELETE, async (ctx) => {
+    const org = await controlPrisma.organization.findUnique({ where: { id: String(ctx.params.orgId) }, select: { slug: true } });
+    if (!org) throw new AppError(404, "Organization not found");
+    // Typing the slug is the only confirmation a destructive console action should accept.
+    if (org.slug !== String(ctx.body.confirmSlug ?? "").trim().toLowerCase()) throw new AppError(422, "The slug you typed does not match this workspace.");
+    const result = await deleteWorkspaceUnderPolicy(String(ctx.params.orgId), { actorLabel: ctx.actorLabel, force: true });
+    await platformAudit("PLATFORM_ADMIN", ctx.actorLabel, "retention.deleted_with_approval", "Organization", String(ctx.params.orgId), {
+      slug: org.slug,
+      requestedBy: ctx.requester.label
+    }, { reason: ctx.reason, ipAddress: ctx.ipAddress });
+    return result;
+  })
+);
 
 /* =================================== Feedback ================================== */
 
@@ -431,6 +544,85 @@ platformAdminConsoleRouter.get("/feedback", async (_req, res) => {
   });
 });
 
+/* ================================== Sales leads ================================= */
+
+/**
+ * Everything the public contact form has captured, and where each conversation got to.
+ *
+ * UNFILTERED AND UNPAGINATED, on purpose and for now. A lead is a rare, high-value row — a
+ * deployment that takes ten a week has a busy quarter — so the whole table is a screen, and the
+ * console filters by status in the browser rather than round-tripping for four rows. `take` is a
+ * ceiling against a spam run, not a page size; if a deployment ever hits it, this wants the same
+ * offset paging the audit trail has, not a bigger number.
+ *
+ * The counts are computed FROM THE SAME ROWS rather than by a second `groupBy`. Two queries against
+ * a table that is being written to by a public endpoint can disagree with each other, and a KPI
+ * strip whose numbers do not add up to the list underneath it is worse than no KPI strip.
+ */
+platformAdminConsoleRouter.get("/sales-leads", async (_req, res) => {
+  const rows = await controlPrisma.salesLead.findMany({ orderBy: { createdAt: "desc" }, take: 500 });
+  const counts = Object.fromEntries(SALES_LEAD_STATUSES.map((status) => [status, rows.filter((r) => r.status === status).length]));
+  res.json({
+    count: rows.length,
+    counts,
+    /** How many arrived from a personal address — shown because it is a fact about the funnel, and
+     *  because somebody will eventually propose blocking them and should see the number first. */
+    freeMailCount: rows.filter((r) => r.isFreeMailDomain).length,
+    newThisWeek: rows.filter((r) => r.createdAt >= new Date(Date.now() - 7 * DAY_MS)).length,
+    statuses: SALES_LEAD_STATUSES,
+    rows
+  });
+});
+
+const salesLeadPatchSchema = z.object({
+  params: z.object({ id: z.string().min(1) }),
+  body: z
+    .object({
+      status: z.enum(SALES_LEAD_STATUSES).optional(),
+      ownerLabel: z.string().max(255).nullable().optional(),
+      notes: z.string().max(8000).nullable().optional()
+    })
+    .strict()
+});
+
+/**
+ * The pipeline half: who owns it, where it got to, and what was said. Nothing a customer submitted
+ * is editable here — a lead is a record of what somebody actually wrote, and a console that can
+ * rewrite it is a console whose rows cannot be trusted as evidence of anything.
+ *
+ * `contactedAt` is STAMPED BY THE MOVE, not typed. It is set the first time a lead leaves NEW and
+ * then left alone, so "how long did we take to answer" stays answerable after the lead moves on to
+ * QUALIFIED or LOST. Re-stamping it on every later transition would quietly convert the one number
+ * worth measuring into "when did somebody last touch this".
+ */
+platformAdminConsoleRouter.patch("/sales-leads/:id", support, validate(salesLeadPatchSchema), async (req, res) => {
+  const id = String(req.params.id);
+  const existing = await controlPrisma.salesLead.findUnique({ where: { id } });
+  if (!existing) throw new AppError(404, "That lead no longer exists.");
+
+  const b = req.body as z.infer<typeof salesLeadPatchSchema>["body"];
+  const movedOffNew = b.status !== undefined && b.status !== "NEW" && existing.status === "NEW";
+
+  // Assembled field by field rather than as conditional spreads, because `undefined` and `null`
+  // mean different things to Prisma here: a key that is absent leaves the column alone, a key set
+  // to null clears it, and "clear the owner" is a thing the console has to be able to do.
+  const data: { status?: string; ownerLabel?: string | null; notes?: string | null; contactedAt?: Date } = {};
+  if (b.status !== undefined) data.status = b.status;
+  if (b.ownerLabel !== undefined) data.ownerLabel = b.ownerLabel?.trim() || null;
+  if (b.notes !== undefined) data.notes = b.notes?.trim() || null;
+  if (movedOffNew && !existing.contactedAt) data.contactedAt = new Date();
+
+  const row = await controlPrisma.salesLead.update({ where: { id }, data });
+
+  await platformAuditFor(req)("sales_lead.updated", "SalesLead", id, {
+    from: existing.status,
+    to: row.status,
+    ownerLabel: row.ownerLabel,
+    notesChanged: b.notes !== undefined
+  });
+  res.json(row);
+});
+
 /* ================================= Audit trail ================================= */
 
 /**
@@ -470,34 +662,184 @@ platformAdminConsoleRouter.get("/audit", async (req, res) => {
 platformAdminConsoleRouter.get("/admins", async (_req, res) => {
   const rows = await controlPrisma.platformAdminUser.findMany({
     orderBy: { createdAt: "asc" },
-    select: { id: true, email: true, name: true, status: true, createdAt: true, lastLoginAt: true, _count: { select: { sessions: { where: { revokedAt: null, expiresAt: { gt: new Date() } } } } } }
+    select: { id: true, email: true, name: true, status: true, role: true, mfaEnabled: true, createdAt: true, lastLoginAt: true, _count: { select: { sessions: { where: { revokedAt: null, expiresAt: { gt: new Date() } } } } } }
   });
-  res.json(rows.map((r) => ({ id: r.id, email: r.email, name: r.name, status: r.status, createdAt: r.createdAt, lastLoginAt: r.lastLoginAt, liveSessions: r._count.sessions })));
+  res.json(
+    rows.map((r) => ({
+      id: r.id,
+      email: r.email,
+      name: r.name,
+      status: r.status,
+      role: r.role,
+      mfaEnabled: r.mfaEnabled,
+      createdAt: r.createdAt,
+      lastLoginAt: r.lastLoginAt,
+      /** Doubles as the "who could countersign right now" signal the approval queue needs — an
+       *  OWNER who last signed in in March is a name, not an approver. */
+      liveSessions: r._count.sessions
+    }))
+  );
 });
 
-platformAdminConsoleRouter.post("/admins", validate(z.object({ body: z.object({ email: z.string().email(), name: z.string().min(2).max(120) }).strict() })), async (req, res) => {
-  const email = req.body.email.trim().toLowerCase();
-  const existing = await controlPrisma.platformAdminUser.findUnique({ where: { email } });
-  if (existing) throw new AppError(409, "A platform admin with that email already exists.");
-  // Generated, never chosen: the person creating the account should never know a colleague's password.
-  const password = generateTempPassword();
-  const row = await controlPrisma.platformAdminUser.create({ data: { email, name: req.body.name.trim(), passwordHash: await hashPassword(password), status: "ACTIVE" } });
-  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "platform_admin.created", "PlatformAdminUser", row.id, { email });
-  res.status(201).json({ id: row.id, email: row.email, name: row.name, temporaryPassword: password });
-});
+/**
+ * Creating a platform admin is the console's clearest privilege escalation: the response body
+ * contains a working temporary password for a brand-new account with access to every customer.
+ * OWNER-only AND two-person — one operator must not be able to mint a colleague, or a sock puppet,
+ * on their own.
+ *
+ * The role is chosen at creation but the account still starts at whatever was asked for and no
+ * higher: the request is queued, so the role that lands is the one a second owner read and agreed
+ * to, not one slipped in afterwards.
+ */
+platformAdminConsoleRouter.post(
+  "/admins",
+  owner,
+  requirePlatformReason,
+  validate(
+    z.object({
+      body: z.object({ email: z.string().email(), name: z.string().min(2).max(120), role: z.enum(platformRoles).default("READ_ONLY") }).strict()
+    })
+  ),
+  twoPerson(platformTwoPersonActions.ADMIN_CREATE, async (ctx) => {
+    const email = String(ctx.body.email).trim().toLowerCase();
+    const existing = await controlPrisma.platformAdminUser.findUnique({ where: { email } });
+    if (existing) throw new AppError(409, "A platform admin with that email already exists.");
+    // Generated, never chosen: the person creating the account should never know a colleague's password.
+    const password = generateTempPassword();
+    /*
+     * `.default("READ_ONLY")` on the schema does NOT reach here, and relying on it would be a real
+     * bug: `middleware/validate.ts` parses to check the shape and THROWS AWAY the parsed value, so
+     * the handler always sees the raw body. Every zod default and coercion in this codebase is
+     * decorative for exactly that reason. Defaulted here instead, and re-checked against the known
+     * list so an unrecognised value fails closed rather than being written to the column.
+     */
+    const asked = String(ctx.body.role ?? "READ_ONLY");
+    const role: PlatformRole = (platformRoles as readonly string[]).includes(asked) ? (asked as PlatformRole) : "READ_ONLY";
+    const row = await controlPrisma.platformAdminUser.create({
+      data: { email, name: String(ctx.body.name).trim(), role, passwordHash: await hashPassword(password), status: "ACTIVE" }
+    });
+    await platformAudit("PLATFORM_ADMIN", ctx.actorLabel, "platform_admin.created", "PlatformAdminUser", row.id, { email, role, requestedBy: ctx.requester.label }, {
+      reason: ctx.reason,
+      ipAddress: ctx.ipAddress,
+      after: { email, role, status: "ACTIVE" }
+    });
+    /** The temporary password comes back to whoever APPROVED it, once. That is a change of
+     *  recipient from the pre-5.0.0 behaviour and it is the correct one: the approver is the last
+     *  person to make a decision here, and they can hand it to the new operator directly. */
+    return { id: row.id, email: row.email, name: row.name, role: row.role, temporaryPassword: password };
+  })
+);
 
-platformAdminConsoleRouter.patch("/admins/:id", validate(z.object({ params: z.object({ id: z.string() }), body: z.object({ status: z.enum(["ACTIVE", "INACTIVE"]) }).strict() })), async (req, res) => {
-  const id = String(req.params.id);
-  if (id === req.platformAdmin!.id && req.body.status === "INACTIVE") throw new AppError(409, "You cannot deactivate the account you are signed in with.");
-  const active = await controlPrisma.platformAdminUser.count({ where: { status: "ACTIVE" } });
+const adminRoleChangeRoute = twoPerson(platformTwoPersonActions.ADMIN_ROLE_CHANGE, async (ctx) => {
+  const id = String(ctx.params.id);
   const target = await controlPrisma.platformAdminUser.findUnique({ where: { id } });
   if (!target) throw new AppError(404, "Not found");
-  if (req.body.status === "INACTIVE" && target.status === "ACTIVE" && active <= 1) throw new AppError(409, "That is the last active platform admin. Create another one first.");
-  const row = await controlPrisma.platformAdminUser.update({ where: { id }, data: { status: req.body.status } });
-  if (req.body.status === "INACTIVE") await controlPrisma.platformAdminSession.updateMany({ where: { adminUserId: id, revokedAt: null }, data: { revokedAt: new Date() } });
-  await platformAudit("PLATFORM_ADMIN", actorLabel(req), `platform_admin.${req.body.status.toLowerCase()}`, "PlatformAdminUser", id, { email: row.email });
-  res.json({ id: row.id, status: row.status });
+
+  const asked = String(ctx.body.role ?? "");
+  if (!(platformRoles as readonly string[]).includes(asked)) throw new AppError(422, `"${asked}" is not a platform role.`);
+  const role = asked as PlatformRole;
+  /*
+   * RE-VALIDATED AT APPROVAL, NOT AT REQUEST. Between the two, somebody else may have demoted the
+   * last remaining owner — and this is the check that would then correctly refuse. A request-time
+   * check would have passed and a stored decision would have gone through.
+   */
+  if (target.role === "OWNER" && role !== "OWNER") {
+    const owners = await controlPrisma.platformAdminUser.count({ where: { status: "ACTIVE", role: "OWNER" } });
+    if (owners <= 1) throw new AppError(409, "That is the last active owner. Promote somebody else first — a platform with no owner cannot grant anybody anything.");
+  }
+
+  const row = await controlPrisma.platformAdminUser.update({ where: { id }, data: { role } });
+  await platformAudit("PLATFORM_ADMIN", ctx.actorLabel, "platform_admin.role_changed", "PlatformAdminUser", id, {
+    email: row.email,
+    from: target.role,
+    to: row.role,
+    requestedBy: ctx.requester.label
+  }, { reason: ctx.reason, ipAddress: ctx.ipAddress, before: { role: target.role }, after: { role: row.role } });
+  return { id: row.id, role: row.role, status: row.status };
 });
+
+/**
+ * Two different authorities behind one PATCH, split on purpose.
+ *
+ * A ROLE CHANGE IS TWO-PERSON. Promoting somebody to OWNER hands them everything including the
+ * ability to promote others, and an operator who can do that alone has a one-step path from
+ * READ_ONLY-for-everyone to a second account that owns the platform.
+ *
+ * A STATUS CHANGE IS NOT, and that is deliberate rather than an omission. Deactivating an account
+ * is how a compromised credential gets cut off, and it is reversible. Making the emergency
+ * response wait for a colleague to wake up would mean an attacker keeps their session for as long
+ * as the second operator takes to answer their phone — the two-person rule would be protecting the
+ * attacker. It stays OWNER-only and immediate.
+ */
+platformAdminConsoleRouter.patch(
+  "/admins/:id",
+  owner,
+  requirePlatformReason,
+  validate(
+    z.object({
+      params: z.object({ id: z.string() }),
+      body: z.object({ status: z.enum(["ACTIVE", "INACTIVE"]).optional(), role: z.enum(platformRoles).optional() }).strict()
+    })
+  ),
+  async (req, res, next) => {
+    // A role change (with or without a status change alongside it) goes to the queue; a
+    // status-only change runs now. Routed here rather than on two separate paths so the console
+    // keeps one endpoint and the decision lives beside the reasoning above.
+    if (req.body.role !== undefined) return adminRoleChangeRoute(req, res, next);
+
+    const id = String(req.params.id);
+    if (req.body.status === undefined) throw new AppError(422, "Nothing to change — send a status, a role, or both.");
+    if (id === req.platformAdmin!.id && req.body.status === "INACTIVE") throw new AppError(409, "You cannot deactivate the account you are signed in with.");
+    const active = await controlPrisma.platformAdminUser.count({ where: { status: "ACTIVE" } });
+    const target = await controlPrisma.platformAdminUser.findUnique({ where: { id } });
+    if (!target) throw new AppError(404, "Not found");
+    if (req.body.status === "INACTIVE" && target.status === "ACTIVE" && active <= 1) throw new AppError(409, "That is the last active platform admin. Create another one first.");
+    const row = await controlPrisma.platformAdminUser.update({ where: { id }, data: { status: req.body.status } });
+    if (req.body.status === "INACTIVE") await controlPrisma.platformAdminSession.updateMany({ where: { adminUserId: id, revokedAt: null }, data: { revokedAt: new Date() } });
+    await platformAuditFor(req)(`platform_admin.${req.body.status.toLowerCase()}`, "PlatformAdminUser", id, { email: row.email }, {
+      before: { status: target.status },
+      after: { status: row.status }
+    });
+    res.json({ id: row.id, status: row.status, role: row.role });
+  }
+);
+
+
+/* ============================== The approval queue ============================== */
+
+/**
+ * Everyone can SEE the queue — a pending deletion of a customer's workspace is not a secret from
+ * the operators who work on it, and hiding it would mean the person best placed to say "wait, no"
+ * never learns it was asked.
+ */
+platformAdminConsoleRouter.get("/governance/requests", async (req, res) => {
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+  res.json({ rows: await listPendingPlatformActions(req.platformAdmin!.id, limit) });
+});
+
+/** Only an OWNER may countersign, and never their own request — the service enforces the second
+ *  half, because a role check cannot see who asked. */
+platformAdminConsoleRouter.post("/governance/requests/:id/approve", owner, async (req, res) => {
+  res.json(await approvePlatformAction(String(req.params.id), { id: req.platformAdmin!.id, email: req.platformAdmin!.email }, { ipAddress: req.ip }));
+});
+
+/**
+ * Saying no. Open to any operator who could have approved it AND to the person who raised it —
+ * withdrawing your own request is not an exercise of authority, and needing to find an owner to
+ * un-ask a question is how a queue fills up with things nobody meant.
+ */
+platformAdminConsoleRouter.post(
+  "/governance/requests/:id/reject",
+  validate(z.object({ params: z.object({ id: z.string() }), body: z.object({ note: z.string().min(1).max(500) }).strict() })),
+  async (req, res) => {
+    const row = await controlPrisma.pendingPlatformAction.findUnique({ where: { id: String(req.params.id) }, select: { requestedById: true } });
+    if (!row) throw new AppError(404, "That request no longer exists.");
+    if (row.requestedById !== req.platformAdmin!.id && req.platformAdmin!.role !== "OWNER") {
+      throw new AppError(403, "Only an OWNER can refuse somebody else's request. You can withdraw your own.");
+    }
+    res.json(await rejectPlatformAction(String(req.params.id), { id: req.platformAdmin!.id, email: req.platformAdmin!.email }, req.body.note));
+  }
+);
 
 /**
  * This admin's own live console sessions, paginated.
@@ -541,7 +883,7 @@ platformAdminConsoleRouter.post("/auth/sessions/revoke-others", async (req, res)
     where: { adminUserId: req.platformAdmin!.id, revokedAt: null, id: { not: req.platformAdminSessionId! } },
     data: { revokedAt: new Date() }
   });
-  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "platform_admin.sessions_revoked", "PlatformAdminUser", req.platformAdmin!.id, { count: result.count });
+  await platformAuditFor(req)("platform_admin.sessions_revoked", "PlatformAdminUser", req.platformAdmin!.id, { count: result.count });
   res.json({ revoked: result.count });
 });
 
@@ -580,7 +922,7 @@ const broadcastSchema = z.object({
     .strict()
 });
 
-platformAdminConsoleRouter.post("/maintenance/broadcast", validate(broadcastSchema), async (req, res) => {
+platformAdminConsoleRouter.post("/maintenance/broadcast", operate, requirePlatformReason, validate(broadcastSchema), async (req, res) => {
   const result = await broadcastMaintenance({
     organizationIds: req.body.organizationIds ?? [],
     enabled: req.body.enabled,
@@ -629,11 +971,11 @@ platformAdminConsoleRouter.get("/monitoring/:orgId/trend", async (req, res) => {
  * one, and right after a migration, where the interesting comparison is before-and-after rather
  * than this-hour-and-last.
  */
-platformAdminConsoleRouter.post("/monitoring/sample", async (req, res) => {
+platformAdminConsoleRouter.post("/monitoring/sample", operate, async (req, res) => {
   const result = await sampleAllTenantDatabases();
   // `platformAudit`, not the tenant `audit`: this touched every workspace and belongs to none of
   // them, so it goes in the control plane's own trail where the operator's other actions are.
-  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "tenant_db.sampled", "Organization", undefined, {
+  await platformAuditFor(req)("tenant_db.sampled", "Organization", undefined, {
     sampled: result.sampled,
     failed: result.failed.length,
     prunedRows: result.prunedRows
@@ -658,7 +1000,7 @@ const operationSchema = z.object({
  * is refused unless the workspace is inside an ACTIVE maintenance window, because it rebuilds each
  * table and blocks writes while it runs — see the service.
  */
-platformAdminConsoleRouter.post("/monitoring/:orgId/operation", validate(operationSchema), async (req, res) => {
+platformAdminConsoleRouter.post("/monitoring/:orgId/operation", operate, requirePlatformReason, validate(operationSchema), async (req, res) => {
   const result = await runMaintenanceOperation({
     orgId: String(req.params.orgId),
     operation: req.body.operation,
@@ -689,7 +1031,7 @@ const aiSettingsSchema = z.object({
     .strict()
 });
 
-platformAdminConsoleRouter.put("/ai/settings", validate(aiSettingsSchema), async (req, res) => {
+platformAdminConsoleRouter.put("/ai/settings", operate, validate(aiSettingsSchema), async (req, res) => {
   res.json(
     await updatePlatformAiSettings({
       enabled: req.body.enabled,
@@ -707,7 +1049,7 @@ platformAdminConsoleRouter.put("/ai/settings", validate(aiSettingsSchema), async
  * Generate one advisory for one workspace. Always operator-initiated — nothing here is on a timer,
  * because an advisor that runs on its own produces a queue nobody reads and a bill somebody pays.
  */
-platformAdminConsoleRouter.post("/ai/advise/:orgId", async (req, res) => {
+platformAdminConsoleRouter.post("/ai/advise/:orgId", support, async (req, res) => {
   const days = Math.min(365, Math.max(1, Number(req.body?.days) || 30));
   res.json(await adviseWorkspace(String(req.params.orgId), actorLabel(req), days));
 });
@@ -726,7 +1068,7 @@ const decisionSchema = z.object({
     .strict()
 });
 
-platformAdminConsoleRouter.post("/ai/advice/:adviceId/decision", validate(decisionSchema), async (req, res) => {
+platformAdminConsoleRouter.post("/ai/advice/:adviceId/decision", support, validate(decisionSchema), async (req, res) => {
   res.json(await decideAdvice({ adviceId: String(req.params.adviceId), status: req.body.status, note: req.body.note ?? null, actorLabel: actorLabel(req) }));
 });
 
@@ -866,7 +1208,7 @@ const destinationBody = z.object({
   isDefault: z.boolean().optional()
 });
 
-platformAdminConsoleRouter.post("/backups/destinations", validate(z.object({ body: destinationBody.strict() })), async (req, res) => {
+platformAdminConsoleRouter.post("/backups/destinations", operate, validate(z.object({ body: destinationBody.strict() })), async (req, res) => {
   const b = req.body;
   if (b.organizationId) {
     const org = await controlPrisma.organization.findUnique({ where: { id: b.organizationId } });
@@ -888,12 +1230,13 @@ platformAdminConsoleRouter.post("/backups/destinations", validate(z.object({ bod
       isDefault: b.isDefault ?? false
     }
   });
-  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "backup.destination_created", "BackupDestination", row.id, { name: row.name, kind: row.kind });
+  await platformAuditFor(req)("backup.destination_created", "BackupDestination", row.id, { name: row.name, kind: row.kind });
   res.status(201).json({ id: row.id });
 });
 
 platformAdminConsoleRouter.patch(
   "/backups/destinations/:id",
+  operate,
   validate(z.object({ params: z.object({ id: z.string() }), body: destinationBody.partial().strict() })),
   async (req, res) => {
     const id = String(req.params.id);
@@ -928,12 +1271,12 @@ platformAdminConsoleRouter.patch(
         encryptedSecret
       }
     });
-    await platformAudit("PLATFORM_ADMIN", actorLabel(req), "backup.destination_updated", "BackupDestination", row.id, { name: row.name });
+    await platformAuditFor(req)("backup.destination_updated", "BackupDestination", row.id, { name: row.name });
     res.json({ id: row.id });
   }
 );
 
-platformAdminConsoleRouter.post("/backups/destinations/:id/test", async (req, res) => {
+platformAdminConsoleRouter.post("/backups/destinations/:id/test", operate, async (req, res) => {
   const row = await controlPrisma.backupDestination.findUnique({ where: { id: String(req.params.id) } });
   if (!row) throw new AppError(404, "Destination not found");
   const result = await testDestination(row as DestinationRecord);
@@ -946,14 +1289,14 @@ platformAdminConsoleRouter.post("/backups/destinations/:id/test", async (req, re
   res.json(result);
 });
 
-platformAdminConsoleRouter.delete("/backups/destinations/:id", async (req, res) => {
+platformAdminConsoleRouter.delete("/backups/destinations/:id", operate, async (req, res) => {
   const id = String(req.params.id);
   const inUse = await controlPrisma.orgBackupPolicy.count({ where: { destinationId: id } });
   if (inUse > 0) throw new AppError(409, `${inUse} backup polic${inUse === 1 ? "y is" : "ies are"} still pointed at this destination. Repoint them first.`);
   await controlPrisma.backupDestination.delete({ where: { id } }).catch(() => {
     throw new AppError(404, "Destination not found");
   });
-  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "backup.destination_deleted", "BackupDestination", id);
+  await platformAuditFor(req)("backup.destination_deleted", "BackupDestination", id);
   res.status(204).send();
 });
 
@@ -978,7 +1321,7 @@ const policyBody = z
   })
   .strict();
 
-platformAdminConsoleRouter.put("/backups/policy/:orgId", validate(z.object({ params: z.object({ orgId: z.string() }), body: policyBody })), async (req, res) => {
+platformAdminConsoleRouter.put("/backups/policy/:orgId", billing, validate(z.object({ params: z.object({ orgId: z.string() }), body: policyBody })), async (req, res) => {
   const orgId = String(req.params.orgId);
   const org = await controlPrisma.organization.findUnique({ where: { id: orgId } });
   if (!org) throw new AppError(404, "Organization not found");
@@ -1033,7 +1376,7 @@ platformAdminConsoleRouter.put("/backups/policy/:orgId", validate(z.object({ par
   };
 
   const row = await controlPrisma.orgBackupPolicy.upsert({ where: { organizationId: orgId }, update: data, create: { organizationId: orgId, ...data } });
-  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "backup.policy_updated", "Organization", orgId, { slug: org.slug, enabled: row.enabled, frequency: row.frequency });
+  await platformAuditFor(req)("backup.policy_updated", "Organization", orgId, { slug: org.slug, enabled: row.enabled, frequency: row.frequency });
   res.json({ id: row.id, nextRunAt: row.nextRunAt });
 });
 
@@ -1054,28 +1397,33 @@ platformAdminConsoleRouter.get("/backups/policy/:orgId/retention-preview", async
   });
 });
 
-platformAdminConsoleRouter.post("/backups/run/:orgId", validate(z.object({ params: z.object({ orgId: z.string() }), body: z.object({ destinationId: z.string().optional() }).strict().optional() })), async (req, res) => {
+platformAdminConsoleRouter.post("/backups/run/:orgId", operate, requirePlatformReason, validate(z.object({ params: z.object({ orgId: z.string() }), body: z.object({ destinationId: z.string().optional() }).strict().optional() })), async (req, res) => {
   const result = await runBackup(String(req.params.orgId), { kind: "MANUAL", actorLabel: actorLabel(req), destinationId: req.body?.destinationId });
   if (result.status === "FAILED") throw new AppError(502, result.message);
   res.json(result);
 });
 
-platformAdminConsoleRouter.post("/backups/sweep/:orgId", async (req, res) => {
+platformAdminConsoleRouter.post("/backups/sweep/:orgId", operate, requirePlatformReason, async (req, res) => {
   const policy = await controlPrisma.orgBackupPolicy.findUnique({ where: { organizationId: String(req.params.orgId) } });
   if (!policy) throw new AppError(404, "This workspace has no backup policy yet.");
-  res.json(await sweepRetention(String(req.params.orgId), policy.id));
+  const result = await sweepRetention(String(req.params.orgId), policy.id);
+  // A sweep DELETES backups, and until 5.0.0 it left no trace of having done so — the one class of
+  // action where "we cannot tell whether this ran" and "we cannot tell what it destroyed" are the
+  // same sentence.
+  await platformAuditFor(req)("backup.swept", "Organization", String(req.params.orgId), result as unknown as Record<string, unknown>);
+  res.json(result);
 });
 
-platformAdminConsoleRouter.post("/backups/runs/:runId/test-restore", async (req, res) => {
+platformAdminConsoleRouter.post("/backups/runs/:runId/test-restore", operate, async (req, res) => {
   const result = await testRestore(String(req.params.runId), actorLabel(req));
   if (!result.ok) throw new AppError(502, result.message);
   res.json(result);
 });
 
-platformAdminConsoleRouter.post("/backups/tick", validate(z.object({ body: z.object({ dryRun: z.boolean().optional() }).strict().optional() })), async (req, res) => {
+platformAdminConsoleRouter.post("/backups/tick", operate, validate(z.object({ body: z.object({ dryRun: z.boolean().optional() }).strict().optional() })), async (req, res) => {
   const dryRun = req.body?.dryRun !== false;
   const result = await runBackupTick(new Date(), { dryRun, actorLabel: actorLabel(req) });
-  if (!dryRun) await platformAudit("PLATFORM_ADMIN", actorLabel(req), "backup.tick_run", "PlatformRetentionSettings", "global", { ran: result.ran.length });
+  if (!dryRun) await platformAuditFor(req)("backup.tick_run", "PlatformRetentionSettings", "global", { ran: result.ran.length });
   res.json(result);
 });
 
@@ -1092,12 +1440,24 @@ platformAdminConsoleRouter.get("/backups", async (_req, res) => {
   res.json(await listSnapshots());
 });
 
-/** Streams one snapshot to the operator. `Content-Disposition: attachment` so a browser saves the
- *  file rather than trying to render several hundred megabytes of SQL. */
-platformAdminConsoleRouter.get("/backups/:id/download", async (req, res) => {
+/**
+ * Streams one snapshot to the operator. `Content-Disposition: attachment` so a browser saves the
+ * file rather than trying to render several hundred megabytes of SQL.
+ *
+ * THE ONE GET IN THIS FILE THAT IS NOT READ-ONLY, AND THE MOST IMPORTANT GUARD IN IT.
+ *
+ * Every other GET here returns a summary, a count, a status. This one returns an entire customer's
+ * database as SQL — every user, every timesheet, every ticket, every attachment path, in plain
+ * text, down a browser. It is by a wide margin the largest exfiltration surface in the console, and
+ * its verb disguises that completely: "it's a GET, so READ_ONLY should have it" is the reasonable
+ * inference and it is catastrophically wrong. OPERATOR/OWNER only, and it demands a reason like
+ * every other action that touches a customer, because "who pulled a copy of Acme's database, and
+ * why" is precisely the question this row will be asked.
+ */
+platformAdminConsoleRouter.get("/backups/:id/download", operate, requirePlatformReason, async (req, res) => {
   const id = String(req.params.id);
   const { full, bytes } = await snapshotPath(id);
-  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "backup.snapshot_downloaded", "Snapshot", id, { bytes });
+  await platformAuditFor(req)("backup.snapshot_downloaded", "Snapshot", id, { bytes });
   res.setHeader("Content-Type", "application/sql");
   res.setHeader("Content-Length", String(bytes));
   // The id is validated against the directory listing before it reaches here, so it cannot carry a
@@ -1106,19 +1466,291 @@ platformAdminConsoleRouter.get("/backups/:id/download", async (req, res) => {
   createReadStream(full).pipe(res);
 });
 
+/**
+ * Restoring a snapshot writes a whole database over a workspace. There is no undo and no second
+ * copy of what was there a moment before — two-person, like the deletion it mirrors.
+ *
+ * The service's own safety rules (it refuses to overwrite a workspace that still has a database,
+ * and it checks the typed slug) all run inside the executor, at approval time, against the world
+ * as it is then.
+ */
 platformAdminConsoleRouter.post(
   "/backups/:id/restore",
+  operate,
+  requirePlatformReason,
   validate(z.object({ params: z.object({ id: z.string() }), body: z.object({ organizationId: z.string().min(1), confirmSlug: z.string().min(1) }).strict() })),
-  async (req, res) => {
-    res.json(await restoreSnapshot(String(req.params.id), req.body.organizationId, req.body.confirmSlug, actorLabel(req)));
-  }
+  twoPerson(platformTwoPersonActions.SNAPSHOT_RESTORE, async (ctx) => {
+    const result = await restoreSnapshot(String(ctx.params.id), String(ctx.body.organizationId), String(ctx.body.confirmSlug), ctx.actorLabel);
+    await platformAudit("PLATFORM_ADMIN", ctx.actorLabel, "backup.snapshot_restored_with_approval", "Snapshot", String(ctx.params.id), {
+      organizationId: ctx.body.organizationId,
+      requestedBy: ctx.requester.label
+    }, { reason: ctx.reason, ipAddress: ctx.ipAddress });
+    return result;
+  })
 );
 
-platformAdminConsoleRouter.delete("/backups/:id", async (req, res) => {
-  res.json(await deleteSnapshot(String(req.params.id), actorLabel(req)));
-});
+/** Deleting a snapshot destroys the last copy of a workspace that may already be gone — the thing
+ *  a restore would have needed. Two-person for the same reason the restore is. */
+platformAdminConsoleRouter.delete(
+  "/backups/:id",
+  operate,
+  requirePlatformReason,
+  twoPerson(platformTwoPersonActions.SNAPSHOT_DELETE, async (ctx) => {
+    const result = await deleteSnapshot(String(ctx.params.id), ctx.actorLabel);
+    await platformAudit("PLATFORM_ADMIN", ctx.actorLabel, "backup.snapshot_deleted_with_approval", "Snapshot", String(ctx.params.id), {
+      requestedBy: ctx.requester.label
+    }, { reason: ctx.reason, ipAddress: ctx.ipAddress });
+    return result;
+  })
+);
 
 /* Re-exported so the console's organizations page can show analytics for one org without a second loop. */
 platformAdminConsoleRouter.get("/analytics/summary", async (_req, res) => {
   res.json(await getPlatformAnalytics());
+});
+
+/* ============================= Revenue, health and snapshots ============================ */
+
+/*
+ * All READS, on `platform:read` — which is what every operator holds, and correctly so: a revenue
+ * or health number is aggregate, carries no customer content, and an operator who cannot see the
+ * business cannot run it. The one WRITE here, triggering a sweep by hand, is `platform:operate`
+ * for the same reason `POST /monitoring/sample` is: it opens a connection to every tenant database
+ * in the fleet, which is a load decision rather than a reporting one.
+ *
+ * EDITING A LIST PRICE IS NOT HERE. It is a field on `PATCH /plan-tier-limits/:tier` in
+ * platform-admin.controller.ts, already gated on `platform:billing` — money belongs to the finance
+ * role, and putting a second price-editing route on this router would be a second gate to keep in
+ * step with the first.
+ */
+
+/** `days` is the churn/retention comparison window. Clamped rather than validated into an error:
+ *  an operator typing 5000 into a query string wants "as much as you have", not a 400. */
+const windowDays = (raw: unknown, fallback: number, max = 365): number => {
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(Math.round(parsed), max) : fallback;
+};
+
+/**
+ * MRR, ARR, ARPA, revenue by tier, churn, NRR, trial conversion and the signup cohort table.
+ *
+ * EVERY FIGURE IS LIST PRICE. The payload carries `basis: "list-price"` and the console labels it,
+ * because a list-price MRR is not billed revenue: a discounted, annual or negotiated customer pays
+ * something else. Reads the nightly snapshots only — no tenant database is opened.
+ */
+platformAdminConsoleRouter.get("/analytics/revenue", async (req, res) => {
+  res.json(await getRevenueOverview(windowDays(req.query.days, 30)));
+});
+
+/** Per-workspace account health, each band carrying the signal that produced it, plus the seat
+ *  overage list — the workspaces at or above 90% of a real seat ceiling. */
+platformAdminConsoleRouter.get("/analytics/health", async (req, res) => {
+  res.json(await getFleetAccountHealth(windowDays(req.query.days, 30)));
+});
+
+/** Seats, tickets and AI spend across the whole fleet, per day. The chart the console could not
+ *  draw before there was a history to draw it from. */
+platformAdminConsoleRouter.get("/analytics/usage-trend", async (req, res) => {
+  res.json({ points: await getFleetUsageTrend(windowDays(req.query.days, 90, 1100)) });
+});
+
+/** One workspace's usage series, health and list MRR — the usage half of the Org 360 page. The
+ *  other halves (identity, plan, database trend, backups, emails, audit, AI advice) are the
+ *  endpoints that already exist; that page COMPOSES them rather than replacing them. */
+platformAdminConsoleRouter.get("/analytics/org/:orgId", async (req, res) => {
+  res.json(await getOrgUsageProfile(req.params.orgId, windowDays(req.query.days, 60)));
+});
+
+/**
+ * Take today's snapshot now rather than waiting for 03:40 UTC.
+ *
+ * `platform:operate`, matching `POST /monitoring/sample`: this opens a connection to every tenant
+ * database in the fleet. Safe to run twice — the pass upserts on (organizationId, day), so a
+ * second run of the same day corrects the row instead of appending one and doubling every fleet
+ * total that sums it.
+ */
+platformAdminConsoleRouter.post("/analytics/snapshot", operate, async (req, res) => {
+  const result = await captureOrgUsageSnapshots();
+  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "usage_snapshot.captured", "Organization", null, {
+    captured: result.captured,
+    failed: result.failed.length,
+    prunedRows: result.prunedRows
+  });
+  res.json(result);
+});
+
+/* ========================= Fleet alerts, and how they leave =========================== */
+
+/**
+ * WHY THERE IS A PAGE FOR THIS AT ALL (5.0.0). `deriveAlerts` has computed real fleet alerts since
+ * 4.0.0 and every one of them existed only while somebody had the Monitoring page open. These four
+ * routes are the delivery: what is wrong right now, where those should go, and a way to prove the
+ * pipe works without waiting six hours for the worker to prove it for you.
+ */
+
+/**
+ * Everything the Alerts page shows, in ONE read: the live sweep, the delivery settings, and how
+ * long each open condition has been standing.
+ *
+ * `platform:read`. Every figure is an operational aggregate about our own fleet and carries no
+ * customer content — and an operator who cannot see what is broken cannot be on call for it. The
+ * settings are visible to READ_ONLY for the same reason a firewall rule is: knowing where alerts go
+ * is not the same as being able to change it, and the write below is `platform:operate`.
+ */
+platformAdminConsoleRouter.get("/alerts", async (_req, res) => {
+  res.json(await getAlertsOverview());
+});
+
+const alertSettingsSchema = z.object({
+  body: z
+    .object({
+      digestEnabled: z.boolean(),
+      minSeverity: z.enum(ALERT_SEVERITIES),
+      /** Empty means "every ACTIVE platform admin" — see `resolveAlertRecipients` for why that is
+       *  the right default and not a convenience. */
+      recipients: z.array(z.string().email().max(255)).max(25).default([]),
+      webhookUrl: z.string().url().max(500).nullable().optional(),
+      /** Omitted keeps the stored secret; "" clears it. Same three-state contract as every other
+       *  secret field in this console, so editing a URL never silently drops the signature. */
+      webhookSecret: z.string().max(255).optional()
+    })
+    .strict()
+});
+
+platformAdminConsoleRouter.put("/alerts/settings", operate, validate(alertSettingsSchema), async (req, res) => {
+  res.json(
+    await updateAlertSettings({
+      digestEnabled: Boolean(req.body.digestEnabled),
+      minSeverity: String(req.body.minSeverity),
+      recipients: (req.body.recipients ?? []) as string[],
+      webhookUrl: (req.body.webhookUrl ?? null) as string | null,
+      webhookSecret: req.body.webhookSecret,
+      actorLabel: actorLabel(req),
+      reason: req.platformReason
+    })
+  );
+});
+
+/**
+ * Run a digest pass now.
+ *
+ * `dryRun: true` is the console's Preview: it sweeps and diffs and reports what WOULD go out
+ * without sending anything and without recording anything, which is what makes it safe to press
+ * repeatedly. A real run spends the one chance to say each thing, so it is `platform:operate` —
+ * the same reasoning as `POST /monitoring/sample`, plus the fact that it mails people.
+ */
+platformAdminConsoleRouter.post("/alerts/digest/run", operate, async (req, res) => {
+  res.json(await runAlertDigest({ dryRun: Boolean(req.body?.dryRun), actorLabel: actorLabel(req) }));
+});
+
+/**
+ * Prove the webhook works, with a payload shaped exactly like a real digest and marked `test: true`.
+ *
+ * The alternative — waiting for something to break to find out whether the alert about it can be
+ * delivered — is how an alerting pipeline turns out to have been broken for a month.
+ */
+platformAdminConsoleRouter.post("/alerts/webhook/test", operate, async (req, res) => {
+  const outcome = await deliverAlertWebhook({
+    event: "platform.alert_digest",
+    test: true,
+    deliveredAt: new Date().toISOString(),
+    totals: { critical: 0, warning: 0, info: 0, workspaces: 0 },
+    appeared: [
+      {
+        slug: "example",
+        name: "Example workspace",
+        key: "test.ping",
+        severity: "info",
+        title: "Test alert",
+        detail: "Sent from the console to prove this endpoint is reachable."
+      }
+    ],
+    escalated: [],
+    cleared: []
+  });
+  await platformAuditFor(req)("platform_alerts.webhook_tested", "PlatformAlertSettings", "global", { status: outcome.status });
+  // 200 either way: "not configured" and "the endpoint answered 404" are both ANSWERS the operator
+  // needs to read, not failures of this request.
+  res.json(outcome);
+});
+
+/* ============================== Fleet schema drift ============================== */
+
+/**
+ * Which tenants are on which migration, and which are behind the code that is running.
+ *
+ * READ-ONLY, AND THERE IS DELIBERATELY NO BUTTON. The fix is a fan-out that opens, migrates and
+ * closes every tenant database in turn, and it can fail on any one of them. That wants a terminal
+ * with a human watching, not a browser tab that times out at thirty seconds and leaves the operator
+ * guessing which half of the fleet moved. The response carries the exact command instead, and the
+ * page prints it.
+ *
+ * MOUNTED AT `/fleet/schema-drift` RATHER THAN `/monitoring/schema-drift` on purpose: the latter
+ * would be matched by `GET /monitoring/:orgId` with `orgId = "schema-drift"` unless this route were
+ * registered first, and a route whose correctness depends on the order two lines appear in is a
+ * trap for whoever tidies this file next.
+ */
+platformAdminConsoleRouter.get("/fleet/schema-drift", async (_req, res) => {
+  res.json(await getFleetSchemaDrift());
+});
+
+/* ============================== Org 360 extras ============================== */
+
+/**
+ * One workspace's incident timeline — the audit trail, backup runs, alert conditions coming and
+ * going, maintenance broadcasts and failed platform email, merged and sorted.
+ *
+ * Composed from rows that already exist; nothing here measures anything new. See the service for
+ * why the merge lives on the server rather than in the page.
+ */
+platformAdminConsoleRouter.get("/organizations/:orgId/timeline", async (req, res) => {
+  res.json(await getOrgTimeline(String(req.params.orgId), windowDays(req.query.days, 90)));
+});
+
+/** What this workspace has been given or held back, and what each override DOES against its tier. */
+platformAdminConsoleRouter.get("/organizations/:orgId/feature-overrides", async (req, res) => {
+  res.json(await getOrgFeatureOverrides(String(req.params.orgId)));
+});
+
+const featureOverrideSchema = z.object({
+  body: z
+    .object({
+      /** Replace, not merge — `{}` clears every override. See the service for why merging leaves
+       *  keys nobody can see and therefore nobody can remove. Values are validated loosely here and
+       *  sanitised strictly against the allowlist in `readFeatureOverrides`; the allowlist is the
+       *  authority, so a key this schema has never heard of is dropped rather than rejected. */
+      overrides: z.record(z.string().max(64), z.union([z.boolean(), z.number().int().min(0).max(1_000_000)])).default({}),
+      /** Required only when something is being GRANTED beyond the plan. The service names which. */
+      acknowledgeGrants: z.boolean().default(false)
+    })
+    .strict()
+});
+
+/**
+ * `platform:operate`, plus a reason.
+ *
+ * NOT `platform:billing`, despite touching entitlements, and the distinction is the one this
+ * console draws everywhere else: BILLING moves a workspace between PLANS, which changes what the
+ * customer pays. An override changes nothing anybody pays — it is a deployment-level exception a
+ * platform operator makes and answers for, and it is the on-call role that grants a design partner
+ * a beta at four in the afternoon.
+ *
+ * A WRITTEN REASON is demanded at the door, because this acts on a customer from outside their
+ * workspace — which is exactly the row a reviewer will read six months from now. (The middleware is
+ * named on the registration line below rather than in this comment on purpose: the drift guard in
+ * apps/web/tests/unit/platform-reason.test.ts chunks the file BETWEEN route registrations, so a
+ * mention of it up here would be attributed to the GET above and invent a phantom route for the
+ * console's prompt table. That test's own header warns about exactly this shape of false positive.)
+ */
+platformAdminConsoleRouter.put("/organizations/:orgId/feature-overrides", operate, requirePlatformReason, validate(featureOverrideSchema), async (req, res) => {
+  res.json(
+    await setOrgFeatureOverrides({
+      orgId: String(req.params.orgId),
+      overrides: req.body.overrides ?? {},
+      acknowledgeGrants: Boolean(req.body.acknowledgeGrants),
+      actorLabel: actorLabel(req),
+      reason: req.platformReason,
+      ipAddress: req.ip
+    })
+  );
 });

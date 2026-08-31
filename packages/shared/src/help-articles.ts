@@ -185,6 +185,39 @@ export const HELP_ARTICLES: HelpArticle[] = [
     ],
     keywords: ["ticket", "status", "transition", "comment", "watcher", "checklist", "github", "branch", "pr", "reopen", "resolve", "close"]
   },
+  {
+    id: "verification-badges",
+    category: "Tickets",
+    title: "What the verification badge on a security finding means",
+    where: "Tickets → open a ticket carrying findings → the Security tab",
+    when: "You resolved a ticket with security findings on it and want to know whether the fix has actually been confirmed.",
+    steps: [
+      "Open the ticket and go to its Security tab. Each finding shows a badge for what a scanner has observed, which is separate from the status you set.",
+      "“Awaiting proof” — you marked it fixed and no qualifying scan has run yet. It still counts as open until one does.",
+      "“Verified fixed” — a later scan by the same tool, on the same repository and branch, no longer reports it. The box names the scan and the commit that proved it.",
+      "“Reopened by scan” — that scan still reports it, so the fix did not hold. If auto-reopen is on for your workspace the ticket was reopened and the SLA clock restarted.",
+      "“Unverified” — nothing has run in the grace window. Nothing has been proven either way, and no ticket was reopened because of it: this usually means the scan job itself stopped running."
+    ],
+    notes:
+      "The footer under each finding shows when it was first seen, how many scans have reported it and the run it came from. A repeat scan raises that count rather than adding another copy of the same finding.",
+    keywords: ["verified", "verification", "awaiting proof", "unverified", "reopened", "badge", "finding", "security", "fix", "proof", "scan"]
+  },
+  {
+    id: "reopen-digest",
+    category: "Tickets",
+    title: "The “a fix did not hold” email, and why you got it",
+    where: "Your inbox, and the ticket it links to under Tickets",
+    when: "A scan found a security finding still present after the ticket claiming to fix it was resolved or closed.",
+    steps: [
+      "The mail names which scan, which commit, which findings survived and how long they have been open — enough to act without opening anything first.",
+      "Follow the link to the ticket. If auto-reopen is on it is already back in progress with the SLA clock restarted; if it is off it is exactly where it was and somebody has to move it by hand.",
+      "The ticket also carries a system comment with the same evidence, so the record survives the email.",
+      "Not sure why you were included? It goes to whoever closed the ticket, its current assignee and everyone who logged time against it, copying the closer's manager and the routed module's owner."
+    ],
+    notes:
+      "It is called “A fix did not hold” in Workspace settings → Email channels, where a super admin can mute it like any other message under the same category-by-role grid. Muting the mail does not switch off the verification itself, and the in-app bell still fires.",
+    keywords: ["reopen", "reopened", "digest", "email", "regression", "fix", "did not hold", "security", "scan", "sla"]
+  },
 
   /* ── Change management ───────────────────────────────────────────────────────────────────── */
   {
@@ -323,7 +356,11 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Edit any answer; the document is yours, the interview is scaffolding.",
       "Generate the requirements document, then create the proposed tickets and goals from it — each one a suggestion you accept individually."
     ],
-    screenshot: "studio.png",
+    // `requirements.png`, NOT `studio.png` — the latter is a capture of Workflow Studio, a
+    // different page reached from a different sidebar entry. Two products in this workspace are
+    // called something Studio and the filenames do not disambiguate them, so the article that
+    // describes Requirements Studio names the capture that shows it.
+    screenshot: "requirements.png",
     keywords: ["requirements", "prd", "brd", "spec", "interview", "studio", "generate tickets"]
   },
   {
@@ -431,11 +468,69 @@ export const HELP_ARTICLES: HelpArticle[] = [
     when: "Connecting code, ingesting scanner findings, and gating uploads.",
     steps: [
       "Git provider: bring your own GitHub OAuth App; tickets then get repo/branch/PR pickers.",
-      "CI webhooks: GitHub Actions, GitLab, Jenkins and friends push test runs and security findings — findings become owned tickets.",
+      "CI webhooks: GitHub Actions, GitLab, Jenkins and friends push test runs and security findings. A finding is routed by the file it names — see Route findings by file path below — so it lands on the module that owns the code rather than on whoever happens to be first in the list.",
       "Malware scanning: the switch scans EVERY upload before it is stored. It fails closed — with it on and the scanner down, uploads are refused — so use Test scanner beside it before flipping."
     ],
-    screenshot: "security.png",
+    // No screenshot on purpose. This article is about the Security & DevOps SETTINGS tab, and the
+    // only security-shaped capture in `apps/web/public/product/` is `security.png` — the
+    // "Security & DevOps insights" page, which is where findings are READ rather than where any of
+    // the switches described above live. Pointing a reader at a picture of somewhere they are not
+    // is worse than showing them nothing, so this waits for a real capture of the tab.
     keywords: ["security", "devops", "github", "oauth", "ci", "webhook", "virus", "malware", "scan", "clamav", "findings"]
+  },
+  {
+    id: "sonarqube-eslint",
+    category: "Workspace settings",
+    title: "Connecting SonarQube and ESLint",
+    roles: SA,
+    where: "Workspace settings → Security & DevOps → Security & CI ingestion",
+    when: "You already run SonarQube or ESLint and want their results tracked, deduplicated, routed and verified like every other finding.",
+    steps: [
+      "Press Generate token (or Rotate token) on the Security & CI ingestion card and copy it. Every URL below is authenticated with `Authorization: Bearer <token>` — nothing else.",
+      "Copy “SonarQube quality-gate webhook” and paste it into SonarQube under Administration → Configuration → Webhooks, adding the same Authorization header there. Sonar's payload is stored exactly as it sends it — there is nothing to translate.",
+      "Copy “SonarQube issues webhook” and have your pipeline POST the response from Sonar's /api/issues/search to it, unmodified. A VULNERABILITY becomes a SAST finding; a BUG or CODE_SMELL becomes a code-quality one.",
+      "Copy “ESLint findings webhook” and POST `eslint --format json` output to it. Send `rootPath` (your CI workspace directory) alongside it, or two runners will report the same file with different absolute paths and nothing will deduplicate.",
+      "Optional: Workspace settings → Ticketing → “Block resolve on failing quality gate”, so a ticket cannot be resolved while the latest gate on its linked branch is failing."
+    ],
+    notes:
+      "Quality and lint results are excluded from every security figure — the risk score, the by-severity chart and the weekly security digest — and that separation is enforced in code, so connecting a linter cannot make your security posture look like it collapsed overnight. They still deduplicate, route to modules and get verified by the next scan exactly as a vulnerability does. ESLint findings are never filed above MEDIUM severity.",
+    keywords: ["sonarqube", "sonar", "eslint", "lint", "quality gate", "code smell", "ci", "webhook", "findings", "ingestion", "token"]
+  },
+  {
+    id: "finding-routing",
+    category: "Workspace settings",
+    title: "Routing findings to the right project, module and submodule",
+    roles: SA,
+    where: "Workspace settings → Security & DevOps → Route findings by repository / by file path",
+    when: "Auto-created security tickets are landing in the wrong project, or on the wrong person.",
+    steps: [
+      "“Route findings by repository”: add a repository pattern and the project its findings belong in. Rules are evaluated in order, lowest first, and the first match wins; anything unmatched falls back to the project set on the ingestion card.",
+      "“Route findings by file path”: add a path pattern with the module — and optionally the submodule — that owns it. Same ordering, same first-match-wins rule. `*` stays inside one path segment, `**` crosses them, and a trailing `/` means that directory and everything under it.",
+      "Set a default assignee for that module under Workspace settings → Email intake → “Module auto-assignment” — the same rule email intake already uses is what a matched finding's ticket is assigned through.",
+      "Use “Test a path” below the rules: type a repository (e.g. `acme/web-app`) and a file path (e.g. `apps/api/src/services/billing-rate.service.ts`), press Test, and it runs the same resolver the ingestion does — showing the project, module and submodule it would pick and which rule decided it. It changes nothing.",
+      "Use the Active switch on a row to take a rule out of the running without deleting it."
+    ],
+    notes:
+      "Configure this after upgrading to 5.0.0. Before it, auto-created security tickets were assigned through whichever module on the fallback project happened to have an assignee rule — arbitrary, and now removed. Without path rules those tickets fall through to CODEOWNERS (where you have enabled it) or arrive unassigned. The repository rules also decide where a ticket auto-created from a failed CI run opens, matched against the repository named in that run's pull-request URL; such a ticket carries no module (a failed run names no file) and is never auto-assigned.",
+    keywords: ["routing", "route", "findings", "repository", "module", "submodule", "path", "glob", "pattern", "assignee", "project", "test a path"]
+  },
+  {
+    id: "verified-remediation",
+    category: "Workspace settings",
+    title: "Verified remediation: making a scan confirm a fix",
+    roles: SA,
+    where: "Workspace settings → Security & DevOps → Verified remediation",
+    when: "You want “resolved” on a security ticket to mean a scanner agreed, not that somebody said so.",
+    steps: [
+      "Turn on “Require a scan to confirm a fix”. Findings on a ticket that is resolved or closed then become a claim awaiting proof, and keep counting as unresolved until a scan settles them.",
+      "Set the “Grace window” — 7, 14, 30 or 60 days — for how long a claim waits for a qualifying scan before it is marked unverified. Fourteen days is the default.",
+      "Decide separately whether to turn on “Reopen tickets on CI regression”. Verification on with auto-reopen off is a supported setup: you are told what happened and your tickets are left where they are.",
+      "Check that the tool you rely on actually runs on that repository and branch — proof only counts from the same tool, the same repository and branch, and the same kind of finding.",
+      "Watch the “Awaiting proof” tile on Security insights: findings sitting there are claimed fixes nobody has confirmed."
+    ],
+    notes:
+      "A missing scan is never treated as a failure. If nothing qualifying runs inside the window the finding is marked unverified and the assignee is nudged in their bell — no ticket is reopened, because absence of proof is not proof that the fix failed.",
+    keywords: ["verified", "verification", "remediation", "reopen", "regression", "proof", "grace window", "scan", "security", "fix", "auto-reopen"]
   },
   {
     id: "billing-plans",
@@ -446,10 +541,31 @@ export const HELP_ARTICLES: HelpArticle[] = [
     when: "Your tier, seats and upgrades. Limits are enforced live on every request, not at renewal.",
     steps: [
       "The card shows your plan and seat usage; Starter is free to ten users.",
-      "Upgrade to Team ($8/seat/month) or Enterprise through the buttons — payment is handled by Stripe Checkout.",
+      "Upgrade to Team ($8/seat/month) or Enterprise through the buttons — payment is handled by Stripe Checkout the first time.",
+      "Already subscribed? The buttons read “Switch to …” instead, and the change is applied to your existing subscription with proration rather than starting a second one.",
       "AI usage is never billed by us: you pay your model provider directly, under the budget you set on the AI tab."
     ],
+    notes:
+      "A tier change emails your workspace's super admins a receipt. A seat count changing on its own does not — that is not a plan change.",
     keywords: ["billing", "plan", "tier", "seats", "upgrade", "stripe", "payment", "enterprise", "starter", "team"]
+  },
+  {
+    id: "billing-portal-invoices",
+    category: "Workspace settings",
+    title: "Changing your card, cancelling, and finding an invoice",
+    roles: SA,
+    where: "Workspace settings → Billing",
+    when: "A card expired, finance wants a copy of last month's invoice, or you are cancelling.",
+    steps: [
+      "Press “Manage billing” at the top of the Plan & billing card. It hands you to Stripe's own customer portal, signed in as your workspace.",
+      "In the portal: update the payment method, change the billing address and tax details, download past invoices, or cancel the subscription.",
+      "Stripe's return link brings you back to Workspace settings when you are done.",
+      "For a quick look without leaving the app, scroll to “Recent invoices” on the same card: the last twelve, each with a “View” link that opens Stripe's hosted invoice page in a new tab.",
+      "The button only appears once your workspace has a Stripe customer — a Starter workspace that has never subscribed has nothing to manage. It stays available after a subscription ends, so you can still reach your invoice history."
+    ],
+    notes:
+      "Invoices are rendered and stored by Stripe, not by us, so what your finance team downloads is the document of record. If you land back here from a checkout, the page shows a confirmation and refreshes twice — the second refresh covers the few seconds Stripe's webhook can lag behind the redirect.",
+    keywords: ["invoice", "invoices", "receipt", "card", "payment method", "cancel", "cancellation", "portal", "stripe", "billing", "refund", "vat", "tax"]
   },
 
   /* ── Platform & operations ───────────────────────────────────────────────────────────────── */

@@ -120,6 +120,124 @@ export function resolveHeldRoles(primaryRole: RoleName, extraRoleNames: RoleName
   return roles.filter((r) => held.has(r));
 }
 
+/* =========================== Platform console governance (5.0.0) ===========================
+ *
+ * WHAT: the role/capability vocabulary for the `/platform-admin` console — the operator plane,
+ * NOT a tenant workspace. Deliberately its own set of names beside `roles`/`permissions` above
+ * rather than an extension of them: a platform operator has no workspace, no `User` row, and no
+ * tenant session, and the one mistake that must never be possible is a guard reading the tenant
+ * role for a control-plane decision (see apps/web/src/App.tsx's `RedirectIfPlatformAdmin` header
+ * for the same argument on the client).
+ *
+ * WHY IT EXISTS AT ALL: until 5.0.0 `requirePlatformAdmin` was the console's entire authorization
+ * surface. It proved you were *an* admin and nothing more, so every platform admin could drop any
+ * tenant's database, restore over one, retune every plan tier and read every stored AI credential.
+ * "Everyone who can sign in can do everything" is not a policy, it is the absence of one.
+ */
+export const platformRoles = ["OWNER", "OPERATOR", "SUPPORT", "BILLING", "READ_ONLY"] as const;
+export type PlatformRole = (typeof platformRoles)[number];
+
+/**
+ * Capabilities, in the same flat `as const` shape as `permissions` above so both planes read the
+ * same way at a call site. Five, not fifty: a matrix an operator cannot hold in their head is a
+ * matrix nobody audits, and every route in the console falls cleanly into one of these buckets.
+ */
+export const platformCapabilities = {
+  /** See the console. Every signed-in operator holds this; it is what READ_ONLY is. */
+  PLATFORM_READ: "platform:read",
+  /** Act ON a customer without changing the platform: rescues, resends, advisories, lead pipeline.
+   *  Everything here is either reversible or a message. */
+  PLATFORM_SUPPORT: "platform:support",
+  /** Money: plan tiers, the Stripe configuration, an org's tier/seat/AI-budget overrides, and the
+   *  backup policy a tier entitles. Deliberately does NOT include the tenant rescue routes — a
+   *  finance role has no business inside a customer's user table. */
+  PLATFORM_BILLING: "platform:billing",
+  /** Run the platform: mail/AI/retention/backup configuration, provisioning, org status changes,
+   *  maintenance windows, and the snapshot download. */
+  PLATFORM_OPERATE: "platform:operate",
+  /** Grant power to other people, and countersign somebody else's irreversible action. */
+  PLATFORM_OWNER: "platform:owner"
+} as const;
+
+export type PlatformCapability = (typeof platformCapabilities)[keyof typeof platformCapabilities];
+
+/**
+ * The matrix, written out per role rather than derived from a ladder.
+ *
+ * SUPPORT AND BILLING ARE SIBLINGS, NOT RUNGS. The obvious shape is a single ordered ladder
+ * (READ_ONLY < SUPPORT < BILLING < OPERATOR < OWNER), and it is wrong in both directions: it would
+ * hand a finance operator the break-glass that resets a customer's super-admin password, and hand
+ * a support operator the ability to move a workspace onto a different plan. Neither is a capability
+ * the other job needs, and the whole point of splitting the console's single all-powerful role is
+ * to stop granting authority nobody asked for.
+ *
+ * OPERATOR IS THE UNION, because it is the on-call role: the person holding the pager at 3am must
+ * not discover that restoring service needs a second account they do not have.
+ */
+export const PLATFORM_ROLE_CAPABILITIES: Record<PlatformRole, readonly PlatformCapability[]> = {
+  READ_ONLY: [platformCapabilities.PLATFORM_READ],
+  SUPPORT: [platformCapabilities.PLATFORM_READ, platformCapabilities.PLATFORM_SUPPORT],
+  BILLING: [platformCapabilities.PLATFORM_READ, platformCapabilities.PLATFORM_BILLING],
+  OPERATOR: [
+    platformCapabilities.PLATFORM_READ,
+    platformCapabilities.PLATFORM_SUPPORT,
+    platformCapabilities.PLATFORM_BILLING,
+    platformCapabilities.PLATFORM_OPERATE
+  ],
+  OWNER: [
+    platformCapabilities.PLATFORM_READ,
+    platformCapabilities.PLATFORM_SUPPORT,
+    platformCapabilities.PLATFORM_BILLING,
+    platformCapabilities.PLATFORM_OPERATE,
+    platformCapabilities.PLATFORM_OWNER
+  ]
+};
+
+/** One-line descriptions, so the console's role picker explains itself instead of showing five
+ *  enum values and hoping the reader already knows what they mean. */
+export const PLATFORM_ROLE_LABEL: Record<PlatformRole, string> = {
+  OWNER: "Owner — everything, plus creating operators and countersigning irreversible actions",
+  OPERATOR: "Operator — runs the platform: configuration, provisioning, backups, maintenance",
+  SUPPORT: "Support — customer rescues, resends, advisories and the sales pipeline",
+  BILLING: "Billing — plan tiers, Stripe configuration and per-workspace commercial overrides",
+  READ_ONLY: "Read only — sees the console, changes nothing"
+};
+
+export function platformRoleHas(role: PlatformRole, capability: PlatformCapability): boolean {
+  return PLATFORM_ROLE_CAPABILITIES[role]?.includes(capability) ?? false;
+}
+
+/**
+ * The irreversible actions that need a second pair of eyes, and the label the console shows for
+ * each. Shared because the API enforces the list and the console has to describe what it just
+ * queued — two copies of "which actions are two-person" would drift the first time one is added.
+ *
+ * The test of membership is NOT "is it dangerous". It is "can it be undone". A suspended workspace
+ * can be un-suspended; a deleted one cannot, a restored-over one cannot, and an operator account
+ * somebody quietly promoted to OWNER can grant itself anything before anyone notices.
+ */
+export const platformTwoPersonActions = {
+  RETENTION_DELETE: "retention.delete",
+  SNAPSHOT_RESTORE: "snapshot.restore",
+  SNAPSHOT_DELETE: "snapshot.delete",
+  ADMIN_CREATE: "admin.create",
+  ADMIN_ROLE_CHANGE: "admin.role_change"
+} as const;
+
+export type PlatformTwoPersonAction = (typeof platformTwoPersonActions)[keyof typeof platformTwoPersonActions];
+
+export const PLATFORM_TWO_PERSON_LABEL: Record<PlatformTwoPersonAction, string> = {
+  "retention.delete": "Delete a workspace and its database",
+  "snapshot.restore": "Restore a snapshot over a workspace",
+  "snapshot.delete": "Delete a pre-deletion snapshot",
+  "admin.create": "Create a platform admin account",
+  "admin.role_change": "Change a platform admin's role"
+};
+
+/** How long a queued request stays approvable. Long enough to find a colleague in another
+ *  timezone, short enough that an approval is a decision about NOW and not about last week. */
+export const PLATFORM_APPROVAL_TTL_HOURS = 24;
+
 export interface TimesheetInput {
   projectId: string;
   moduleId: string;
@@ -153,26 +271,216 @@ export const ticketStatusTransitions: Record<TicketStatus, TicketStatus[]> = {
   REOPENED: ["IN_PROGRESS"]
 };
 
-/** Ingest-only security-assessment types — see docs/ROADMAP.md's "Security assessment suite"
+/** Ingest-only assessment types — see docs/ROADMAP.md's "Security assessment suite"
  *  section. SSAT = secrets scanning, SSCT = software supply-chain testing (SBOM/provenance),
- *  distinct from a plain CVE-only dependency check. VAPT is deliberately absent here — it's a
- *  periodic human-led assessment, not a per-finding type an automated webhook posts. */
+ *  distinct from a plain CVE-only dependency check. VAPT is deliberately absent from the CI
+ *  webhook's accepted set — it's a periodic human-led assessment, not a per-finding type an
+ *  automated webhook posts. */
 /** Includes VAPT even though the CI ingestion webhook never accepts it as input (see
- *  devops-webhook.controller.ts's own hardcoded, VAPT-excluding type list) — this constant is
+ *  devops-webhook.controller.ts's own VAPT-excluding type list) — this constant is
  *  the *display*-side source of truth (report rendering, the ticket Security tab), where a VAPT
  *  finding (uploaded via Workspace Settings, not the webhook) needs to render identically to
- *  the other 4 types. */
-export const securityFindingTypes = ["SAST", "DAST", "SSAT", "SSCT", "VAPT"] as const;
+ *  the other types. */
+/**
+ * QUALITY and LINT are the two CODE-QUALITY members, and they are the reason
+ * `securityFindingTypeDisciplines` below exists. They share this table, this ingest, this
+ * fingerprint and this verification machinery with the five security types on purpose — a Sonar
+ * code smell and a Semgrep injection warning are the same SHAPE of record (a tool, a rule, a file, a
+ * line, a claim that got fixed or did not) — but they are emphatically not the same NUMBER. See the
+ * discipline map for what that separation buys and where it is enforced.
+ *
+ * ORDER IS STORAGE LAYOUT, not taxonomy — the same argument `securityFindingStatuses` makes below.
+ * MySQL stores an ENUM as the ordinal of its member, so `ALTER TABLE … MODIFY … ENUM(…)` is an
+ * in-place alter only when the new member is APPENDED; slot one into the middle and every existing
+ * row's stored ordinal has to be rewritten. Hence QUALITY and LINT at the end rather than beside
+ * SAST where a taxonomy would put them. Keep this identical to the `SecurityFindingType` enum in
+ * prisma/schema.prisma, member for member and order for order.
+ */
+export const securityFindingTypes = ["SAST", "DAST", "SSAT", "SSCT", "VAPT", "QUALITY", "LINT"] as const;
 export type SecurityFindingType = (typeof securityFindingTypes)[number];
+
+/** The two things a finding can be ABOUT. `"security"` is exposure — something an attacker could
+ *  use. `"quality"` is maintainability — something that will cost the team later. Both are worth
+ *  tracking; only one of them belongs in a security posture number. */
+export type SecurityFindingDiscipline = "security" | "quality";
+
+/**
+ * Which discipline each finding type belongs to — the one place that answers "does this count as
+ * SECURITY exposure?", for every score, chart and digest that has to ask.
+ *
+ * WHY THIS EXISTS. SonarQube and ESLint ingestion means a workspace can post a thousand code smells
+ * in one night, through the same webhook, into the same table, as its SAST findings. Without this
+ * map every one of them would be a "finding": the org risk score would climb, the by-severity chart
+ * would fill with MEDIUMs, the Monday security digest would open with a number nobody could act on,
+ * and a single CRITICAL SQL injection would be one row in ten thousand. The failure is not that the
+ * numbers would be wrong — each row is a real thing a real tool reported. The failure is that the
+ * figure a security team reads would stop measuring security, quietly, on the day somebody wired up
+ * a linter.
+ *
+ * WHAT IS *NOT* SPLIT, deliberately, and this is the whole reason one table was chosen: the
+ * per-ticket security report, verification and reopen, module routing, deduplication and
+ * fingerprinting all serve BOTH disciplines unchanged. A lint rule that keeps coming back after
+ * somebody said they fixed it is exactly as interesting as a vulnerability that does, and it costs
+ * nothing to answer that question for both.
+ *
+ * NOT A STORED COLUMN. It is derived from `type`, so there is no migration, no second field that can
+ * disagree with the first, and no possibility of a row whose discipline says one thing and whose
+ * type says another. The price is that a type cannot be re-disciplined per workspace — which is the
+ * right price, because "is a code smell a security problem?" is not a per-workspace opinion.
+ *
+ * ADDING A VALUE: add it to `securityFindingTypes` above, and this Record stops compiling until
+ * somebody decides whether it counts against a workspace's security posture. That failure is the
+ * point; it is the check this map exists to provide.
+ */
+export const securityFindingTypeDisciplines: Record<SecurityFindingType, SecurityFindingDiscipline> = {
+  SAST: "security",
+  DAST: "security",
+  SSAT: "security",
+  SSCT: "security",
+  VAPT: "security",
+  /** Sonar's BUG and CODE_SMELL, and anything else a quality gate reports. Sonar's own
+   *  VULNERABILITY is NOT here — it maps to SAST, because it is static analysis finding a
+   *  vulnerability and belongs in the security numbers. */
+  QUALITY: "quality",
+  /** ESLint and friends. A lint warning is a maintainability signal; treating one as security
+   *  exposure is how a risk score becomes noise. */
+  LINT: "quality"
+};
+
+/** WHY MUTABLE ARRAYS: identical reasoning to `securityFindingStatusesIn` below — every consumer is
+ *  a Prisma `type: { in: … }` filter, and Prisma's `Enumerable<T>` does not accept a `readonly`
+ *  array. */
+function securityFindingTypesIn(discipline: SecurityFindingDiscipline): SecurityFindingType[] {
+  return securityFindingTypes.filter((type) => securityFindingTypeDisciplines[type] === discipline);
+}
+
+/** The types that count against a workspace's SECURITY posture — the risk score, the by-severity
+ *  breakdown, the weekly security digest, and the one-line verdict on a ticket's report. */
+export const securityDisciplineFindingTypes = securityFindingTypesIn("security");
+/** The code-quality types. Reported in their own section, never folded into the numbers above. */
+export const qualityDisciplineFindingTypes = securityFindingTypesIn("quality");
 
 export const securityFindingSeverities = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
 export type SecurityFindingSeverity = (typeof securityFindingSeverities)[number];
 
-export const securityFindingStatuses = ["OPEN", "ACKNOWLEDGED", "FIXED", "ACCEPTED_RISK"] as const;
+/**
+ * WHY THE ORDER LOOKS WRONG. Read as a life cycle this should be
+ * OPEN → ACKNOWLEDGED → PENDING_VERIFICATION → FIXED → ACCEPTED_RISK, and PENDING_VERIFICATION
+ * belongs in the middle. It is last because MySQL stores an ENUM column as the ORDINAL of its
+ * member, and `ALTER TABLE … MODIFY … ENUM(…)` is an in-place, no-rewrite operation only when the
+ * new member is APPENDED. Insert one in the middle and every existing row's stored ordinal has to
+ * be rewritten — a full table copy, on the one table an org's scanners append to every night. The
+ * list is a storage layout, not a workflow diagram; the workflow lives in
+ * `securityFindingStatusBuckets` below, which is order-independent. Keep this identical to the
+ * `SecurityFindingStatus` enum in prisma/schema.prisma, member for member and order for order.
+ */
+export const securityFindingStatuses = ["OPEN", "ACKNOWLEDGED", "FIXED", "ACCEPTED_RISK", "PENDING_VERIFICATION"] as const;
 export type SecurityFindingStatus = (typeof securityFindingStatuses)[number];
+
+/** The three answers to "is this finding still a problem?". `pending` is the middle one: somebody
+ *  says it is fixed and nothing has confirmed that yet. */
+export type SecurityFindingStatusBucket = "open" | "resolved" | "pending";
+
+/**
+ * Which bucket each finding status falls into — the one place that answers "is this still a
+ * problem?", for every report, digest and score that has to ask.
+ *
+ * WHY THIS EXISTS. The open/resolved split used to be typed out by hand in five independent
+ * places: the Security Insights aggregation (report.controller.ts), the per-ticket report behind
+ * the risk verdict and the ticket-closed digest (security-report.service.ts), the weekly security
+ * digest worker, the bug-pattern digest worker, and the admin chat tool that validates a status
+ * the model typed. Five copies of one list is five chances for a newly added status to be missing
+ * from four of them — and the resulting failure is the worst shape a security metric can fail in.
+ * Not wrong and loud: quietly LOW. The finding sits in the table, counts nowhere, and every
+ * dashboard reports a cleaner workspace than the one that exists.
+ *
+ * ADDING A VALUE: add it to `securityFindingStatuses` above, and this Record stops compiling until
+ * somebody decides which bucket it belongs to. Every reader then reads it from here, so the
+ * decision lands everywhere at once. That failure is the point; it is the check this map exists to
+ * provide.
+ */
+export const securityFindingStatusBuckets: Record<SecurityFindingStatus, SecurityFindingStatusBucket> = {
+  OPEN: "open",
+  ACKNOWLEDGED: "open",
+  FIXED: "resolved",
+  ACCEPTED_RISK: "resolved",
+  /** Somebody says this is fixed; no scan has agreed yet. See `unresolvedSecurityFindingStatuses`
+   *  for why that is not the same thing as resolved. */
+  PENDING_VERIFICATION: "pending"
+};
+
+/** WHY MUTABLE ARRAYS and not `as const` tuples: every consumer of these is a Prisma
+ *  `status: { in: … }` filter, and Prisma's `Enumerable<T>` does not accept a `readonly` array —
+ *  the call sites this replaced all had to write `{ in: [...OPEN_FINDING_STATUSES] }` to strip the
+ *  readonly-ness back off. Handing them an array they can pass straight in removes the spread and
+ *  the temptation to hand-write the list instead. */
+function securityFindingStatusesIn(bucket: SecurityFindingStatusBucket): SecurityFindingStatus[] {
+  return securityFindingStatuses.filter((status) => securityFindingStatusBuckets[status] === bucket);
+}
+
+/** Findings nobody has claimed to have fixed. */
+export const openSecurityFindingStatuses = securityFindingStatusesIn("open");
+/** Findings that are done with — fixed and confirmed, or consciously accepted. */
+export const resolvedSecurityFindingStatuses = securityFindingStatusesIn("resolved");
+/** Findings claimed fixed but not yet confirmed by a later scan. */
+export const pendingSecurityFindingStatuses = securityFindingStatusesIn("pending");
+
+/**
+ * Everything that is NOT resolved — the set that counts against a workspace's posture.
+ *
+ * WHY `pending` LANDS HERE. A claimed-but-unconfirmed fix is an unproven fix. If pending counted
+ * as resolved, a workspace could lower its own risk score, empty its own insights page and quieten
+ * its own weekly digest by marking findings fixed — no scanner involved, no evidence required.
+ * The number that is supposed to measure exposure would instead measure how willing somebody was
+ * to close a ticket. So a pending finding keeps counting until a scan stops reporting it, and only
+ * then does it move to `resolved`.
+ */
+export const unresolvedSecurityFindingStatuses = [...openSecurityFindingStatuses, ...pendingSecurityFindingStatuses];
 
 export const securityFindingAiVerdicts = ["TRUE_POSITIVE", "FALSE_POSITIVE", "NEEDS_REVIEW"] as const;
 export type SecurityFindingAiVerdict = (typeof securityFindingAiVerdicts)[number];
+
+/**
+ * WHERE ONE CLAIMED FIX STANDS WITH THE SCANNER — the verification ladder, in one column.
+ *
+ * `status` above answers "is this still a problem?". This answers the separate question "what does
+ * the EVIDENCE say?", and the two are deliberately not the same field. A finding can be
+ * PENDING_VERIFICATION (somebody closed the ticket) while the evidence is still AWAITING_PROOF, and
+ * it can be FIXED while carrying VERIFIED_FIXED — which is the only combination that means a
+ * scanner, not a person, decided it was over.
+ *
+ * WHY A COLUMN RATHER THAN THREE TIMESTAMPS READ TOGETHER: the verdict pass and the sweep both ask
+ * "which findings are waiting on proof, on this repository and branch?" — a question a single
+ * indexed value answers and a derivation over `status`, `verifiedFixedAt` and a due date does not.
+ * The timestamps still exist beside it; they carry the EVIDENCE (which run, which commit, when),
+ * and this carries the CONCLUSION.
+ *
+ * Null is the ordinary value: a finding that has never been through the gate has no verdict, and
+ * that is not the same as having failed one.
+ */
+export const securityFindingVerificationStates = [
+  /** A ticket was resolved/closed while this was still open. The next scan by the SAME TOOL on the
+   *  same repo+branch decides. */
+  "AWAITING_PROOF",
+  /** A qualifying scan ran and did not report it. The strongest statement this system can make. */
+  "VERIFIED_FIXED",
+  /** A qualifying scan ran and reported it again. The fix did not hold. */
+  "REFUTED_BY_SCAN",
+  /** The grace window closed with no qualifying scan. NOT a failure — nobody proved anything either
+   *  way, and treating silence as guilt is how a system like this gets switched off. */
+  "UNVERIFIED"
+] as const;
+export type SecurityFindingVerificationState = (typeof securityFindingVerificationStates)[number];
+
+/** What each verification state is called wherever a person reads it — the badge on the ticket's
+ *  Security panel and the lines in the reopen digest. One list so the email and the screen cannot
+ *  describe the same row differently. */
+export const securityFindingVerificationLabels: Record<SecurityFindingVerificationState, string> = {
+  AWAITING_PROOF: "Awaiting proof",
+  VERIFIED_FIXED: "Verified fixed",
+  REFUTED_BY_SCAN: "Reopened by scan",
+  UNVERIFIED: "Unverified"
+};
 
 /**
  * What one row of an AI proposal points AT — the single source for the API and the browser alike.
@@ -255,6 +563,11 @@ export interface NotificationPreferences {
   emailTicketNeedsReview: boolean;
   /** Ticket-close security/test-status digest — see docs/ROADMAP.md's security assessment suite. */
   emailTicketClosedDigest: boolean;
+  /** The other half of that pair: a scan proved a claimed fix did not hold. Goes wider than the
+   *  close digest on purpose — the closer, the assignee and everyone who logged time against the
+   *  ticket, with the closer's manager and the module owner in Cc. See
+   *  security-report.service.ts#sendTicketReopenedDigest. */
+  emailTicketReopenedDigest: boolean;
   /** AI weekly org-wide security digest to every ADMIN/SUPER_ADMIN — see
    *  workers/security-weekly-digest.worker.ts. Gated alongside GlobalAISettings.securityWeeklyDigestEnabled. */
   emailSecurityWeeklyDigest: boolean;
@@ -323,6 +636,7 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailTicketEscalation",
   "emailTicketNeedsReview",
   "emailTicketClosedDigest",
+  "emailTicketReopenedDigest",
   "emailSecurityWeeklyDigest",
   "emailFaceEnrollmentRequired",
   "emailFaceEnrollmentReminder",
@@ -409,6 +723,11 @@ export interface GlobalTicketSettings {
   /** Off by default. When true, a ticket can't move to RESOLVED while its latest ingested
    *  TestRun is FAILED — see docs/ROADMAP.md's "Auto testing on branch/PR push" theme. */
   blockResolveOnFailingTests: boolean;
+  /** Off by default, and the sibling of the switch above. When true, a ticket can't move to
+   *  RESOLVED while the latest SonarQube quality gate on a branch linked to it reports ERROR — see
+   *  `assertQualityGateAllowsResolve` in api/src/services/ticket.service.ts, which is the one place
+   *  it is enforced for all three surfaces that can resolve a ticket. */
+  blockResolveOnFailingQualityGate: boolean;
   /** ISO-4217 fallback when a project sets no billingCurrency — see
    *  api/src/services/billing-rate.service.ts. */
   defaultCurrency: string;
@@ -904,6 +1223,64 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
   }
 };
 
+/* ================================ List price (5.0.0) ==================================== *
+ *
+ * WHAT A SEAT COSTS, as one constant, because until 5.0.0 there was no price anywhere in this
+ * product's data at all. `PlatformBillingSettings` holds Stripe Price IDs — opaque handles whose
+ * amounts live in Stripe — and `PlanTierLimit` held entitlements and no money. So MRR was not
+ * derivable, and the very common deployment that assigns tiers by hand and has no Stripe account
+ * had nothing to derive it from either.
+ *
+ * WHY IT IS *NOT* A FIELD ON `PlanTierLimits` ABOVE: everything on that interface is something the
+ * server ENFORCES — a ceiling, an allowlist, a capability that fails closed. A price enforces
+ * nothing. Folding it in would also mean `plan-tier-claims.test.ts`'s entitlement contract and this
+ * commercial one fail together, when they are two different conversations with two different
+ * owners. They are pinned side by side in that same test instead.
+ *
+ * THIS IS A LIST PRICE. It is what the pricing page advertises, not what any given customer pays:
+ * a discount, an annual commitment or a negotiated Enterprise contract all differ from it. Every
+ * figure the platform console derives from it is labelled "list" for exactly that reason.
+ *
+ * `perSeatMinor` is MINOR UNITS (cents) so no money is ever held in a float. `null` means the tier
+ * has no list price — Enterprise is priced per contract, and the landing page says "Custom". A
+ * null must never be rendered, or summed, as zero: the console shows an unset price as "Not set"
+ * and leaves those workspaces out of the MRR total with the count stated beside it.
+ */
+export interface PlanTierListPrice {
+  /** Per seat, per month, in minor units of `currency`. `null` = no list price (priced per deal). */
+  perSeatMinor: number | null;
+  /** ISO-4217. One currency across the deployment; the console formats with it rather than a `$`. */
+  currency: string;
+}
+
+export const PLAN_TIER_LIST_PRICES: Record<PlanTier, PlanTierListPrice> = {
+  /** Free, and a real 0 rather than a null — Starter has a price and it is nothing. */
+  STARTER: { perSeatMinor: 0, currency: "USD" },
+  TEAM: { perSeatMinor: 800, currency: "USD" },
+  /** "Talk to sales" on the pricing page, and deliberately unset here. A made-up Enterprise list
+   *  price would show up in an MRR figure an operator would then quote to somebody. */
+  ENTERPRISE: { perSeatMinor: null, currency: "USD" }
+};
+
+/** Minor units as a person reads them: `800` → `$8`, `850` → `$8.50`, `null` → the fallback. */
+export function formatMinorUnits(minor: number | null | undefined, currency = "USD", fallback = "—"): string {
+  if (minor === null || minor === undefined) return fallback;
+  const major = minor / 100;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    // Whole amounts read better without ".00" in a pricing card; fractional ones need both digits.
+    minimumFractionDigits: Number.isInteger(major) ? 0 : 2,
+    maximumFractionDigits: 2
+  }).format(major);
+}
+
+/** What the pricing card shows for a tier. "Custom" rather than an em dash: a landing page saying
+ *  "—" reads as an oversight, and this is the tier where the answer really is a conversation. */
+export function planTierPriceLabel(tier: PlanTier): string {
+  return formatMinorUnits(PLAN_TIER_LIST_PRICES[tier].perSeatMinor, PLAN_TIER_LIST_PRICES[tier].currency, "Custom");
+}
+
 /* ------------------------------------------------------------------ *
  * PLANNING LAYER (V6) — types both apps agree on.
  *
@@ -1296,3 +1673,66 @@ export interface GlobalChangeSettingsRow {
   remindHoursBefore: number[];
   requireFaceOnApproval: boolean;
 }
+
+/* ------------------------------------------------------------------------------------------ *
+ * Sales enquiries (4.0.0)
+ *
+ * The vocabulary the public contact form offers, the API validates against, and the console
+ * displays. THREE surfaces, which is exactly the number at which a copied list starts drifting:
+ * add an option to the form and the API rejects it; rename a label in the console and the
+ * notification email keeps the old one. The codes are what is stored (`SalesLead.teamSize` and
+ * friends are short strings, not MySQL enums, so they survive a rename); the labels are the only
+ * words a person ever sees.
+ * ------------------------------------------------------------------------------------------ */
+
+/** Bands, not a number: nobody knows their exact headcount, and the band is the part that decides
+ *  who picks the enquiry up. */
+export const TEAM_SIZE_BANDS = ["1-10", "11-50", "51-200", "201-500", "500+"] as const;
+export type TeamSizeBand = (typeof TEAM_SIZE_BANDS)[number];
+export const TEAM_SIZE_LABEL: Record<TeamSizeBand, string> = {
+  "1-10": "1–10 people",
+  "11-50": "11–50 people",
+  "51-200": "51–200 people",
+  "201-500": "201–500 people",
+  "500+": "500+ people"
+};
+
+/** How they want to run it — the first question an enterprise buyer asks, so it is asked of them. */
+export const DEPLOYMENT_INTERESTS = ["SAAS", "PRIVATE_CLOUD", "ON_PREM", "UNSURE"] as const;
+export type DeploymentInterest = (typeof DEPLOYMENT_INTERESTS)[number];
+export const DEPLOYMENT_LABEL: Record<DeploymentInterest, string> = {
+  SAAS: "Hosted by TimeSphere",
+  PRIVATE_CLOUD: "Our own cloud",
+  ON_PREM: "On our own hardware",
+  UNSURE: "Not decided yet"
+};
+
+export const SALES_TIMELINES = ["NOW", "THIS_QUARTER", "EXPLORING"] as const;
+export type SalesTimeline = (typeof SALES_TIMELINES)[number];
+export const TIMELINE_LABEL: Record<SalesTimeline, string> = {
+  NOW: "Now",
+  THIS_QUARTER: "This quarter",
+  EXPLORING: "Exploring"
+};
+
+/** What they are evaluating. A closed list, because it decides which demo they are shown — free
+ *  text here would only be a second, worse copy of the message field. */
+export const SALES_INTERESTS = ["TIMESHEETS", "TICKETING", "CHANGE", "AI", "SSO_SCIM", "COMPLIANCE", "BACKUPS", "INTEGRATIONS"] as const;
+export type SalesInterest = (typeof SALES_INTERESTS)[number];
+export const INTEREST_LABEL: Record<SalesInterest, string> = {
+  TIMESHEETS: "Timesheets & approvals",
+  TICKETING: "Ticketing & SLAs",
+  CHANGE: "Change management",
+  AI: "AI assistance",
+  SSO_SCIM: "SSO / SCIM",
+  COMPLIANCE: "Audit & compliance",
+  BACKUPS: "Backups & retention",
+  INTEGRATIONS: "Integrations"
+};
+
+/** The pipeline a lead moves through, in the order it moves. */
+export const SALES_LEAD_STATUSES = ["NEW", "CONTACTED", "QUALIFIED", "WON", "LOST"] as const;
+export type SalesLeadStatus = (typeof SALES_LEAD_STATUSES)[number];
+
+/** A code back into words, tolerating a value stored before an option was renamed. */
+export const salesLabel = (map: Record<string, string>, code: string | null | undefined): string => (code ? (map[code] ?? code) : "—");

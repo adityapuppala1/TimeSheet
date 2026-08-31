@@ -19,18 +19,45 @@ import express from "express";
 import request from "supertest";
 
 const ORG = { id: "org-1", slug: "acme", status: "ACTIVE" };
-const ACTOR = { id: "pa-1", name: "Ops", email: "ops@timesphere.app" };
+/**
+ * `role` and `REASON` are 4.1.0 additions and both are load-bearing here.
+ *
+ * The route now sits behind `requirePlatformCapability(PLATFORM_SUPPORT)` and
+ * `requirePlatformReason`. Without a role on the actor the capability guard 403s every test in this
+ * file; without the header the reason guard 400s them. SUPPORT rather than OWNER on purpose — this
+ * is the least-privileged role that is supposed to be able to run a rescue, so the fixture proves
+ * the classification rather than sailing over it with the most powerful role available.
+ */
+const ACTOR = { id: "pa-1", name: "Ops", email: "ops@timesphere.app", role: "SUPPORT" as const };
+const REASON = "Ticket 4192 - their SSO broke and nobody can sign in";
 
-const control = { organization: { findUnique: vi.fn() } };
+const control = { organization: { findUnique: vi.fn() }, platformAuditLog: { create: vi.fn() } };
 vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: control }));
 
-vi.mock("../../src/middleware/platform-admin-auth.js", () => ({
-  requirePlatformAdmin: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
-    req.platformAdmin = { ...ACTOR };
-    req.platformAdminSessionId = "sess-1";
-    next();
-  }
-}));
+/*
+ * PARTIAL, VIA `importActual` — deliberately not a one-key factory any more.
+ *
+ * The previous version returned an object with exactly one key, `requirePlatformAdmin`. That was
+ * right when the module exported exactly one thing; the moment the router also imported
+ * `requirePlatformCapability` and `requirePlatformReason` from it, the mock made those `undefined`
+ * and the file died at ROUTER CONSTRUCTION with an unhelpful "argument handler must be a function".
+ *
+ * Spreading the real module and overriding only the authentication step is better than adding two
+ * more stubs: the capability gate and the reason gate then run FOR REAL on this route, so this file
+ * now also pins that a rescue needs `platform:support` and a written justification. Only the "who
+ * are you" step is faked, which is the one thing a unit test cannot supply.
+ */
+vi.mock("../../src/middleware/platform-admin-auth.js", async (importActual) => {
+  const actual = await importActual<typeof import("../../src/middleware/platform-admin-auth.js")>();
+  return {
+    ...actual,
+    requirePlatformAdmin: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
+      req.platformAdmin = { ...ACTOR };
+      req.platformAdminSessionId = "sess-1";
+      next();
+    }
+  };
+});
 
 const tenant = {
   user: { findFirst: vi.fn(), update: vi.fn() },
@@ -77,6 +104,10 @@ beforeEach(() => {
 });
 
 const call = (body: unknown = { email: "Owner@Acme.com" }) =>
+  request(buildApp()).post(`/api/platform-admin/organizations/${ORG.id}/reset-admin-password`).set("X-Platform-Reason", REASON).send(body);
+
+/** The same call with no justification — what an operator's console sends before it asks "why?". */
+const callWithoutReason = (body: unknown = { email: "Owner@Acme.com" }) =>
   request(buildApp()).post(`/api/platform-admin/organizations/${ORG.id}/reset-admin-password`).send(body);
 
 describe("reset-admin-password guards", () => {
@@ -106,6 +137,24 @@ describe("reset-admin-password guards", () => {
     expect(res.status).toBe(403);
     expect(tenant.user.update).not.toHaveBeenCalled();
     expect(tenant.session.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("refuses without a written reason — this reaches inside a customer's database", async () => {
+    const res = await callWithoutReason();
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("REASON_REQUIRED");
+    expect(tenant.user.update).not.toHaveBeenCalled();
+  });
+
+  it("refuses a role that does not hold platform:support", async () => {
+    ACTOR.role = "BILLING" as never;
+    try {
+      const res = await call();
+      expect(res.status).toBe(403);
+      expect(tenant.user.update).not.toHaveBeenCalled();
+    } finally {
+      ACTOR.role = "SUPPORT";
+    }
   });
 
   it("rejects a body that is not just an email — the platform never chooses the password", async () => {
@@ -141,7 +190,10 @@ describe("reset-admin-password happy path", () => {
       "user.password_reset_by_platform",
       "User",
       SUPER.id,
-      expect.objectContaining({ by: ACTOR.email }),
+      // The operator's OWN words now, not the constant "platform-admin rescue" this used to send:
+      // the customer reading their own log deserves to know why somebody outside their workspace
+      // reset their owner's password.
+      expect.objectContaining({ by: ACTOR.email, reason: REASON }),
       expect.objectContaining({ actorType: "GUEST", actorLabel: `platform-admin:${ACTOR.email}` })
     );
 

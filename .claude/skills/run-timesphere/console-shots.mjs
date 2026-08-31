@@ -51,17 +51,27 @@ const DEMOS = [
   { slug: `${PREFIX}vertex`, name: "Vertex Analytics", status: "ACTIVE", tier: "TEAM", endsInDays: -20, notices: { ended: new Date(Date.now() - 20 * DAY).toISOString() }, owner: "ops@vertex.example", converted: true }
 ];
 
+/* Every page the console's own nav can reach. It is a hand-written list beside a nav that is
+   itself a list, so it drifts: 5.0.0 added five pages and only `/revenue` reached this array,
+   which meant a console screenshot pass reported success while never opening Access, Approvals,
+   Alerts, Sales leads or an org profile. If you add a console route, add it here — a page nobody
+   screenshots is a page whose dark theme nobody has ever seen. */
 const PAGES = [
   ["", "overview"],
   ["/organizations", "organizations"],
   ["/retention", "retention"],
   ["/emails", "emails"],
   ["/feedback", "feedback"],
+  ["/sales-leads", "sales-leads"],
   ["/plan-tiers", "plan-tiers"],
   ["/analytics", "analytics"],
+  ["/revenue", "revenue"],
   ["/backups", "backups"],
   ["/monitoring", "monitoring"],
+  ["/alerts", "alerts"],
   ["/maintenance", "maintenance"],
+  ["/access", "access"],
+  ["/approvals", "approvals"],
   ["/settings", "settings"]
 ];
 

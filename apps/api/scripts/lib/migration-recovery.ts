@@ -63,6 +63,13 @@ export function failedMigrationName(output: string): string | null {
  * Requires the marker to sit in a `--` comment. That is not decoration: it means the marker is
  * part of the migration file Prisma checksums, so it cannot be added by anything other than an
  * edit to the migration itself.
+ *
+ * AND REQUIRES THE COMMENT TO BE THE DECLARATION AND NOTHING ELSE — `-- @rerunnable`, optionally
+ * followed by `:` and a reason. This started as "any comment line mentioning the marker", which
+ * quietly meant that a migration DISCUSSING the marker declared it. One arrived whose prose reads
+ * "The file is NOT marked `@rerunnable`" and which this function therefore reported as marked:
+ * a file that said the opposite of what the tool did with it, and an unattended auto-heal its
+ * author had explicitly declined. A declaration has to be a statement, not a mention.
  */
 export function isRerunnable(migrationsDir: string, name: string): boolean {
   // `name` comes from Prisma's own output, but it is about to be used to build a path — reject
@@ -77,9 +84,14 @@ export function isRerunnable(migrationsDir: string, name: string): boolean {
     // different branch. Re-running something we cannot read is exactly the wrong move.
     return false;
   }
-  return sql
-    .split("\n")
-    .some((line) => line.trimStart().startsWith("--") && line.includes(RERUNNABLE_MARKER));
+  return sql.split("\n").some((line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("--")) return false;
+    // Strip the comment opener, then require what remains to BE the marker — not to contain it.
+    const body = trimmed.slice(2).trim();
+    if (body === RERUNNABLE_MARKER) return true;
+    return body.startsWith(`${RERUNNABLE_MARKER}:`);
+  });
 }
 
 /**

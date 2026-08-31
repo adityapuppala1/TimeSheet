@@ -30,6 +30,7 @@ import { templates } from "../services/mail-templates.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { sendPlatformTemplate } from "../services/platform-mail.service.js";
 import { provisionOrganization } from "../services/provisioning.service.js";
+import { isFreeMailAddress } from "../utils/free-mail-domains.js";
 import {
   checkVerificationCode,
   issueVerificationCode,
@@ -43,19 +44,13 @@ export const signupRouter = Router();
  *  Monday somebody actually gets to it. */
 const TRIAL_DAYS = 15;
 
-/**
- * Addresses that are a person rather than an organisation.
- *
- * Deliberately short and not exhaustive — a complete list of free-mail providers does not exist and
- * chasing one is how this becomes a maintenance burden that still misses the newest domain. It
- * catches the overwhelming majority of casual abuse, and the verify-first step catches the rest by
- * costing an inbox per attempt.
- */
-const FREE_MAIL_DOMAINS = new Set([
-  "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.uk", "hotmail.com", "hotmail.co.uk",
-  "outlook.com", "live.com", "msn.com", "aol.com", "icloud.com", "me.com", "mail.com",
-  "gmx.com", "gmx.net", "yandex.com", "proton.me", "protonmail.com", "zoho.com", "tutanota.com"
-]);
+/* The list of "this address is a person, not an organisation" domains moved to
+ * utils/free-mail-domains.ts in 4.0.0, when the sales contact form became the SECOND caller — and
+ * the one that reaches the opposite conclusion from the same fact. Signup refuses a free-mail
+ * address (a trial provisions a database, so one address anybody can make in ten seconds is not an
+ * organisation); a sales enquiry from the same address is flagged and kept, because there is no
+ * infrastructure behind a contact form and a founder on Gmail is a real lead. Two copies of the
+ * list would have drifted the moment either side learned a new domain. */
 
 /** Slugs that must never become a workspace: they would shadow a real hostname on the deployment. */
 const RESERVED_SLUGS = new Set(["www", "app", "api", "admin", "platform-admin", "mail", "smtp", "status", "docs", "help", "support", "static", "cdn", "assets"]);
@@ -77,8 +72,7 @@ signupRouter.post(
   validate(z.object({ body: z.object({ email: z.string().email().max(255) }) })),
   async (req, res) => {
     const email = req.body.email.trim().toLowerCase();
-    const domain = email.split("@")[1] ?? "";
-    if (FREE_MAIL_DOMAINS.has(domain)) {
+    if (isFreeMailAddress(email)) {
       // Named plainly rather than hidden behind a generic error: this one IS worth telling the
       // person, because it is a mistake they can fix in five seconds, not an enumeration signal.
       throw new AppError(422, "Use your work email address — a workspace belongs to a company, not to a personal inbox.");

@@ -10,7 +10,7 @@
  * copy it into your CI config now, or rotate again if you lose it.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, FileUp, GitBranch, KeyRound, ShieldAlert, ShieldOff, ShieldQuestion, Sparkles, Ticket, Unlink } from "lucide-react";
+import { Check, Copy, FileUp, GitBranch, KeyRound, ShieldAlert, ShieldCheck, ShieldOff, ShieldQuestion, Sparkles, Ticket, Unlink, Wrench } from "lucide-react";
 import { useState } from "react";
 import { notificationPreferenceKeys } from "@timesheet/shared";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
@@ -27,6 +27,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
 import { projectApi, SERVER_ORIGIN, settingsApi } from "../../services/api";
 import { copyText } from "../../lib/clipboard";
+import { FindingRoutingCard } from "./FindingRoutingCard";
 
 const VAPT_SAMPLE_JSON = `[
   {
@@ -125,6 +126,21 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
     mutationFn: (enabled: boolean) => settingsApi.updateSecurityIngestionAutoReopen(enabled),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings", "security-ingestion"] }),
     onError: () => toast.error("Could not update auto-reopen", { description: "Try again." })
+  });
+
+  const toggleVerifyResolution = useMutation({
+    mutationFn: (enabled: boolean) => settingsApi.updateSecurityIngestionVerifyResolution(enabled),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings", "security-ingestion"] }),
+    onError: () => toast.error("Could not update verified remediation", { description: "Try again." })
+  });
+
+  const updateVerificationWindow = useMutation({
+    mutationFn: (days: number) => settingsApi.updateSecurityIngestionVerificationWindow(days),
+    onSuccess: () => {
+      toast.success("Saved");
+      queryClient.invalidateQueries({ queryKey: ["settings", "security-ingestion"] });
+    },
+    onError: () => toast.error("Could not update the verification window", { description: "Try again." })
   });
 
   const toggleCodeownersAssign = useMutation({
@@ -233,6 +249,9 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
               <CopyableUrl label="Test-run webhook" url={webhookUrl(ingestion.data.testRunsWebhookPath)} />
               <CopyableUrl label="SBOM webhook (SPDX / CycloneDX)" url={webhookUrl(ingestion.data.sbomWebhookPath)} />
               <CopyableUrl label="Error-tracking webhook (Sentry / Rollbar / raw)" url={webhookUrl(ingestion.data.errorEventsWebhookPath)} />
+              <CopyableUrl label="SonarQube issues webhook (/api/issues/search response)" url={webhookUrl(ingestion.data.sonarFindingsWebhookPath)} />
+              <CopyableUrl label="ESLint findings webhook (eslint --format json)" url={webhookUrl(ingestion.data.eslintFindingsWebhookPath)} />
+              <CopyableUrl label="SonarQube quality-gate webhook (paste into Sonar → Webhooks)" url={webhookUrl(ingestion.data.qualityGateWebhookPath)} />
 
               <Alert>
                 <AlertTitle className="text-sm">Authenticate every POST with a bearer token</AlertTitle>
@@ -253,6 +272,33 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                   automatically, no <code>jq</code> mapping needed. Send either the raw SARIF log, or{" "}
                   <code>{`{ sarif: {...}, type, repository, branch, prUrl, ticketKey }`}</code> to attach repo/PR/ticket context the SARIF
                   format itself has no room for.
+                </AlertDescription>
+              </Alert>
+
+              <Alert>
+                <Wrench className="h-4 w-4" />
+                <AlertTitle className="text-sm">SonarQube and ESLint: code quality, tracked but never counted as security</AlertTitle>
+                <AlertDescription className="text-xs">
+                  POST SonarQube's <code>/api/issues/search</code> response and your <code>eslint --format json</code> output to the two
+                  webhooks above, unmodified. Sonar's own taxonomy decides where each issue lands: a <code>VULNERABILITY</code> becomes
+                  a SAST finding and counts towards your risk score, while <code>BUG</code> and <code>CODE_SMELL</code> — and every lint
+                  result — are recorded as code quality and are <strong>excluded from every security figure</strong>, including the risk
+                  score, the by-severity chart and the weekly security digest. They still deduplicate, route to modules, and get
+                  verified by the next scan exactly like a vulnerability does. Send <code>rootPath</code> (the CI workspace directory)
+                  with ESLint output so its absolute paths become repo-relative — without it, two runners report the same file
+                  differently and nothing deduplicates.
+                </AlertDescription>
+              </Alert>
+
+              <Alert>
+                <ShieldCheck className="h-4 w-4" />
+                <AlertTitle className="text-sm">Quality gate: paste the URL into Sonar, nothing else</AlertTitle>
+                <AlertDescription className="text-xs">
+                  In SonarQube, go to Administration → Configuration → Webhooks, add the quality-gate URL above, and set{" "}
+                  <code>Authorization: Bearer &lt;token&gt;</code> as a header. The payload is stored exactly as Sonar sends it —
+                  project, branch, revision, the gate verdict and every condition behind it. Turn on{" "}
+                  <strong>Workspace Settings → Ticketing → Block resolve on failing quality gate</strong> to make a failing gate stop a
+                  ticket from being resolved; the gate is matched to a ticket by the branch names linked on it.
                 </AlertDescription>
               </Alert>
 
@@ -339,10 +385,76 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Auto-assigned via that project's own module-assignee rules (Workspace Settings → Email intake), if any module has one
-                configured.
+                This is the <strong>fallback</strong>: it is where a finding goes when none of the repository rules below claim it.
+                The ticket is then assigned via the resolved module's own assignee rule (Workspace Settings → Email intake).
               </p>
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Directly under the fallback project on purpose — that select is literally the else-branch
+          of the repository rules in here, and reading one without the other is how an admin ends up
+          believing findings are routed when they are only falling through. */}
+      <FindingRoutingCard readOnly={readOnly} />
+
+      {/* The two rungs are rendered adjacent and in order on purpose: verification is what you turn
+          on first, and auto-reopen below is the separate decision to let it move your tickets. */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldCheck className="h-4 w-4 text-success" />
+            Verified remediation
+          </CardTitle>
+          <CardDescription>
+            When a ticket carrying security findings is resolved or closed, those findings are held as{" "}
+            <strong>awaiting proof</strong> instead of being quietly retired — they keep counting against your risk score until a
+            scan agrees. The next scan by the <strong>same tool</strong>, on the same repository and branch, decides: gone means
+            verified fixed, still there means the fix did not hold and the people who worked on it hear about it. A different
+            scanner not reporting a finding proves nothing and is never treated as evidence.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          {ingestion.isLoading && <Skeleton className="h-10 w-full" />}
+          {!ingestion.isLoading && (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">Require a scan to confirm a fix</p>
+                  <p className="text-xs text-muted-foreground">
+                    Off by default. This marks, judges and reports — it never moves a ticket on its own; that is the next card.
+                  </p>
+                </div>
+                <Switch
+                  checked={Boolean(ingestion.data?.verifyResolutionEnabled)}
+                  onCheckedChange={(value) => toggleVerifyResolution.mutate(value)}
+                  disabled={readOnly || toggleVerifyResolution.isPending}
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="verification-window">Grace window</Label>
+                <Select
+                  value={String(ingestion.data?.verificationWindowDays ?? 14)}
+                  onValueChange={(value) => updateVerificationWindow.mutate(Number(value))}
+                  disabled={readOnly || !ingestion.data?.verifyResolutionEnabled || updateVerificationWindow.isPending}
+                >
+                  <SelectTrigger id="verification-window" className="sm:w-80">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="7">7 days</SelectItem>
+                    <SelectItem value="14">14 days</SelectItem>
+                    <SelectItem value="30">30 days</SelectItem>
+                    <SelectItem value="60">60 days</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  If no qualifying scan arrives in this window the finding is marked <strong>unverified</strong> and the assignee
+                  is notified. It is <strong>not</strong> reopened — absence of proof is not proof of failure, and the usual reason
+                  a scan never arrives is that the scanner is not wired into CI for that branch.
+                </p>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -354,7 +466,8 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
             When a FAILED test run, or a new/reintroduced finding, references (via <code>ticketKey</code>) a ticket that's already
             RESOLVED or CLOSED, reopen it automatically — the same behavior Black Duck's Jira plugin calls "auto-reopen on policy
             violation." Deterministic — no AI involved — and always audit-logged with the assignee notified, since this is the one
-            place an automated process changes ticket state without a human click.
+            place an automated process changes ticket state without a human click. This is also the switch a failed verification
+            above goes through: with it off you still get told the fix did not hold, the ticket just stays where you left it.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -379,8 +492,11 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
         <CardHeader>
           <CardTitle className="text-base">Create a ticket from an untracked CI failure</CardTitle>
           <CardDescription>
-            A FAILED test run reported with no <code>ticketKey</code> at all today just sits in the log — this creates one in the
-            fallback project above, the same way an untracked CRITICAL/HIGH finding does. Guarded against flaky-test spam: a repeat
+            A FAILED test run reported with no <code>ticketKey</code> at all today just sits in the log — this opens one, the same way
+            an untracked CRITICAL/HIGH finding does. It goes to whichever project the repository rules above match against the
+            repository named in the run's pull-request URL, and to the fallback project when nothing matches or the run has no PR. It
+            opens <strong>unassigned</strong>: a failed run names no file, so there is no module to attribute it to and guessing an
+            owner only makes it look handled. Guarded against flaky-test spam: a repeat
             failure on the same provider/branch within 24h gets a comment on the existing ticket instead of a duplicate, and (when AI
             CI-failure triage is on and a failure log was supplied) a failure already flagged as likely-flaky skips ticket creation
             entirely on its first sighting.
@@ -392,7 +508,9 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
               <div className="min-w-0">
                 <p className="text-sm font-medium">Auto-create a ticket for untracked CI failures</p>
-                <p className="text-xs text-muted-foreground">Off by default — needs a fallback project configured above.</p>
+                <p className="text-xs text-muted-foreground">
+                  Off by default — needs somewhere to put the ticket: a repository rule that matches, or the fallback project above.
+                </p>
               </div>
               <Switch
                 checked={Boolean(ingestion.data?.autoCreateTicketOnCiFailureEnabled)}
@@ -542,7 +660,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           <CardTitle className="text-base">AI weekly security digest</CardTitle>
           <CardDescription>
             Every Monday morning, an AI-authored org-wide recap (open findings, risk score trend, tickets past SLA) is emailed to
-            every admin — needs both the AI toggle (Workspace Settings → AI → "AI weekly security digest") and this delivery toggle
+            every admin — needs both the AI toggle (Workspace Settings → AI → "Security weekly digest") and this delivery toggle
             on.
           </CardDescription>
         </CardHeader>

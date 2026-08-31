@@ -337,7 +337,7 @@ function RecipientsCard() {
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
             <span>
               The practice-update email is switched off for this workspace. Turn it on under Workspace
-              Settings → Notifications → Digests, or sending will be refused.
+              Settings → Email channels → Digests, or sending will be refused.
             </span>
           </p>
         )}

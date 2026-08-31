@@ -24,6 +24,7 @@ import type {
   SecurityFindingSeverity,
   SecurityFindingStatus,
   SecurityFindingType,
+  SecurityFindingVerificationState,
   TestRunStatus,
   TicketBranchPrStatus,
   TicketPriority,
@@ -867,13 +868,40 @@ export interface LeaderboardRow {
 export interface SecurityInsights {
   totalOpen: number;
   totalOpenYesterday: number;
-  openBySeverity: Record<"CRITICAL" | "HIGH" | "MEDIUM" | "LOW", number>;
-  byType: Array<{ type: "SAST" | "DAST" | "SSAT" | "SSCT" | "VAPT"; count: number }>;
+  openBySeverity: Record<SecurityFindingSeverity, number>;
+  /** `SecurityFindingType`, not a hand-written union of the same five words. The literal copy that
+   *  stood here is exactly the drift `aiProposalTargetTypes`' comment describes: the API adds a type,
+   *  this file says it cannot occur, and TypeScript then happily accepts a page that has no label
+   *  for the bar it is drawing. */
+  byType: Array<{ type: SecurityFindingType; count: number }>;
   findingsOverTime: Array<{ weekStart: string; count: number }>;
   meanTimeToRemediateHours: number;
+  /** How many of the findings behind that average were confirmed gone by a scan rather than
+   *  estimated from `updatedAt` — see report.controller.ts's /security-insights header for what the
+   *  two halves of the average measure. */
+  verifiedFixedCount: number;
+  /** Claimed fixed and still waiting on a scan to agree. A live count, not a windowed one. */
+  awaitingVerificationCount: number;
   topRepositories: Array<{ repository: string; count: number }>;
+  /** Open findings per module of the work breakdown, resolved at ingest from the finding's
+   *  repository and file path — see the API's finding-routing.service.ts. Empty until a workspace
+   *  writes routing rules, which is why `openWithoutModuleCount` is reported beside it. */
+  openByModule: Array<{ moduleId: string | null; moduleName: string; projectName: string; projectCode: string | null; count: number }>;
+  /** Open findings no path rule has claimed yet. Not an error; the size of the gap. */
+  openWithoutModuleCount: number;
   riskScore: number;
   riskScoreYesterday: number;
+  /** THE CODE-QUALITY BACKLOG, kept out of every field above it. Sonar's bugs and code smells and
+   *  ESLint's results share the findings table with the security scanners, and every number above
+   *  this line filters them out — see `securityFindingTypeDisciplines` in @timesheet/shared for why
+   *  a thousand code smells must not move a workspace's risk score. This block is where they are
+   *  reported instead. Deliberately fewer figures than the security half: no risk score, no trend,
+   *  no remediation average, because those are claims about exposure. */
+  quality: {
+    totalOpen: number;
+    openBySeverity: Record<SecurityFindingSeverity, number>;
+    byType: Array<{ type: SecurityFindingType; count: number }>;
+  };
 }
 
 export interface SbomInventory {
@@ -1905,6 +1933,30 @@ export interface TicketRuleInput {
   actionNotifyUserId?: string | null;
 }
 
+/** One invoice as `GET /billing/invoices` projects it — never the raw Stripe object. Amounts are
+ *  in MINOR units (cents/paise) exactly as Stripe reports them, so formatting has to go through
+ *  `currency` rather than assuming two decimal places. */
+export interface BillingInvoice {
+  id: string;
+  number: string | null;
+  /** ISO string. */
+  created: string;
+  amountPaid: number;
+  amountDue: number;
+  currency: string;
+  status: string | null;
+  hostedInvoiceUrl: string | null;
+  invoicePdf: string | null;
+}
+
+/**
+ * The answer to `POST /billing/checkout-session`, which has TWO shapes because the server has two
+ * paths: a workspace with no subscription is sent to a hosted Checkout page, one that already has
+ * a subscription has it changed in place and there is nowhere to redirect to. Callers must branch
+ * on `mode` — reading `url` unconditionally is how you get `window.location.href = undefined`.
+ */
+export type BillingCheckoutResult = { mode: "checkout"; url: string } | { mode: "updated" };
+
 /** Self-serve Stripe billing — see billing.controller.ts. */
 export const billingApi = {
   status: async () =>
@@ -1912,12 +1964,18 @@ export const billingApi = {
       await api.get<{
         planTier: "STARTER" | "TEAM" | "ENTERPRISE";
         hasStripeCustomer: boolean;
+        /** A live subscription exists — so a plan change happens in place, with no Checkout page. */
+        hasSubscription: boolean;
         seatLimit: number;
         activeSeats: number;
         checkoutAvailable: { TEAM: boolean; ENTERPRISE: boolean };
       }>("/billing/status")
     ).data,
-  checkoutSession: async (tier: "TEAM" | "ENTERPRISE") => (await api.post<{ url: string }>("/billing/checkout-session", { tier })).data
+  checkoutSession: async (tier: "TEAM" | "ENTERPRISE") => (await api.post<BillingCheckoutResult>("/billing/checkout-session", { tier })).data,
+  /** Stripe's hosted Customer Portal — card updates, invoice history, cancellation. 409s when this
+   *  workspace has never had a Stripe customer, which is a state, not a failure. */
+  portalSession: async () => (await api.post<{ url: string }>("/billing/portal-session")).data,
+  invoices: async () => (await api.get<BillingInvoice[]>("/billing/invoices")).data
 };
 
 /** The three workspace flags ordinary (non-super-admin) pages are allowed to read — see
@@ -2076,8 +2134,18 @@ export const settingsApi = {
         sarifFindingsWebhookPath: string;
         sbomWebhookPath: string;
         errorEventsWebhookPath: string;
+        /** SonarQube's `/api/issues/search` response, ESLint's `--format json` output, and
+         *  SonarQube's quality-gate webhook — each accepted verbatim, no translation step. */
+        sonarFindingsWebhookPath: string;
+        eslintFindingsWebhookPath: string;
+        qualityGateWebhookPath: string;
         fallbackProjectId: string | null;
         autoReopenEnabled: boolean;
+        /** The first rung of the verification ladder — hold a resolved ticket's findings as
+         *  awaiting proof and let the next scan by the same tool decide. `autoReopenEnabled` above
+         *  is the second rung; on with reopen off is a legitimate configuration. */
+        verifyResolutionEnabled: boolean;
+        verificationWindowDays: number;
         codeownersAssignEnabled: boolean;
         autoCreateTicketOnCiFailureEnabled: boolean;
       }>("/settings/security-ingestion")
@@ -2094,6 +2162,15 @@ export const settingsApi = {
    *  security-report.service.ts#maybeReopenTicketOnRegression. */
   updateSecurityIngestionAutoReopen: async (autoReopenEnabled: boolean) =>
     (await api.patch<{ autoReopenEnabled: boolean }>("/settings/security-ingestion/auto-reopen", { autoReopenEnabled })).data,
+  /** Verified remediation — see security-report.service.ts#markFindingsAwaitingVerification. Marks,
+   *  judges and reports; moving the ticket is `updateSecurityIngestionAutoReopen` above and stays a
+   *  separate decision. */
+  updateSecurityIngestionVerifyResolution: async (verifyResolutionEnabled: boolean) =>
+    (await api.patch<{ verifyResolutionEnabled: boolean }>("/settings/security-ingestion/verify-resolution", { verifyResolutionEnabled })).data,
+  /** How long a claimed fix waits for a qualifying scan before it is called unverified and the
+   *  assignee is nudged — never reopened. See security-report.service.ts#sweepUnverifiedFindings. */
+  updateSecurityIngestionVerificationWindow: async (verificationWindowDays: number) =>
+    (await api.patch<{ verificationWindowDays: number }>("/settings/security-ingestion/verification-window", { verificationWindowDays })).data,
   /** Fallback assignee resolution (CODEOWNERS, then last committer) for an auto-created security
    *  ticket when no ModuleAssigneeRule matches — see
    *  security-report.service.ts#maybeAssignFindingViaCodeowners. Needs a connected GitConnection
@@ -2796,13 +2873,28 @@ export interface SecurityFindingRow {
   repository: string | null;
   branch: string | null;
   prUrl: string | null;
-  /// Opt-in AI exploitability triage (Workspace Settings → AI → "Security finding exploitability
+  /// Opt-in AI exploitability triage (Workspace Settings → AI → "Security finding
   /// triage") — null until triaged, or if the toggle is off, or the finding's severity is below
   /// CRITICAL/HIGH (see security-report.service.ts#maybeTriageFindingWithAI).
   aiVerdict: "TRUE_POSITIVE" | "FALSE_POSITIVE" | "NEEDS_REVIEW" | null;
   aiExploitability: string | null;
   aiFixSuggestion: string | null;
   aiTriagedAt: string | null;
+  /// What the EVIDENCE says, as opposed to what `status` says somebody decided — see
+  /// `securityFindingVerificationStates` in packages/shared. Null for every finding that has never
+  /// been through the resolution gate, which is the ordinary case.
+  verificationState: SecurityFindingVerificationState | null;
+  awaitingVerificationSince: string | null;
+  /// Set only by the verdict pass, never by a human action. The three below are the evidence behind
+  /// a VERIFIED_FIXED: when, which run, and which commit that run scanned.
+  verifiedFixedAt: string | null;
+  verifiedByScanRunId: string | null;
+  verifiedByCommitSha: string | null;
+  /// When this exact problem was first reported and how many scans have reported it — what "how
+  /// long has this been open" is actually measured from.
+  firstSeenAt: string;
+  lastSeenAt: string;
+  occurrences: number;
   createdAt: string;
 }
 
@@ -2824,7 +2916,11 @@ export interface TicketSecurityReport {
   ticket: { id: string; key: string; title: string };
   findings: SecurityFindingRow[];
   findingsByType: Record<SecurityFindingType, SecurityFindingRow[]>;
+  /** SECURITY-discipline findings only — what the risk verdict was computed from. */
   openCountBySeverity: Record<SecurityFindingSeverity, number>;
+  /** The code-quality/lint findings on this ticket, counted beside the security ones rather than
+   *  mixed into them. The findings themselves are in `findings`/`findingsByType` either way. */
+  openQualityCountBySeverity: Record<SecurityFindingSeverity, number>;
   latestTestRun: TestRunRow | null;
   riskVerdict: string;
   generatedAt: string;
@@ -3153,6 +3249,72 @@ export const emailIntakeApi = {
       (await api.post<ModuleAssigneeRuleRow>("/email-intake/assignee-rules", payload)).data,
     remove: async (id: string) => api.delete(`/email-intake/assignee-rules/${id}`)
   }
+};
+
+/** One repository→project rule. Ordered: `order` ascending, `createdAt` breaking the tie, first
+ *  match wins — the same semantics ticket automation rules use. */
+export interface RepositoryMapRow {
+  id: string;
+  pattern: string;
+  projectId: string;
+  project: { id: string; name: string; code: string };
+  isActive: boolean;
+  order: number;
+  createdAt: string;
+}
+
+/** One path→module rule, scoped to a project. Same ordering and first-match-wins semantics. */
+export interface ModulePathRuleRow {
+  id: string;
+  projectId: string;
+  project: { id: string; name: string; code: string };
+  pattern: string;
+  moduleId: string;
+  module: { id: string; name: string };
+  submoduleId: string | null;
+  submodule: { id: string; name: string } | null;
+  isActive: boolean;
+  order: number;
+  createdAt: string;
+}
+
+/** What the dry-run answers: where a finding from this repository, at this path, would land — and
+ *  WHICH rule decided it, so an overlapping rule with a lower `order` is visible rather than
+ *  mysterious. */
+export interface FindingRoutingTestResult {
+  project: { id: string; name: string; code: string } | null;
+  module: { id: string; name: string } | null;
+  submodule: { id: string; name: string } | null;
+  matchedRepositoryMapId: string | null;
+  matchedModulePathRuleId: string | null;
+  usedFallbackProject: boolean;
+}
+
+/** Admin-only: the two rule sets that decide where an ingested security finding belongs, plus the
+ *  dry-run that answers "where would this path go?" without waiting for a scan. Same list/create/
+ *  patch/delete shape as emailIntakeApi's rules. */
+export const findingRoutingApi = {
+  repositoryMaps: {
+    list: async () => (await api.get<RepositoryMapRow[]>("/finding-routing/repository-maps")).data,
+    create: async (payload: { pattern: string; projectId: string; order?: number }) =>
+      (await api.post<RepositoryMapRow>("/finding-routing/repository-maps", payload)).data,
+    update: async (id: string, payload: Partial<{ pattern: string; projectId: string; order: number; isActive: boolean }>) =>
+      (await api.patch<RepositoryMapRow>(`/finding-routing/repository-maps/${id}`, payload)).data,
+    remove: async (id: string) => api.delete(`/finding-routing/repository-maps/${id}`)
+  },
+  modulePathRules: {
+    list: async () => (await api.get<ModulePathRuleRow[]>("/finding-routing/module-path-rules")).data,
+    create: async (payload: { projectId: string; pattern: string; moduleId: string; submoduleId?: string | null; order?: number }) =>
+      (await api.post<ModulePathRuleRow>("/finding-routing/module-path-rules", payload)).data,
+    update: async (
+      id: string,
+      payload: Partial<{ projectId: string; pattern: string; moduleId: string; submoduleId: string | null; order: number; isActive: boolean }>
+    ) => (await api.patch<ModulePathRuleRow>(`/finding-routing/module-path-rules/${id}`, payload)).data,
+    remove: async (id: string) => api.delete(`/finding-routing/module-path-rules/${id}`)
+  },
+  /** Runs the REAL resolver the ingest uses, never a re-implementation of it. */
+  test: async (payload: { repository?: string; filePath?: string }) =>
+    (await api.post<FindingRoutingTestResult>("/finding-routing/test", payload)).data
 };
 
 /** Admin-only: per-platform chat-connector settings (Slack/Teams/Google Chat/Telegram) and

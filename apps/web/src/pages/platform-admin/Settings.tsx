@@ -24,24 +24,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Brain,
-  Check,
   ChevronLeft,
   ChevronRight,
   Copy,
+  Download,
   KeyRound,
   ListChecks,
   Lock,
   LogOut,
   Monitor,
   MonitorSmartphone,
-  Plus,
   Send,
   ServerCog,
   ShieldCheck,
   Smartphone,
   Tablet,
-  TerminalSquare,
-  UserX
+  TerminalSquare
 } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "../../components/ui/badge";
@@ -54,9 +52,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/ta
 import { toast } from "../../components/ui/toaster";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { parseUserAgent, type ParsedUserAgent } from "../../lib/user-agent";
-import { platformAdminConsoleApi, type PlatformMailSettings } from "../../services/platform-admin-api";
+import { exportCsv, type CsvColumn } from "../../utils/console-csv";
+import { platformAdminAuthApi, platformAdminConsoleApi, type PlatformAuditRow, type PlatformMailSettings } from "../../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../../store/platform-admin-auth";
-import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, FieldGrid, Num, PRIMARY_BTN, SwitchField, Toolbar, shortDateTime } from "./console-ui";
+import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, FieldGrid, PRIMARY_BTN, SwitchField, Toolbar, shortDateTime } from "./console-ui";
 import { AiAdvisorCard } from "./AiAdvisorCard";
 
 const errorMessageOf = (error: unknown) => (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
@@ -69,11 +68,11 @@ const errorMessageOf = (error: unknown) => (error as { response?: { data?: { mes
    skeleton — one constant rather than two copies that can drift. */
 const MAIL_TITLE = "Platform mail server";
 const MAIL_DESCRIPTION =
-  "Used for signup codes and the retention programme — anything sent to somebody whose workspace is not there to send from. Falls back to the SMTP_* variables in apps/api/.env when empty.";
+  "Used for signup codes, the retention programme and the public contact form — anything sent to somebody whose workspace is not there to send from, or who does not have one yet. Falls back to the SMTP_* variables in apps/api/.env when empty.";
 
 function MailServerCard({ settings }: { settings: PlatformMailSettings }) {
   const queryClient = useQueryClient();
-  const [form, setForm] = useState({ host: settings.host, port: String(settings.port), secure: settings.secure, user: settings.user, password: "", fromAddress: settings.fromAddress, replyTo: settings.replyTo });
+  const [form, setForm] = useState({ host: settings.host, port: String(settings.port), secure: settings.secure, user: settings.user, password: "", fromAddress: settings.fromAddress, replyTo: settings.replyTo, salesInboxAddress: settings.salesInboxAddress });
   const [testTo, setTestTo] = useState("");
   const save = useMutation({
     mutationFn: () =>
@@ -84,7 +83,8 @@ function MailServerCard({ settings }: { settings: PlatformMailSettings }) {
         user: form.user,
         ...(form.password ? { password: form.password } : {}),
         fromAddress: form.fromAddress,
-        replyTo: form.replyTo
+        replyTo: form.replyTo,
+        salesInboxAddress: form.salesInboxAddress
       }),
     onSuccess: () => {
       toast.success("Mail settings saved");
@@ -155,6 +155,13 @@ function MailServerCard({ settings }: { settings: PlatformMailSettings }) {
         <Field label="Reply-to (optional)" htmlFor="pm-reply">
           <Input id="pm-reply" value={form.replyTo} onChange={(e) => setForm((f) => ({ ...f, replyTo: e.target.value }))} placeholder="hello@timesphere.app" />
         </Field>
+        {/* The one address on this card that is not about the RELAY but about where a message
+            LANDS. It sits here anyway because it is the same row in the same table, and an operator
+            looking for "where does mail go" looks in one place. The hint states the effective value
+            so "blank" is never a guess. */}
+        <Field label="Sales inbox" htmlFor="pm-sales" hint={`Contact-form enquiries go here. Blank uses ${settings.salesInboxEffective}.`}>
+          <Input id="pm-sales" value={form.salesInboxAddress} onChange={(e) => setForm((f) => ({ ...f, salesInboxAddress: e.target.value }))} placeholder={settings.salesInboxEffective} />
+        </Field>
       </FieldGrid>
       {/* The test pair gets its own row under a rule instead of sharing a `justify-between` line
           with Save. The input column is capped (an email box does not want 900px) and the button
@@ -173,149 +180,182 @@ function MailServerCard({ settings }: { settings: PlatformMailSettings }) {
 }
 
 /* ----------------------------------------------------------------------------------------- */
-/* Platform admins                                                                            */
+/* This operator's own second factor                                                          */
 /* ----------------------------------------------------------------------------------------- */
 
-function AdminsCard() {
+/**
+ * TOTP enrolment for the account that is signed in — nobody else's.
+ *
+ * WHY EVERY ROLE CAN REACH THIS, INCLUDING READ_ONLY. It is the caller's own credential, exactly
+ * like the password change beside it. Making "harden your own sign-in" a privilege would be absurd.
+ *
+ * WHY IT IS OPT-IN AND THE CARD NAGS INSTEAD OF FORCING. Turning a mandatory second factor on at
+ * upgrade time locks out every existing operator on the spot: nobody has enrolled yet, and the
+ * people who would fix that are the people who are locked out. It is the same failure mode as a
+ * restrictive role default, and the migration had to solve it the same way. Once the fleet has
+ * enrolled, a later release can require it.
+ *
+ * THE SECRET AND THE RECOVERY CODES ARE SHOWN ONCE. The secret is encrypted at rest and the codes
+ * are bcrypt-hashed, so neither can be re-displayed — losing the list means re-enrolling, which is
+ * a five-minute inconvenience rather than a stored bypass of the factor.
+ */
+function SecondFactorCard() {
   const queryClient = useQueryClient();
+  const setAdmin = usePlatformAdminAuthStore((s) => s.setAdmin);
   const me = usePlatformAdminAuthStore((s) => s.admin);
-  const admins = useQuery({ queryKey: ["platform-admin", "admins"], queryFn: platformAdminConsoleApi.admins });
-  const [createOpen, setCreateOpen] = useState(false);
-  const [form, setForm] = useState({ email: "", name: "" });
-  const [created, setCreated] = useState<{ email: string; temporaryPassword: string } | null>(null);
-  const [copied, setCopied] = useState(false);
-  const create = useMutation({
-    mutationFn: () => platformAdminConsoleApi.createAdmin(form),
+  const status = useQuery({ queryKey: ["platform-admin", "mfa"], queryFn: platformAdminAuthApi.mfaStatus });
+
+  const [setup, setSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
+  const [code, setCode] = useState("");
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const [disablePassword, setDisablePassword] = useState("");
+  const [disableOpen, setDisableOpen] = useState(false);
+
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["platform-admin", "mfa"] });
+    platformAdminAuthApi.me().then(setAdmin).catch(() => undefined);
+  };
+
+  const begin = useMutation({
+    mutationFn: platformAdminAuthApi.mfaBegin,
+    onSuccess: setSetup,
+    onError: (e: any) => toast.error("Could not start", { description: e?.response?.data?.message ?? "Try again." })
+  });
+  const confirm = useMutation({
+    mutationFn: () => platformAdminAuthApi.mfaConfirm(code),
     onSuccess: (r) => {
-      setCreated({ email: r.email, temporaryPassword: r.temporaryPassword });
-      setForm({ email: "", name: "" });
-      queryClient.invalidateQueries({ queryKey: ["platform-admin", "admins"] });
+      setCodes(r.recoveryCodes);
+      setSetup(null);
+      setCode("");
+      refresh();
     },
-    onError: (e) => toast.error("Could not create", { description: errorMessageOf(e) })
+    onError: (e: any) => toast.error("That code is not right", { description: e?.response?.data?.message ?? "Check your authenticator's clock." })
   });
-  const setStatus = useMutation({
-    mutationFn: (args: { id: string; status: "ACTIVE" | "INACTIVE" }) => platformAdminConsoleApi.setAdminStatus(args.id, args.status),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["platform-admin", "admins"] }),
-    onError: (e) => toast.error("Not changed", { description: errorMessageOf(e) })
+  const disable = useMutation({
+    mutationFn: () => platformAdminAuthApi.mfaDisable(disablePassword),
+    onSuccess: () => {
+      setDisableOpen(false);
+      setDisablePassword("");
+      refresh();
+      toast.success("Two-factor authentication is off");
+    },
+    onError: (e: any) => toast.error("Not turned off", { description: e?.response?.data?.message ?? "Try again." })
   });
+
+  const enabled = status.data?.enabled ?? me?.mfaEnabled ?? false;
+
   return (
     <ConsoleSection
-      title="Platform admins"
-      description="Accounts that can open this console. Separate from every tenant; a compromised tenant database can never yield one of these."
-      actions={
-        <Toolbar>
-          <Button size="sm" className={`gap-1.5 ${PRIMARY_BTN}`} onClick={() => setCreateOpen(true)}>
-            <Plus className="h-3.5 w-3.5" />New platform admin
-          </Button>
-        </Toolbar>
-      }
+      title="Two-factor authentication"
+      description="A code from your authenticator, on top of your password. This console can reach every customer's database — a leaked password should not be enough to open it."
     >
-      {admins.isLoading && <Skeleton className="h-40 w-full" />}
-      {admins.data && (
-        <ConsoleTable minWidth={900}>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Email</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-right">Last Sign-In</TableHead>
-              <TableHead className="text-right">Live Sessions</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {admins.data.map((a) => (
-              <TableRow key={a.id}>
-                <TableCell className="font-medium">
-                  {a.name}
-                  {a.id === me?.id && <span className="ml-1.5 text-xs text-muted-foreground">(you)</span>}
-                </TableCell>
-                <TableCell className="font-mono text-xs">{a.email}</TableCell>
-                <TableCell>
-                  <Badge variant={a.status === "ACTIVE" ? "success" : "muted"}>{a.status}</Badge>
-                </TableCell>
-                <Num className="whitespace-nowrap text-xs text-muted-foreground">{a.lastLoginAt ? shortDateTime(a.lastLoginAt) : "never"}</Num>
-                <Num>{a.liveSessions}</Num>
-                <TableCell className="text-right">
-                  {a.id !== me?.id && (
-                    <Button size="sm" variant="outline" className="h-7 gap-1.5" onClick={() => setStatus.mutate({ id: a.id, status: a.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })} disabled={setStatus.isPending}>
-                      {a.status === "ACTIVE" ? (
-                        <>
-                          <UserX className="h-3.5 w-3.5" />Deactivate
-                        </>
-                      ) : (
-                        <>
-                          <ShieldCheck className="h-3.5 w-3.5" />Reactivate
-                        </>
-                      )}
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </ConsoleTable>
+      {status.isLoading && <Skeleton className="h-32 w-full" />}
+
+      {!status.isLoading && !enabled && !setup && !codes && (
+        <div className="grid gap-3">
+          <div className="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+            <span>
+              This account has no second factor. Your password alone opens a console that can drop any workspace's database, restore over one, and read every stored credential.
+            </span>
+          </div>
+          <Toolbar>
+            <Button size="sm" className={`gap-1.5 ${PRIMARY_BTN}`} disabled={begin.isPending} onClick={() => begin.mutate()}>
+              <Smartphone className="h-3.5 w-3.5" />
+              {begin.isPending ? "Starting…" : "Set up an authenticator"}
+            </Button>
+          </Toolbar>
+        </div>
       )}
-      <Dialog
-        open={createOpen}
-        onOpenChange={(open) => {
-          setCreateOpen(open);
-          if (!open) setCreated(null);
-        }}
-      >
+
+      {setup && (
+        <div className="grid gap-4">
+          <p className="text-sm text-muted-foreground">
+            Add this to your authenticator, then type the six digits it shows. Nothing is switched on until that code checks out — enrolling you into a factor you cannot produce is how a console
+            locks out its own owner.
+          </p>
+          <Field label="Setup key" hint="Type this in by hand if you cannot scan. Case-insensitive; the spaces do not matter.">
+            <code className="select-all break-all rounded-md border border-accent/40 bg-muted px-3 py-2 font-mono text-sm tracking-widest">{setup.secret}</code>
+          </Field>
+          <Field label="otpauth:// URI" hint="Paste into an authenticator that accepts a link rather than a QR code.">
+            <code className="select-all break-all rounded-md bg-muted px-3 py-2 font-mono text-[11px] text-muted-foreground">{setup.otpauthUri}</code>
+          </Field>
+          <FieldGrid cols={2}>
+            <Field label="The six digits" htmlFor="pa-totp">
+              <Input id="pa-totp" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" />
+            </Field>
+          </FieldGrid>
+          <Toolbar>
+            <Button variant="outline" size="sm" onClick={() => setSetup(null)}>
+              Cancel
+            </Button>
+            <Button size="sm" className={PRIMARY_BTN} disabled={code.trim().length < 6 || confirm.isPending} onClick={() => confirm.mutate()}>
+              {confirm.isPending ? "Checking…" : "Turn it on"}
+            </Button>
+          </Toolbar>
+        </div>
+      )}
+
+      {codes && (
+        <div className="grid gap-3">
+          <p className="text-sm">
+            Two-factor authentication is on. <span className="font-medium">Save these recovery codes now</span> — each works once, and they are the only way back in if you lose the authenticator.
+            They are stored hashed, so they cannot be shown again.
+          </p>
+          <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/40 p-3 sm:grid-cols-5">
+            {codes.map((c) => (
+              <code key={c} className="select-all text-center font-mono text-sm tracking-wide">
+                {c}
+              </code>
+            ))}
+          </div>
+          <Toolbar>
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => navigator.clipboard?.writeText(codes.join("\n"))}>
+              <Copy className="h-3.5 w-3.5" />Copy all
+            </Button>
+            <Button size="sm" className={PRIMARY_BTN} onClick={() => setCodes(null)}>
+              I have saved them
+            </Button>
+          </Toolbar>
+        </div>
+      )}
+
+      {!codes && enabled && status.data && (
+        <div className="grid gap-3">
+          <div className="flex items-start gap-3 rounded-lg border border-success/40 bg-success/10 p-3 text-sm">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+            <span>
+              On since {shortDateTime(status.data.enrolledAt)}. <span className="font-medium">{status.data.recoveryCodesRemaining}</span> recovery code
+              {status.data.recoveryCodesRemaining === 1 ? "" : "s"} left.
+              {status.data.recoveryCodesRemaining <= 2 && " Turn it off and back on to issue a fresh set."}
+            </span>
+          </div>
+          <Toolbar>
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setDisableOpen(true)}>
+              <Lock className="h-3.5 w-3.5" />Turn it off
+            </Button>
+          </Toolbar>
+        </div>
+      )}
+
+      <Dialog open={disableOpen} onOpenChange={setDisableOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>New platform admin</DialogTitle>
-            <DialogDescription>A generated one-time password is shown once. They change it on first sign-in — the console nags them until they do.</DialogDescription>
+            <DialogTitle>Turn off two-factor authentication</DialogTitle>
+            <DialogDescription>
+              Your password is asked for again, exactly as it is when you change it: a walked-away console must not be enough to strip an account's second factor. Every recovery code is destroyed
+              with it.
+            </DialogDescription>
           </DialogHeader>
-          {!created ? (
-            <div className="grid gap-4">
-              <FieldGrid cols={1}>
-                <Field label="Name" htmlFor="pa-new-name">
-                  <Input id="pa-new-name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
-                </Field>
-                <Field label="Email" htmlFor="pa-new-email">
-                  <Input id="pa-new-email" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
-                </Field>
-              </FieldGrid>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setCreateOpen(false)}>
-                  Cancel
-                </Button>
-                <Button className={PRIMARY_BTN} disabled={form.name.length < 2 || !form.email.includes("@") || create.isPending} onClick={() => create.mutate()}>
-                  {create.isPending ? "Creating…" : "Create"}
-                </Button>
-              </DialogFooter>
-            </div>
-          ) : (
-            <div className="grid gap-4">
-              <p className="text-sm">
-                <span className="font-medium">{created.email}</span> can sign in with this password, once:
-              </p>
-              <div className="flex items-center gap-2">
-                <code className="min-w-0 flex-1 select-all break-all rounded-md border border-accent/40 bg-muted px-3 py-2 font-mono text-base tracking-wide">{created.temporaryPassword}</code>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="shrink-0 gap-1.5"
-                  onClick={() => {
-                    navigator.clipboard?.writeText(created.temporaryPassword).then(() => {
-                      setCopied(true);
-                      setTimeout(() => setCopied(false), 1800);
-                    });
-                  }}
-                >
-                  {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                  {copied ? "Copied" : "Copy"}
-                </Button>
-              </div>
-              <DialogFooter>
-                <Button className={PRIMARY_BTN} onClick={() => setCreateOpen(false)}>
-                  Done
-                </Button>
-              </DialogFooter>
-            </div>
-          )}
+          <Input type="password" autoComplete="current-password" value={disablePassword} onChange={(e) => setDisablePassword(e.target.value)} placeholder="Current password" />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDisableOpen(false)}>
+              Cancel
+            </Button>
+            <Button className={PRIMARY_BTN} disabled={disablePassword.length < 8 || disable.isPending} onClick={() => disable.mutate()}>
+              Turn it off
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </ConsoleSection>
@@ -482,6 +522,25 @@ function SessionsCard() {
 const ACTOR_VARIANT: Record<string, "muted" | "info" | "success"> = { SYSTEM: "muted", CUSTOMER: "info", PLATFORM_ADMIN: "success" };
 
 /**
+ * The audit export's columns.
+ *
+ * The REASON column is here and is not in the table, deliberately. On screen it would push the five
+ * existing columns past what fits; in a spreadsheet — which is where an audit trail is actually
+ * reviewed, months later, by somebody reconstructing a decision — the operator's own sentence is
+ * the most valuable field in the row.
+ */
+const AUDIT_CSV_COLUMNS: Array<CsvColumn<PlatformAuditRow>> = [
+  { header: "When", value: (row) => row.createdAt },
+  { header: "Action", value: (row) => row.action },
+  { header: "Entity", value: (row) => row.entity },
+  { header: "Entity id", value: (row) => row.entityId },
+  { header: "Actor type", value: (row) => row.actorType },
+  { header: "Actor", value: (row) => row.actorLabel },
+  { header: "Reason", value: (row) => row.reason ?? "" },
+  { header: "Details", value: (row) => (row.metadata ? JSON.stringify(row.metadata) : "") }
+];
+
+/**
  * The control-plane audit trail: paginated and filterable, because it only grows and "who deleted
  * that workspace in June" is the question it exists for — one that an un-paginated "last 120" can
  * never answer.
@@ -534,6 +593,24 @@ function AuditCard() {
               ))}
             </SelectContent>
           </Select>
+          {/*
+           * THE PAGE, filtered — and the label says so, because this is the one console table where
+           * the export is genuinely a subset of what the filter matches. The audit trail is
+           * server-paginated: `audit.data.rows` is the 25 rows on screen, not every row the two
+           * selects match, and there is no client-side array to widen it to. Calling the button
+           * "Export CSV" here would promise the filter and deliver the page.
+           */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            disabled={!audit.data?.rows.length}
+            onClick={() => exportCsv("audit-trail", AUDIT_CSV_COLUMNS, audit.data?.rows ?? [])}
+            title="Exports the rows on this page, with the filters above applied."
+          >
+            <Download className="h-4 w-4" />
+            Export page
+          </Button>
         </Toolbar>
       }
       flush
@@ -588,7 +665,7 @@ function AuditCard() {
 export function PlatformAdminSettings() {
   const mail = useQuery({ queryKey: ["platform-admin", "mail-settings"], queryFn: platformAdminConsoleApi.mailSettings });
   return (
-    <ConsolePage eyebrow="Platform" title="Settings" description="The relay the platform sends from, the advisor's own model, who can open this console, your other sessions, and everything the control plane has recorded.">
+    <ConsolePage eyebrow="Platform" title="Settings" description="The relay the platform sends from, the advisor's own model, your own second factor and sessions, and everything the control plane has recorded. Who can open this console moved to Access, where roles live.">
       {/* `mt-0` on every panel: `TabsContent` ships its own `mt-3`, which on top of this grid's
           `gap-4` made the gap between the tab strip and the card different from the gap the rest of
           the console uses. One gap, owned by the grid. */}
@@ -600,8 +677,8 @@ export function PlatformAdminSettings() {
           <TabsTrigger value="advisor" className="gap-1.5">
             <Brain className="h-3.5 w-3.5" />AI advisor
           </TabsTrigger>
-          <TabsTrigger value="admins" className="gap-1.5">
-            <KeyRound className="h-3.5 w-3.5" />Platform admins
+          <TabsTrigger value="security" className="gap-1.5">
+            <KeyRound className="h-3.5 w-3.5" />My second factor
           </TabsTrigger>
           <TabsTrigger value="sessions" className="gap-1.5">
             <MonitorSmartphone className="h-3.5 w-3.5" />My sessions
@@ -621,8 +698,8 @@ export function PlatformAdminSettings() {
         <TabsContent value="advisor" className="mt-0">
           <AiAdvisorCard />
         </TabsContent>
-        <TabsContent value="admins" className="mt-0">
-          <AdminsCard />
+        <TabsContent value="security" className="mt-0">
+          <SecondFactorCard />
         </TabsContent>
         <TabsContent value="sessions" className="mt-0">
           <SessionsCard />

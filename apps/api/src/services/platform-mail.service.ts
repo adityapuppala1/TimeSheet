@@ -144,6 +144,19 @@ export interface PlatformSendArgs {
   dayMarker?: string | null;
   isTest?: boolean;
   metadata?: Record<string, unknown>;
+  /**
+   * Where a REPLY to this one message should go, overriding the deployment-wide `replyTo`.
+   *
+   * WHY THIS EXISTS (4.0.0). Until the sales notification there was only ever one sensible answer —
+   * "reply to whoever runs this deployment" — so the config value was enough. A lead notification
+   * inverts it: the message is addressed to the sales inbox and the person who should receive the
+   * reply is the PROSPECT, whose address is not known until the moment of sending. Without a
+   * per-message override, hitting Reply on a lead answers ourselves, which is the entire point of
+   * the email failing silently.
+   *
+   * Per-message beats the global value; omitting it keeps the previous behaviour exactly.
+   */
+  replyTo?: string;
   /** Throw on failure (the signup path — a person is watching) instead of returning it. */
   throwOnFailure?: boolean;
 }
@@ -169,7 +182,14 @@ async function logPlatformEmail(args: PlatformSendArgs, status: PlatformSendResu
         isTest: args.isTest ?? false,
         // Kept for every row, so a FAILED one can be resent exactly as it was and a SENT one can be
         // opened from the log. Platform volume is small; this is not the tenant EmailLog's problem.
-        payload: { html: args.html },
+        //
+        // `replyTo` IS PART OF "AS IT WAS". It is a per-message decision that nothing else on the
+        // row records (`PlatformEmailLog` has no column for it, and deliberately gets none — this
+        // is exactly what `payload` is for). Without it a resent sales notification would reply to
+        // the deployment instead of to the prospect: silent, and noticed only by whoever gets a
+        // reply they did not expect. Written only when there IS one, so a row for an ordinary
+        // message keeps the `{ html }` shape every row has had until now.
+        payload: { html: args.html, ...(args.replyTo ? { replyTo: args.replyTo } : {}) },
         metadata: args.metadata ? JSON.parse(JSON.stringify(args.metadata)) : undefined
       },
       select: { id: true }
@@ -211,7 +231,9 @@ export async function sendPlatformMail(args: PlatformSendArgs): Promise<Platform
       to: args.to,
       subject: args.subject,
       html: args.html,
-      replyTo: config.replyTo ?? undefined
+      // Per-message first, deployment-wide second. See `PlatformSendArgs.replyTo` — a sales lead
+      // notification is addressed to us and must be replied to the customer.
+      replyTo: args.replyTo ?? config.replyTo ?? undefined
     });
     const id = await logPlatformEmail(args, "SENT");
     return { ok: true, status: "SENT", emailLogId: id };
@@ -247,7 +269,11 @@ export async function sendPlatformTemplate(
 export async function resendPlatformEmail(logId: string, actorLabel: string): Promise<PlatformSendResult> {
   const row = await controlPrisma.platformEmailLog.findUnique({ where: { id: logId } });
   if (!row) throw new AppError(404, "That email is not in the log.");
-  const html = (row.payload as { html?: string } | null)?.html;
+  // Rows written before the reply-to was kept carry `{ html }` only, and rows for a message that
+  // never named one still do — both read as `undefined` here and resend on the deployment-wide
+  // address, which is the behaviour they were sent with.
+  const payload = row.payload as { html?: string; replyTo?: string } | null;
+  const html = payload?.html;
   if (!html) throw new AppError(409, "That message's body was not kept, so it cannot be resent as it was — send the template again instead.");
   return sendPlatformMail({
     to: row.to,
@@ -257,6 +283,9 @@ export async function resendPlatformEmail(logId: string, actorLabel: string): Pr
     organizationId: row.organizationId,
     dayMarker: row.dayMarker,
     isTest: row.isTest,
+    // "Exactly as it was" has to include where a reply goes, or resending a sales notification
+    // quietly redirects the prospect's answer to us.
+    replyTo: typeof payload?.replyTo === "string" && payload.replyTo ? payload.replyTo : undefined,
     metadata: { resendOf: row.id, by: actorLabel }
   });
 }

@@ -1,7 +1,8 @@
 /**
  * WHAT: every email the PLATFORM sends — as opposed to a workspace — with its variables, a sample
  * value for each, and the shipped default body. The trial retention programme lives here
- * (`retention.*`), plus the signup code and the "is mail working" test.
+ * (`retention.*`), plus the signup code, the sales pair the public contact form sends
+ * (`sales.*` — one to us, one back to the prospect) and the "is mail working" test.
  *
  * WHY DEFAULTS ARE STRINGS WITH `{{placeholders}}` RATHER THAN FUNCTIONS. The tenant registry in
  * `mail-templates.ts` compiles its bodies in code and keeps a second, placeholder-based copy for
@@ -21,7 +22,7 @@ const { shell, heading, paragraph, button, ACCENT } = emailShell;
 
 export interface PlatformTemplateDef {
   key: string;
-  group: "Trial retention" | "Signup" | "Operator";
+  group: "Trial retention" | "Signup" | "Sales" | "Operator";
   description: string;
   /** Which `{{vars}}` the body may use, in the order the editor lists them. */
   variables: string[];
@@ -59,6 +60,35 @@ const RETENTION_SAMPLE: Record<string, string> = {
   appUrl: "https://timesphere.app"
 };
 
+/**
+ * What the sales notification is allowed to say. Ordered the way the email reads: who, what they
+ * are asking for, what they wrote, and where the enquiry came from.
+ *
+ * `freeMailNote` is a whole sentence rather than a boolean because every value is substituted as
+ * escaped TEXT — a template cannot branch, so the branch happens where the row is written and the
+ * result arrives as a line to print or an empty string. Same for `campaign`: the three UTM fields
+ * are joined into one readable string rather than three variables that are usually blank.
+ */
+const SALES_LEAD_VARS = [
+  "name",
+  "email",
+  "company",
+  "role",
+  "teamSize",
+  "deployment",
+  "timeline",
+  "interests",
+  "message",
+  "country",
+  "phone",
+  "sourcePage",
+  "referrer",
+  "campaign",
+  "freeMailNote",
+  "consoleUrl",
+  "appUrl"
+];
+
 /** The small print every retention email ends with — the policy, in one sentence, every time. */
 const policyLine = () =>
   paragraph(
@@ -69,6 +99,13 @@ const feedbackLine = () =>
   paragraph(
     `Could you spare two minutes to tell us what worked and what did not? <a href="{{feedbackUrl}}" style="color:${ACCENT};font-weight:600;">Share your feedback</a> — it goes straight to the people building TimeSphere.`
   );
+
+/** One list of alerts, in a box that keeps its line breaks. `white-space:pre-wrap` rather than
+ *  `<br>`s because every substituted value is HTML-escaped, so markup built into a variable arrives
+ *  as visible angle brackets — preserving the newlines the sender wrote is the only thing that
+ *  survives that. Monospaced so a column of `[CRITICAL]` prefixes lines up. */
+const alertBlock = (body: string) =>
+  `<pre style="margin:0 0 14px;padding:12px 14px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:19px;color:#0F172A;white-space:pre-wrap;word-break:break-word;">${body}</pre>`;
 
 export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
   {
@@ -202,6 +239,88 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
     )
   },
   {
+    key: "sales.lead",
+    group: "Sales",
+    description: "The internal notification when somebody fills in the public contact form. Sent to the sales inbox, with Reply-To set to the prospect.",
+    variables: SALES_LEAD_VARS,
+    sample: {
+      name: "Priya Raman",
+      email: "priya@northwind.co.uk",
+      company: "Northwind Logistics",
+      role: "Head of Operations",
+      teamSize: "201–500",
+      deployment: "Our own cloud",
+      timeline: "This quarter",
+      interests: "Timesheets & approvals, SSO / SCIM, Backups & retention",
+      message: "We run about 300 field engineers across three countries and currently reconcile hours in one system and tickets in another.\n\nWhat would a migration look like?",
+      country: "United Kingdom",
+      phone: "+44 20 7946 0123",
+      sourcePage: "/contact",
+      referrer: "https://www.google.com/",
+      campaign: "google / cpc / q3-enterprise",
+      freeMailNote: "",
+      consoleUrl: "https://timesphere.app/platform-admin/sales-leads",
+      appUrl: "https://timesphere.app"
+    },
+    // SUBJECT CARRIES THE QUALIFICATION, because a sales inbox is read as a list of subject lines
+    // and "New enquiry" in forty rows tells you nothing about which one to open first.
+    subject: "Lead: {{company}} — {{teamSize}}, {{deployment}}, {{timeline}}",
+    html: shell(
+      { title: "New sales lead", preheader: "{{company}} · {{teamSize}} · {{deployment}} · {{timeline}}", accentColor: ACCENT },
+      heading("{{company}}") +
+        // The header line repeats the subject on purpose: whoever forwards this to a colleague
+        // forwards the body, and the four facts that decide who picks it up must survive that.
+        paragraph(
+          `<span style="display:inline-block;padding:8px 12px;border-radius:8px;background:#FEF3C7;font-size:13px;font-weight:700;color:#78350F;">{{teamSize}} &middot; {{deployment}} &middot; {{timeline}}</span>`
+        ) +
+        // Every optional field is printed with an em-dash placeholder rather than omitted. A fixed
+        // block is scannable at a glance; a block whose lines move depending on what was filled in
+        // has to be read. (A "{{roleSuffix}}"-style variable carrying its own <br> cannot work here
+        // — substitution escapes markup, so the tag would arrive as visible text.)
+        paragraph(
+          `<strong>{{name}}</strong> &middot; {{role}}<br /><a href="mailto:{{email}}" style="color:${ACCENT};font-weight:600;">{{email}}</a><br /><span style="font-size:13px;color:#64748B;">{{country}} &middot; {{phone}}</span>`
+        ) +
+        paragraph(`<span style="font-size:12px;color:#64748B;">Evaluating: {{interests}}</span>`) +
+        paragraph(`<span style="font-size:12px;color:#64748B;">{{freeMailNote}}</span>`) +
+        // `white-space:pre-wrap` rather than turning newlines into <br>: every value is HTML-escaped
+        // at substitution (that is what makes a stranger's words safe here), so markup injected
+        // into the message would arrive as visible text. CSS keeps their paragraphs instead.
+        paragraph(
+          `<span style="display:block;padding:14px 16px;border-radius:10px;background:#F8FAFC;border:1px solid #E2E8F0;white-space:pre-wrap;font-size:14px;line-height:22px;color:#0F172A;">{{message}}</span>`
+        ) +
+        paragraph(button("Open in the console", "{{consoleUrl}}", ACCENT)) +
+        paragraph(
+          `<span style="font-size:12px;color:#64748B;">Reply to this message and it goes straight to {{email}}. Arrived from {{sourcePage}} &middot; referrer {{referrer}} &middot; campaign {{campaign}}.</span>`
+        )
+    )
+  },
+  {
+    key: "sales.ack",
+    group: "Sales",
+    description: "The confirmation the prospect gets back. Says when a human will reply, and gives them something to do in the meantime.",
+    variables: ["name", "company", "responseWindow", "trialUrl", "faqUrl", "appUrl"],
+    sample: {
+      name: "Priya",
+      company: "Northwind Logistics",
+      responseWindow: "one working day",
+      trialUrl: "https://timesphere.app/signup",
+      faqUrl: "https://timesphere.app/#faq",
+      appUrl: "https://timesphere.app"
+    },
+    subject: "Thanks — we have your message",
+    html: shell(
+      { title: "We have your message", preheader: "A person will reply within {{responseWindow}}." },
+      heading("Thanks, {{name}}") +
+        paragraph("We have your enquiry about TimeSphere for <strong>{{company}}</strong>. A person — not a sequence — will read it and reply within <strong>{{responseWindow}}</strong>.") +
+        // NO MARKETING PADDING, and that is a promise this email has to keep itself: the only two
+        // links are the ones somebody waiting for a reply might actually want.
+        paragraph(
+          `If you would rather not wait, the trial is open and needs no card: <a href="{{trialUrl}}" style="color:${ACCENT};font-weight:600;">start a workspace</a>. The questions we get asked most — where the data sits, whether AI can be switched off, whether it runs on your own infrastructure — are <a href="{{faqUrl}}" style="color:${ACCENT};font-weight:600;">answered here</a>.`
+        ) +
+        paragraph("You will not be added to anything. Reply to this message any time and it reaches the same person.")
+    )
+  },
+  {
     key: "maintenance.scheduled",
     group: "Operator",
     description: "Sent to a workspace's super admins when the platform schedules maintenance across the fleet.",
@@ -259,6 +378,61 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
         paragraph("Workspace <strong>{{workspace}}</strong> (<code>{{slug}}</code>), destination <strong>{{destination}}</strong>.") +
         paragraph("{{detail}}") +
         paragraph("<span style=\"font-size:12px;color:#64748B;\">Sent by the platform rather than by the workspace — the workspace's own mail server may be the thing that is not working.</span>")
+    )
+  },
+  {
+    key: "platform.alert_digest",
+    group: "Operator",
+    description:
+      "The fleet alert digest (5.0.0). Sent only when something has CHANGED — a new alert, one that escalated, or one that cleared. A standing alert is never re-sent, which is what stops this becoming a message people filter.",
+    variables: [
+      "criticalCount",
+      "warningCount",
+      "newCount",
+      "escalatedCount",
+      "clearedCount",
+      "newAlerts",
+      "escalatedAlerts",
+      "clearedAlerts",
+      "consoleUrl",
+      "appUrl"
+    ],
+    sample: {
+      criticalCount: "2",
+      warningCount: "5",
+      newCount: "1",
+      escalatedCount: "1",
+      clearedCount: "2",
+      newAlerts: "[CRITICAL] Acme Corp (acme) — Auto-increment 94% consumed. TimeEntry — against a signed INT key. Threshold: 70%.",
+      escalatedAlerts: "[WARNING → CRITICAL] Northwind (northwind) — Database connections at 91%. 182 of 200 on db-2.internal. Threshold: 80%.",
+      clearedAlerts: "2 service down — Email delivery, AI features",
+      consoleUrl: "https://timesphere.app/platform-admin/alerts",
+      appUrl: "https://timesphere.app"
+    },
+    subject: "Fleet alerts: {{newCount}} new, {{escalatedCount}} escalated, {{clearedCount}} cleared",
+    html: shell(
+      { title: "Fleet alerts", preheader: "{{criticalCount}} critical, {{warningCount}} warning across the fleet.", accentColor: ACCENT },
+      heading("What changed on the fleet") +
+        paragraph(
+          "This message is sent only when something has <strong>changed</strong>. A standing alert is recorded and not repeated, so an email arriving here always means there is something new to look at."
+        ) +
+        paragraph(
+          `Across the whole fleet right now: <strong>{{criticalCount}} critical</strong> and <strong>{{warningCount}} warning</strong>.`
+        ) +
+        paragraph(`<strong>New ({{newCount}})</strong>`) +
+        /* `<pre>` and not `<p>`, because every value is HTML-ESCAPED at substitution — see
+           platform-mail.service.ts#applyPlatformVars — so a `<br>` built into the variable would
+           arrive as visible angle brackets. Preserving the newlines the sender already put there is
+           the only way a multi-line list survives that escaping intact. */
+        alertBlock("{{newAlerts}}") +
+        paragraph(`<strong>Escalated ({{escalatedCount}})</strong>`) +
+        alertBlock("{{escalatedAlerts}}") +
+        paragraph(`<strong>Cleared ({{clearedCount}})</strong>`) +
+        alertBlock("{{clearedAlerts}}") +
+        paragraph(button("Open the console", "{{consoleUrl}}", ACCENT)) +
+        paragraph(
+          `<span style="font-size:12px;color:#64748B;">Sent by the platform rather than by any workspace — the workspace whose alert this is may be the thing that is not working. Change what reaches you, or add a Slack or PagerDuty webhook, on the console's Alerts page.</span>`
+        )
     )
   },
   {
