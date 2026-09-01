@@ -19,7 +19,11 @@ import type {
   GlobalSettings,
   GlobalTicketSettings,
   ModuleAssigneeRuleRow,
+  NativeBenchmarkSummary,
   NativeCapabilityReport,
+  NativeKvCacheType,
+  NativeModelDownloadRow,
+  NativeRuntimeStatus,
   OutboundWebhookEvent,
   RoleName,
   SecurityFindingSeverity,
@@ -2123,6 +2127,53 @@ export const settingsApi = {
    *  re-deriving the fit here is how the screen ends up disagreeing with the server that has to
    *  honour it. `speed.measured` is false — present that number as an estimate, never a benchmark. */
   getNativeAiCapability: async () => (await api.get<NativeCapabilityReport>("/settings/ai/native/capability")).data,
+  /** THE MODEL STORE. Every download this workspace has started, newest first — and once one is
+   *  `ready` this is also the record of what is on the machine's disk. Empty is the normal first
+   *  answer and never an error.
+   *
+   *  POLL IT WITH A CONDITIONAL `refetchInterval` while any row's status is in
+   *  `nativeDownloadInFlightStatuses`, and STOP when none is — the AgentRunsCard pattern. There is
+   *  no SSE and no WebSocket in this app; an idle workspace must not issue a request every few
+   *  seconds forever.
+   *
+   *  Prefer `row.fileSizeBytes` (measured) over `row.catalogue`'s derived weight estimate wherever
+   *  both exist — `catalogue` already has the measured size folded in server-side, so estimating a
+   *  fit from it gives the same answer the API would. */
+  listNativeAiDownloads: async () => (await api.get<NativeModelDownloadRow[]>("/settings/ai/native/downloads")).data,
+  getNativeAiDownload: async (id: string) => (await api.get<NativeModelDownloadRow>(`/settings/ai/native/downloads/${id}`)).data,
+  /** Starts the transfer and returns the job row straight away — the bytes move detached. A 507
+   *  means there is not enough disk and the message names both numbers; show it verbatim. */
+  startNativeAiDownload: async (modelId: string) =>
+    (await api.post<NativeModelDownloadRow>("/settings/ai/native/downloads", { modelId })).data,
+  /** Stops the stream AND removes the partial file. Cancel means "I do not want this", not "pause". */
+  cancelNativeAiDownload: async (id: string) =>
+    (await api.post<NativeModelDownloadRow>(`/settings/ai/native/downloads/${id}/cancel`)).data,
+  /** Deletes the row and the several-gigabyte file behind it. 409s while a download is running. */
+  deleteNativeAiModel: async (id: string) => api.delete(`/settings/ai/native/downloads/${id}`),
+  /** Who runs llama-server here (`embedded`/`external`/`off`), whether it is up, and — when it is
+   *  not — `detail`, which is a sentence written for the operator. Render `detail` and `modeReason`
+   *  rather than deriving copy from `state`: an unexplained badge is a badge somebody argues with.
+   *  Never a 500; "off" and "unavailable" are answers. */
+  getNativeAiRuntime: async () => (await api.get<NativeRuntimeStatus>("/settings/ai/native/runtime")).data,
+  /** Every knob is optional and defaults to what the fit estimator recommends for THIS machine at
+   *  the model's measured size. Resolves once the server is ready or the attempt has failed — a
+   *  model can take tens of seconds to load, so give this call room. */
+  startNativeAiRuntime: async (payload: {
+    modelId: string;
+    contextTokens?: number;
+    threads?: number;
+    kvCacheType?: NativeKvCacheType;
+    parallelSlots?: number;
+  }) => (await api.post<NativeRuntimeStatus>("/settings/ai/native/runtime/start", payload)).data,
+  stopNativeAiRuntime: async () => (await api.post<NativeRuntimeStatus>("/settings/ai/native/runtime/stop")).data,
+  restartNativeAiRuntime: async () => (await api.post<NativeRuntimeStatus>("/settings/ai/native/runtime/restart")).data,
+  /** MEASURES the machine — a short fixed prompt against the running runtime — and replaces the
+   *  capability report's `speed.measured: false` estimate with a real figure. `suggestedMaxOutputTokens`
+   *  is what the native provider row's `maxOutputTokens` should hold; APPLYING it is a separate
+   *  `updateAiProvider` call on purpose, because a measurement that silently rewrote routing would
+   *  be a side effect nobody asked for. Takes seconds, not minutes. */
+  runNativeAiBenchmark: async (modelId: string) =>
+    (await api.post<{ download: NativeModelDownloadRow; benchmark: NativeBenchmarkSummary }>("/settings/ai/native/benchmark", { modelId })).data,
   getSso: async () => (await api.get<SsoSettings>("/settings/sso")).data,
   /** `clientSecret`/`idpCertificate` are write-only, same masked-field convention as
    *  GlobalAISettings.apiKey — omit to leave the stored value untouched, pass "" to clear it.

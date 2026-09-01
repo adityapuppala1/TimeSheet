@@ -10,6 +10,70 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🤖 Fetch a model, run it, and measure it instead of guessing
+
+- **A model store on this machine's own disk, with four ways to refuse a file.** A download is a row
+  in the tenant database — queued, downloading, verifying, ready, failed, cancelled — so the settings
+  screen polls it the way this app polls every other long job, and a restart in the middle of a
+  five-gigabyte transfer no longer makes the progress bar simply vanish. Bytes land in a `.part` file
+  and are renamed only after every check has passed, because a crash must leave something obviously
+  unfinished rather than a truncated `.gguf` that looks exactly like a complete one. The four
+  refusals are each aimed at a failure that *looks like success* at the moment it happens: there is
+  no room on the volume (checked before a byte moves, and the message names both numbers, because a
+  disk that fills at 94% of a model download takes the database's next write with it); the file's
+  first four bytes are not `GGUF` (a 404 page, a captive-portal login and an S3 error are all
+  200-shaped responses that save happily under a model's name — the refusal quotes what actually
+  arrived, so `<!DO` reads as a diagnosis rather than as "verification failed"); fewer bytes arrived
+  than the server said it would send; or the size is nowhere near what the catalogue's arithmetic
+  expects. Without those, the first sign of trouble is `llama-server` exiting with a parse error
+  minutes later, and the operator debugging the runtime instead of the download.
+- **The measured size and hash outrank the estimate.** The catalogue *derives* a file size from the
+  quantisation's published bits-per-weight and says so. The store records the real byte count and a
+  SHA-256 of what actually arrived, and from that moment every fit estimate, memory verdict and
+  recommended context runs on the file rather than on the arithmetic. The hash is recorded, not
+  compared: the catalogue publishes none, and asserting one this project cannot verify would be worse
+  than admitting the gap.
+- **Where a model may come from is not negotiable.** The URL is derived from the catalogue entry and
+  typed by nobody, and it is still checked twice — against the catalogue's own host allowlist and
+  against the same SSRF gate every other outbound fetch in this codebase uses — on the first request
+  **and on every redirect hop**. Hugging Face answers a large-file request with a redirect to its own
+  CDN, so redirects cannot simply be refused; an unchecked one is the hole, and "the allowlist only
+  covered the first URL" is precisely how a control like this becomes decorative.
+- **A supervised runtime, and three honest answers about who runs it.** *Embedded* means this process
+  spawns and watches `llama-server`. *External* means a sidecar does, and this process only points at
+  it — the default under Docker and Kubernetes, because this app's image is Alpine/musl while upstream
+  llama.cpp builds are glibc, and a sidecar is the idiomatic answer in both orchestrators anyway.
+  *Off* is the veto and costs nothing. It waits for **readiness, not liveness**: the server binds its
+  port instantly and then spends tens of seconds mapping several gigabytes of weights, answering its
+  own health endpoint with 503 the whole time, so "the socket accepted" would hand the first real
+  request to a model that cannot answer it. It binds loopback only — an unauthenticated inference
+  endpoint on every interface is what the alternative actually means. An unexpected exit is retried
+  with an exponential backoff that is **capped and terminates**, because the things that kill this
+  process repeatedly (a corrupt model, a port already taken, an OOM kill) are not transient, and a
+  supervisor without a limit turns a broken configuration into a machine pegged loading weights
+  forever and a log of one identical line a second.
+- **None of it can stop the product from starting.** A missing binary, a model that was never
+  downloaded, a port in use — every one degrades to *"the native provider is unavailable"*, logged
+  once, with the API booting and serving normally. This is an optional accelerator inside a timesheet
+  and ticketing system, and the day it takes payroll down is the day it should not have been written.
+  Nothing downloads a binary to make itself work either: `llama-server` comes from a configured path
+  or from PATH, and PATH is *read* rather than shelled out to. The runtime is stopped inside the
+  existing shutdown, with a synchronous last-resort kill behind it for the two paths that never reach
+  a graceful stop — because a leaked model process holds gigabytes and the port the next start needs.
+- **The benchmark is the point of the whole thing.** A short fixed prompt against the running server
+  measures time-to-first-token and generation rate *separately*, because they are bound by different
+  things and fail differently — a machine that emits forty tokens a second after a twenty-second wait
+  is fine for background classification and unusable for anything a person waits on. That measurement
+  replaces the fit estimator's assumed-bandwidth guess, and it produces the number the previous
+  release could only ask an administrator to invent: what this machine can actually emit inside the
+  ninety-second call ceiling, with a real margin. That is exactly the figure the dispatcher's demand
+  filter consumes, so routing finally runs on something measured. Applying it stays a separate,
+  deliberate act — a measurement that silently rewrote routing would be a side effect nobody asked for.
+- Super-Admin routes beside the existing AI settings ones: list and inspect downloads, start one,
+  cancel one, delete a stored model, read runtime status, start/stop/restart it, run a benchmark.
+  Every one is safe to call when nothing whatsoever is configured — an empty list, a status of "off"
+  with a sentence explaining it, and never a 500. The settings screen itself lands next.
+
 ### 🤖 Know the machine, know the models, and be honest about whether one fits the other
 
 - **The hardware probe does not lie in a container.** `os.totalmem()` reports the *host* — always. A

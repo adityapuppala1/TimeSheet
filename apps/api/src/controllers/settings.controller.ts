@@ -9,14 +9,14 @@
  */
 import { Router } from "express";
 import { z } from "zod";
-import { notificationPreferenceKeys, permissions, roles } from "@timesheet/shared";
+import { nativeKvCacheTypes, notificationPreferenceKeys, permissions, roles, type NativeKvCacheType } from "@timesheet/shared";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { env, serverTimezone } from "../config/env.js";
 import { getLoggingStatus } from "../config/logger.js";
-import { describeStorageLayout, storageRoot, validateDirectory } from "../config/storage-paths.js";
+import { describeStorageLayout, validateDirectory } from "../config/storage-paths.js";
 import { requireAuth, requirePermission, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
@@ -33,6 +33,22 @@ import { getGlobalNotificationSettings } from "../services/notify.service.js";
 import { getGlobalAISettings, getEnabledProviderConfigs, getAIUsageBreakdown, getAIUsageDailyDetail, getWeeklyAIUsageTrend, getAIFeatureUsage, listAvailableOpenAICompatibleModels, resolveApiKey, testProviderConnectivity } from "../services/ai.service.js";
 import { buildAiUsageWorkbook } from "../services/ai-usage-export.service.js";
 import { describeNativeCapability } from "../services/hardware-probe.service.js";
+import { nativeModelDiskPath } from "../config/native-ai.js";
+import {
+  cancelNativeDownload,
+  deleteNativeModel,
+  getNativeDownload,
+  listNativeDownloads,
+  startNativeDownload
+} from "../services/native-model-store.service.js";
+import {
+  getNativeRuntimeStatus,
+  planLaunch,
+  restartNativeRuntime,
+  startNativeRuntime,
+  stopNativeRuntime
+} from "../services/native-runtime.service.js";
+import { runNativeBenchmark } from "../services/native-benchmark.service.js";
 import {
   listProviderConfigs,
   createProviderConfig,
@@ -720,11 +736,146 @@ settingsRouter.post("/ai/available-models", requireSuperAdmin, validate(availabl
  * a new key needs idempotent backfill SQL in a migration, and this needs no finer grain than the
  * neighbouring AI settings already have.
  *
- * The disk figure is measured on `storageRoot()`, the app's own data volume. A downloaded model
- * will land in a subdirectory of it, and free space is a property of the volume, not the folder.
+ * The disk figure is measured on the model directory once one exists and on `storageRoot()` before
+ * that — free space is a property of the VOLUME, not the folder, and an operator who pointed
+ * NATIVE_AI_MODEL_DIR at a second disk must not be shown the first one's number. See
+ * `nativeModelDiskPath` for why the fallback is right rather than merely convenient.
  */
 settingsRouter.get("/ai/native/capability", requireSuperAdmin, async (_req, res) => {
-  res.json(await describeNativeCapability(storageRoot()));
+  res.json(await describeNativeCapability(nativeModelDiskPath()));
+});
+
+/**
+ * THE MODEL STORE AND THE RUNTIME — everything that turns "this machine could run a model" into
+ * "this machine is running one".
+ *
+ * ALL OF THESE ARE SAFE TO CALL WHEN NOTHING IS CONFIGURED, and that is a hard requirement rather
+ * than politeness: the settings screen renders them on first paint, before any operator has done
+ * anything. An empty store is `[]`, an unconfigured runtime is a status of "off" or "unavailable"
+ * with a sentence saying why, and neither is ever a 500. The only routes that refuse are the ones
+ * being ASKED to do something impossible — download a model with no disk space (507, with both
+ * numbers), start a model that was never downloaded (409), benchmark a runtime that is not ready
+ * (409) — and each of those refusals is the answer, not an error.
+ *
+ * `requireSuperAdmin` throughout, matching the capability route above and every other AI setting in
+ * this file. These spend gigabytes of disk and a host's CPU; they are not a per-user surface.
+ *
+ * The Zod schemas are `.strict()` like every other schema in this file, and for the same reason
+ * stated on `providerConfigBodySchema`: an undeclared key is a typo'd write silently doing nothing.
+ */
+const nativeModelIdSchema = z.string().min(1).max(80);
+
+settingsRouter.get("/ai/native/downloads", requireSuperAdmin, async (_req, res) => {
+  res.json(await listNativeDownloads());
+});
+
+settingsRouter.get(
+  "/ai/native/downloads/:id",
+  requireSuperAdmin,
+  validate(z.object({ params: z.object({ id: z.string().uuid() }).strict() })),
+  async (req, res) => {
+    res.json(await getNativeDownload(String(req.params.id)));
+  }
+);
+
+/**
+ * Begin fetching a catalogue model. Returns the job row immediately — the transfer runs detached and
+ * the UI polls, which is this codebase's only pattern for long work (there is no SSE and no
+ * WebSocket here; see AgentRunsCard for the precedent this follows).
+ */
+const startNativeDownloadSchema = z.object({ body: z.object({ modelId: nativeModelIdSchema }).strict() });
+settingsRouter.post("/ai/native/downloads", requireSuperAdmin, validate(startNativeDownloadSchema), async (req, res) => {
+  const row = await startNativeDownload(String(req.body.modelId), req.user!.id);
+  await audit(req.user!.id, "settings.ai_native_download_started", "NativeModelDownload", row.id, { modelId: row.modelId }, { ipAddress: req.ip });
+  res.status(201).json(row);
+});
+
+settingsRouter.post(
+  "/ai/native/downloads/:id/cancel",
+  requireSuperAdmin,
+  validate(z.object({ params: z.object({ id: z.string().uuid() }).strict() })),
+  async (req, res) => {
+    const row = await cancelNativeDownload(String(req.params.id));
+    await audit(req.user!.id, "settings.ai_native_download_cancelled", "NativeModelDownload", row.id, { modelId: row.modelId }, { ipAddress: req.ip });
+    res.json(row);
+  }
+);
+
+/** Removes the FILE as well as the row — several gigabytes, so it is audited with the model named.
+ *  Refuses (409) while a download is running: cancel it first, so the two halves cannot race. */
+settingsRouter.delete(
+  "/ai/native/downloads/:id",
+  requireSuperAdmin,
+  validate(z.object({ params: z.object({ id: z.string().uuid() }).strict() })),
+  async (req, res) => {
+    const existing = await getNativeDownload(String(req.params.id));
+    await deleteNativeModel(existing.id);
+    await audit(req.user!.id, "settings.ai_native_model_deleted", "NativeModelDownload", existing.id, { modelId: existing.modelId }, { ipAddress: req.ip });
+    res.status(204).end();
+  }
+);
+
+/** Who runs llama-server here, whether it is up, and — when it is not — the sentence explaining it.
+ *  Never a 500 and never a throw; "off" is a perfectly good answer. */
+settingsRouter.get("/ai/native/runtime", requireSuperAdmin, async (_req, res) => {
+  res.json(await getNativeRuntimeStatus());
+});
+
+/**
+ * Start the runtime on one downloaded model. Every knob is optional and defaults to what
+ * `estimateNativeModelFit` recommends for THIS machine at the model's MEASURED size — an operator
+ * should be able to press Start without first learning what a KV cache is.
+ */
+const startNativeRuntimeSchema = z.object({
+  body: z
+    .object({
+      modelId: nativeModelIdSchema,
+      // Bounded by the catalogue's own ladder at the top end; llama.cpp refuses anything under 256.
+      contextTokens: z.number().int().min(256).max(131072).optional(),
+      threads: z.number().int().min(1).max(256).optional(),
+      kvCacheType: z.enum(nativeKvCacheTypes).optional(),
+      // Mirrors AIProviderConfig.maxConcurrent's own ceiling — the two describe the same capacity
+      // from opposite ends and must not be able to disagree about what is expressible.
+      parallelSlots: z.number().int().min(1).max(64).optional()
+    })
+    .strict()
+});
+settingsRouter.post("/ai/native/runtime/start", requireSuperAdmin, validate(startNativeRuntimeSchema), async (req, res) => {
+  const body = req.body as { modelId: string; contextTokens?: number; threads?: number; kvCacheType?: NativeKvCacheType; parallelSlots?: number };
+  const launch = await planLaunch(body.modelId, body);
+  const status = await startNativeRuntime(launch);
+  await audit(req.user!.id, "settings.ai_native_runtime_started", "NativeRuntime", body.modelId, { state: status.state, contextTokens: launch.contextTokens }, { ipAddress: req.ip });
+  res.json(status);
+});
+
+settingsRouter.post("/ai/native/runtime/stop", requireSuperAdmin, async (req, res) => {
+  const status = await stopNativeRuntime();
+  await audit(req.user!.id, "settings.ai_native_runtime_stopped", "NativeRuntime", status.modelId ?? "none", { state: status.state }, { ipAddress: req.ip });
+  res.json(status);
+});
+
+settingsRouter.post("/ai/native/runtime/restart", requireSuperAdmin, async (req, res) => {
+  const status = await restartNativeRuntime();
+  await audit(req.user!.id, "settings.ai_native_runtime_restarted", "NativeRuntime", status.modelId ?? "none", { state: status.state }, { ipAddress: req.ip });
+  res.json(status);
+});
+
+/**
+ * MEASURE THE MACHINE. Replaces the fit estimator's assumed-bandwidth guess with a real
+ * time-to-first-token and generation rate, and returns the `maxOutputTokens` those imply — which is
+ * the number `AIProviderConfig.maxOutputTokens` should hold, and the reason this whole block exists.
+ * Applying it is deliberately a separate act (PATCH the provider row); a benchmark that silently
+ * rewrote routing would be a measurement with a side effect.
+ */
+const nativeBenchmarkSchema = z.object({ body: z.object({ modelId: nativeModelIdSchema }).strict() });
+settingsRouter.post("/ai/native/benchmark", requireSuperAdmin, validate(nativeBenchmarkSchema), async (req, res) => {
+  const result = await runNativeBenchmark(String(req.body.modelId));
+  await audit(req.user!.id, "settings.ai_native_benchmarked", "NativeModelDownload", result.download.id, {
+    modelId: result.download.modelId,
+    tokensPerSecond: result.benchmark.tokensPerSecond,
+    suggestedMaxOutputTokens: result.benchmark.suggestedMaxOutputTokens
+  }, { ipAddress: req.ip });
+  res.json(result);
 });
 
 /**

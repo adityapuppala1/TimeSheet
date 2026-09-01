@@ -427,7 +427,12 @@ export async function callAnthropic(apiKey: string, params: CallChatParams): Pro
  * are configured. One attempt per provider, then move on; the fallback chain is what provides
  * resilience, not a same-provider retry.
  */
-const MODEL_CALL_TIMEOUT_MS = 90_000;
+/* EXPORTED because the native benchmark divides by it. `suggestNativeMaxOutputTokens` answers "what
+ * can this machine emit before a call is abandoned", and the ceiling it divides is THIS number —
+ * re-declaring 90_000 beside it would be two constants that must agree, discovered to disagree on
+ * the day somebody tunes one of them and the local provider starts being asked for a document it
+ * cannot finish. See services/native-benchmark.service.ts. */
+export const MODEL_CALL_TIMEOUT_MS = 90_000;
 
 /**
  * Both provider SDKs' errors carry a real HTTP status and, usually, a provider-written message —

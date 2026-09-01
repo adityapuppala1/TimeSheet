@@ -44,6 +44,16 @@ export function createFakeTenantClient(): PrismaClient {
     aIDataset: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn() },
     aIDatasetItem: { create: vi.fn(), findFirst: vi.fn(), delete: vi.fn() },
     aIPromptTemplate: { findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn(), update: vi.fn() },
+    // The local-model store (services/native-model-store.service.ts), which the AI settings routes
+    // now read on first paint. Defaults to no rows — an installation that has never downloaded a
+    // model, which is every installation until somebody presses the button.
+    nativeModelDownload: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findUnique: vi.fn().mockResolvedValue(null),
+      upsert: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn()
+    },
     aIPromptVersion: { findFirst: vi.fn(), create: vi.fn() },
     aIEvalRun: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
     aIEvalResult: { create: vi.fn(), findMany: vi.fn() },

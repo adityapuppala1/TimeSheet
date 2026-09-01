@@ -1451,6 +1451,87 @@ model AIProviderConfig {
   @@index([priority])
 }
 
+/// ONE MODEL THIS DEPLOYMENT HAS (OR IS GETTING) ON ITS OWN DISK — the download job the settings
+/// screen polls, and afterwards the record of what is actually stored.
+///
+/// WHY A ROW AND NOT AN IN-MEMORY JOB. Fetching five gigabytes takes minutes, and this codebase has
+/// no SSE and no WebSocket — the house pattern for long-running work is a row polled by react-query
+/// with a conditional `refetchInterval` (see AgentRunsCard, AIEvalsCard). A row also survives the
+/// restart that an in-memory job would silently lose, which is exactly the failure an operator
+/// notices as "the progress bar went away and nothing happened".
+///
+/// WHY IT IS ALSO THE STORED-MODEL RECORD, rather than a job table plus an inventory table: a model
+/// on this disk got there by being downloaded, so the job's terminal `ready` state IS the
+/// inventory. Splitting them would create two rows that must agree about one file, and the day they
+/// disagree is the day a delete removes the file and leaves the inventory claiming it is there.
+///
+/// `modelId` IS UNIQUE, so there is one row and one file per catalogue entry. Re-downloading after
+/// a failure reuses the row rather than accumulating a history of attempts — this is a store, not an
+/// audit log, and the AuditLog already records who asked for what.
+///
+/// SIZES ARE Float AND NOT BigInt, for the reason `TenantDbSample` states in the control schema:
+/// Prisma maps BigInt to a JS BigInt, which `JSON.stringify` throws on, so every route returning one
+/// needs a bespoke serialiser and the one that forgets fails in production rather than in tests. A
+/// double is exact for integers to 2^53 — nine petabytes — and a model file is five gigabytes.
+model NativeModelDownload {
+  id String @id @default(uuid())
+
+  /// A `nativeModelCatalogue` id (packages/shared/src/native-models.ts). Stored rather than
+  /// referenced because the catalogue ships in the build: a later release may remove an entry
+  /// somebody has already downloaded, and that must render as "unknown model — delete it" rather
+  /// than as a dangling relation.
+  modelId String @unique @db.VarChar(80)
+
+  /// queued | downloading | verifying | ready | failed | cancelled
+  ///
+  /// `verifying` is its own state because it is seconds of real work with no bytes moving: the
+  /// finished temp file is re-read end to end to hash it and check its magic bytes. Folded into
+  /// `downloading` it would look like a progress bar stuck at 100%.
+  status String @default("queued") @db.VarChar(20)
+
+  /// Progress. `bytesTotal` is `Content-Length` when the server sent one — NULL means "it would not
+  /// say", which is a real outcome and not zero, and the bar has to render indeterminate for it.
+  bytesDownloaded Float  @default(0)
+  bytesTotal      Float?
+
+  /// THE MEASURED TRUTH, and the reason this table exists at all. The catalogue derives a file size
+  /// from the quantisation's published bits-per-weight and says so; this is the size of the file
+  /// that actually arrived, and everything downstream prefers it (see
+  /// `nativeModelWithMeasuredSize`). The hash is recorded, not compared — the catalogue publishes
+  /// no hashes, because asserting one it cannot verify would be worse than admitting the gap.
+  fileSizeBytes Float?
+  sha256        String? @db.Char(64)
+
+  /// Absolute path of the stored file. NULL until `ready`, and cleared by a delete.
+  filePath String? @db.VarChar(500)
+  /// Where it came from, recorded so a support conversation does not have to re-derive it.
+  sourceUrl String? @db.VarChar(1000)
+
+  /// Operator-facing, populated only on `failed`, and it always names the numbers — "verification
+  /// failed" is not an error message anyone can act on.
+  error String? @db.Text
+
+  /// THE MEASUREMENT THAT REPLACES THE ESTIMATE. `estimateNativeModelFit` guesses generation speed
+  /// from assumed memory bandwidth and marks itself `measured: false`; these columns are what a real
+  /// benchmark against the running server recorded. `suggestedMaxOutputTokens` is the number
+  /// `AIProviderConfig.maxOutputTokens` should hold — deriving it from a measurement instead of a
+  /// guess is the entire point of the benchmark.
+  benchmarkedAt           DateTime?
+  timeToFirstTokenMs      Int?
+  tokensPerSecond         Float?
+  benchmarkOutputTokens   Int?
+  benchmarkTotalMs        Int?
+  suggestedMaxOutputTokens Int?
+
+  requestedById String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status])
+}
+
 /// How much authority one AI capability has when it runs.
 ///
 /// The ladder is deliberately short and its rungs are deliberately unequal in size: almost

@@ -52,6 +52,7 @@ import { registerFlowDispatch } from "./services/automation-dispatch.service.js"
 import { reportTenantSchemaDrift } from "./services/tenant-schema-check.service.js";
 import { reportDeploymentConfig } from "./config/deployment-check.js";
 import { warmFaceModelsIfEnabled } from "./services/face.service.js";
+import { startNativeRuntimeIfConfigured, stopNativeRuntime } from "./services/native-runtime.service.js";
 import { announceRunningRelease } from "./services/release-announce.service.js";
 import { startIdentityWeeklyDigestWorker } from "./workers/identity-weekly-digest.worker.js";
 import { startProjectRiskWorker } from "./workers/project-risk.worker.js";
@@ -287,6 +288,16 @@ server.on("listening", async () => {
     console.warn(`[face] boot warm-up skipped: ${(error as Error).message}`)
   );
 
+  // Detached, and deliberately IDENTICAL in shape to the line above it. Starts the local
+  // llama.cpp runtime only where a workspace has an enabled native provider row naming a model this
+  // host has already downloaded; absent that it costs one query per org and stops. Nothing it can
+  // encounter — a missing binary, a missing model, a port in use — may reach this catch as a failed
+  // boot, and the service is written so that it does not: it reports "native provider unavailable"
+  // and the API keeps serving every other provider. See services/native-runtime.service.ts.
+  void startNativeRuntimeIfConfigured(runForEveryOrg).catch((error) =>
+    console.warn(`[native-runtime] boot start skipped: ${(error as Error).message}`)
+  );
+
   // Detached, and at BOOT rather than on a schedule, because "the version changed" only ever
   // happens when this process is replaced. Writes one bell notification per user per new version,
   // at most once per workspace (see release-announce.service.ts for the dedupe), so a restart loop
@@ -320,6 +331,17 @@ function shutdown(signal: NodeJS.Signals) {
 
   server.close(async (err) => {
     if (err) console.error("[shutdown] server.close error:", err.message);
+    // FIRST, and before the database work: a `llama-server` child holds several gigabytes and this
+    // process's own model port, so one that outlives us makes the NEXT start fail with EADDRINUSE
+    // on a machine that is already running the thing it says it cannot start. It sends SIGTERM,
+    // waits a five-second grace inside this 25-second budget, then SIGKILLs — and there is a
+    // synchronous `process.on("exit")` kill behind it for the two paths that never reach here: the
+    // forced exit when the grace window expires, and the `uncaughtException` route below.
+    try {
+      await stopNativeRuntime();
+    } catch (error) {
+      console.error("[shutdown] native runtime stop error:", (error as Error).message);
+    }
     try {
       // Before the pools close, not after: buffered telemetry is written through the tenant clients
       // `disconnectAllTenantClients` is about to tear down. A rolling deploy replaces this process

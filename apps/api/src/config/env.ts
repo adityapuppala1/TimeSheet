@@ -250,6 +250,56 @@ const schema = z.object({
   ANTHROPIC_API_KEY: z.string().default(""),
 
   /**
+   * THE MANAGED llama.cpp RUNTIME. All five are optional and the defaults add up to "this
+   * deployment does nothing native", which is what every existing installation runs — see
+   * config/native-ai.ts for how they resolve and services/native-runtime.service.ts for who reads
+   * them. Nothing here is reachable from a tenant: a workspace admin picks a model, an OPERATOR
+   * decides whether this box may run one at all.
+   *
+   * `NATIVE_AI_RUNTIME_MODE` — "auto" (the default) asks the hardware probe where it is running and
+   * answers `external` under Docker/Kubernetes, `embedded` otherwise. "auto" is safe as a default
+   * because the mode is only ever ACTED on when a workspace has an enabled `LLAMA_CPP` provider row
+   * naming a model this machine has already downloaded; until then the supervisor resolves a mode,
+   * reports it, and starts nothing. `off` is the operator's hard veto — it makes every route in
+   * this subsystem answer "off" without touching the disk, the PATH or a child process.
+   *
+   * `NATIVE_AI_SERVER_BIN` — absolute path to `llama-server`. Left empty, PATH is searched. NOTHING
+   * IS EVER DOWNLOADED to satisfy this: a runtime dependency on an external binary is a real cost,
+   * and config/version.ts already declines to spawn `git` at boot for the same reason.
+   *
+   * `NATIVE_AI_HOST`/`NATIVE_AI_PORT` — where the runtime listens. The host default is loopback and
+   * an EMBEDDED runtime must never be given anything else; the override exists for `external`,
+   * where a Docker Compose sidecar is a different container with its own name. Changing either
+   * re-derives every `LLAMA_CPP` provider row's stored URL on its next write.
+   *
+   * `NATIVE_AI_MODEL_DIR` — where GGUF files live. Defaults beside the uploads tree so a
+   * deployment that has already moved storage onto a volume gets this on the volume too, which is
+   * the whole point: a downloaded model inside a container's writable layer dies with the
+   * container, and it is measured in gigabytes.
+   */
+  /*
+   * AN EMPTY VALUE MEANS "UNSET" FOR BOTH OF THE TYPED ONES BELOW, and that is not fussiness — it is
+   * the difference between a deployment booting and not. Zod's `.default()` only fires for
+   * `undefined`, while dotenv turns `NATIVE_AI_RUNTIME_MODE=` in a `.env` file into the empty
+   * STRING. Without the preprocess, an operator who blanked a line (or `scripts/bootstrap-dev.mjs`
+   * syncing a blank one across from `.env.example`) would fail the enum, and `env.ts` refuses to
+   * boot on a parse error. The same trap catches the port through `z.coerce`, where `Number("")` is
+   * 0 and 0 fails `.min(1)`. `TRUST_PROXY_HOPS` and the STORAGE_* variables both took the trouble to
+   * avoid this in their own way; these two do it explicitly.
+   */
+  NATIVE_AI_RUNTIME_MODE: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.enum(["auto", "embedded", "external", "off"]).default("auto")
+  ),
+  NATIVE_AI_SERVER_BIN: z.string().default(""),
+  NATIVE_AI_HOST: z.string().default("127.0.0.1"),
+  NATIVE_AI_PORT: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.coerce.number().int().min(1).max(65535).default(8080)
+  ),
+  NATIVE_AI_MODEL_DIR: absoluteDirectory("NATIVE_AI_MODEL_DIR"),
+
+  /**
    * Per-request API telemetry (middleware/request-telemetry.ts → ApiRequestSample).
    *
    * OFF BY DEFAULT **IN PRODUCTION**, and that is the important part: this middleware sits in the

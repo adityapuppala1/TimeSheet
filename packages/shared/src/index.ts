@@ -6,6 +6,10 @@ export * from "./help-articles.js";
    give the operator the same answer — see native-fit.ts's header for why that matters. */
 export * from "./native-models.js";
 export * from "./native-fit.js";
+/* The download job's states, the runtime supervisor's modes, and the four pure decisions the store
+   and the settings screen must answer identically — where a model may be fetched from, whether the
+   file that arrived is plausible, and what a benchmark lets the provider row declare. */
+export * from "./native-runtime.js";
 /**
  * WHAT: the single `@timesheet/shared` package — every type/constant that both `apps/api` and
  * `apps/web` need to agree on: roles/permission keys, activity types, ticket status/priority
