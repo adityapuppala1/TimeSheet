@@ -104,6 +104,49 @@ function snapshot(overrides: {
   };
 }
 
+describe("the budget is what the machine HAS, not what is unallocated this second", () => {
+  // The regression this whole describe exists for. A workstation with 31 GB of RAM was told a 2.9 GB
+  // model "won't fit", because 4.3 GB happened to be unallocated at that instant and the estimator
+  // judged against that. Everything else on a running machine is page cache, which the kernel hands
+  // back on demand — so the refusal was arithmetic on the wrong number, and an operator who reads it
+  // once is right to stop trusting the panel.
+  const roomy = () => snapshot({ hostTotal: 31 * GIB, hostAvailable: Math.round(4.3 * GIB) });
+
+  it("fits a model that exceeds free-right-now but sits well inside total memory", () => {
+    const estimate = estimateNativeModelFit(roomy(), roundModel, 4096, "f16");
+    expect(estimate.verdict, estimate.reason).toBe("comfortable");
+    // Judged against 31 GB minus the reserve, never against the 4.3 GB that was merely unallocated.
+    expect(estimate.ram.availableBytes).toBe(31 * GIB - nativeApplicationReserveBytes);
+  });
+
+  it("still SAYS that loading has to reclaim cache first, rather than staying silent about it", () => {
+    // Honest middle: not a refusal, not silence. The model loads; it is just not instant.
+    const tightNow = snapshot({ hostTotal: 31 * GIB, hostAvailable: 1 * GIB, effectiveTotal: 31 * GIB, effectiveAvailable: 1 * GIB });
+    const estimate = estimateNativeModelFit(tightNow, roundModel, 4096, "f16");
+    const warning = estimate.warnings.find((w) => w.code === "below-free-memory-now");
+    expect(warning, `expected a free-memory warning, got ${estimate.warnings.map((w) => w.code).join(", ") || "none"}`).toBeTruthy();
+    expect(warning!.message).toMatch(/unallocated at this moment/i);
+  });
+
+  it("does NOT warn when the model fits inside what is already free", () => {
+    const estimate = estimateNativeModelFit(snapshot({ hostTotal: 31 * GIB, hostAvailable: 20 * GIB }), roundModel, 4096, "f16");
+    expect(estimate.warnings.map((w) => w.code)).not.toContain("below-free-memory-now");
+  });
+
+  it("a cgroup limit still beats host total — the container protection survives this change", () => {
+    // The pod sees a 30 GB node and is capped at 4 GiB. The cap must remain the denominator; this is
+    // the one case where the smaller number is the true one.
+    const pod = snapshot({
+      hostTotal: 30 * GIB, hostAvailable: 25 * GIB,
+      cgroupLimit: 4 * GIB, effectiveTotal: 4 * GIB, effectiveAvailable: 4 * GIB,
+      environment: "kubernetes"
+    });
+    const estimate = estimateNativeModelFit(pod, roundModel, 16384, "f16");
+    expect(estimate.ram.availableBytes).toBe(4 * GIB - nativeApplicationReserveBytes);
+    expect(estimate.ram.availableBytes! < 30 * GIB).toBe(true);
+  });
+});
+
 describe("KV cache maths — the term the whole catalogue is built around", () => {
   // Identical models but for the KV head count: 2 (grouped-query) against 8. Same depth, same
   // head width, same context. If kv_heads is in the formula the ratio is exactly 4.
@@ -203,10 +246,12 @@ describe("the cgroup limit beats host RAM", () => {
 });
 
 describe("the application reserve", () => {
-  it("a 3 GiB model with 4 GiB free does NOT fit, because MySQL and Node live here too", () => {
+  it("a 3 GiB model on a 4 GiB machine does NOT fit, because MySQL and Node live here too", () => {
     // Bare metal, no cgroup anywhere: host and effective are the same number, so the ONLY thing
-    // standing between "4 GiB free" and "comfortable" is the reserve.
-    const hw = snapshot({ hostTotal: 8 * GIB, hostAvailable: 4 * GIB, effectiveTotal: 8 * GIB, effectiveAvailable: 4 * GIB });
+    // standing between a 4 GiB machine and "comfortable" is the reserve. Note the pressure is
+    // expressed as TOTAL memory, not free memory — free-right-now is page cache away from being
+    // meaningless, and judging against it once told a 31 GB workstation it could not hold 3 GB.
+    const hw = snapshot({ hostTotal: 4 * GIB, hostAvailable: 4 * GIB, effectiveTotal: 4 * GIB, effectiveAvailable: 4 * GIB });
     const estimate = estimateNativeModelFit(hw, roundModel, 4096);
 
     expect(estimate.ram.applicationReserveBytes).toBe(nativeApplicationReserveBytes);
@@ -215,17 +260,17 @@ describe("the application reserve", () => {
   });
 
   it("states the reserve in the reason, so the missing memory is accounted for rather than mysterious", () => {
-    const hw = snapshot({ hostAvailable: 4 * GIB, effectiveAvailable: 4 * GIB });
+    const hw = snapshot({ hostTotal: 4 * GIB, effectiveTotal: 4 * GIB });
     expect(estimateNativeModelFit(hw, roundModel, 4096).reason).toContain("reserved for the database and the app");
   });
 });
 
 describe("verdicts always explain themselves", () => {
   const cases: Array<[string, NativeHardwareSnapshot]> = [
-    ["comfortable", snapshot({ hostAvailable: 16 * GIB, effectiveAvailable: 16 * GIB })],
-    ["tight", snapshot({ hostAvailable: 5 * GIB, effectiveAvailable: 5 * GIB })],
-    ["will-not-fit", snapshot({ hostAvailable: 2 * GIB, effectiveAvailable: 2 * GIB })],
-    ["unknown", snapshot({ hostAvailable: null, effectiveAvailable: null })]
+    ["comfortable", snapshot({ hostTotal: 16 * GIB, effectiveTotal: 16 * GIB })],
+    ["tight", snapshot({ hostTotal: 5 * GIB, effectiveTotal: 5 * GIB })],
+    ["will-not-fit", snapshot({ hostTotal: 2 * GIB, effectiveTotal: 2 * GIB })],
+    ["unknown", snapshot({ hostTotal: null, effectiveTotal: null })]
   ];
 
   it.each(cases)("%s carries a non-empty reason naming real numbers", (_label, hw) => {
@@ -240,7 +285,7 @@ describe("verdicts always explain themselves", () => {
   });
 
   it("unknown memory is undecidable, never optimistic", () => {
-    const estimate = estimateNativeModelFit(snapshot({ hostAvailable: null, effectiveAvailable: null }), roundModel, 4096);
+    const estimate = estimateNativeModelFit(snapshot({ hostTotal: null, effectiveTotal: null }), roundModel, 4096);
     expect(estimate.verdict).toBe("unknown");
     expect(estimate.ram.availableBytes).toBeNull();
     expect(estimate.warnings.map((w) => w.code)).toContain("unknown-memory");
@@ -283,7 +328,7 @@ describe("thread and context recommendations", () => {
   });
 
   it("recommends nothing, with a warning, when not even the smallest rung fits", () => {
-    const hw = snapshot({ hostAvailable: 2 * GIB, effectiveAvailable: 2 * GIB });
+    const hw = snapshot({ hostTotal: 2 * GIB, effectiveTotal: 2 * GIB });
     const estimate = estimateNativeModelFit(hw, roundModel, 4096);
     expect(estimate.recommended.contextTokens).toBeNull();
     expect(estimate.warnings.map((w) => w.code)).toContain("context-does-not-fit");

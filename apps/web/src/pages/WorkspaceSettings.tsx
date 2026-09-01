@@ -118,6 +118,7 @@ import { ChangeManagementSettingsCard } from "./settings/ChangeManagementSetting
 import { PlanningSettingsCard } from "./settings/PlanningSettingsCard";
 import { StorageAndLogsCard } from "./settings/StorageAndLogsCard";
 import { AIProviderListCard } from "./settings/AIProviderListCard";
+import { NativeModelRunnerCard } from "./settings/NativeModelRunnerCard";
 
 // Matches the exact chart styling convention used in Insights.tsx (this repo's `dataviz`
 // skill): CSS-variable colors only, fixed categorical order never re-cycled by rank.
@@ -1650,6 +1651,11 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
               </div>
 
               <AIProviderListCard readOnly={readOnly} />
+
+              {/* Below the provider list on purpose: this card's whole payoff is the button that
+                  puts a locally-run model at the TOP of that list, and reading it in that order is
+                  what makes "native is primary, the cloud key is the fallback" obvious. */}
+              <NativeModelRunnerCard readOnly={readOnly} />
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="grid gap-1.5">

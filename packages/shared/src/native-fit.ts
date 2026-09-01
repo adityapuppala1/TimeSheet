@@ -13,10 +13,20 @@
  * THE THING THIS FILE EXISTS TO GET RIGHT. `os.totalmem()` reports the HOST's memory, always. A
  * container capped at 1 GiB is told it has 32 GiB, is told a 3B model fits comfortably, downloads
  * two gigabytes, and is OOM-killed the instant llama.cpp maps the file. Every memory figure that
- * reaches a verdict here comes from `memory.effectiveTotalBytes` /
- * `memory.effectiveAvailableBytes`, which the probe has already reduced to the MINIMUM of the host
- * figure and any cgroup limit. Nothing in this file may reach past those to the host numbers, and
- * a test pins exactly that.
+ * reaches a verdict comes from `memory.effectiveTotalBytes`, which the probe has already reduced to
+ * the MINIMUM of the host figure and any cgroup limit. Nothing here may reach past it to the host
+ * number, and a test pins exactly that.
+ *
+ * AND THE VERDICT IS COMPUTED FROM TOTAL, NOT FROM FREE-RIGHT-NOW. This is the second half of the
+ * same lesson and it was learned the hard way: judging against `freemem()` told a workstation with
+ * 31 GB of RAM that a 2.9 GB model would not fit, because 4.3 GB happened to be unallocated at the
+ * moment of the probe. Everything else was reclaimable page cache — memory the kernel hands back the
+ * instant something asks for it. A refusal like that is not conservative, it is wrong, and an
+ * operator who reads it once is right to stop trusting the whole screen.
+ *
+ * So the budget is what the machine HAS minus a stated reserve, and free-right-now becomes a
+ * WARNING when a model needs more than is currently unallocated: it will load, the kernel just has
+ * to evict cache first. Both tests are pinned, including the 31 GB case by name.
  *
  * WHAT IS DELIBERATELY AN ESTIMATE, AND SAYS SO. The generation speed. CPU token generation is
  * bound by memory bandwidth, not clock — every token streams the entire model through the cache
@@ -392,11 +402,32 @@ export function estimateNativeModelFit(
   const kvCacheBytes = nativeKvCacheBytes(model, contextTokens, kvCacheType);
   const requiredBytes = weight.bytes + kvCacheBytes + nativeRuntimeOverheadBytes;
 
-  // THE CENTRAL RULE OF THIS FILE: `effectiveAvailableBytes` has already had any cgroup limit
-  // applied by the probe. Reaching for `hostAvailableBytes` here would re-introduce exactly the
-  // container lie this block exists to remove, so the host figures are reported and never used.
-  const effectiveAvailable = hardware.memory.effectiveAvailableBytes;
-  const availableBytes = effectiveAvailable === null ? null : Math.max(0, effectiveAvailable - nativeApplicationReserveBytes);
+  // THE CENTRAL RULE OF THIS FILE: the budget is derived from the effective TOTAL — the host's
+  // memory or the cgroup limit, whichever is lower — and never from the host figure alone. That is
+  // what keeps the container lie out of the verdict.
+  //
+  // AND IT IS TOTAL, NOT FREE-RIGHT-NOW, which is the correction that matters most here. `freemem()`
+  // reports only unallocated memory; on any machine that has been up for an hour most of the rest is
+  // reclaimable page cache, which the kernel hands back the moment something asks. Judging against it
+  // produced the absurdity this rule was written for: a box with 31 GB of RAM being told a 2.9 GB
+  // model would not fit, because 4.3 GB happened to be unallocated at that instant. An operator who
+  // reads that once stops believing the panel, and they are right to.
+  //
+  // Free-right-now is still worth knowing — it decides whether loading is instant or whether the
+  // kernel has to evict cache first — so it becomes a WARNING below rather than the denominator.
+  const effectiveTotal = hardware.memory.effectiveTotalBytes;
+  const availableBytes = effectiveTotal === null ? null : Math.max(0, effectiveTotal - nativeApplicationReserveBytes);
+
+  // A model that fits the budget but exceeds what is unallocated will load — the kernel reclaims
+  // cache — it just will not load instantly. Saying so is the honest middle between silence and a
+  // false refusal.
+  const freeNow = hardware.memory.effectiveAvailableBytes;
+  if (availableBytes !== null && freeNow !== null && requiredBytes <= availableBytes && requiredBytes > freeNow) {
+    warnings.push({
+      code: "below-free-memory-now",
+      message: `This fits the machine, but only ${formatBytes(freeNow)} is unallocated at this moment against ${formatBytes(requiredBytes)} needed. The kernel will reclaim page cache to make room, so loading works — it is just slower the first time, and worth a second look if this box is genuinely busy.`
+    });
+  }
 
   if (
     hardware.environment.kind !== "bare-metal" &&

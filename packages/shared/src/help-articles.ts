@@ -411,6 +411,22 @@ export const HELP_ARTICLES: HelpArticle[] = [
     screenshot: "settings-ai.png",
     keywords: ["ai settings", "byok", "provider", "key", "budget", "ollama", "anthropic", "openai", "quality", "evals", "prompt"]
   },
+  {
+    id: "ai-native-model",
+    category: "AI",
+    title: "Run an AI model on your own server",
+    roles: SA,
+    where: "Workspace settings → AI → Run a model on this server",
+    when: "No per-call cost, nothing sent to a vendor, and it works with no internet at all — paid for in memory and speed.",
+    steps: [
+      "Read \"Your system\" first. It shows the CPU, the RAM this process may actually use, free disk, and how it worked out whether it is on bare metal, in Docker or in Kubernetes. If it warns that the memory figures are the HOST's, set a memory limit on the container before trusting anything below it.",
+      "Pick a model from the list. Each one states what it is good and bad at, and whether it fits — with the arithmetic: weights, plus the KV cache at the chosen context, plus llama.cpp's own working set, against what is left after 1.5 GB is reserved for the database and the API. Models that will not fit are shown anyway, with the reason.",
+      "Move the context steps and the KV precision and watch every model's memory line change. An 8-bit KV cache roughly halves what the context costs, and is the first thing to try when the model you want is one step away from fitting.",
+      "Download it (the transfer runs on the server; verification is its own step), then Run it, then Measure it — the benchmark replaces the speed ESTIMATE with a real tokens/sec, a time-to-first-token, and the output-token ceiling this machine can meet inside the 90-second call limit.",
+      "Press \"Make it the primary provider\". That adds a llama.cpp row at the TOP of the provider list, carrying the running context and the measured ceiling. Reorder, disable or delete it from the provider list like any other."
+    ],
+    keywords: ["local model", "llama.cpp", "gguf", "offline ai", "self hosted", "on premise", "cpu", "quantisation", "kv cache", "context window", "benchmark", "download model"]
+  },
 
   /* ── Workspace settings ──────────────────────────────────────────────────────────────────── */
   {

@@ -10,6 +10,55 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🤖 The screen an administrator actually uses to run a model on their own server
+
+- **"Run a model on this server", in Workspace settings → AI.** Everything the last three releases
+  built behind the scenes — the hardware probe, the curated catalogue, the fit estimator, the
+  downloader, the supervisor and the benchmark — now has a face. It opens with what this machine
+  *is*: CPU and physical cores, the RAM this process may actually use, free disk on the volume the
+  models land on, and the environment it detected **with the evidence attached** ("Kubernetes,
+  detected from KUBERNETES_SERVICE_HOST is set"), because a label nobody can check is a label
+  somebody argues with. Anything the platform would not report says *unknown* rather than showing a
+  confident zero — an unreadable disk figure and an empty disk are very different problems.
+- **The warning that stops a container being killed by its own settings page.** `os.totalmem()`
+  always reports the HOST's memory, so a pod with no cgroup memory limit is told it has the whole
+  node, told a 3B model fits comfortably, downloads two gigabytes, and dies the instant llama.cpp
+  maps the file. When that is the situation, the card says so at the top, in those terms, and states
+  plainly that every estimate below it is optimistic until a real limit is set.
+- **A model list that argues its case instead of colouring a badge.** One card per catalogue entry,
+  each with what it is good at *and* what it is bad at, and a verdict whose reasoning is on the face
+  of the card and never behind a tooltip: "Comfortable: needs 2.4 GB of 6.5 GB available after
+  reserve", "Won't fit: needs 9.4 GB, 6.5 GB available after the 1.5 GB reserved for the database
+  and the app." The memory figure is always shown **split** — weights + KV cache at the chosen
+  context + runtime working set = total — because an operator deciding between 8k and 16k needs to
+  see which of the three moved. Models that will not fit are **listed anyway**, clearly refused and
+  with the reason: hiding them answers "why isn't the 7B here?" with silence, and an operator who
+  cannot see the refusal cannot see that one step of context, or an 8-bit cache, would lift it.
+- **The tuning is the point, and it recomputes live.** Threads (bounded by physical cores, clamped
+  by any cgroup CPU quota, and recommended one short of the total with the reason stated: llama.cpp
+  saturates whatever it is given, and a box with no core left for MySQL answers the request that
+  *asked* for the completion slowly), context as steps rather than a free number, and 16-bit versus
+  8-bit KV cache. Move any of them and every model's memory line re-derives in front of you, through
+  the same shared estimator the API runs — so the screen cannot show a green badge over a server
+  that would refuse the same settings.
+- **Estimated and measured never look alike.** A speed figure derived from an assumed memory
+  bandwidth wears a dashed outline, a "≈" and muted text; a benchmark wears a solid badge, an exact
+  number, its time-to-first-token, and the output-token ceiling that measurement implies — described
+  as what this machine can emit inside the 90-second call ceiling. Downloads show verification as its
+  own step rather than a bar frozen at 100%, and a failure quotes what actually arrived, so an HTML
+  error page saved under a `.gguf` name reads as a diagnosis instead of "verification failed".
+- **One button makes it primary.** Creating the `LLAMA_CPP` provider row puts it at the **top** of
+  the priority order rather than appending it like every other kind — a model on your own CPU is the
+  thing decisions should be made with, and a cloud key is the fallback behind it. It carries the
+  running context, the measured output ceiling, and one concurrent call, because llama.cpp serves one
+  request per slot. After that the existing provider list owns it completely. The same kind can be
+  added from the **Add provider** dialog, with the same three controls — the same component, not a
+  copy — and saving there applies them to the runtime rather than merely recording them.
+- **Honest with nothing installed.** The whole panel works, and tells the truth, with no model
+  downloaded, no `llama-server` binary on the box and the runtime off — which is the state every
+  installation is in the first time it is opened. Each empty state names the next step instead of
+  looking broken.
+
 ### 🤖 Fetch a model, run it, and measure it instead of guessing
 
 - **A model store on this machine's own disk, with four ways to refuse a file.** A download is a row

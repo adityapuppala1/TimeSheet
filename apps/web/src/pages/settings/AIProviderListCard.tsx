@@ -22,7 +22,7 @@
  */
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { aiModels, aiProviderPresets, resolveProviderLabel, type AIProvider } from "@timesheet/shared";
+import { aiModels, aiProviderPresets, findNativeModel, resolveProviderLabel, type AIProvider, type NativeKvCacheType } from "@timesheet/shared";
 import { ArrowDown, ArrowUp, Bolt, KeyRound, Loader2, Pencil, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import {
   settingsApi,
@@ -44,6 +44,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toaster";
 import { cn } from "../../lib/utils";
+import { NativeRuntimeTuningControls } from "./NativeModelRunnerCard";
 
 function providerDisplayName(row: Pick<AIProviderConfigRow, "provider" | "baseUrl" | "label">): string {
   return row.label?.trim() || resolveProviderLabel(row.provider, row.baseUrl);
@@ -388,6 +389,186 @@ function fetchedModelOptions(models: string[], currentModel: string): Array<{ id
   return [...current, ...models.map((m) => ({ id: m, name: m }))];
 }
 
+/**
+ * Everything the native kind adds to this dialog, kept in one hook.
+ *
+ * WHY A HOOK RATHER THAN MORE STATE IN THE DIALOG: that function already runs one state machine
+ * (preset, base URL, key, fetched-model list); a second one interleaved with it is how a component
+ * stops being readable. Both queries stay OFF until the native preset is actually chosen, and both
+ * use the exact cache keys NativeModelRunnerCard uses — so opening this dialog on the AI tab reads
+ * what that card already fetched instead of re-probing the host.
+ *
+ * The "override, or the recommendation" shape is the runner card's, for the runner card's reason:
+ * `?? recommended` fills the controls the instant the capability report lands, with no effect that
+ * would fight an operator mid-edit on a refetch.
+ */
+function useNativeProviderDraft(active: boolean, config: AIProviderConfigRow | null) {
+  const [context, setContext] = useState<number | null>(config?.contextWindow ?? null);
+  const [threads, setThreads] = useState<string | null>(null);
+  const [kvCacheType, setKvCacheType] = useState<NativeKvCacheType>("f16");
+
+  const capability = useQuery({
+    queryKey: ["settings", "ai", "native", "capability"],
+    queryFn: settingsApi.getNativeAiCapability,
+    enabled: active
+  });
+  const downloads = useQuery({
+    queryKey: ["settings", "ai", "native", "downloads"],
+    queryFn: settingsApi.listNativeAiDownloads,
+    enabled: active
+  });
+
+  const estimate = capability.data?.models[0]?.estimate ?? null;
+  const suggested = capability.data?.models.find((row) => row.modelId === capability.data?.suggestedModelId)?.estimate ?? null;
+  const recommendedContext = suggested?.recommended.contextTokens ?? 8192;
+  const recommendedThreads = estimate?.recommended.threads ?? null;
+
+  return {
+    hardware: capability.data?.hardware ?? null,
+    estimate,
+    recommendedContext,
+    recommendedThreads,
+    // Only what is actually on this machine's disk. A row naming a model nobody downloaded is a
+    // provider every AI feature tries first and every one of them fails on.
+    readyModels: (downloads.data ?? []).filter((row) => row.status === "ready"),
+    loadingModels: downloads.isLoading,
+    contextTokens: context ?? recommendedContext,
+    setContext,
+    threadsField: threads ?? (recommendedThreads === null ? "" : String(recommendedThreads)),
+    setThreads,
+    kvCacheType,
+    setKvCacheType
+  };
+}
+
+/**
+ * Hands the three launch knobs to the runtime once a native row has been saved, and returns the
+ * sentence to show for it. NEVER THROWS.
+ *
+ * A FAILED START MUST NOT FAIL THE SAVE. The row is already written by the time this runs, and
+ * "saved, but the runtime did not start, because …" is worth more to an operator than rolling back
+ * a perfectly good provider row. In `external`/`off` mode the API starts nothing and returns the
+ * status unchanged — which is correct, and its own `detail` says so in words.
+ */
+async function applyNativeLaunch(input: {
+  modelId: string;
+  contextTokens: number;
+  threads?: number;
+  kvCacheType: NativeKvCacheType;
+  parallelSlots: number;
+}): Promise<string> {
+  try {
+    const status = await settingsApi.startNativeAiRuntime(input);
+    return status.detail;
+  } catch (error: any) {
+    return `Saved, but the local runtime did not start: ${error?.response?.data?.message ?? "no reason given"}`;
+  }
+}
+
+/**
+ * The model control, which is four different controls depending on the kind: Anthropic's own
+ * catalogue, the models on this machine's disk, a fetched list, or a typed name.
+ *
+ * ITS OWN COMPONENT WITH EARLY RETURNS rather than a four-deep ternary in the dialog's JSX — the
+ * chain was already at the edge of legible with three branches, and the native kind's own empty
+ * state (nothing downloaded yet) makes a fifth.
+ */
+function ProviderModelField({
+  provider,
+  model,
+  onModelChange,
+  fetched,
+  manualEntry,
+  onManualEntry,
+  nativeReadyModels,
+  nativeLoading
+}: {
+  provider: AIProvider;
+  model: string;
+  onModelChange: (value: string) => void;
+  fetched: { ok: boolean; models: string[]; message?: string } | undefined;
+  manualEntry: boolean;
+  onManualEntry: () => void;
+  nativeReadyModels: Array<{ modelId: string }>;
+  nativeLoading: boolean;
+}) {
+  if (provider === "ANTHROPIC") {
+    return (
+      <SearchableSelect
+        options={aiModels.map((m) => ({ id: m.id, name: m.label }))}
+        value={model}
+        onChange={onModelChange}
+        placeholder="Pick a model"
+        searchPlaceholder="Search models…"
+        aria-label="Model"
+      />
+    );
+  }
+
+  if (provider === "LLAMA_CPP") {
+    // An empty store is the ordinary first state, and it says what to do about it rather than
+    // rendering a picker with nothing in it.
+    if (nativeReadyModels.length === 0) {
+      return (
+        <p className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
+          {nativeLoading
+            ? "Checking what is on this machine's disk…"
+            : 'No model has been downloaded on this server yet. Close this dialog and use "Run a model on this server" below the list — it shows which models fit this machine, and why.'}
+        </p>
+      );
+    }
+    return (
+      <Select value={model} onValueChange={onModelChange}>
+        <SelectTrigger aria-label="Model">
+          <SelectValue placeholder="Pick a downloaded model" />
+        </SelectTrigger>
+        <SelectContent>
+          {nativeReadyModels.map((row) => (
+            <SelectItem key={row.modelId} value={row.modelId}>
+              {findNativeModel(row.modelId)?.displayName ?? row.modelId}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  if (fetched?.ok && fetched.models.length > 0 && !manualEntry) {
+    return (
+      <>
+        <SearchableSelect
+          // A provider like OpenRouter can list hundreds of models — the plain dropdown this
+          // replaced made every one of them a scroll-and-squint exercise with no way to type a name.
+          options={fetchedModelOptions(fetched.models, model)}
+          value={model}
+          onChange={onModelChange}
+          placeholder="Pick a model"
+          searchPlaceholder="Search models…"
+          aria-label="Model"
+        />
+        <button
+          type="button"
+          className="justify-self-start text-xs text-muted-foreground underline-offset-2 hover:underline"
+          onClick={onManualEntry}
+        >
+          Enter manually instead
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Input value={model} placeholder="e.g. llama3.1, mixtral-8x7b, gpt-4o-mini" onChange={(e) => onModelChange(e.target.value)} />
+      <p className="text-xs text-muted-foreground">
+        {fetched && !fetched.ok
+          ? `Couldn't fetch a model list (${fetched.message ?? "unknown error"}) — enter the exact model name.`
+          : 'Exact model name as this provider expects it, or click "Fetch available models" above to pick from a list.'}
+      </p>
+    </>
+  );
+}
+
 function ProviderConfigDialog({
   config,
   onClose,
@@ -398,13 +579,15 @@ function ProviderConfigDialog({
   onSaved: () => void;
 }) {
   const isNew = config === null;
-  // Widened to the full shared union so an existing LLAMA_CPP row can be opened and saved without
-  // its kind being coerced. This dialog does not yet offer a way to CREATE one — the native runtime
-  // has no supervisor, catalogue or downloader behind it yet, and a preset that starts nothing
-  // would be a control that lies. That is the next block's work.
+  // The full shared union, so an existing LLAMA_CPP row opens and saves without its kind being
+  // coerced — and, since the supervisor, catalogue and downloader now exist behind it, so one can
+  // be CREATED here too. The three knobs that kind needs (threads, context, KV precision) are the
+  // very same component the "Run a model on this server" card renders, imported rather than copied:
+  // two controls that looked alike while writing different values would be worse than one.
   const [provider, setProvider] = useState<AIProvider>(config?.provider ?? "ANTHROPIC");
   const [presetKey, setPresetKey] = useState(() => {
     if (!config || config.provider === "ANTHROPIC") return "anthropic";
+    if (config.provider === "LLAMA_CPP") return "native";
     return aiProviderPresets.find((p) => p.baseUrl && p.baseUrl === config.baseUrl)?.key ?? "custom";
   });
   const [label, setLabel] = useState(config?.label ?? "");
@@ -414,11 +597,24 @@ function ProviderConfigDialog({
   const [maxConcurrent, setMaxConcurrent] = useState(String(config?.maxConcurrent ?? 2));
   const [manualModelEntry, setManualModelEntry] = useState(true);
 
+  const isNative = provider === "LLAMA_CPP";
+  const native = useNativeProviderDraft(isNative, config);
+
   function selectPreset(key: string) {
     setPresetKey(key);
     if (key === "anthropic") {
       setProvider("ANTHROPIC");
       setBaseUrl("");
+    } else if (key === "native") {
+      // The endpoint here is NOT the admin's to give — config/native-ai.ts derives it and the write
+      // path discards whatever arrives — so the field is not rendered at all rather than rendered
+      // and quietly ignored. Same for the key: a process on loopback has none.
+      setProvider("LLAMA_CPP");
+      setBaseUrl("");
+      setModel("");
+      // llama.cpp serves one request per slot; a higher ceiling just recreates the unbounded
+      // queueing `maxConcurrent` exists to prevent.
+      setMaxConcurrent("1");
     } else {
       setProvider("OPENAI_COMPATIBLE");
       setBaseUrl(aiProviderPresets.find((p) => p.key === key)?.baseUrl ?? "");
@@ -443,7 +639,8 @@ function ProviderConfigDialog({
   });
 
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
+      const slots = Math.min(64, Math.max(1, Number(maxConcurrent) || 2));
       const payload: Partial<AIProviderConfigInput> = {
         provider,
         label: label.trim() || null,
@@ -451,13 +648,34 @@ function ProviderConfigDialog({
         model,
         // Clamped to the same 1-64 the API enforces, so a typo can't send an obviously-wrong
         // ceiling and get a 422 back instead of a saved provider.
-        maxConcurrent: Math.min(64, Math.max(1, Number(maxConcurrent) || 2))
+        maxConcurrent: slots
       };
+      // The context an operator picked below is what the row DECLARES, so the dispatcher's demand
+      // filter and the process actually serving the call agree about the window.
+      if (isNative) payload.contextWindow = native.contextTokens;
       if (apiKeyDraft) payload.apiKey = apiKeyDraft;
-      return isNew ? settingsApi.createAiProvider(payload as AIProviderConfigInput) : settingsApi.updateAiProvider(config!.id, payload);
+      const saved = isNew
+        ? await settingsApi.createAiProvider(payload as AIProviderConfigInput)
+        : await settingsApi.updateAiProvider(config!.id, payload);
+
+      // THE THREE KNOBS ARE APPLIED, NOT MERELY COLLECTED. Threads and KV precision are launch
+      // arguments for `llama-server` and live nowhere on a provider row, so a dialog that showed all
+      // three and stored only the context would be three controls where one works.
+      const threadCount = Number(native.threadsField);
+      let runtimeNote: string | null = null;
+      if (isNative) {
+        runtimeNote = await applyNativeLaunch({
+          modelId: model,
+          contextTokens: native.contextTokens,
+          threads: threadCount > 0 ? threadCount : undefined,
+          kvCacheType: native.kvCacheType,
+          parallelSlots: slots
+        });
+      }
+      return { saved, runtimeNote };
     },
-    onSuccess: () => {
-      toast.success(isNew ? "Provider added" : "Provider updated");
+    onSuccess: ({ runtimeNote }) => {
+      toast.success(isNew ? "Provider added" : "Provider updated", runtimeNote ? { description: runtimeNote } : undefined);
       onSaved();
       onClose();
     },
@@ -471,7 +689,8 @@ function ProviderConfigDialog({
           <DialogTitle>{isNew ? "Add provider" : "Edit provider"}</DialogTitle>
           <DialogDescription>
             Every non-Anthropic option talks to the same OpenAI-compatible chat API — pick a preset to fill in its
-            base URL, or "Custom endpoint" for anything else that speaks that protocol.
+            base URL, or "Custom endpoint" for anything else that speaks that protocol. "Local model on this server" is
+            the one kind with no endpoint and no key: it points at a model running on this machine's own CPU.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
@@ -483,6 +702,7 @@ function ProviderConfigDialog({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="anthropic">Anthropic</SelectItem>
+                <SelectItem value="native">Local model on this server (llama.cpp)</SelectItem>
                 {aiProviderPresets.map((p) => (
                   <SelectItem key={p.key} value={p.key}>
                     {p.label}
@@ -501,18 +721,23 @@ function ProviderConfigDialog({
               <Input value={baseUrl} placeholder="https://api.example.com/v1" onChange={(e) => setBaseUrl(e.target.value)} />
             </div>
           )}
-          <div className="grid gap-1.5">
-            <Label>
-              API key{" "}
-              {config?.apiKeySet && <span className="font-normal text-muted-foreground">(saved — leave blank to keep it)</span>}
-            </Label>
-            <Input
-              type="password"
-              placeholder={config?.apiKeySet ? "•••••••••••••••• (unchanged)" : "Not set"}
-              value={apiKeyDraft}
-              onChange={(e) => setApiKeyDraft(e.target.value)}
-            />
-          </div>
+          {/* No key field for the native kind, and not merely as tidiness: the process is on this
+              host's loopback, there is nothing to authenticate to, and an empty password box would
+              read as a setting somebody forgot rather than one that does not exist. */}
+          {!isNative && (
+            <div className="grid gap-1.5">
+              <Label>
+                API key{" "}
+                {config?.apiKeySet && <span className="font-normal text-muted-foreground">(saved — leave blank to keep it)</span>}
+              </Label>
+              <Input
+                type="password"
+                placeholder={config?.apiKeySet ? "•••••••••••••••• (unchanged)" : "Not set"}
+                value={apiKeyDraft}
+                onChange={(e) => setApiKeyDraft(e.target.value)}
+              />
+            </div>
+          )}
           <div className="grid gap-1.5">
             <Label htmlFor="provider-max-concurrent">Concurrent calls</Label>
             <Input
@@ -525,8 +750,18 @@ function ProviderConfigDialog({
             />
             <p className="text-xs text-muted-foreground">
               How many requests may run against this provider at once. Anything beyond it waits briefly, then falls over to the next
-              provider — which is what stops a busy provider from silently queueing everyone. For a self-hosted Ollama, match{" "}
-              <code className="rounded bg-muted px-1 py-0.5 text-[11px]">OLLAMA_NUM_PARALLEL</code>; a hosted API can go much higher.
+              provider — which is what stops a busy provider from silently queueing everyone.{" "}
+              {isNative ? (
+                <>
+                  For a local model, 1 is almost always right: llama.cpp serves one request per slot, and every extra slot divides
+                  the same CPU and adds its own KV cache to the memory bill. This number is also what the runtime is started with.
+                </>
+              ) : (
+                <>
+                  For a self-hosted Ollama, match <code className="rounded bg-muted px-1 py-0.5 text-[11px]">OLLAMA_NUM_PARALLEL</code>;
+                  a hosted API can go much higher.
+                </>
+              )}
             </p>
           </div>
           <div className="grid gap-1.5">
@@ -546,47 +781,44 @@ function ProviderConfigDialog({
                 </Button>
               )}
             </div>
-            {provider === "ANTHROPIC" ? (
-              <SearchableSelect
-                options={aiModels.map((m) => ({ id: m.id, name: m.label }))}
-                value={model}
-                onChange={setModel}
-                placeholder="Pick a model"
-                searchPlaceholder="Search models…"
-                aria-label="Model"
-              />
-            ) : fetchModels.data?.ok && fetchModels.data.models.length > 0 && !manualModelEntry ? (
-              <>
-                <SearchableSelect
-                  // A provider like OpenRouter can list hundreds of models — the plain dropdown
-                  // this replaced made every one of them a scroll-and-squint exercise with no way
-                  // to type a name.
-                  options={fetchedModelOptions(fetchModels.data.models, model)}
-                  value={model}
-                  onChange={setModel}
-                  placeholder="Pick a model"
-                  searchPlaceholder="Search models…"
-                  aria-label="Model"
-                />
-                <button
-                  type="button"
-                  className="justify-self-start text-xs text-muted-foreground underline-offset-2 hover:underline"
-                  onClick={() => setManualModelEntry(true)}
-                >
-                  Enter manually instead
-                </button>
-              </>
-            ) : (
-              <>
-                <Input value={model} placeholder="e.g. llama3.1, mixtral-8x7b, gpt-4o-mini" onChange={(e) => setModel(e.target.value)} />
-                <p className="text-xs text-muted-foreground">
-                  {fetchModels.data && !fetchModels.data.ok
-                    ? `Couldn't fetch a model list (${fetchModels.data.message ?? "unknown error"}) — enter the exact model name.`
-                    : 'Exact model name as this provider expects it, or click "Fetch available models" above to pick from a list.'}
-                </p>
-              </>
-            )}
+            <ProviderModelField
+              provider={provider}
+              model={model}
+              onModelChange={setModel}
+              fetched={fetchModels.data}
+              manualEntry={manualModelEntry}
+              onManualEntry={() => setManualModelEntry(true)}
+              nativeReadyModels={native.readyModels}
+              nativeLoading={native.loadingModels}
+            />
           </div>
+
+          {/* The same three controls the runner card renders, from the same component. Saving
+              applies them: the context is stored on the row, and all three are handed to the
+              runtime as launch arguments. */}
+          {isNative && native.hardware && (
+            <div className="grid gap-4 rounded-lg border border-border p-3">
+              <p className="text-xs text-muted-foreground">
+                Saving also (re)starts the local runtime with these settings. In <code className="rounded bg-muted px-1 py-0.5 text-[11px]">external</code>{" "}
+                mode a sidecar owns that process, so they are recorded and nothing here is restarted.
+              </p>
+              <NativeRuntimeTuningControls
+                idPrefix="provider-native"
+                disabled={false}
+                hardware={native.hardware}
+                recommendedThreads={native.recommendedThreads}
+                threadsBasis={native.estimate?.recommended.threadsBasis ?? null}
+                threads={native.threadsField}
+                onThreadsChange={native.setThreads}
+                contextTokens={native.contextTokens}
+                recommendedContext={native.recommendedContext}
+                onContextChange={native.setContext}
+                kvCacheType={native.kvCacheType}
+                onKvCacheTypeChange={native.setKvCacheType}
+                model={findNativeModel(model) ?? null}
+              />
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
