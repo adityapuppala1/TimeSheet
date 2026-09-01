@@ -164,6 +164,28 @@ export function OpenAiMark({ className = "h-4 w-4" }: MarkProps) {
   );
 }
 
+/**
+ * The native llama.cpp runtime — a chip, because that is the honest thing to draw.
+ *
+ * NOT a llama, and not llama.cpp's own artwork. This mark does not stand for a vendor: there is no
+ * vendor. It stands for "a model running on THIS machine, on hardware you own", which is the only
+ * thing that distinguishes it from every other row in the same list. A processor die with legs is
+ * the plainest way to say that, and it is buildable from two rectangles and a set of short lines —
+ * the same test everything else in this file has to pass.
+ *
+ * `currentColor`, following the protocol marks rather than the brand ones: local compute has no
+ * brand colour, and the mark should take the surface it sits on.
+ */
+export function NativeModelMark({ className = "h-4 w-4" }: MarkProps) {
+  return (
+    <svg {...box(className)} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+      <rect x="9.75" y="9.75" width="4.5" height="4.5" rx="1" />
+      <path d="M9.5 2.8v3.2M14.5 2.8v3.2M9.5 18v3.2M14.5 18v3.2M2.8 9.5H6M2.8 14.5H6M18 9.5h3.2M18 14.5h3.2" />
+    </svg>
+  );
+}
+
 /** Model Context Protocol — a plug going into a socket, which is what it is. */
 export function McpMark({ className = "h-4 w-4" }: MarkProps) {
   return (
@@ -221,8 +243,14 @@ export const SSO_PROVIDER_MARKS: Record<SsoProvider, Mark> = {
 };
 
 /** OPENAI_COMPATIBLE covers Groq, Mistral, DeepSeek, OpenRouter, Gemini and Ollama as well, which
- *  is why its mark is the generic knot rather than any one vendor's — see the component. */
+ *  is why its mark is the generic knot rather than any one vendor's — see the component.
+ *
+ *  THIS RECORD IS LOAD-BEARING AT RUNTIME, not only at compile time: the provider list renders
+ *  `const Mark = AI_PROVIDER_MARKS[row.provider]` and then `<Mark />`. A missing key is `undefined`,
+ *  and `<undefined />` is not an empty space — it throws and takes the whole card down. The
+ *  exhaustive `Record` is what turns that runtime crash into a type error in this file instead. */
 export const AI_PROVIDER_MARKS: Record<AIProvider, Mark> = {
   ANTHROPIC: AnthropicMark,
-  OPENAI_COMPATIBLE: OpenAiMark
+  OPENAI_COMPATIBLE: OpenAiMark,
+  LLAMA_CPP: NativeModelMark
 };

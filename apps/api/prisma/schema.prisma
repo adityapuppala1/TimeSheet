@@ -1428,6 +1428,23 @@ model AIProviderConfig {
   /// a routing decision, rather than inside the provider where it can only wait.
   maxConcurrent Int @default(2)
 
+  /// WHAT THIS PROVIDER CAN BE ASKED FOR AND STILL ANSWER IN TIME — the demand pre-filter
+  /// `ai.service.ts#getEnabledProviderConfigsForTask` applies before it dispatches anything.
+  ///
+  /// `maxOutputTokens` is the largest `max_tokens` this row can serve inside MODEL_CALL_TIMEOUT_MS
+  /// (90s). `contextWindow` is how many tokens it can hold at once, prompt plus answer. A call
+  /// asking for more than a row declares SKIPS that row entirely — it is never attempted, so it
+  /// never fails, and its circuit-breaker counter never moves. That distinction is the whole point:
+  /// a small local model made primary must not spend 90 seconds discovering it cannot write an
+  /// eight-thousand-token requirements document.
+  ///
+  /// BOTH ARE NULLABLE AND NULL MEANS "NO DECLARED LIMIT", which is every row that exists today —
+  /// so this upgrade changes the routing of exactly nothing until somebody declares a number. They
+  /// are deliberately NOT llama-specific: a hosted model with a 4k window has the same problem and
+  /// deserves the same answer.
+  maxOutputTokens Int?
+  contextWindow   Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1623,9 +1640,28 @@ model AiCapabilityPolicy {
   updatedBy   User?    @relation("AiCapabilityPolicyEditor", fields: [updatedById], references: [id], onDelete: SetNull)
 }
 
+/// WHICH WIRE PROTOCOL A PROVIDER ROW SPEAKS — not which vendor it is. Two of the three members
+/// share one protocol and differ only in who runs the server.
+///
+/// LLAMA_CPP IS APPENDED, NOT INSERTED between the other two where a reader might file it next to
+/// its OpenAI-compatible sibling. MySQL stores an ENUM as the ORDINAL of its member: appending
+/// rewrites only the table definition, while inserting into the middle rewrites every stored row's
+/// ordinal. Same argument the SecurityFinding type enum makes in
+/// `20260831150000_quality_gate_and_code_quality_findings`. The list is a storage layout, not a
+/// taxonomy — read `aiProviders` in packages/shared for the ordering rule restated where the code
+/// that adds the next member will actually be looking.
 enum AIProvider {
+  /// Anthropic's native Messages API.
   ANTHROPIC
+  /// Any endpoint speaking the OpenAI chat-completions API, reached at an ADMIN-SUPPLIED baseUrl —
+  /// which is exactly why that URL goes through the SSRF gate (utils/egress.ts).
   OPENAI_COMPATIBLE
+  /// A llama.cpp `llama-server` this deployment runs ITSELF. Same wire protocol as
+  /// OPENAI_COMPATIBLE, different trust story: its base URL is derived from the managed runtime's
+  /// own configuration (config/native-ai.ts) and is never typed by an admin. See
+  /// ai.service.ts#callOpenAICompatible for why that difference is what makes skipping the egress
+  /// gate safe here and unsafe there.
+  LLAMA_CPP
 }
 
 /// Append-only log of every AI call, for cost tracking / the monthly budget cap.

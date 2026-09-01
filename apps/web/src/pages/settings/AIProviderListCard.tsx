@@ -22,7 +22,7 @@
  */
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { aiModels, aiProviderPresets, resolveProviderLabel } from "@timesheet/shared";
+import { aiModels, aiProviderPresets, resolveProviderLabel, type AIProvider } from "@timesheet/shared";
 import { ArrowDown, ArrowUp, Bolt, KeyRound, Loader2, Pencil, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import {
   settingsApi,
@@ -398,7 +398,11 @@ function ProviderConfigDialog({
   onSaved: () => void;
 }) {
   const isNew = config === null;
-  const [provider, setProvider] = useState<"ANTHROPIC" | "OPENAI_COMPATIBLE">(config?.provider ?? "ANTHROPIC");
+  // Widened to the full shared union so an existing LLAMA_CPP row can be opened and saved without
+  // its kind being coerced. This dialog does not yet offer a way to CREATE one — the native runtime
+  // has no supervisor, catalogue or downloader behind it yet, and a preset that starts nothing
+  // would be a control that lies. That is the next block's work.
+  const [provider, setProvider] = useState<AIProvider>(config?.provider ?? "ANTHROPIC");
   const [presetKey, setPresetKey] = useState(() => {
     if (!config || config.provider === "ANTHROPIC") return "anthropic";
     return aiProviderPresets.find((p) => p.baseUrl && p.baseUrl === config.baseUrl)?.key ?? "custom";

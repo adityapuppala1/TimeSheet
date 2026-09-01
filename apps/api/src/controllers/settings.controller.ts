@@ -515,12 +515,34 @@ settingsRouter.patch("/ai", requireSuperAdmin, validate(aiSettingsSchema), async
  * mixing it into the general settings PATCH would make one giant handler respond wrong to a
  * partial payload that happened to omit a provider a caller didn't mean to touch.
  */
+/*
+ * BOTH USES OF THIS SCHEMA ARE `.strict()` — `.strict()` on create, `.partial().strict()` on
+ * update — so a field that is not declared HERE is a 422, not an ignored extra. That is the right
+ * default for a credential-carrying surface, and it is also the trap: adding a column to
+ * AIProviderConfig and a control to the settings UI produces a save button that fails with
+ * "Unrecognized key", with nothing in the message naming this file. And the mirror trap lives one
+ * file away — `updateProviderConfig`'s field allowlist DROPS what it does not recognise, so a field
+ * declared here and only here validates, returns 200, and never reaches the database. Both places.
+ */
 const providerConfigBodySchema = z.object({
-  provider: z.enum(["ANTHROPIC", "OPENAI_COMPATIBLE"]),
+  provider: z.enum(["ANTHROPIC", "OPENAI_COMPATIBLE", "LLAMA_CPP"]),
   label: z.string().max(60).optional().nullable(),
   // SSRF-validated at save time — see utils/egress.ts. Empty string/omitted both mean "no base
   // URL", matching ANTHROPIC's own default (baseUrl is meaningless for the native Messages API).
+  //
+  // ACCEPTED AND THEN IGNORED FOR LLAMA_CPP. That row's endpoint is derived server-side by
+  // config/native-ai.ts and overwritten on every write (ai-provider-config.service.ts), because an
+  // admin-supplied URL is the thing the egress gate exists to distrust and the native path skips
+  // that gate. Ignored rather than refused so that reading a row and saving it back — which returns
+  // the derived URL it was just shown — is not an error.
   baseUrl: egressUrl(300).or(z.literal("")).optional().nullable(),
+  // Declared capacity, read by the demand filter in ai.service.ts. Null explicitly CLEARS a
+  // declaration back to "no declared limit"; omitted leaves it alone, the same convention as every
+  // other optional field here. The ceilings are loose sanity bounds, not product opinions — a
+  // number below 1 cannot serve any call at all, and a million tokens is past anything a provider
+  // in this decade will honour inside the 90-second call timeout.
+  maxOutputTokens: z.number().int().min(1).max(1_000_000).optional().nullable(),
+  contextWindow: z.number().int().min(1).max(10_000_000).optional().nullable(),
   model: z.string().min(1).max(80),
   // Non-empty encrypts before it ever touches the database; omitted on CREATE means "no key yet"
   // (legal for a local Ollama/LM Studio, which needs none); omitted on UPDATE leaves the stored

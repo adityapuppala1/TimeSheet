@@ -57,7 +57,34 @@ export function SearchableSelect({
   const selected = options.find((option) => option.id === value);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    /**
+     * `modal` IS THE BUG FIX, and it is not cosmetic — without it this list cannot be scrolled at
+     * all when the picker is inside a Dialog.
+     *
+     * A modal Dialog mounts `react-remove-scroll`, which installs a document-level, NON-PASSIVE
+     * wheel/touchmove listener and `preventDefault()`s any event that is not inside the lock or
+     * inside a registered "shard". The Dialog registers exactly one shard: its own DialogContent.
+     * A Popover portals its content to `document.body` — a SIBLING of the dialog — so
+     * `DialogContent.contains(theOptionYouAreScrollingOver)` is false, the event is cancelled, and
+     * the wheel does nothing.
+     *
+     * The list still RENDERS a scrollbar, because `CommandList` genuinely overflows its
+     * `max-h-[300px]`. That is what makes the symptom so confusing: it looks scrollable, the
+     * scrollbar is right there, and clicks work fine (the dismissable layer keeps pointer events),
+     * but the wheel and touch-drag are both silently swallowed.
+     *
+     * `modal` makes the Popover mount its OWN `react-remove-scroll`, which pushes onto the shared
+     * lock stack; the Dialog's handler then early-returns because it is no longer the top of that
+     * stack, and the popover scrolls. It is the same mechanism that makes a plain `<Select>` work
+     * inside a Dialog today — Select mounts that lock unconditionally, which is why the Provider
+     * dropdown two fields above always scrolled while this one never did.
+     *
+     * Safe here despite `modal` implying `disableOutsidePointerEvents`: selecting an option calls
+     * `setOpen(false)` while the surrounding Dialog stays open, so the popover never unmounts in
+     * the same tick as the dialog — the sequence that can otherwise strand
+     * `document.body { pointer-events: none }`.
+     */
+    <Popover open={open} onOpenChange={setOpen} modal>
       <PopoverTrigger asChild>
         <Button
           type="button"

@@ -1577,7 +1577,10 @@ export type ProviderHealthStatus = "healthy" | "degraded" | "down" | "unknown";
 
 export interface AIProviderConfigRow {
   id: string;
-  provider: "ANTHROPIC" | "OPENAI_COMPATIBLE";
+  /** Mirrors `aiProviders` in @timesheet/shared — hand-written here rather than imported so this
+   *  file stays a plain description of the wire, but the two must not drift: the marks lookup in
+   *  connector-marks.tsx is keyed by the shared union and crashes on a value it has no entry for. */
+  provider: "ANTHROPIC" | "OPENAI_COMPATIBLE" | "LLAMA_CPP";
   label: string | null;
   baseUrl: string | null;
   model: string;
@@ -1590,18 +1593,28 @@ export interface AIProviderConfigRow {
   /** How many calls may run at once against this provider before the rest queue or fall over to
    *  the next one. Match it to the provider's real parallelism (for Ollama, OLLAMA_NUM_PARALLEL). */
   maxConcurrent: number;
+  /** What this provider has declared it can serve, in output tokens and in total context. `null`
+   *  means "no declared limit" and is what every row says until somebody fills one in; a call
+   *  asking for more than a declared number skips this provider without attempting it. */
+  maxOutputTokens: number | null;
+  contextWindow: number | null;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface AIProviderConfigInput {
-  provider: "ANTHROPIC" | "OPENAI_COMPATIBLE";
+  provider: "ANTHROPIC" | "OPENAI_COMPATIBLE" | "LLAMA_CPP";
   label?: string | null;
+  /** Ignored by the API for `LLAMA_CPP`, whose endpoint the server derives from the local runtime's
+   *  own configuration rather than accepting one from a client. */
   baseUrl?: string | null;
   model: string;
   apiKey?: string;
   enabled?: boolean;
   maxConcurrent?: number;
+  /** `null` clears a declared limit; omitted leaves whatever is stored. */
+  maxOutputTokens?: number | null;
+  contextWindow?: number | null;
 }
 
 /** One provider's real 30-day track record, behind the "Suggest order" recommendation. */

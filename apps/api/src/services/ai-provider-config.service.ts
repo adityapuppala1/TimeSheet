@@ -9,7 +9,8 @@
  * concern (who can add/reorder/remove a provider) from dispatch (which provider answers a call),
  * the same separation `ai-usage-export.service.ts` already draws from it.
  */
-import { resolveProviderLabel } from "@timesheet/shared";
+import { resolveProviderLabel, type AIProvider } from "@timesheet/shared";
+import { nativeProviderBaseUrl } from "../config/native-ai.js";
 import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
 import { audit } from "./audit.service.js";
@@ -26,6 +27,8 @@ const SELECT_PUBLIC = {
   consecutiveFailures: true,
   autoDemotedAt: true,
   maxConcurrent: true,
+  maxOutputTokens: true,
+  contextWindow: true,
   createdAt: true,
   updatedAt: true
 } as const;
@@ -96,7 +99,7 @@ export async function listProviderConfigs() {
 }
 
 export interface ProviderConfigInput {
-  provider: "ANTHROPIC" | "OPENAI_COMPATIBLE";
+  provider: AIProvider;
   label?: string | null;
   baseUrl?: string | null;
   apiKey?: string;
@@ -104,6 +107,26 @@ export interface ProviderConfigInput {
   enabled?: boolean;
   /** Calls allowed in flight at once — see the column's comment in schema.prisma. */
   maxConcurrent?: number;
+  /** Declared capacity, both optional and both meaning "no declared limit" when absent or null —
+   *  see the columns' comment in schema.prisma and the demand filter in ai.service.ts. */
+  maxOutputTokens?: number | null;
+  contextWindow?: number | null;
+}
+
+/**
+ * The base URL to STORE for a row, which for exactly one provider kind is not the admin's to give.
+ *
+ * A `LLAMA_CPP` row points at a process this deployment runs itself, whose address is derived by
+ * config/native-ai.ts. Whatever arrives in the payload for that kind is DISCARDED rather than
+ * rejected with a 422: a client sending it is not attacking anything, it is echoing back the value
+ * it was shown, and failing that request would make the ordinary edit-and-save round trip
+ * impossible. Discarding is also what makes the exemption in `callOpenAICompatible` true — that
+ * function skips the SSRF gate for a native row precisely because no admin-supplied value can ever
+ * reach this column, and this is the single write path that keeps that promise.
+ */
+function resolveStoredBaseUrl(provider: AIProvider, supplied: string | null | undefined): string | null {
+  if (provider === "LLAMA_CPP") return nativeProviderBaseUrl();
+  return supplied ?? null;
 }
 
 /** New rows append to the end of the priority order — an admin adding a provider is adding a
@@ -114,11 +137,14 @@ export async function createProviderConfig(input: ProviderConfigInput, actorId: 
     data: {
       provider: input.provider,
       label: input.label ?? null,
-      baseUrl: input.baseUrl ?? null,
+      baseUrl: resolveStoredBaseUrl(input.provider, input.baseUrl),
       apiKey: input.apiKey ? encryptSecret(input.apiKey) : null,
       model: input.model,
       enabled: input.enabled ?? true,
       ...(input.maxConcurrent !== undefined ? { maxConcurrent: input.maxConcurrent } : {}),
+      // Absent stays NULL — "no declared limit", the same thing every pre-existing row says.
+      maxOutputTokens: input.maxOutputTokens ?? null,
+      contextWindow: input.contextWindow ?? null,
       priority: (last?.priority ?? -1) + 1
     },
     select: SELECT_PUBLIC
@@ -131,13 +157,28 @@ export async function updateProviderConfig(id: string, input: Partial<ProviderCo
   const existing = await prisma.aIProviderConfig.findUnique({ where: { id } });
   if (!existing) throw new AppError(404, "That provider configuration no longer exists — refresh and retry.");
 
+  // THIS LIST IS AN ALLOWLIST AND IT FAILS SILENTLY. A field added to the route's Zod schema but
+  // not to this block validates cleanly, returns 200, and is never written — the update simply does
+  // not happen, with nothing anywhere saying so. Anything new goes in both places or in neither.
   const data: Record<string, unknown> = {};
   if (input.provider !== undefined) data.provider = input.provider;
   if (input.label !== undefined) data.label = input.label;
-  if (input.baseUrl !== undefined) data.baseUrl = input.baseUrl;
   if (input.model !== undefined) data.model = input.model;
   if (input.enabled !== undefined) data.enabled = input.enabled;
   if (input.maxConcurrent !== undefined) data.maxConcurrent = input.maxConcurrent;
+  if (input.maxOutputTokens !== undefined) data.maxOutputTokens = input.maxOutputTokens;
+  if (input.contextWindow !== undefined) data.contextWindow = input.contextWindow;
+
+  // A PATCH may be changing the kind, so the rule is applied to the kind this row will HAVE, not
+  // the one it had. For a native row the URL is re-derived on every write and whatever was sent is
+  // discarded (see `resolveStoredBaseUrl`) — which also quietly repairs a row whose stored URL
+  // predates a change to the runtime's port.
+  const effectiveProvider = (input.provider ?? existing.provider) as AIProvider;
+  if (effectiveProvider === "LLAMA_CPP") {
+    data.baseUrl = resolveStoredBaseUrl(effectiveProvider, input.baseUrl);
+  } else if (input.baseUrl !== undefined) {
+    data.baseUrl = input.baseUrl;
+  }
   // Write-only, same convention as GlobalAISettings.apiKey: absent = leave the stored key
   // untouched, "" clears it, anything else replaces it.
   if (typeof input.apiKey === "string") data.apiKey = input.apiKey.length > 0 ? encryptSecret(input.apiKey) : null;

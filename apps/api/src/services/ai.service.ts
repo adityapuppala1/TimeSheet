@@ -22,7 +22,17 @@
  * unconfigured). `OPENAI_COMPATIBLE` covers every other vendor this app claims to support
  * (OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi, Nvidia NIM, Ollama, LM
  * Studio, or any other custom endpoint) via the `openai` SDK pointed at this row's `baseUrl` —
- * none of the 6 capability functions below know or care which one is actually in use.
+ * none of the 6 capability functions below know or care which one is actually in use. `LLAMA_CPP`
+ * takes that SAME client: it is the deployment's OWN `llama-server`, which speaks the same
+ * protocol at a base URL derived by config/native-ai.ts instead of typed by an admin. The dispatch
+ * branch therefore names the OpenAI-family kinds explicitly rather than treating Anthropic as the
+ * else — see the comment on it, which is the trap this file already fell into once.
+ *
+ * CAPACITY-AWARE DISPATCH: a provider row may declare `maxOutputTokens`/`contextWindow`, and
+ * `getEnabledProviderConfigsForTask` drops the rows that cannot serve the call in hand BEFORE it
+ * tries any of them. Both columns are null everywhere until someone fills them in, so this is
+ * inert on upgrade; what it buys is a small local model that can be PRIMARY for the decisions it
+ * is good at without stalling the four heavy generators for a full 90-second timeout apiece.
  *
  * Structured JSON output (`classifyTicket`, `findDuplicateTickets`) asks Anthropic through its
  * native `output_config.format` (a raw JSON-schema object, not the SDK's `zodOutputFormat`
@@ -37,8 +47,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { z } from "zod";
 import type { TicketPriority } from "@prisma/client";
-import { resolveProviderLabel } from "@timesheet/shared";
+import { resolveProviderLabel, type AIProvider } from "@timesheet/shared";
 import { env } from "../config/env.js";
+import { isNativeProviderBaseUrl } from "../config/native-ai.js";
 import { prisma } from "../config/prisma.js";
 import { computeRecentAvgCostByLabel, computeRecentStatusByLabel, recordProviderAttemptOutcome } from "./ai-provider-config.service.js";
 import { acquireAiSlot } from "./ai-concurrency.service.js";
@@ -140,7 +151,7 @@ export function resolveApiKey(settings: { provider: string; apiKey: string | nul
  *  (extra fields ignored) or by the synthesized implicit default below. */
 export interface ProviderConfigRow {
   id: string | null;
-  provider: "ANTHROPIC" | "OPENAI_COMPATIBLE";
+  provider: AIProvider;
   label: string | null;
   baseUrl: string | null;
   apiKey: string | null;
@@ -148,6 +159,97 @@ export interface ProviderConfigRow {
   /** How many calls may run at once against this provider — see the column's own comment in
    *  schema.prisma and ai-concurrency.service.ts for why this is bounded outside the provider. */
   maxConcurrent: number;
+  /** Declared capacity, both nullable and both meaning "no declared limit" when null — see the
+   *  columns' comment in schema.prisma and {@link canServeDemand}. Optional on this interface as
+   *  well as nullable, so the synthesized default and every test fixture predating them still
+   *  satisfy the shape. */
+  maxOutputTokens?: number | null;
+  contextWindow?: number | null;
+}
+
+/**
+ * WHAT ONE CALL IS ABOUT TO ASK FOR, in the two dimensions a provider can actually run out of.
+ * Built by `callChat` from the params it already has; see {@link canServeDemand}.
+ */
+export interface CallDemand {
+  /** The `max_tokens` the request will carry. */
+  maxTokens: number;
+  /** Length of the prompt in CHARACTERS, not tokens — the caller has characters, and converting
+   *  is this file's job so that every estimate uses the same ratio. */
+  promptChars: number;
+}
+
+/**
+ * Characters per token, for estimating how much context a prompt will need.
+ *
+ * BE HONEST: THIS IS AN APPROXIMATION AND CANNOT BE ANYTHING ELSE. The real answer depends on the
+ * tokenizer of a model this process does not have, and tokenizing every prompt locally to route it
+ * would cost more than the routing decision is worth. English prose runs about 4 characters per
+ * token; code, JSON, ticket keys and non-Latin text run considerably denser.
+ *
+ * 3 IS DELIBERATELY LOW, i.e. it OVER-estimates the token count. The two errors are not
+ * symmetrical. Over-estimating skips a provider that could in fact have answered — the call goes
+ * to the next one in the admin's list and succeeds, and the cost is a slightly worse routing
+ * choice. Under-estimating sends a prompt to a provider that cannot hold it, and what comes back
+ * is not an error but a TRUNCATED answer: a summary missing its last paragraph, a JSON object
+ * cut mid-string. A wrong answer that looks like an answer is much worse than a second choice.
+ *
+ * Images are NOT counted here. `classifyTicket` is the only caller that sends any, and their token
+ * cost is a per-provider function of resolution that this file has no way to compute — so the
+ * estimate is understated for exactly that one path, and the over-estimating ratio above is what
+ * absorbs it.
+ */
+const CHARS_PER_TOKEN_ESTIMATE = 3;
+
+/** Prompt characters → an over-estimated token count. Exported for the tests, which pin the
+ *  direction of the error rather than the exact number. */
+export function estimatePromptTokens(promptChars: number): number {
+  return Math.ceil(promptChars / CHARS_PER_TOKEN_ESTIMATE);
+}
+
+/**
+ * Can this provider serve this call AT ALL, according to what it has declared about itself?
+ *
+ * A `false` here means SKIP — do not open a socket, do not start the timeout, do not record an
+ * attempt, do not move the circuit breaker. The row was never asked, so it has not failed. That is
+ * the whole difference between "the local model is primary" and "the local model stalls every
+ * heavy generator for ninety seconds before the cloud row gets a turn".
+ *
+ * NULL IS NOT ZERO. A row that declares nothing is a row that has made no claim about its limits,
+ * and the honest reading of no claim is "try it" — which is what every provider row in every
+ * existing workspace does, and why this filter is a no-op on upgrade.
+ */
+function canServeDemand(config: ProviderConfigRow, demand: CallDemand): boolean {
+  // Output first: it is the exact number the request carries, no estimation involved.
+  if (config.maxOutputTokens != null && demand.maxTokens > config.maxOutputTokens) return false;
+  // Context has to hold the prompt AND the answer at the same time — a provider is not sized for a
+  // 7k prompt because its window is 8k if the call also wants 4k of output back.
+  if (config.contextWindow != null && estimatePromptTokens(demand.promptChars) + demand.maxTokens > config.contextWindow) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Drops the providers that have declared they cannot serve this call — and gives up entirely
+ * rather than returning nothing.
+ *
+ * THE FALLBACK IS THE IMPORTANT HALF. Consider the workspace with ONE provider row that declares a
+ * modest `maxOutputTokens`, and a feature that asks for more. Filtering correctly leaves an empty
+ * list, `callChat` finds nothing to try, and the person is told "AI is not configured" — by an
+ * admin panel showing a configured, enabled, working provider. That is a lie, and it is a worse
+ * outcome than every alternative: letting the call go ahead means it either succeeds (the declared
+ * limit was conservative) or fails with the provider's own honest error, which at least names the
+ * real problem. An advisory filter must never be able to turn into an outage.
+ *
+ * IT NEVER REORDERS. `filter` preserves order, so what comes out is the admin's own priority order
+ * with some entries missing; the economy tier's health/cost sort then runs on top of that exactly
+ * as it did before this existed. Capacity decides WHETHER a provider is a candidate, never WHERE.
+ */
+function applyDemandFilter(configs: ProviderConfigRow[], demand: CallDemand | undefined): ProviderConfigRow[] {
+  if (!demand) return configs;
+  const able = configs.filter((config) => canServeDemand(config, demand));
+  return able.length > 0 ? able : configs;
 }
 
 /**
@@ -176,7 +278,12 @@ export async function getEnabledProviderConfigs(): Promise<ProviderConfigRow[]> 
       model: settings.model,
       // The synthesised default has no row to carry a ceiling, so it takes the column's own
       // default — bounded like everything else rather than silently unlimited.
-      maxConcurrent: 2
+      maxConcurrent: 2,
+      // No row, so nothing has declared a capacity. Null is "no declared limit" and that is the
+      // correct answer here rather than a guess: this is a hosted Anthropic model, and inventing a
+      // ceiling for it would start skipping a provider nobody said anything about.
+      maxOutputTokens: null,
+      contextWindow: null
     }
   ];
 }
@@ -196,9 +303,15 @@ export type TaskTier = "economy" | "judgment";
  * cost-sensitive task never gets routed to a provider that's already failing just because it's
  * cheap, and never displaces the admin's order for anything rated above `healthy` — this only
  * ever reshuffles among providers already known to be working.
+ *
+ * `demand` (optional, and absent from every caller that does not care) is a DIFFERENT question,
+ * asked FIRST and answered without touching the network: not "which of these should go first" but
+ * "which of these can serve this call at all". See {@link applyDemandFilter} — including why it
+ * declines to filter when filtering would leave nothing. It runs before the tier logic so that the
+ * economy sort ranks candidates rather than ranking rows that were never going to be tried.
  */
-export async function getEnabledProviderConfigsForTask(tier: TaskTier): Promise<ProviderConfigRow[]> {
-  const configs = await getEnabledProviderConfigs();
+export async function getEnabledProviderConfigsForTask(tier: TaskTier, demand?: CallDemand): Promise<ProviderConfigRow[]> {
+  const configs = applyDemandFilter(await getEnabledProviderConfigs(), demand);
   if (tier === "judgment" || configs.length <= 1) return configs;
 
   const [statusByLabel, costByLabel] = await Promise.all([computeRecentStatusByLabel(), computeRecentAvgCostByLabel()]);
@@ -375,7 +488,11 @@ export function isAvailabilityFailure(error: unknown): boolean {
 }
 
 /** Exported for the platform advisor — see the note on `callAnthropic` above. */
-export async function callOpenAICompatible(settings: { baseUrl: string | null }, apiKey: string, params: CallChatParams): Promise<CallChatResult> {
+export async function callOpenAICompatible(
+  settings: { baseUrl: string | null; provider?: AIProvider },
+  apiKey: string,
+  params: CallChatParams
+): Promise<CallChatResult> {
   if (!settings.baseUrl) {
     throw new AppError(503, "AI features are not configured — set a base URL for the selected provider in workspace AI settings.");
   }
@@ -384,7 +501,26 @@ export async function callOpenAICompatible(settings: { baseUrl: string | null },
   // which is exactly why the guard permits private targets in development and behind
   // ALLOW_PRIVATE_NETWORK_EGRESS rather than blocking them outright: the goal is to stop a
   // hosted tenant reaching the platform's internal network, not to break on-prem local models.
-  await assertPublicEgressTarget(settings.baseUrl, "The AI provider base URL");
+  //
+  // THE ONE EXEMPTION, AND WHY IT IS NARROW. A LLAMA_CPP row's base URL is not admin-supplied at
+  // all: it is derived server-side by config/native-ai.ts, rejected on write if an admin sends one
+  // (ai-provider-config.service.ts), and re-derived on read. So there is no attacker-controlled
+  // value here for the gate to guard — the URL is a compile-time constant of this deployment
+  // pointing at a process this deployment starts itself, and in production (where the gate would
+  // otherwise refuse loopback outright) that is the ONLY thing it can ever point at.
+  //
+  // THE SAME EXEMPTION WOULD BE A VULNERABILITY FOR OPENAI_COMPATIBLE, which is why it checks the
+  // kind as well as the URL. That kind's whole purpose is a URL a Super Admin types, and a Super
+  // Admin of one hosted tenant is not trusted with the platform's internal network: exempting it
+  // would hand them http://169.254.169.254/ (cloud instance metadata, which hands out IAM
+  // credentials to anything that asks), the control-plane database, and every internal admin panel
+  // — reached BY the server, FROM inside the trust boundary. Both conditions are required so that
+  // neither a row relabelled LLAMA_CPP nor an OPENAI_COMPATIBLE row typed at the native port can
+  // reach past this on its own.
+  const isManagedNativeRuntime = settings.provider === "LLAMA_CPP" && isNativeProviderBaseUrl(settings.baseUrl);
+  if (!isManagedNativeRuntime) {
+    await assertPublicEgressTarget(settings.baseUrl, "The AI provider base URL");
+  }
   // Local providers (Ollama, LM Studio) don't require a real key, but the SDK still wants a non-empty string.
   const client = new OpenAI({ apiKey: apiKey || "not-needed", baseURL: settings.baseUrl, timeout: MODEL_CALL_TIMEOUT_MS, maxRetries: 0 });
 
@@ -504,7 +640,7 @@ const PROVIDER_TEST_TIMEOUT_MS = 15_000;
  * breaker reacts only to real feature calls, not a manual check run out of curiosity.
  */
 export async function testProviderConnectivity(config: {
-  provider: "ANTHROPIC" | "OPENAI_COMPATIBLE";
+  provider: AIProvider;
   baseUrl: string | null;
   apiKey: string;
   model: string;
@@ -515,9 +651,19 @@ export async function testProviderConnectivity(config: {
   let outputTokens = 0;
   try {
     let modelCount: number;
-    if (config.provider === "OPENAI_COMPATIBLE") {
+    // Names the OpenAI-family kinds, for the same reason `callChat`'s dispatch does — see the
+    // comment there. This branch is the one that hurts most if it gets it wrong: the Anthropic side
+    // demands an API key, and a native row legitimately has none, so a misrouted LLAMA_CPP row
+    // fails the Test button with "No API key configured" — an error about the wrong thing entirely.
+    if (config.provider === "OPENAI_COMPATIBLE" || config.provider === "LLAMA_CPP") {
       if (!config.baseUrl) throw new AppError(503, "No base URL configured.");
-      await assertPublicEgressTarget(config.baseUrl, "The AI provider base URL");
+      // Same narrow exemption, same two conditions, same reasoning as callOpenAICompatible's — a
+      // derived native URL is not an admin-supplied one. Duplicated as a condition rather than
+      // factored out because the two call sites guard different clients; the argument for it lives
+      // in one place, on `callOpenAICompatible`, and this refers to it rather than restating it.
+      if (!(config.provider === "LLAMA_CPP" && isNativeProviderBaseUrl(config.baseUrl))) {
+        await assertPublicEgressTarget(config.baseUrl, "The AI provider base URL");
+      }
       const client = new OpenAI({ apiKey: config.apiKey || "not-needed", baseURL: config.baseUrl, timeout: PROVIDER_TEST_TIMEOUT_MS, maxRetries: 0 });
       modelCount = (await client.models.list()).data.length;
       const completion = await client.chat.completions.create({ model: config.model, max_tokens: 5, messages: [{ role: "user", content: "Reply with OK." }] });
@@ -635,7 +781,13 @@ export function stripReasoning(text: string): string {
 const SLOT_WAIT_MS = 10_000;
 
 async function callChat(settings: AISettingsRow, params: CallChatParams): Promise<CallChatOutcome> {
-  const configs = await getEnabledProviderConfigsForTask(params.tier ?? "judgment");
+  // The demand is built here rather than asked of the caller: `callChat` already holds both halves
+  // of it, and the ~27 capability functions that call this should not have to learn a routing
+  // concept to keep working. Prompt LENGTH only — the text itself never leaves this frame.
+  const configs = await getEnabledProviderConfigsForTask(params.tier ?? "judgment", {
+    maxTokens: params.maxTokens,
+    promptChars: params.prompt.length
+  });
   const settle = await reserveAiSpend(await effectiveMonthlyBudgetUsd(settings));
   let lastError: unknown;
   try {
@@ -659,10 +811,16 @@ async function callChat(settings: AISettingsRow, params: CallChatParams): Promis
       }
 
       try {
-        const result =
-          config.provider === "OPENAI_COMPATIBLE"
-            ? await callOpenAICompatible(config, apiKey, { ...params, model })
-            : await callAnthropic(apiKey, { ...params, model });
+        // NAMES THE OpenAI-FAMILY KINDS EXPLICITLY, and does not treat Anthropic as "everything
+        // else". Written the other way round — `=== "ANTHROPIC" ? anthropic : openai` is equally
+        // wrong in the mirror — a provider kind added to the enum silently routes to whichever
+        // client the `else` branch happens to hold, and the failure is not a compile error or even
+        // a clear runtime one: it is a real HTTP call to the wrong API that comes back as an
+        // unhelpful 4xx. Adding LLAMA_CPP is exactly that case, since it speaks this protocol.
+        const speaksOpenAiProtocol = config.provider === "OPENAI_COMPATIBLE" || config.provider === "LLAMA_CPP";
+        const result = speaksOpenAiProtocol
+          ? await callOpenAICompatible(config, apiKey, { ...params, model })
+          : await callAnthropic(apiKey, { ...params, model });
         await settle(estimateCostUsd(model, result.usage.inputTokens, result.usage.outputTokens));
         // Best-effort, same reasoning as the failure branch below — the circuit breaker's own
         // bookkeeping must never mask a real answer that already arrived.

@@ -10,6 +10,43 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🤖 Room for a model you run yourself, and a way to not waste ninety seconds on it
+
+- **`LLAMA_CPP` is a third provider kind**, alongside Anthropic and the OpenAI-compatible family. It
+  speaks the same wire protocol as the latter and differs in one thing that matters: its address is
+  not typed by anybody. A BYOK base URL is a value a Super Admin chooses, which is exactly why it
+  goes through the SSRF gate — that field is one keystroke from cloud instance metadata. A native
+  row's URL is derived server-side, overwritten on every write, and re-checked at dispatch, so the
+  gate is skipped for it and only for it. The exemption requires *both* the kind and the derived
+  URL, because "trust anything labelled native" would make the label itself the exploit. Nothing
+  starts a model yet — the supervisor, catalogue and downloader are separate work. This is the
+  platform being made able to host one.
+- **A provider may now declare what it can actually serve**, in output tokens and in total context,
+  and the dispatcher skips the ones that cannot serve the call in hand *before opening a socket*.
+  This is the difference between a local model being primary and a local model costing every heavy
+  generator a full ninety-second timeout, one at a time, before the cloud provider behind it gets a
+  turn. A skipped provider is **skipped, not failed**: nothing is attempted, so nothing is recorded
+  against it and the circuit breaker never sees it — otherwise "make the small model primary" would
+  slowly auto-demote it for failures it was never given the chance to have.
+- **Both columns are null everywhere, and null means no limit.** Every existing row has declared
+  nothing, and nothing is inferred: a model name is not a capacity, and guessing one would start
+  silently skipping providers that work. So the routing after this upgrade is identical to the
+  routing before it, in every workspace, until somebody fills a number in.
+- The rule that took the most thought is the one that does nothing: **if the filter would remove
+  every provider, it does not filter.** A workspace with one provider and a conservative declared
+  limit must not lose AI entirely and be told "not configured" by an app displaying a configured,
+  enabled, working provider. Letting the call through means it either succeeds — the limit was
+  cautious — or fails with the provider's own honest error. An advisory filter must never be able to
+  become an outage.
+- What this cost: the dispatch branch had been written as "OpenAI-compatible, *else* Anthropic",
+  which routes any new member of the enum to the wrong API and reports it as an unhelpful 4xx rather
+  than as anything resembling the actual mistake. It now names the kinds. Three other places had the
+  same shape of assumption baked in — the provider label (which is the join key every health and
+  cost metric groups by, so getting it wrong strands the status dot on "No recent data" forever), an
+  exhaustive icon map that renders `<undefined />` and takes the card down, and a settings schema
+  that 422s on any field it has not been told about while the service beneath it silently *drops*
+  any field it has not been told about. Two opposite failures, one field, both quiet.
+
 ### 📊 The discounting nobody could see
 
 - **`billedMrrMinor` stopped being a hard-coded `null`.** Every revenue figure in the console is list
@@ -55,6 +92,22 @@ number, on purpose — an installation must never render history for a version t
   functions: the one inside every entitlement check must never throw, so it ignores a bad value; the
   one behind a person's click must not, because an operator who types `-5`, sees a saved card with no
   override on it and walks away has been told nothing at all.
+
+### 🐛 The dropdown that drew a scrollbar and then ignored it
+
+- Any long list inside a dialog — the AI model picker, the module and submodule pickers on a
+  timesheet entry, the pickers on a change — rendered a scrollbar and refused to move for the
+  wheel or a touch drag. Clicking still worked, which is what made it look like a rendering quirk
+  rather than a broken control.
+- It is neither. A modal dialog installs a document-level scroll lock that cancels any wheel event
+  outside itself, and it recognises exactly one exception: its own content box. A popover's list is
+  portalled to the end of the document — a *sibling* of the dialog, not a descendant — so the
+  check fails and the event is cancelled. The scrollbar was real: the list genuinely overflows. Only
+  the scrolling was being thrown away.
+- The fix is one word, and it is the same mechanism that has always made an ordinary dropdown work
+  in the same dialog: the list now claims the lock while it is open, so the dialog's handler stands
+  down. A test asserts it stays claimed, because the prop reads like something a tidy-up would
+  delete.
 
 ### 🎨 Five signposts that pointed at the wrong door
 

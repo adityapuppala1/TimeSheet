@@ -754,8 +754,18 @@ export const aiModels = [
   { id: "claude-opus-4-8", label: "Claude Opus 4.8 — most capable" }
 ] as const;
 
-export const aiProviders = ["ANTHROPIC", "OPENAI_COMPATIBLE"] as const;
+/** The wire protocols a provider row can speak. APPEND-ONLY: the API stores this as a MySQL ENUM,
+ *  which is persisted by member ORDINAL — inserting a member in the middle rewrites every existing
+ *  row, appending rewrites only the table definition. The order here mirrors the enum in
+ *  apps/api/prisma/schema.prisma and must keep mirroring it. */
+export const aiProviders = ["ANTHROPIC", "OPENAI_COMPATIBLE", "LLAMA_CPP"] as const;
 export type AIProvider = (typeof aiProviders)[number];
+
+/** The display name a `LLAMA_CPP` row resolves to. Exported rather than inlined because it is a
+ *  JOIN KEY, not decoration: `computeRecentStatusByLabel` and `computeRecentAvgCostByLabel` bucket
+ *  AIUsageLog rows by this exact string, so a second spelling anywhere would silently split one
+ *  provider's history into two halves and leave the status dot reading "No recent data" forever. */
+export const NATIVE_AI_PROVIDER_LABEL = "Native (llama.cpp)";
 
 /** A curated dropdown of well-known OpenAI-compatible endpoints — the admin can still type a
  *  custom baseUrl for anything not listed (see WorkspaceSettings' AI tab). Zen, OpenCode, and
@@ -782,9 +792,19 @@ export const aiProviderPresets: Array<{ key: string; label: string; baseUrl: str
  * "Custom endpoint", when baseUrl matches no known preset). Shared between the API (AIUsageLog.provider,
  * resolved once per call in ai.service.ts#logAIUsage) and the web app (display) so the two can
  * never disagree on what a given baseUrl is called.
+ *
+ * THIS IS A JOIN KEY, NOT A CAPTION. `computeRecentStatusByLabel` (the 15-minute health dot) and
+ * `computeRecentAvgCostByLabel` (the 30-day cost the economy tier sorts on) both bucket AIUsageLog
+ * rows by whatever string this returns. So a provider kind that falls through to the hostname or to
+ * "Custom endpoint" does not merely look shabby — it collides with every other unrecognised
+ * endpoint, or changes name when its URL changes, and the health/cost history stops finding itself.
+ * That is why LLAMA_CPP is answered ABOVE the baseUrl lookup: its URL is derived from the local
+ * runtime's configuration and can legitimately change port between restarts, and its identity must
+ * not move with it.
  */
 export function resolveProviderLabel(provider: AIProvider, baseUrl: string | null | undefined): string {
   if (provider === "ANTHROPIC") return "Anthropic";
+  if (provider === "LLAMA_CPP") return NATIVE_AI_PROVIDER_LABEL;
   const preset = aiProviderPresets.find((p) => p.baseUrl && p.baseUrl === baseUrl);
   if (preset) return preset.label;
   if (!baseUrl) return "Custom endpoint";

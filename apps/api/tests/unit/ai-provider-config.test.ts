@@ -20,6 +20,7 @@ import { runInTenant } from "../helpers/tenant-context.js";
 const { getEnabledProviderConfigs } = await import("../../src/services/ai.service.js");
 const { createProviderConfig, updateProviderConfig, deleteProviderConfig, reorderProviderConfigs, listProviderConfigs, getSuggestedProviderOrder } =
   await import("../../src/services/ai-provider-config.service.js");
+const { nativeProviderBaseUrl } = await import("../../src/config/native-ai.js");
 
 describe("getEnabledProviderConfigs", () => {
   it("synthesizes the implicit ANTHROPIC/deprecated-settings default when the list is empty", async () => {
@@ -36,9 +37,22 @@ describe("getEnabledProviderConfigs", () => {
     const configs = await runInTenant(client, () => getEnabledProviderConfigs());
 
     // maxConcurrent comes along at the column's own default — the synthesised provider is bounded
-    // by the concurrency gate like any configured one, never silently unlimited.
+    // by the concurrency gate like any configured one, never silently unlimited. The two capacity
+    // fields come along NULL, which is "has declared no limit": the synthesised row is a hosted
+    // Anthropic model nobody has made a claim about, and inventing a ceiling for it would make the
+    // demand filter start skipping the one provider a never-configured workspace has.
     expect(configs).toEqual([
-      { id: null, provider: "ANTHROPIC", label: null, baseUrl: null, apiKey: null, model: "claude-haiku-4-5", maxConcurrent: 2 }
+      {
+        id: null,
+        provider: "ANTHROPIC",
+        label: null,
+        baseUrl: null,
+        apiKey: null,
+        model: "claude-haiku-4-5",
+        maxConcurrent: 2,
+        maxOutputTokens: null,
+        contextWindow: null
+      }
     ]);
   });
 
@@ -99,6 +113,71 @@ describe("provider config CRUD", () => {
     vi.mocked(client.aIProviderConfig.findMany).mockResolvedValue([{ id: "a" }, { id: "b" }] as never);
 
     await expect(runInTenant(client, () => reorderProviderConfigs(["a", "c"], "user-1"))).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it("derives a LLAMA_CPP row's base URL server-side and DISCARDS whatever the client sent", async () => {
+    // This is the load-bearing half of the egress exemption in ai.service.ts#callOpenAICompatible:
+    // that function skips the SSRF gate for a native row precisely because no admin-supplied value
+    // can reach this column. If this write path ever honoured the payload, the exemption would turn
+    // into "any Super Admin may name a URL the server will fetch with no checks at all".
+    const client = createFakeTenantClient();
+    vi.mocked(client.aIProviderConfig.findFirst).mockResolvedValue(null as never);
+    vi.mocked(client.aIProviderConfig.create).mockImplementation(({ data }: never) => Promise.resolve({ id: "n", ...data }) as never);
+
+    await runInTenant(client, () =>
+      createProviderConfig({ provider: "LLAMA_CPP", model: "qwen2.5-7b-instruct", baseUrl: "http://169.254.169.254/v1" }, "user-1")
+    );
+
+    const created = vi.mocked(client.aIProviderConfig.create).mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(created.data.baseUrl).toBe(nativeProviderBaseUrl());
+  });
+
+  it("re-derives the native base URL on UPDATE too, including when the payload tries to change it", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.aIProviderConfig.findUnique).mockResolvedValue({ id: "a", provider: "LLAMA_CPP", apiKey: null } as never);
+    vi.mocked(client.aIProviderConfig.update).mockImplementation(({ data }: never) => Promise.resolve({ id: "a", ...data }) as never);
+
+    await runInTenant(client, () => updateProviderConfig("a", { baseUrl: "http://evil.internal/v1" }, "user-1"));
+
+    const updated = vi.mocked(client.aIProviderConfig.update).mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(updated.data.baseUrl).toBe(nativeProviderBaseUrl());
+  });
+
+  it("leaves every other kind's admin-supplied base URL exactly as sent", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.aIProviderConfig.findUnique).mockResolvedValue({ id: "a", provider: "OPENAI_COMPATIBLE", apiKey: null } as never);
+    vi.mocked(client.aIProviderConfig.update).mockImplementation(({ data }: never) => Promise.resolve({ id: "a", ...data }) as never);
+
+    await runInTenant(client, () => updateProviderConfig("a", { baseUrl: "https://api.groq.com/openai/v1" }, "user-1"));
+
+    const updated = vi.mocked(client.aIProviderConfig.update).mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(updated.data.baseUrl).toBe("https://api.groq.com/openai/v1");
+  });
+
+  it("actually WRITES the declared capacity fields — the update allowlist drops what it doesn't name", async () => {
+    // The silent half of the 422 trap: a field can pass the route's `.strict()` Zod schema, return
+    // 200, and never reach the database, because `updateProviderConfig` copies only the fields it
+    // explicitly lists. Nothing anywhere reports that; the value simply does not change.
+    const client = createFakeTenantClient();
+    vi.mocked(client.aIProviderConfig.findUnique).mockResolvedValue({ id: "a", provider: "ANTHROPIC", apiKey: null } as never);
+    vi.mocked(client.aIProviderConfig.update).mockImplementation(({ data }: never) => Promise.resolve({ id: "a", ...data }) as never);
+
+    await runInTenant(client, () => updateProviderConfig("a", { maxOutputTokens: 1500, contextWindow: 8192 }, "user-1"));
+
+    const updated = vi.mocked(client.aIProviderConfig.update).mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(updated.data).toMatchObject({ maxOutputTokens: 1500, contextWindow: 8192 });
+  });
+
+  it("clears a declared limit when null is sent explicitly, and leaves it alone when omitted", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.aIProviderConfig.findUnique).mockResolvedValue({ id: "a", provider: "ANTHROPIC", apiKey: null } as never);
+    vi.mocked(client.aIProviderConfig.update).mockImplementation(({ data }: never) => Promise.resolve({ id: "a", ...data }) as never);
+
+    await runInTenant(client, () => updateProviderConfig("a", { maxOutputTokens: null }, "user-1"));
+
+    const updated = vi.mocked(client.aIProviderConfig.update).mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(updated.data.maxOutputTokens).toBeNull();
+    expect(updated.data).not.toHaveProperty("contextWindow");
   });
 
   it("listProviderConfigs never returns the raw key, only apiKeySet", async () => {
