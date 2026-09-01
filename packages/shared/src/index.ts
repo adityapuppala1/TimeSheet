@@ -10,6 +10,10 @@ export * from "./native-fit.js";
    and the settings screen must answer identically — where a model may be fetched from, whether the
    file that arrived is plausible, and what a benchmark lets the provider row declare. */
 export * from "./native-runtime.js";
+/* How `llama-server` itself is OBTAINED: which published build belongs on this machine, the hosts
+   an archive may come from, which archive entries may be written to disk, and the refusals (musl
+   above all) that must read identically on the settings screen and in the installer. */
+export * from "./native-engine.js";
 /**
  * WHAT: the single `@timesheet/shared` package — every type/constant that both `apps/api` and
  * `apps/web` need to agree on: roles/permission keys, activity types, ticket status/priority

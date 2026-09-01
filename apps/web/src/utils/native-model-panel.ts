@@ -34,13 +34,16 @@ import {
   nativeRuntimeOverheadBytes,
   type NativeBenchmarkSummary,
   type NativeDownloadStatus,
+  type NativeEngineInstallStatus,
   type NativeFitEstimate,
   type NativeFitVerdict,
   type NativeHardwareSnapshot,
   type NativeKvCacheType,
   type NativeModelEntry,
   type NativeModelWeightSource,
-  type NativeRuntimeEnvironment
+  type NativeRuntimeEnvironment,
+  type NativeRuntimeMode,
+  type NativeRuntimeState
 } from "@timesheet/shared";
 
 /* ── numbers a person can read ──────────────────────────────────────────────────────────────── */
@@ -405,4 +408,322 @@ const MACHINE_WIDE_WARNING_CODES = new Set([
 
 export function isMachineWideWarning(code: string): boolean {
   return MACHINE_WIDE_WARNING_CODES.has(code);
+}
+
+/* ── the runtime block's three sentences, said once each ────────────────────────────────────── */
+
+/** Which field a line came from, so the card can give each its own icon and tone without
+ *  re-deriving that from the text. */
+export type NativeRuntimeMessageKind = "detail" | "binaryProblem" | "lastError";
+
+export interface NativeRuntimeMessage {
+  kind: NativeRuntimeMessageKind;
+  text: string;
+}
+
+/** Whitespace and case folded away, because "the same sentence" is a claim about content and not
+ *  about how a server happened to wrap it. */
+function normaliseMessage(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/**
+ * THE RUNTIME BLOCK'S MESSAGES, DEDUPLICATED ON CONTENT — each distinct thing said exactly once.
+ *
+ * ── THE BUG THIS EXISTS TO KILL ─────────────────────────────────────────────────────────────
+ *
+ * With no binary installed, the API filled `detail`, `binaryProblem` and `lastError` with the SAME
+ * sentence, and this card rendered all three unconditionally: the identical paragraph three times,
+ * under three different icons, in three different colours. The state underneath was perfectly
+ * correct and the screen read as broken software — which is worse than a wrong number, because an
+ * operator who stops trusting the panel stops reading the parts of it that are right.
+ *
+ * ── WHY NOT SIMPLY DELETE TWO OF THE RENDERS ────────────────────────────────────────────────
+ *
+ * Because the three fields mean three genuinely different things and routinely differ:
+ *   `detail`         — what the runtime IS, always present, often a mode explanation
+ *                      ("NATIVE_AI_RUNTIME_MODE is off, so no local model runtime is used here").
+ *   `binaryProblem`  — a fixable CONFIGURATION problem, and usually the only actionable line on the
+ *                      card ("NATIVE_AI_SERVER_BIN points at …, which does not exist").
+ *   `lastError`      — something that went WRONG while running (a crash, an exit code, a readiness
+ *                      timeout with llama.cpp's own stderr quoted).
+ * Dropping two renders would hide a real crash behind a stale mode explanation. The fix is
+ * content-level: say the first, then say the second only if it adds something the first did not, and
+ * the third only if it adds something neither did.
+ *
+ * ── THE CONTAINMENT RULE, AND ITS DELIBERATE ASYMMETRY ──────────────────────────────────────
+ *
+ * A later line is dropped when what it says is already CONTAINED in what has been said — identical
+ * strings, and also the very common case where `detail` is `binaryProblem` plus a sentence of
+ * context. It is NOT dropped when it is longer and contains an earlier line, because then it really
+ * does carry something new, and suppressing it would be the "deleted two renders" mistake wearing a
+ * cleverer hat. Containment rather than equality alone, because the API composes these sentences
+ * from shared fragments and exact equality would miss most real duplicates.
+ */
+export function runtimeMessageLines(status: {
+  detail?: string | null;
+  binaryProblem?: string | null;
+  lastError?: string | null;
+}): NativeRuntimeMessage[] {
+  const candidates: NativeRuntimeMessage[] = [
+    { kind: "detail", text: status.detail ?? "" },
+    { kind: "binaryProblem", text: status.binaryProblem ?? "" },
+    { kind: "lastError", text: status.lastError ?? "" }
+  ];
+
+  const shown: NativeRuntimeMessage[] = [];
+  const said: string[] = [];
+  for (const candidate of candidates) {
+    const text = candidate.text.trim();
+    if (text === "") continue;
+    const normalised = normaliseMessage(text);
+    if (said.some((earlier) => earlier.includes(normalised))) continue;
+    shown.push({ kind: candidate.kind, text });
+    said.push(normalised);
+  }
+  return shown;
+}
+
+/* ── which runtime action can possibly work ─────────────────────────────────────────────────── */
+
+export type NativeRuntimeAction = "stop" | "restart" | "measure";
+
+export interface NativeActionAvailability {
+  enabled: boolean;
+  /** Why it is disabled, for the button's `title`. Null when it is enabled. NEVER empty when
+   *  disabled — a control greyed out for an unstated reason is a support ticket. */
+  reason: string | null;
+}
+
+/**
+ * WHAT EACH RUNTIME BUTTON ACTUALLY REQUIRES, and the sentence to show when it is not met.
+ *
+ * ── THE BUG THIS EXISTS TO KILL ─────────────────────────────────────────────────────────────
+ *
+ * Restart was gated on `status.modelId === null` and nothing else. With a model on disk and no
+ * `llama-server` anywhere, that made it a live, clickable, confident-looking button whose every
+ * press was guaranteed to fail — the worst kind of control, because it teaches an operator that the
+ * screen does not know what it is talking about.
+ *
+ * ── EACH RULE, AND WHY IT IS THAT RULE ──────────────────────────────────────────────────────
+ *
+ * STOP needs a process THIS PROCESS supervises. `external` mode reports `ready` when the sidecar
+ * answers, and pressing Stop there does nothing at all: the child is somebody else's, and this
+ * process has never held a handle to it. A button that silently no-ops is worse than one that
+ * explains itself.
+ *
+ * RESTART needs a usable binary AND a model. Both, and the binary half is the one that was missing:
+ * `restartNativeRuntime` replays the last launch, and a launch with no binary to spawn cannot
+ * succeed however many times it is replayed. `binaryPath` is now resolved on every status read
+ * precisely so this question is answerable before anybody presses anything.
+ *
+ * MEASURE needs a READY runtime, in either mode — the benchmark is an HTTP call to the base URL, so
+ * a sidecar is a perfectly good thing to measure. It does not need a local binary at all.
+ *
+ * READ-ONLY AND BUSY COME FIRST because they are true regardless of the rest, and an operator
+ * without permission should be told that rather than being told about a missing binary they cannot
+ * do anything about anyway.
+ */
+export interface NativeActionStatus {
+  state: NativeRuntimeState;
+  mode: NativeRuntimeMode;
+  modelId: string | null;
+  binaryPath: string | null;
+  binaryProblem: string | null;
+}
+
+const ALLOWED = { enabled: true, reason: null } as const;
+
+/** Stop: a process THIS process supervises, and one that is actually up. */
+function stopAvailability(status: NativeActionStatus): NativeActionAvailability {
+  if (status.mode !== "embedded") {
+    return {
+      enabled: false,
+      reason: `In ${status.mode} mode a separate service owns llama-server — this process only points at it, so there is nothing here to stop.`
+    };
+  }
+  const running = status.state === "ready" || status.state === "starting" || status.state === "restarting";
+  return running ? { ...ALLOWED } : { enabled: false, reason: `Nothing is running to stop — the runtime is ${status.state}.` };
+}
+
+/** Restart: a usable binary AND a model. The binary half is the one that was missing. */
+function restartAvailability(status: NativeActionStatus): NativeActionAvailability {
+  if (status.mode !== "embedded") {
+    return {
+      enabled: false,
+      reason: `In ${status.mode} mode a separate service owns llama-server — restart it where it runs, not from here.`
+    };
+  }
+  if (status.binaryPath === null) {
+    return {
+      enabled: false,
+      // The server's own sentence when it has one: it names the actual problem (a bad
+      // NATIVE_AI_SERVER_BIN, or nothing installed) far better than anything this file could
+      // reconstruct from a null.
+      reason:
+        status.binaryProblem ??
+        "There is no llama-server on this host to start, so a restart cannot succeed. Install the engine above first."
+    };
+  }
+  if (status.modelId === null) {
+    return {
+      enabled: false,
+      reason: "No model has been started yet, so there is no previous launch to repeat. Press Run on a model below."
+    };
+  }
+  return { ...ALLOWED };
+}
+
+/** Measure: a READY runtime, in either mode — the benchmark is an HTTP call, so a sidecar is a
+ *  perfectly good thing to measure and no local binary is needed. */
+function measureAvailability(status: NativeActionStatus): NativeActionAvailability {
+  if (status.state !== "ready") {
+    return { enabled: false, reason: `The runtime has to be ready before it can be measured — it is ${status.state}.` };
+  }
+  if (status.modelId === null) return { enabled: false, reason: "Nothing is loaded, so there is no model to measure." };
+  return { ...ALLOWED };
+}
+
+export function nativeRuntimeActionAvailability(input: {
+  status: NativeActionStatus | null;
+  action: NativeRuntimeAction;
+  readOnly: boolean;
+  busy: boolean;
+}): NativeActionAvailability {
+  // These three come FIRST because they are true regardless of the action, and an operator without
+  // permission should be told that rather than about a missing binary they could not act on anyway.
+  if (input.readOnly) return { enabled: false, reason: "You have read-only access to these settings." };
+  if (input.busy) return { enabled: false, reason: "Another runtime action is still running." };
+  const status = input.status;
+  if (!status) return { enabled: false, reason: "The runtime status has not loaded yet." };
+  if (status.mode === "off") {
+    return { enabled: false, reason: "NATIVE_AI_RUNTIME_MODE is off, so there is no local runtime on this host to act on." };
+  }
+
+  if (input.action === "stop") return stopAvailability(status);
+  if (input.action === "restart") return restartAvailability(status);
+  return measureAvailability(status);
+}
+
+/* ── the honest provider row ────────────────────────────────────────────────────────────────── */
+
+export interface NativeProviderRowPlan {
+  /** What `enabled` the row should actually be created/saved with. */
+  enabled: boolean;
+  /** True when this plan DIFFERS from what the operator would naively expect (an enabled row). */
+  heldBack: boolean;
+  /** Stated at the moment of the click and repeated in the toast. Null when nothing needs saying. */
+  warning: string | null;
+}
+
+/**
+ * WHETHER A NATIVE PROVIDER ROW MAY BE CREATED LIVE, AND WHAT TO SAY WHEN IT MAY NOT.
+ *
+ * ── THE BUG THIS EXISTS TO KILL ─────────────────────────────────────────────────────────────
+ *
+ * The runner card's "Make it the primary provider" button is correctly disabled until something is
+ * actually serving requests. The Add provider dialog had no such check, so a `LLAMA_CPP` row could
+ * be created with no runtime behind it — and because a native row is the kind that belongs at the
+ * top of the priority list, it landed there and became the first provider every AI feature tried and
+ * the first one every AI feature failed on. The provider list showed exactly that:
+ * "Native (llama.cpp) · Primary · Down", with the fallback quietly picking up the pieces.
+ *
+ * ── WHAT WAS CHOSEN, AND WHY IT IS NOT A REFUSAL ────────────────────────────────────────────
+ *
+ * The row is still CREATED — configuring a provider before installing its engine is a legitimate
+ * order to do things in, and refusing would force an admin to keep the settings in their head until
+ * the download finishes. What it must not do is silently become the primary FAILING provider. So it
+ * is created DISABLED, the dialog says so before the click in those words, the toast repeats it, and
+ * the provider list carries the reason on the row. Nothing here is silent, which is the actual
+ * requirement: the failure mode being fixed is not "a disabled row" but "an operator who does not
+ * know what their click did".
+ *
+ * AN ALREADY-ENABLED ROW IS NEVER TURNED OFF BY THIS. Editing an existing enabled row while the
+ * runtime happens to be down is not the moment to override an administrator's explicit earlier
+ * decision — they get the warning, not a surprise state change. `heldBack` is therefore only ever
+ * true on creation.
+ */
+export function nativeProviderRowPlan(input: {
+  isNew: boolean;
+  /** The row's current/intended enabled state. */
+  requestedEnabled: boolean;
+  runtime: { state: NativeRuntimeState; mode: NativeRuntimeMode; detail?: string | null } | null;
+}): NativeProviderRowPlan {
+  const running = input.runtime?.state === "ready";
+  if (running) return { enabled: input.requestedEnabled, heldBack: false, warning: null };
+
+  let situation: string;
+  if (input.runtime === null) situation = "the local runtime's status could not be read";
+  else if (input.runtime.mode === "off") situation = "NATIVE_AI_RUNTIME_MODE is off on this host";
+  else situation = `the local runtime is ${input.runtime.state}, not ready`;
+
+  if (!input.isNew) {
+    return {
+      enabled: input.requestedEnabled,
+      heldBack: false,
+      warning: input.requestedEnabled
+        ? `Heads up: ${situation}. While that is true, every AI feature will try this row first and fail over to the next provider. ` +
+          `Its enabled state is left exactly as you set it — turning it off is your call, not this dialog's.`
+        : null
+    };
+  }
+
+  return {
+    enabled: false,
+    heldBack: true,
+    warning:
+      `This row will be added DISABLED, because ${situation}. A native row goes to the top of the priority list, so an enabled one ` +
+      `with nothing behind it would be the first provider every AI feature tries and the first one every AI feature fails on — ` +
+      `showing up as "Primary · Down" while the fallback quietly does the work. Start the runtime (or install the engine) and then ` +
+      `turn this row on from the provider list.`
+  };
+}
+
+/* ── the engine ─────────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The sentence stating what the Install button will fetch, from where, and roughly how big — the
+ * whole thing said BEFORE the click, because downloading and then executing a binary from the
+ * internet is a decision an operator makes knowingly or not at all.
+ *
+ * "About" is load-bearing on the size: it is the published-size ballpark from the resolver, and the
+ * REAL byte count is measured from what arrives and shown on the row afterwards. Saying "26 MB" flat
+ * about a number nobody has measured is the same class of dishonesty as an estimate wearing a
+ * measurement's badge, which this panel refuses to do anywhere else.
+ */
+export function engineInstallOffer(asset: { assetName: string; url: string; releaseTag: string; approximateBytes: number }): string {
+  let host = "github.com";
+  try {
+    host = new URL(asset.url).hostname;
+  } catch {
+    // A malformed URL is not a thing the resolver produces, and the offer sentence is not the place
+    // to raise over it — the installer's own host allowlist refuses it a moment later anyway.
+  }
+  return (
+    `Downloads ${asset.assetName} (about ${formatBytes(asset.approximateBytes)}) from ${host}, checks that it is really an archive, ` +
+    `extracts only llama-server and the libraries it needs, and then RUNS it to confirm it works on this machine before calling it ` +
+    `installed. Release ${asset.releaseTag} is pinned by this build — nothing resolves "latest".`
+  );
+}
+
+/** The line under the engine bar. Extraction and the version probe share `installing` because they
+ *  are one step from the operator's point of view — "it is being put in place" — and separating them
+ *  would be two labels for four seconds. */
+export function engineInstallStatusLabel(status: NativeEngineInstallStatus): string {
+  switch (status) {
+    case "queued":
+      return "Queued";
+    case "downloading":
+      return "Downloading the llama.cpp build";
+    case "verifying":
+      return "Verifying — hashing the archive and checking it really is one";
+    case "installing":
+      return "Installing — extracting, then running the binary to confirm it works here";
+    case "ready":
+      return "Installed on this machine";
+    case "cancelled":
+      return "Cancelled";
+    default:
+      return "Failed";
+  }
 }

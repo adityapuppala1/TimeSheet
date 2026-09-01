@@ -132,8 +132,9 @@ const GGUF_MAGIC = Buffer.from("GGUF", "ascii");
 const MAX_REDIRECTS = 5;
 
 /** How often progress reaches the database while bytes are moving. A row per chunk would be a write
- *  every few milliseconds for twenty minutes; the UI polls far slower than this anyway. */
-const PROGRESS_WRITE_INTERVAL_MS = 2_000;
+ *  every few milliseconds for twenty minutes; the UI polls far slower than this anyway. Exported so
+ *  the engine installer's progress cadence is the same decision rather than a second guess at it. */
+export const PROGRESS_WRITE_INTERVAL_MS = 2_000;
 
 /* ── in-flight cancellation ─────────────────────────────────────────────────────────────────── */
 
@@ -180,30 +181,56 @@ export function requireCatalogueEntry(modelId: string): NativeModelEntry {
 }
 
 /**
- * The URL this entry's file lives at, checked against the catalogue's host allowlist.
+ * THE HOST GATE, IN ITS GENERAL FORM — https, and a hostname the caller's own allowlist accepts.
+ *
+ * WHY IT IS PARAMETERISED RATHER THAN COPIED. The engine installer
+ * (services/native-engine.service.ts) fetches a llama.cpp release archive from GitHub, which is the
+ * same job against a different allowlist: an https-only check, a suffix match, and a refusal that
+ * names what it refused. A second copy of this would be a second place for the "only the first URL
+ * was checked" bug to live, and that bug is the entire reason `openAllowlistedStream` below follows
+ * redirects by hand. One implementation, two allowlists.
  *
  * Throws rather than returning a boolean so a caller cannot forget to look — the same argument
  * `assertPublicEgressTarget` makes for itself one layer down.
  */
-export function assertAllowedDownloadUrl(url: string): URL {
+export function assertAllowedFetchUrl(input: {
+  url: string;
+  isHostAllowed: (hostname: string) => boolean;
+  /** What this caller is fetching, for both refusal sentences. e.g. "a model", "the llama.cpp engine". */
+  what: string;
+  /** Where this caller's things legitimately live, listed in the refusal. */
+  allowedHosts: readonly string[];
+}): URL {
   let parsed: URL;
   try {
-    parsed = new URL(url);
+    parsed = new URL(input.url);
   } catch {
-    throw new AppError(422, `"${url}" is not a valid download URL.`);
+    throw new AppError(422, `"${input.url}" is not a valid download URL.`);
   }
   if (parsed.protocol !== "https:") {
-    throw new AppError(422, `Model downloads must use https:// — "${parsed.protocol}//" was refused.`);
+    throw new AppError(422, `Downloads of ${input.what} must use https:// — "${parsed.protocol}//" was refused.`);
   }
-  if (!isNativeDownloadHostAllowed(parsed.hostname)) {
+  if (!input.isHostAllowed(parsed.hostname)) {
     throw new AppError(
       422,
-      `Refusing to download a model from "${parsed.hostname}". The catalogue's models are published on ` +
-        `${nativeDownloadHostSuffixes.join(" and ")}, and nothing else is fetched — the download URL is derived from the ` +
-        `catalogue entry, so a different host means the entry or a redirect is not what it claims to be.`
+      `Refusing to download ${input.what} from "${parsed.hostname}". It is published on ` +
+        `${input.allowedHosts.join(" and ")}, and nothing else is fetched — the URL is derived in this build, so a different ` +
+        `host means the derivation or a redirect is not what it claims to be.`
     );
   }
   return parsed;
+}
+
+/**
+ * The URL this entry's file lives at, checked against the catalogue's host allowlist.
+ */
+export function assertAllowedDownloadUrl(url: string): URL {
+  return assertAllowedFetchUrl({
+    url,
+    isHostAllowed: isNativeDownloadHostAllowed,
+    what: "a model",
+    allowedHosts: nativeDownloadHostSuffixes
+  });
 }
 
 /**
@@ -452,30 +479,43 @@ async function sizeOf(target: string): Promise<number> {
 }
 
 /**
- * Opens the byte stream, following redirects BY HAND.
+ * OPENS THE BYTE STREAM, FOLLOWING REDIRECTS BY HAND — the transfer primitive, shared with the
+ * engine installer.
  *
  * `redirect: "manual"` and an explicit loop, rather than letting `fetch` follow them, is the whole
  * point: an automatic follow would apply the host allowlist and the egress gate to the first URL and
  * to nothing else, and the first URL is the one that was never in doubt. Every hop is re-checked.
+ *
+ * WHY IT IS EXPORTED AND PARAMETERISED. Hugging Face answers a model request with a 302 to its CDN;
+ * GitHub answers a release-asset request with a 302 to `objects.githubusercontent.com`. Two
+ * downloaders needing the identical redirect discipline against different allowlists is precisely
+ * the case for one function with the check passed in — and writing the engine's own copy would give
+ * the "the allowlist only covered the first URL" bug a second home. `assertAllowedUrl` runs on EVERY
+ * hop, and so does the SSRF gate.
  */
-async function openStream(
-  startUrl: string,
-  rangeStart: number,
-  signal: AbortSignal,
-  io: NativeStoreIo
-): Promise<{ response: Response; url: string }> {
-  let url = startUrl;
+export async function openAllowlistedStream(options: {
+  startUrl: string;
+  rangeStart: number;
+  signal: AbortSignal;
+  fetch: NativeStoreIo["fetch"];
+  assertEgress: NativeStoreIo["assertEgress"];
+  /** Throws when this URL is not one the caller may fetch. Applied to every hop, never just the first. */
+  assertAllowedUrl: (url: string) => void;
+  /** What the egress gate calls this, for its own refusal message. */
+  egressLabel: string;
+}): Promise<{ response: Response; url: string }> {
+  let url = options.startUrl;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    assertAllowedDownloadUrl(url);
-    await io.assertEgress(url, "The model download URL");
+    options.assertAllowedUrl(url);
+    await options.assertEgress(url, options.egressLabel);
 
     const headers: Record<string, string> = { accept: "application/octet-stream" };
     // Resume. A server that ignores this answers 200 with the whole file, which is handled by the
     // caller rather than assumed away — silently appending a full body onto a partial file is how a
     // "resumed" download ends up double its real size and fails verification for the wrong reason.
-    if (rangeStart > 0) headers.range = `bytes=${rangeStart}-`;
+    if (options.rangeStart > 0) headers.range = `bytes=${options.rangeStart}-`;
 
-    const response = await io.fetch(url, { headers, signal, redirect: "manual" });
+    const response = await options.fetch(url, { headers, signal: options.signal, redirect: "manual" });
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       if (!location) throw new AppError(502, `The download server answered ${response.status} with no destination.`);
@@ -487,13 +527,35 @@ async function openStream(
   throw new AppError(502, `The download URL redirected more than ${MAX_REDIRECTS} times; refusing to keep following it.`);
 }
 
+/** The model store's own use of the primitive above, with the catalogue's allowlist bound in. */
+async function openStream(
+  startUrl: string,
+  rangeStart: number,
+  signal: AbortSignal,
+  io: NativeStoreIo
+): Promise<{ response: Response; url: string }> {
+  return openAllowlistedStream({
+    startUrl,
+    rangeStart,
+    signal,
+    fetch: io.fetch,
+    assertEgress: io.assertEgress,
+    assertAllowedUrl: (url) => void assertAllowedDownloadUrl(url),
+    egressLabel: "The model download URL"
+  });
+}
+
 /**
  * Hash and inspect the finished temp file in ONE pass.
  *
  * Two things are wanted from a five-gigabyte file — its SHA-256 and its first four bytes — and
  * reading it twice to get them would double the slowest part of verification for no reason.
+ *
+ * Exported because the engine installer wants the identical three facts about the archive it just
+ * fetched (measured size, recorded hash, magic bytes) and the one-pass property is the whole reason
+ * this exists rather than being three lines at each call site.
  */
-async function hashAndInspect(target: string): Promise<{ sha256: string; header: Buffer; sizeBytes: number }> {
+export async function hashAndInspect(target: string): Promise<{ sha256: string; header: Buffer; sizeBytes: number }> {
   const hash = createHash("sha256");
   let header = Buffer.alloc(0);
   let sizeBytes = 0;
@@ -613,10 +675,29 @@ export async function runNativeDownload(downloadId: string, io: NativeStoreIo = 
     const contentLength = Number(response.headers.get("content-length"));
     const expectedTotal = Number.isFinite(contentLength) && contentLength > 0 ? contentLength + resumeFrom : null;
 
-    await prisma.nativeModelDownload.update({
-      where: { id: downloadId },
+    // ADVANCE ONLY IF THE JOB IS STILL WANTED, and this is a CONDITIONAL write rather than a plain
+    // one for a reason worth stating.
+    //
+    // `openStream` can take seconds — DNS, TLS, and Hugging Face's redirect chain — and a Cancel
+    // pressed inside that window has ALREADY written `cancelled` to this row. An unconditional
+    // update here puts it back to `downloading`, and the abort that cancel then triggers arrives in
+    // the catch below to find an in-flight row, which it dutifully marks `failed`. The operator's
+    // experience is a Cancel button that appears to break the download it just stopped, with an
+    // error message about an aborted operation they caused deliberately.
+    //
+    // `updateMany` with the status in the WHERE clause makes the check and the write one statement,
+    // so there is no window between them at all. A count of zero means somebody else moved this row
+    // out of flight while we were opening the socket, and the right response is to stop quietly —
+    // the cancel path already owns the temp file and the row's final state.
+    const advanced = await prisma.nativeModelDownload.updateMany({
+      where: { id: downloadId, status: { in: [...IN_FLIGHT_STATUSES] } },
       data: { status: "downloading", startedAt: new Date(), bytesDownloaded: resumeFrom, bytesTotal: expectedTotal, error: null }
     });
+    if (advanced.count === 0) {
+      controller.abort();
+      await removeQuietly(tempPath);
+      return;
+    }
 
     if (!response.body) throw new AppError(502, "The download server returned no body.");
 

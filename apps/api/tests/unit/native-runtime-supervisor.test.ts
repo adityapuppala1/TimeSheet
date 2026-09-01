@@ -172,6 +172,8 @@ interface IoOptions {
   spawn?: (binary: string, args: string[]) => ChildProcess;
   healthy?: () => boolean;
   files?: Set<string>;
+  /** Absolute paths where an engine installed from the settings screen would be, preferred first. */
+  engineCandidates?: string[];
 }
 
 let spawned: Array<{ binary: string; args: string[] }> = [];
@@ -191,6 +193,10 @@ function makeIo(options: IoOptions = {}): NativeRuntimeIo {
     },
     fileExists: (target) => files.has(target),
     pathEntries: () => PATH_DIRS,
+    // The managed engine directory — where an install from the settings screen writes. Empty by
+    // default so this suite keeps describing a machine whose only llama-server is the one on PATH;
+    // `options.engineCandidates` is how a test says "an engine was installed here".
+    engineCandidates: () => options.engineCandidates ?? [],
     pathExtensions: () => [""],
     platform: () => "linux",
     probeHealth: async () => (options.healthy ?? (() => true))(),
@@ -285,11 +291,44 @@ describe("a host with no llama-server on it", () => {
     const status = await startNativeRuntime(LAUNCH, makeIo({ files: new Set() }));
     expect(status.state).toBe("unavailable");
     expect(status.binaryPath).toBeNull();
-    // The message has to say what to do, and it has to say that nothing will be downloaded to fix it.
+    expect(status.binarySource).toBeNull();
+    // The message has to say what to do about it. It used to end at "nothing is downloaded to
+    // satisfy this — install llama.cpp on this host", which was a wall with an instruction painted
+    // on it: the operator had just watched a model download and verify, and the panel's last word
+    // was "now go and build a C++ project". It names the button that fixes it instead, and it still
+    // names the sidecar for the hosts where that button cannot help.
     expect(status.binaryProblem).toContain("llama-server");
     expect(status.binaryProblem).toMatch(/NATIVE_AI_SERVER_BIN/);
-    expect(status.binaryProblem).toMatch(/Nothing is downloaded/);
+    expect(status.binaryProblem).toMatch(/Install the engine/i);
+    expect(status.binaryProblem).toMatch(/NATIVE_AI_RUNTIME_MODE=external/);
     expect(spawned).toEqual([]);
+  });
+
+  it("does NOT put the same sentence into detail, binaryProblem AND lastError", async () => {
+    // THE THREE-TIMES BUG, at its source. This branch used to write one string into all three
+    // fields, and the settings card rendered each of them — one paragraph, three icons, three
+    // colours. A missing binary is not an error that occurred; it is a precondition that is not met,
+    // and `binaryProblem` is the field for it. (The screen also dedupes on content, because two
+    // fields can still legitimately coincide — see `runtimeMessageLines` in the web workspace.)
+    const status = await startNativeRuntime(LAUNCH, makeIo({ files: new Set() }));
+    expect(status.binaryProblem).toBeTruthy();
+    expect(status.lastError).toBeNull();
+  });
+
+  it("prefers an engine installed from the settings screen over one on PATH", async () => {
+    // A stale llama-server from an unrelated experiment sitting on PATH is exactly the version
+    // mismatch nobody enjoys diagnosing. The one this app fetched, verified and RAN wins.
+    const managed = path.join("/srv/timesphere/engine/b6099", "llama-server");
+    const io = makeIo({ files: new Set([FAKE_BINARY, managed]), engineCandidates: [managed] });
+    const resolved = resolveServerBinary(io);
+    expect(resolved.path).toBe(managed);
+    expect(resolved.source).toBe("managed");
+  });
+
+  it("still falls back to PATH when nothing has been installed here", async () => {
+    const resolved = resolveServerBinary(makeIo());
+    expect(resolved.path).toBe(FAKE_BINARY);
+    expect(resolved.source).toBe("path");
   });
 
   it("names a configured path that does not exist, rather than silently searching PATH instead", async () => {

@@ -53,8 +53,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   nativeContextLadder,
   nativeDownloadInFlightStatuses,
+  nativeEngineInstallInFlightStatuses,
   nativeModelCatalogue,
   type NativeDownloadStatus,
+  type NativeEngineBinarySource,
+  type NativeEngineInstallRow,
+  type NativeEngineInstallStatus,
+  type NativeEngineReport,
   type NativeFitEstimate,
   type NativeHardwareSnapshot,
   type NativeKvCacheType,
@@ -97,15 +102,21 @@ import {
   contextStepsForModel,
   downloadProgressPercent,
   downloadStatusLabel,
+  engineInstallOffer,
+  engineInstallStatusLabel,
   environmentSummary,
   fitVerdictTone,
   formatBytes,
   formatContextTokens,
   isMachineWideWarning,
   liveNativeFit,
+  nativeProviderRowPlan,
+  nativeRuntimeActionAvailability,
   nativeThreadCeiling,
+  runtimeMessageLines,
   selectSpeedFigure,
-  type NativeBadgeVariant
+  type NativeBadgeVariant,
+  type NativeRuntimeAction
 } from "../../utils/native-model-panel";
 
 /** The download statuses worth polling on, straight from the shared list rather than a second copy
@@ -128,6 +139,17 @@ const RUNTIME_TONE: Record<NativeRuntimeState, { badge: NativeBadgeVariant; labe
   ready: { badge: "success", label: "Ready" },
   restarting: { badge: "info", label: "Restarting" },
   failed: { badge: "destructive", label: "Failed" }
+};
+
+/** The engine-install statuses worth polling on, from the shared list rather than a second copy. */
+const ENGINE_IN_FLIGHT = new Set<NativeEngineInstallStatus>(nativeEngineInstallInFlightStatuses);
+
+/** Where a resolved `llama-server` came from, in words. Which of the three answered is exactly the
+ *  question an operator debugging a version mismatch has to be able to settle. */
+const ENGINE_SOURCE_LABEL: Record<NativeEngineBinarySource, string> = {
+  configured: "from NATIVE_AI_SERVER_BIN",
+  managed: "installed from this screen",
+  path: "found on PATH"
 };
 
 const KV_LABEL: Record<NativeKvCacheType, string> = { f16: "16-bit", q8_0: "8-bit" };
@@ -196,6 +218,13 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
     queryFn: settingsApi.getNativeAiRuntime,
     refetchInterval: (query) => (query.state.data && RUNTIME_TRANSIENT.has(query.state.data.state) ? 3000 : false)
   });
+  // The engine — `llama-server` itself. Polled on the same conditional-interval pattern as the
+  // download list, and OFF the moment nothing is transferring.
+  const engine = useQuery({
+    queryKey: ["settings", "ai", "native", "engine"],
+    queryFn: settingsApi.getNativeAiEngine,
+    refetchInterval: (query) => (query.state.data?.install && ENGINE_IN_FLIGHT.has(query.state.data.install.status) ? 2000 : false)
+  });
   // Same key AIProviderListCard fetches under, so this shares its cache instead of re-fetching —
   // both cards live in the same tab and both need to know whether a native row already exists.
   const providers = useQuery({ queryKey: ["settings", "ai", "providers"], queryFn: settingsApi.listAiProviders });
@@ -223,6 +252,34 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
 
   const invalidateDownloads = () => queryClient.invalidateQueries({ queryKey: ["settings", "ai", "native", "downloads"] });
   const invalidateRuntime = () => queryClient.invalidateQueries({ queryKey: ["settings", "ai", "native", "runtime"] });
+  // The engine and the runtime are refreshed TOGETHER, always: `binaryPath` on the runtime status is
+  // what gates Restart, and an install that finishes without the runtime being re-read would leave
+  // that button disabled with a sentence that has just stopped being true.
+  const invalidateEngine = () => {
+    void queryClient.invalidateQueries({ queryKey: ["settings", "ai", "native", "engine"] });
+    void invalidateRuntime();
+  };
+
+  const installEngine = useMutation({
+    mutationFn: () => settingsApi.installNativeAiEngine(),
+    onSuccess: () => {
+      toast.success("Installing the engine", {
+        description: "It downloads on the server, is checked, extracted and then run once to prove it works. This page can be closed."
+      });
+      invalidateEngine();
+    },
+    // A 422 (musl, an unsupported architecture) and a 409 (external/off mode) both carry the sentence
+    // that says what to do instead. Showing it verbatim is the whole point of writing it.
+    onError: (err) => toast.error("Could not install the engine", { description: errorMessage(err) })
+  });
+  const cancelEngineInstall = useMutation({
+    mutationFn: (id: string) => settingsApi.cancelNativeAiEngineInstall(id),
+    onSuccess: () => {
+      toast.success("Install cancelled", { description: "The partial download was removed." });
+      invalidateEngine();
+    },
+    onError: (err) => toast.error("Could not cancel", { description: errorMessage(err) })
+  });
 
   const startDownload = useMutation({
     mutationFn: (modelId: string) => settingsApi.startNativeAiDownload(modelId),
@@ -369,6 +426,18 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
         {hardware && (
           <>
             <SystemStrip hardware={hardware} warnings={anyEstimate?.warnings ?? []} />
+
+            {/* THE ENGINE COMES BEFORE THE MODEL LIST, because nothing below it works without one.
+                The old order let an operator download 940 MB and only then discover the panel's last
+                word was "install llama.cpp yourself". */}
+            <EngineStrip
+              report={engine.data ?? null}
+              loading={engine.isLoading}
+              readOnly={readOnly}
+              installing={installEngine.isPending}
+              onInstall={() => installEngine.mutate()}
+              onCancel={(id) => cancelEngineInstall.mutate(id)}
+            />
 
             <RuntimeStrip
               status={runtime.data ?? null}
@@ -564,7 +633,24 @@ function RuntimeStrip({
 
   const tone = RUNTIME_TONE[status.state];
   const running = status.state === "ready";
-  const stoppable = status.state === "ready" || status.state === "starting" || status.state === "restarting";
+
+  // Each button asks what IT requires, and carries the answer's sentence as its title. Restart used
+  // to be gated on `modelId === null` alone, which left it live and certain to fail on any host with
+  // a model on disk and no llama-server — see `nativeRuntimeActionAvailability` for the rules.
+  const availability = (action: NativeRuntimeAction) => nativeRuntimeActionAvailability({ status, action, readOnly, busy });
+  const stop = availability("stop");
+  const restart = availability("restart");
+  const measure = nativeRuntimeActionAvailability({ status, action: "measure", readOnly, busy: busy || benchmarking });
+
+  // The three message fields, collapsed to what is actually distinct. `detail` leads; the rest are
+  // rendered below the endpoint line only when they add something.
+  const messages = runtimeMessageLines(status);
+  const detailMessage = messages.find((message) => message.kind === "detail") ?? null;
+  const extraMessages = messages.filter((message) => message.kind !== "detail");
+
+  // The promotion has the same honesty requirement the Add-provider dialog now has: a native row
+  // with nothing behind it goes to the top of the priority order and fails first for every AI call.
+  const promotionPlan = nativeProviderRowPlan({ isNew: nativeProviderRow === null, requestedEnabled: true, runtime: status });
 
   return (
     <div className="min-w-0 rounded-lg border border-border p-3">
@@ -577,7 +663,10 @@ function RuntimeStrip({
               {status.mode} mode
             </Badge>
           </p>
-          <p className="mt-1 text-xs text-muted-foreground">{status.detail}</p>
+          {/* `detail` is always the first line, and `runtimeMessageLines` guarantees it is the one
+              the others are measured against — so a mode explanation is never suppressed by a
+              problem sentence that happens to repeat it. */}
+          {detailMessage && <p className="mt-1 text-xs text-muted-foreground">{detailMessage.text}</p>}
           <p className="mt-0.5 text-xs text-muted-foreground">{status.modeReason}</p>
           {status.state === "ready" && (
             <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
@@ -589,18 +678,25 @@ function RuntimeStrip({
             </p>
           )}
           {status.baseUrl && <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{status.baseUrl}</p>}
-          {status.binaryProblem && (
-            <p className="mt-2 flex items-start gap-2 text-xs text-muted-foreground">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-              {status.binaryProblem}
+          {/* `binaryProblem` and `lastError`, each said ONLY IF IT ADDS SOMETHING the lines above it
+              did not already say. With no binary installed all three fields used to carry the same
+              sentence and all three used to render, so the card printed one paragraph three times
+              under three icons — correct underneath and unmistakably broken-looking on screen. The
+              decision is `runtimeMessageLines`' (utils/native-model-panel.ts), which dedupes on
+              CONTENT rather than by deleting renders, so three genuinely different messages still
+              all appear. `detail` itself is rendered above; only the tail is mapped here. */}
+          {extraMessages.map((message) => (
+            <p
+              key={message.kind}
+              className={cn(
+                "mt-2 flex items-start gap-2 break-words text-xs",
+                message.kind === "lastError" ? "text-destructive" : "text-muted-foreground"
+              )}
+            >
+              <AlertTriangle className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", message.kind === "lastError" ? "" : "text-warning")} />
+              {message.text}
             </p>
-          )}
-          {status.lastError && (
-            <p className="mt-2 flex items-start gap-2 break-words text-xs text-destructive">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              {status.lastError}
-            </p>
-          )}
+          ))}
           {status.restarts.attempts > 0 && (
             <p className="mt-1 text-xs text-muted-foreground">
               {status.restarts.attempts} of {status.restarts.maxAttempts} restart attempts used
@@ -609,20 +705,29 @@ function RuntimeStrip({
             </p>
           )}
         </div>
+        {/* Every disabled control carries WHY in its title. A greyed-out button with no explanation
+            is a support ticket, and Restart in particular used to be neither disabled nor
+            explicable — it was enabled on a host that could not possibly honour it. */}
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" disabled={readOnly || busy || !stoppable} onClick={onStop}>
+          <Button size="sm" variant="outline" disabled={!stop.enabled} title={stop.reason ?? "Stop llama-server on this host"} onClick={onStop}>
             {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Square className="mr-1 h-3.5 w-3.5" />}
             Stop
           </Button>
-          <Button size="sm" variant="outline" disabled={readOnly || busy || status.modelId === null} onClick={onRestart}>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!restart.enabled}
+            title={restart.reason ?? "Stop llama-server and start it again on the same model and settings"}
+            onClick={onRestart}
+          >
             <RotateCw className="mr-1 h-3.5 w-3.5" />
             Restart
           </Button>
           <Button
             size="sm"
             variant="outline"
-            disabled={readOnly || benchmarking || !running || status.modelId === null}
-            title="Send a short fixed prompt and time it — the only way to replace the speed estimate with a fact"
+            disabled={!measure.enabled}
+            title={measure.reason ?? "Send a short fixed prompt and time it — the only way to replace the speed estimate with a fact"}
             onClick={() => status.modelId && onBenchmark(status.modelId)}
           >
             {benchmarking ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Gauge className="mr-1 h-3.5 w-3.5" />}
@@ -646,11 +751,218 @@ function RuntimeStrip({
             serves one request per slot. After that the provider list above owns it: reorder, disable and delete all work there.
           </p>
         </div>
-        <Button size="sm" disabled={readOnly || promoting || !running} onClick={onMakePrimary}>
+        <Button
+          size="sm"
+          disabled={readOnly || promoting || !running}
+          title={running ? "Create or update the LLAMA_CPP row and put it first" : (promotionPlan.warning ?? undefined)}
+          onClick={onMakePrimary}
+        >
           {promoting ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <ArrowUpToLine className="mr-1 h-3.5 w-3.5" />}
           {nativeProviderRow ? "Update and promote" : "Make it the primary provider"}
         </Button>
       </div>
+      {/* The reason this button is off, on the face of the card rather than only in its tooltip —
+          the same sentence the Add-provider dialog shows, from the same function, so the two
+          surfaces cannot come to describe this differently. */}
+      {!running && promotionPlan.warning && <p className="mt-2 text-xs text-muted-foreground">{promotionPlan.warning}</p>}
+    </div>
+  );
+}
+
+/* ── the engine ─────────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * STEP ZERO: getting `llama-server` onto this machine.
+ *
+ * WHY IT SITS ABOVE THE MODEL LIST. Nothing below it works without a binary. The panel used to open
+ * with the hardware, then the runtime, then six models to download — and an operator could do all of
+ * that, watch a 940 MB file verify, and only then meet the sentence "install llama.cpp on this host
+ * and point NATIVE_AI_SERVER_BIN at the binary". Putting acquisition first makes the order of
+ * operations the order on screen.
+ *
+ * WHAT IT SAYS BEFORE THE CLICK, ALWAYS. The release, the host, the asset name and the approximate
+ * size. Downloading and then EXECUTING a binary from the internet is a decision an operator makes
+ * knowingly or not at all, so the offer is rendered whether or not they ever press it, and the
+ * button is never the first place the plan appears.
+ *
+ * WHEN IT CANNOT BE DONE HERE, IT SAYS SO SPECIFICALLY AND KEEPS THE ALTERNATIVE. On Alpine (musl)
+ * there is no glibc build that can run, and the honest answer is a sidecar; the same is true of an
+ * unsupported architecture, and of `external`/`off` modes where a local binary would sit unused. A
+ * clear "not here, do this instead" is a good outcome — the dead end was never the refusal, it was
+ * the absence of a path.
+ */
+function EngineStrip({
+  report,
+  loading,
+  readOnly,
+  installing,
+  onInstall,
+  onCancel
+}: {
+  report: NativeEngineReport | null;
+  loading: boolean;
+  readOnly: boolean;
+  installing: boolean;
+  onInstall: () => void;
+  onCancel: (id: string) => void;
+}) {
+  if (loading) return <Skeleton className="h-24 w-full" />;
+  if (!report) return null;
+
+  const install = report.install;
+  const inFlight = install !== null && ENGINE_IN_FLIGHT.has(install.status);
+  const installed = report.binaryPath !== null;
+  const progress = install ? downloadProgressPercent(install) : null;
+  const offer = report.resolution.ok ? engineInstallOffer(report.resolution.asset) : null;
+  // The button is only live where an install could actually succeed AND is worth doing: a host with
+  // a published build, in embedded mode, with nothing already transferring.
+  const canInstall = !readOnly && report.installable && !inFlight && !installing;
+
+  return (
+    <div className="min-w-0 rounded-lg border border-border p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 basis-72">
+          <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+            Inference engine
+            {installed ? (
+              <Badge variant="success" className="text-xs font-normal">
+                Installed
+              </Badge>
+            ) : (
+              <Badge variant="warning" className="text-xs font-normal">
+                Not installed
+              </Badge>
+            )}
+            <Badge variant="outline" className="text-xs font-normal">
+              {report.platform} · {report.arch}
+              {report.libc ? ` · ${report.libc}` : ""}
+            </Badge>
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            <code className="rounded bg-muted px-1 py-0.5 text-[11px]">llama-server</code> is the program that actually runs a model.
+            Nothing below this works without it, and nothing here is fetched on its own — installing is this button and only this button.
+          </p>
+
+          {/* WHAT IS ALREADY THERE, and which of the three sources produced it. "There is a
+              llama-server" and "there is the one this panel installed" are different facts, and a
+              version mismatch is diagnosed from the difference. */}
+          {installed && (
+            <p className="mt-2 break-all font-mono text-[11px] text-muted-foreground">
+              {report.binaryPath}
+              {report.binarySource && <span className="ml-1 font-sans">({ENGINE_SOURCE_LABEL[report.binarySource]})</span>}
+            </p>
+          )}
+
+          {/* THE REFUSAL, when there is one — musl above all. It carries the sidecar instructions,
+              which is what turns "no" into a path rather than a wall. */}
+          {!report.resolution.ok && (
+            <Alert variant="warning" className="mt-2">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>No published build can run on this host</AlertTitle>
+              <AlertDescription>{report.resolution.message}</AlertDescription>
+            </Alert>
+          )}
+
+          {/* THE OFFER, stated before the click and regardless of whether it is ever pressed. */}
+          {report.resolution.ok && !installed && offer && <p className="mt-2 text-xs text-muted-foreground">{offer}</p>}
+
+          {/* Mode is a separate refusal from platform: this host may have a perfectly good build
+              available and still be one where a local binary would never be spawned. */}
+          {report.resolution.ok && !report.installable && (
+            <p className="mt-2 flex items-start gap-2 text-xs text-muted-foreground">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+              {report.sidecarInstructions}
+            </p>
+          )}
+
+          {install && <EngineInstallProgress install={install} progress={progress} />}
+        </div>
+
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {inFlight && install ? (
+            <Button size="sm" variant="ghost" disabled={readOnly} onClick={() => onCancel(install.id)}>
+              <X className="mr-1 h-3.5 w-3.5" />
+              Cancel
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant={installed ? "outline" : "default"}
+              disabled={!canInstall}
+              title={
+                canInstall
+                  ? (offer ?? undefined)
+                  : report.resolution.ok
+                    ? report.sidecarInstructions
+                    : report.resolution.message
+              }
+              onClick={onInstall}
+            >
+              {installing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Download className="mr-1 h-3.5 w-3.5" />}
+              {installed ? "Reinstall the engine" : "Install the engine"}
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The install's progress, with the two steps that move no bytes given their own words.
+ *
+ * A bar frozen at 100% while an archive is hashed, extracted and then RUN is how an operator
+ * concludes the install hung — the same reasoning `DownloadProgress` uses for `verifying`, and the
+ * reason `installing` is a state here rather than a flicker at the end of the transfer.
+ *
+ * A SUCCESS SHOWS WHAT THE BINARY SAID. That string is the evidence behind the word "installed":
+ * the installer ran the thing and got an answer, rather than assuming a file that extracted is a
+ * file that works. Showing it is what lets an operator confirm the version themselves.
+ */
+function EngineInstallProgress({ install, progress }: { install: NativeEngineInstallRow; progress: number | null }) {
+  if (install.status === "ready") {
+    return (
+      <div className="mt-2">
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
+          <span>
+            {engineInstallStatusLabel(install.status)} — {install.assetName}, release {install.releaseTag}
+          </span>
+          <span className="tabular-nums">{formatBytes(install.fileSizeBytes)}</span>
+          {install.sha256 && <span className="break-all font-mono text-[10px]">sha256 {install.sha256.slice(0, 16)}…</span>}
+        </p>
+        {install.versionOutput && (
+          <p className="mt-1 break-words font-mono text-[10px] text-muted-foreground">it answered: {install.versionOutput.split("\n")[0]}</p>
+        )}
+      </div>
+    );
+  }
+
+  if (install.status === "failed" || install.status === "cancelled") {
+    return (
+      <p className="mt-2 flex items-start gap-2 break-words text-xs">
+        <AlertTriangle className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", install.status === "failed" ? "text-destructive" : "text-muted-foreground")} />
+        <span className={install.status === "failed" ? "text-destructive" : "text-muted-foreground"}>
+          {engineInstallStatusLabel(install.status)}
+          {install.error ? ` — ${install.error}` : ""}
+        </span>
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+        <span>{engineInstallStatusLabel(install.status)}</span>
+        <span className="tabular-nums">
+          {formatBytes(install.bytesDownloaded)} of {formatBytes(install.bytesTotal)}
+        </span>
+      </div>
+      <Progress
+        value={progress ?? 100}
+        indicatorClassName={progress === null ? "animate-pulse bg-muted-foreground/40" : "bg-primary"}
+        className="mt-1 h-1.5"
+      />
     </div>
   );
 }

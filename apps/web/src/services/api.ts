@@ -21,6 +21,8 @@ import type {
   ModuleAssigneeRuleRow,
   NativeBenchmarkSummary,
   NativeCapabilityReport,
+  NativeEngineInstallRow,
+  NativeEngineReport,
   NativeKvCacheType,
   NativeModelDownloadRow,
   NativeRuntimeStatus,
@@ -2155,6 +2157,24 @@ export const settingsApi = {
    *  rather than deriving copy from `state`: an unexplained badge is a badge somebody argues with.
    *  Never a 500; "off" and "unavailable" are answers. */
   getNativeAiRuntime: async () => (await api.get<NativeRuntimeStatus>("/settings/ai/native/runtime")).data,
+  /** THE ENGINE — `llama-server` itself, as opposed to a model's weights. Read-only and safe on
+   *  first paint: it resolves what WOULD be fetched for this platform/arch/libc without touching the
+   *  network, so the screen can state the release, the host, the asset name and the approximate size
+   *  BEFORE the button is enabled. `resolution.ok === false` is an ANSWER, not an error — on Alpine
+   *  it carries the musl explanation and the sidecar instructions, and the install button must stay
+   *  disabled. `install` is the most recent attempt, so a page reload mid-download still shows the
+   *  bar; poll it while its status is in `nativeEngineInstallInFlightStatuses`. */
+  getNativeAiEngine: async () => (await api.get<NativeEngineReport>("/settings/ai/native/engine")).data,
+  /** Fetches, verifies, extracts and RUNS the pinned llama.cpp build, then declares it installed.
+   *  Returns the job row immediately — the work runs detached and the UI polls. A 422 means this
+   *  host has no published build (musl, an unsupported architecture) and the message says what to do
+   *  instead; a 409 means the runtime mode is external/off, where a local binary would sit unused.
+   *  Show either verbatim. */
+  installNativeAiEngine: async () => (await api.post<NativeEngineInstallRow>("/settings/ai/native/engine/install")).data,
+  cancelNativeAiEngineInstall: async (id: string) =>
+    (await api.post<NativeEngineInstallRow>(`/settings/ai/native/engine/install/${id}/cancel`)).data,
+  /** Removes an installed release from this host's disk. */
+  removeNativeAiEngine: async (releaseTag: string) => api.delete(`/settings/ai/native/engine/${releaseTag}`),
   /** Every knob is optional and defaults to what the fit estimator recommends for THIS machine at
    *  the model's measured size. Resolves once the server is ready or the attempt has failed — a
    *  model can take tens of seconds to load, so give this call room. */

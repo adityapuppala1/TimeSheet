@@ -122,6 +122,17 @@ function fakeClient(): { client: PrismaClient; rows: Map<string, Row> } {
       Object.assign(existing, data, { updatedAt: new Date() });
       return existing;
     },
+    /** The CONDITIONAL write — a status guard in the WHERE clause, which is how the transfer
+     *  advances a row to `downloading` without clobbering a `cancelled` that landed while the socket
+     *  was opening. Modelled here (rather than stubbed away) because "count 0 and the row is
+     *  untouched" is the whole assertion. */
+    updateMany: async ({ where, data }: { where: { id?: string; status?: { in: string[] } }; data: Row }) => {
+      const existing = find(where);
+      if (!existing) return { count: 0 };
+      if (where.status && !where.status.in.includes(String(existing.status))) return { count: 0 };
+      Object.assign(existing, data, { updatedAt: new Date() });
+      return { count: 1 };
+    },
     delete: async ({ where }: { where: { id: string } }) => {
       const existing = find(where);
       if (!existing) throw new Error("Record to delete does not exist.");
@@ -459,6 +470,38 @@ describe("cancelling a download in flight", () => {
     expect(await exists(finalName())).toBe(false);
     // And the operator's own action is never rewritten as an error.
     expect(row.error).toBeNull();
+  });
+
+  it("survives a cancel that lands WHILE the socket is still opening, rather than resurrecting the row", async () => {
+    /* THE RACE, PINNED. `openStream` takes real time — DNS, TLS, and Hugging Face's redirect chain —
+       and a Cancel pressed inside that window has already written `cancelled`. The transfer's next
+       act used to be an UNCONDITIONAL `status: "downloading"` write, which put the row back in
+       flight; the abort that cancel then triggered arrived in the catch to find an in-flight row and
+       marked it `failed`. To the operator, Cancel appeared to break the download it had just
+       stopped, and left an error message about an operation they aborted on purpose.
+
+       Reproduced deterministically by cancelling from INSIDE the fake fetch — the one point that is
+       provably before the status write and after the row exists. */
+    const id = await seedQueuedRow();
+    let cancelled = false;
+    const io: NativeStoreIo = makeIo({
+      fetch: async () => {
+        if (!cancelled) {
+          cancelled = true;
+          await cancelNativeDownload(id, io);
+        }
+        return bodyResponse(ggufBytes(2000));
+      }
+    });
+
+    await runInTenant(store.client, () => runNativeDownload(id, io));
+
+    const row = store.rows.get(id)!;
+    expect(row.status).toBe("cancelled");
+    expect(row.error).toBeNull();
+    // And nothing was left behind by the transfer that was already in the air.
+    expect(await exists(tempName())).toBe(false);
+    expect(await exists(finalName())).toBe(false);
   });
 
   it("is a no-op on a download that has already finished", async () => {

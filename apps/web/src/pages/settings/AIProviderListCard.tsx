@@ -45,6 +45,7 @@ import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toaster";
 import { cn } from "../../lib/utils";
 import { NativeRuntimeTuningControls } from "./NativeModelRunnerCard";
+import { nativeProviderRowPlan } from "../../utils/native-model-panel";
 
 function providerDisplayName(row: Pick<AIProviderConfigRow, "provider" | "baseUrl" | "label">): string {
   return row.label?.trim() || resolveProviderLabel(row.provider, row.baseUrl);
@@ -135,6 +136,19 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
 
   const rows = providers.data ?? [];
 
+  /* WHY THE LIST ITSELF ASKS ABOUT THE RUNTIME. A `LLAMA_CPP` row's health is not a property of the
+     row: it depends on whether a process is serving on this host right now, which no amount of
+     request history explains. Without this, the list could only ever say "Down" — true, useless, and
+     exactly what the screenshot showed. Fetched ONLY when such a row exists, so a workspace with no
+     native provider pays nothing, and under the same cache key the runner card uses. */
+  const hasNativeRow = rows.some((row) => row.provider === "LLAMA_CPP");
+  const nativeRuntime = useQuery({
+    queryKey: ["settings", "ai", "native", "runtime"],
+    queryFn: settingsApi.getNativeAiRuntime,
+    enabled: hasNativeRow
+  });
+  const nativeRuntimeReady = nativeRuntime.data?.state === "ready";
+
   function move(index: number, direction: -1 | 1) {
     const target = index + direction;
     if (target < 0 || target >= rows.length) return;
@@ -215,6 +229,16 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
                       title="The circuit breaker moved this to the back of the line after repeated failures — reorder it yourself to clear this."
                     >
                       Auto-demoted
+                    </Badge>
+                  )}
+                  {/* A NATIVE ROW WITH NOTHING BEHIND IT, NAMED. "Down" (from request history) says
+                      calls failed; this says WHY, which is a different and far more useful fact —
+                      there is no process on this host serving them. Shown whether the row is enabled
+                      or not: on an enabled one it explains the failures, and on a disabled one it
+                      explains why it is still off. */}
+                  {row.provider === "LLAMA_CPP" && nativeRuntime.data && !nativeRuntimeReady && (
+                    <Badge variant="warning" className="text-xs font-normal" title={nativeRuntime.data.detail}>
+                      No local runtime
                     </Badge>
                   )}
                 </p>
@@ -417,6 +441,14 @@ function useNativeProviderDraft(active: boolean, config: AIProviderConfigRow | n
     queryFn: settingsApi.listNativeAiDownloads,
     enabled: active
   });
+  // WHETHER ANYTHING IS ACTUALLY SERVING REQUESTS, which is the question this dialog never used to
+  // ask. Same cache key the runner card polls, so opening this on the AI tab reads what that card
+  // already fetched rather than re-probing the host.
+  const runtime = useQuery({
+    queryKey: ["settings", "ai", "native", "runtime"],
+    queryFn: settingsApi.getNativeAiRuntime,
+    enabled: active
+  });
 
   const estimate = capability.data?.models[0]?.estimate ?? null;
   const suggested = capability.data?.models.find((row) => row.modelId === capability.data?.suggestedModelId)?.estimate ?? null;
@@ -425,6 +457,7 @@ function useNativeProviderDraft(active: boolean, config: AIProviderConfigRow | n
 
   return {
     hardware: capability.data?.hardware ?? null,
+    runtime: runtime.data ?? null,
     estimate,
     recommendedContext,
     recommendedThreads,
@@ -600,6 +633,32 @@ function ProviderConfigDialog({
   const isNative = provider === "LLAMA_CPP";
   const native = useNativeProviderDraft(isNative, config);
 
+  /**
+   * WHAT THIS CLICK WILL ACTUALLY DO TO THE ROW'S `enabled`, decided before the click and stated
+   * beside the button.
+   *
+   * THE BUG THIS CLOSES: the runner card's promote button is disabled until something is serving
+   * requests; this dialog had no such check, so a `LLAMA_CPP` row could be created with no runtime
+   * behind it. A native row belongs at the TOP of the priority order, so it landed there and became
+   * the first provider every AI feature tried and the first one every AI feature failed on —
+   * "Native (llama.cpp) · Primary · Down", with the fallback quietly doing the work.
+   *
+   * The decision itself lives in `nativeProviderRowPlan` (utils/native-model-panel.ts), shared with
+   * the runner card so the two surfaces cannot come to describe this differently, and tested there.
+   */
+  const nativePlan = nativeProviderRowPlan({
+    isNew,
+    requestedEnabled: config?.enabled ?? true,
+    runtime: native.runtime
+  });
+
+  /* THE BUTTON SAYS WHAT IT WILL DO. "Add it disabled" rather than "Add", because the label is the
+     last thing read before the click and a button that says one word while doing another is exactly
+     the silent behaviour change this fix exists to remove. Written as a statement rather than a
+     ternary chain in the JSX — three outcomes deep is where a chain stops being readable. */
+  let saveButtonLabel = isNew ? "Add" : "Save";
+  if (isNative && nativePlan.heldBack) saveButtonLabel = "Add it disabled";
+
   function selectPreset(key: string) {
     setPresetKey(key);
     if (key === "anthropic") {
@@ -652,7 +711,13 @@ function ProviderConfigDialog({
       };
       // The context an operator picked below is what the row DECLARES, so the dispatcher's demand
       // filter and the process actually serving the call agree about the window.
-      if (isNative) payload.contextWindow = native.contextTokens;
+      if (isNative) {
+        payload.contextWindow = native.contextTokens;
+        // CREATED DISABLED WHEN THERE IS NO RUNTIME. Only ever on creation, and only ever after the
+        // dialog has said so in words — see `nativePlan` above. An existing row's enabled state is
+        // an administrator's earlier explicit decision and this dialog does not overrule it.
+        if (nativePlan.heldBack) payload.enabled = false;
+      }
       if (apiKeyDraft) payload.apiKey = apiKeyDraft;
       const saved = isNew
         ? await settingsApi.createAiProvider(payload as AIProviderConfigInput)
@@ -675,7 +740,12 @@ function ProviderConfigDialog({
       return { saved, runtimeNote };
     },
     onSuccess: ({ runtimeNote }) => {
-      toast.success(isNew ? "Provider added" : "Provider updated", runtimeNote ? { description: runtimeNote } : undefined);
+      // THE SAME SENTENCE AFTER THE CLICK AS BEFORE IT. A row that was quietly created disabled is
+      // exactly the silent behaviour change this fix exists to avoid, so the plan's warning outranks
+      // the runtime note in the toast — the operator's next question is "why is it off?", not "what
+      // did the launch say".
+      const description = nativePlan.warning ?? runtimeNote;
+      toast.success(isNew ? "Provider added" : "Provider updated", description ? { description } : undefined);
       onSaved();
       onClose();
     },
@@ -819,13 +889,23 @@ function ProviderConfigDialog({
               />
             </div>
           )}
+
+          {/* AT THE MOMENT OF THE CLICK, not in a toast afterwards. This sits directly above the
+              button so an operator reads what the button is about to do while their pointer is on
+              the way to it — a native row with nothing behind it going in enabled is the failure
+              being prevented, and doing it silently would be the same failure in a quieter coat. */}
+          {isNative && nativePlan.warning && (
+            <div className="rounded-lg border border-warning/40 bg-warning/10 p-3">
+              <p className="text-xs text-foreground">{nativePlan.warning}</p>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button disabled={!model.trim() || save.isPending} onClick={() => save.mutate()}>
-            {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : isNew ? "Add" : "Save"}
+            {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : saveButtonLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

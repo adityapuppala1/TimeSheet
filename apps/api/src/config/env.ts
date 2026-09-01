@@ -263,9 +263,12 @@ const schema = z.object({
    * reports it, and starts nothing. `off` is the operator's hard veto — it makes every route in
    * this subsystem answer "off" without touching the disk, the PATH or a child process.
    *
-   * `NATIVE_AI_SERVER_BIN` — absolute path to `llama-server`. Left empty, PATH is searched. NOTHING
-   * IS EVER DOWNLOADED to satisfy this: a runtime dependency on an external binary is a real cost,
-   * and config/version.ts already declines to spawn `git` at boot for the same reason.
+   * `NATIVE_AI_SERVER_BIN` — absolute path to `llama-server`. Left empty, three places are searched
+   * in order: this variable, the directory the "Install the engine" button writes to, then PATH.
+   * NOTHING IS EVER FETCHED AT BOOT to satisfy this — an install is an explicit admin action on the
+   * settings screen, because downloading and then executing a binary from the internet is a decision
+   * an operator makes knowingly. config/version.ts declines to spawn `git` at boot for the same
+   * family of reason.
    *
    * `NATIVE_AI_HOST`/`NATIVE_AI_PORT` — where the runtime listens. The host default is loopback and
    * an EMBEDDED runtime must never be given anything else; the override exists for `external`,
@@ -298,6 +301,25 @@ const schema = z.object({
     z.coerce.number().int().min(1).max(65535).default(8080)
   ),
   NATIVE_AI_MODEL_DIR: absoluteDirectory("NATIVE_AI_MODEL_DIR"),
+  /**
+   * `NATIVE_AI_ENGINE_RELEASE` — which llama.cpp release the "Install the engine" button fetches.
+   *
+   * ONLY EVER ANOTHER PIN. Empty means this build's reviewed constant
+   * (`nativeEnginePinnedReleaseTag`, packages/shared/src/native-engine.ts). There is deliberately no
+   * value meaning "newest": a build that resolves at request time changes underneath a deployment,
+   * which makes one operator's bug report unreproducible on another's machine and hands whoever can
+   * publish a release the ability to change what an existing install executes. The escape hatch
+   * exists for an air-gapped mirror, or to move ahead of our pin without waiting for a release of
+   * ours, and the shape is checked HERE so a stray value cannot reach URL construction at all.
+   */
+  NATIVE_AI_ENGINE_RELEASE: z
+    .string()
+    .default("")
+    .transform((value) => value.trim())
+    .refine(
+      (value) => value === "" || /^b\d{3,7}$/.test(value),
+      'NATIVE_AI_ENGINE_RELEASE must be a llama.cpp release tag such as "b6099" — a "b" followed by the build number. Leave it empty to use the release this build pins.'
+    ),
 
   /**
    * Per-request API telemetry (middleware/request-telemetry.ts → ApiRequestSample).

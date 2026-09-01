@@ -59,6 +59,68 @@ number, on purpose — an installation must never render history for a version t
   installation is in the first time it is opened. Each empty state names the next step instead of
   looking broken.
 
+### 🤖 The engine you could not get, and three things the panel said badly
+
+- **You can now install `llama-server` from the screen that needs it.** The entry above was honest
+  about everything except its own last step: a model downloaded, verified and hashed, and the panel
+  then ended at *"install llama.cpp on this host and point `NATIVE_AI_SERVER_BIN` at the binary"*.
+  For a product promising "pick a model, download it, run it", that is a wall with an instruction
+  painted on it, and everything above it was unusable behind it. **Inference engine** is now the
+  first step on the card, above the model list, because nothing below it works without one.
+- **It tells you exactly what it will do before you let it.** The release, the host, the asset name
+  and an approximate size — *"Downloads llama-b6099-bin-ubuntu-x64.zip (about 22 MB) from github.com,
+  checks that it is really an archive, extracts only llama-server and the libraries it needs, and
+  then RUNS it to confirm it works on this machine before calling it installed."* Downloading and
+  then executing a binary from the internet is a decision an operator makes knowingly, so nothing
+  here happens on boot, ever: it is a Super Admin pressing a button, audited with the release in the
+  entry.
+- **The release is PINNED, never "latest".** A build that resolves at request time changes underneath
+  a deployment, which makes one operator's bug report unreproducible on another's machine and hands
+  whoever can publish a release the power to change what an existing install executes. The tag is a
+  reviewed constant, recorded on the install row so "which llama.cpp is this box running?" is a
+  stored fact; `NATIVE_AI_ENGINE_RELEASE` can name a *different pin* for an air-gapped mirror, and
+  there is deliberately no value meaning "newest". The SHA-256 of what arrives is **recorded, not
+  compared** — the same admission the model store already makes, because asserting a checksum this
+  project cannot independently verify would be worse than naming the gap.
+- **Alpine is told the truth instead of being handed a binary that cannot run.** llama.cpp publishes
+  only glibc-linked Linux builds and this app's image is `node:22-alpine`, which is musl — where a
+  glibc binary fails with the kernel loader's *"no such file or directory"* for a file that is plainly
+  there, one of the most misleading errors in Linux. The libc is detected and the download is refused
+  with the reason and the sidecar instructions (`NATIVE_AI_RUNTIME_MODE=external`) attached. Same for
+  an unsupported architecture, and for `external`/`off` modes where a local binary would sit unused.
+  A specific "not here, do this instead" is a good outcome; the dead end was never the refusal.
+- **Five refusals between "the server answered 200" and "installed".** The host allowlist is applied
+  to the first request *and every redirect hop* (GitHub 302s release assets to its own object
+  storage, so an unchecked redirect is the hole); the archive's magic bytes are checked, and a
+  failure quotes what actually arrived, so a captive-portal login page reads as a diagnosis; **any
+  entry naming a path outside the destination fails the whole install**, checked over every entry
+  before a single byte is written; only `llama-server` and the libraries it needs are extracted, and
+  the executable bit is set on POSIX; and then the binary is **run**, because a wrong-architecture
+  build, a missing shared library and an ABI mismatch all extract perfectly and fail at the first
+  inference, days later, to somebody who was told it worked. What it said is stored and shown.
+- **The panel stopped saying the same thing three times.** With no binary installed, `detail`,
+  `binaryProblem` and `lastError` all carried the identical sentence and the card rendered all three
+  — one paragraph, three icons, three colours. It reads as broken software even when the state
+  underneath is perfectly correct. Fixed at both ends: the API no longer copies a missing-binary
+  message into `lastError` (a precondition that is not met is not an error that occurred), and the
+  card deduplicates on **content** rather than by rendering fewer fields — so a mode explanation, a
+  fixable configuration problem and a real crash still all appear when they genuinely differ.
+- **Restart is no longer offered when it cannot possibly work.** It was gated on "is a model loaded"
+  alone, so with a model on disk and no `llama-server` it was live, confident, and certain to fail.
+  Each control now asks what it actually requires — Stop needs something this process is supervising,
+  Restart needs a usable binary *and* a model, Measure needs a ready runtime (a sidecar counts) — and
+  every disabled one carries the reason in its tooltip. The binary is resolved on every status read
+  rather than only after a start, which is what makes the question answerable on first paint.
+- **A native provider row can no longer become the primary failing provider by accident.** The Add
+  provider dialog had no runtime check, so a `LLAMA_CPP` row could be created with nothing behind it,
+  sort to the top of the priority order, and be the first provider every AI feature tried and the
+  first one every AI feature failed on — *"Native (llama.cpp) · Primary · Down"*, with the fallback
+  quietly doing the work. Configuring ahead of installing is legitimate, so the row is still created:
+  it is created **disabled**, the dialog says so in those words above the button (which reads "Add it
+  disabled"), the toast repeats it, and the provider list marks such a row **No local runtime** with
+  the runtime's own sentence behind it. An existing enabled row is never switched off behind an
+  administrator's back — it gets the warning, not a surprise.
+
 ### 🤖 Fetch a model, run it, and measure it instead of guessing
 
 - **A model store on this machine's own disk, with four ways to refuse a file.** A download is a row

@@ -1532,6 +1532,74 @@ model NativeModelDownload {
   @@index([status])
 }
 
+/// One attempt to put `llama-server` — the ENGINE, as opposed to a model's weights — on this host's
+/// disk.
+///
+/// WHY A SECOND TABLE AND NOT A ROW IN NativeModelDownload. They are the same shape of job and
+/// almost nothing else: one has a catalogue id, a GGUF magic check and a derived-size band; the
+/// other has a release tag, a zip magic check, an extraction and a "does the binary answer when
+/// run" probe. Sharing a table would mean half the columns are NULL for every row and the status
+/// vocabulary means two different things depending on which kind it is. They share the TRANSFER
+/// (services/native-model-store.service.ts exports the redirect-following stream and the one-pass
+/// hash both use), which is the part that was worth not writing twice.
+///
+/// WHY THE RELEASE TAG IS STORED RATHER THAN DERIVED. The pin can move — a release of ours bumps
+/// the constant, or an operator sets NATIVE_AI_ENGINE_RELEASE — and "which llama.cpp is this box
+/// actually running" must stay answerable afterwards. A derived answer would silently start
+/// describing the build that WOULD be installed rather than the one that is.
+///
+/// WHY THE HASH IS RECORDED AND NOT COMPARED. The same admission NativeModelDownload.sha256 makes:
+/// this project has no independently-obtained checksum for the upstream asset, and writing an
+/// invented constant into a security check would be worse than the gap it pretends to close. The
+/// recorded value still proves two installations hold the same binary, and it is the raw material
+/// for pinning a real hash later.
+model NativeEngineInstall {
+  id String @id @default(uuid())
+
+  /// queued | downloading | verifying | installing | ready | failed | cancelled
+  ///
+  /// `installing` is its own state because it covers the two slowest, most failure-prone steps:
+  /// extracting the archive and then RUNNING the extracted binary to see whether it answers. Folded
+  /// into `verifying` it would look like a progress bar stuck at 100%.
+  status String @default("queued") @db.VarChar(20)
+
+  /// The llama.cpp release this attempt installed, e.g. "b6099". Never "latest" — see the model's
+  /// header and packages/shared/src/native-engine.ts.
+  releaseTag String @db.VarChar(20)
+  /// The published asset's file name, so a support conversation does not have to re-derive which
+  /// platform/arch build this box has.
+  assetName String @db.VarChar(200)
+  sourceUrl String @db.VarChar(1000)
+
+  bytesDownloaded Float  @default(0)
+  /// NULL means the server sent no Content-Length — a real outcome, not zero.
+  bytesTotal      Float?
+
+  /// MEASURED from the archive that arrived, never the resolver's published-size ballpark.
+  fileSizeBytes Float?
+  sha256        String? @db.Char(64)
+
+  /// Absolute path of the installed `llama-server`, set only after it has been RUN and answered.
+  /// NULL is what "not installed" looks like, including for a row that downloaded perfectly and
+  /// then failed its version probe.
+  binaryPath String? @db.VarChar(500)
+  /// What the binary said when asked its version — the evidence behind the word "installed",
+  /// stored so an operator sees the same string the installer accepted.
+  versionOutput String? @db.VarChar(500)
+
+  /// Operator-facing, populated only on `failed`, and it always names what was refused.
+  error String? @db.Text
+
+  requestedById String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+}
+
 /// How much authority one AI capability has when it runs.
 ///
 /// The ladder is deliberately short and its rungs are deliberately unequal in size: almost

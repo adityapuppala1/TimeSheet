@@ -44,10 +44,18 @@ import {
 import {
   getNativeRuntimeStatus,
   planLaunch,
+  resolveNativeRuntimeMode,
+  resolveServerBinary,
   restartNativeRuntime,
   startNativeRuntime,
   stopNativeRuntime
 } from "../services/native-runtime.service.js";
+import {
+  cancelNativeEngineInstall,
+  describeNativeEngine,
+  removeNativeEngine,
+  startNativeEngineInstall
+} from "../services/native-engine.service.js";
 import { runNativeBenchmark } from "../services/native-benchmark.service.js";
 import {
   listProviderConfigs,
@@ -820,6 +828,70 @@ settingsRouter.delete(
 settingsRouter.get("/ai/native/runtime", requireSuperAdmin, async (_req, res) => {
   res.json(await getNativeRuntimeStatus());
 });
+
+/**
+ * THE ENGINE — how `llama-server` itself gets onto this host, as opposed to a model's weights.
+ *
+ * WHY THIS BLOCK EXISTS. Everything above it worked and was still unusable: a model downloaded,
+ * verified and hashed, and the panel's last word was "install llama.cpp on this host and point
+ * NATIVE_AI_SERVER_BIN at the binary". For a product whose promise is "pick a model, download it,
+ * run it", that is a wall with an instruction painted on it.
+ *
+ * THE GET IS READ-ONLY AND SAFE ON FIRST PAINT, like the capability route beside it: it resolves
+ * what WOULD be fetched here, without touching the network, so the screen can state the release, the
+ * host, the asset name and the size BEFORE the button is enabled. On Alpine it resolves to a refusal
+ * with the sidecar instructions in it, which is an answer and not an error.
+ *
+ * THE POST IS THE ONLY THING IN THIS CODEBASE THAT FETCHES AND THEN EXECUTES A BINARY, and it is
+ * deliberately shaped like the most consequential button on the screen: SUPER_ADMIN only, audited
+ * with the release tag and asset name in the entry, and never reachable from boot. A 422 means this
+ * host has no published build (musl, an unsupported architecture) and its message says what to do
+ * instead; a 409 means the mode is `external`/`off` and a binary here would sit unused.
+ */
+settingsRouter.get("/ai/native/engine", requireSuperAdmin, async (_req, res) => {
+  const { mode } = await resolveNativeRuntimeMode();
+  const binary = resolveServerBinary();
+  res.json(await describeNativeEngine(mode, binary));
+});
+
+settingsRouter.post("/ai/native/engine/install", requireSuperAdmin, async (req, res) => {
+  const { mode } = await resolveNativeRuntimeMode();
+  const row = await startNativeEngineInstall(mode, req.user!.id);
+  await audit(
+    req.user!.id,
+    "settings.ai_native_engine_install_started",
+    "NativeEngineInstall",
+    row.id,
+    { releaseTag: row.releaseTag, assetName: row.assetName, sourceUrl: row.sourceUrl },
+    { ipAddress: req.ip }
+  );
+  res.status(201).json(row);
+});
+
+settingsRouter.post(
+  "/ai/native/engine/install/:id/cancel",
+  requireSuperAdmin,
+  validate(z.object({ params: z.object({ id: z.string().uuid() }).strict() })),
+  async (req, res) => {
+    const row = await cancelNativeEngineInstall(String(req.params.id));
+    await audit(req.user!.id, "settings.ai_native_engine_install_cancelled", "NativeEngineInstall", row.id, { releaseTag: row.releaseTag }, { ipAddress: req.ip });
+    res.json(row);
+  }
+);
+
+/** Removes an installed release from disk. Audited with the tag because it is the inverse of the
+ *  install, and because "which llama.cpp is this box running" must stay answerable from the log. */
+settingsRouter.delete(
+  "/ai/native/engine/:releaseTag",
+  requireSuperAdmin,
+  validate(z.object({ params: z.object({ releaseTag: z.string().regex(/^b\d{3,7}$/) }).strict() })),
+  async (req, res) => {
+    const releaseTag = String(req.params.releaseTag);
+    await removeNativeEngine(releaseTag);
+    await audit(req.user!.id, "settings.ai_native_engine_removed", "NativeEngineInstall", releaseTag, { releaseTag }, { ipAddress: req.ip });
+    res.status(204).end();
+  }
+);
 
 /**
  * Start the runtime on one downloaded model. Every knob is optional and defaults to what

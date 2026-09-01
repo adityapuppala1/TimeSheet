@@ -45,24 +45,34 @@
  * counter. A model that takes forty seconds to load therefore costs nothing but a fallback, and a
  * test pins that behaviour instead of this file duplicating it.
  *
- * ── WHERE THE BINARY COMES FROM, AND WHERE IT DOES NOT ──────────────────────────────────────
+ * ── WHERE THE BINARY COMES FROM, AND WHEN ───────────────────────────────────────────────────
  *
- * From `NATIVE_AI_SERVER_BIN`, or from PATH, and from nowhere else. This block does not bundle,
- * build or download one. `config/version.ts` already declines to spawn `git` at boot for exactly
- * this reason: a runtime dependency on an external binary is a real operational cost, it belongs to
- * whoever runs the machine, and making it opt-in is the difference between "AI is unavailable" and
- * "the product will not start". PATH is searched by READING it, not by shelling out to `which` —
- * spawning a process to find out whether we can spawn a process is a circular kind of silly.
+ * Three sources, in order: `NATIVE_AI_SERVER_BIN`, then the engine an administrator installed from
+ * the settings screen (services/native-engine.service.ts), then PATH. `resolveServerBinary` reports
+ * WHICH of the three answered, because an operator debugging a version mismatch has to know.
+ *
+ * THIS FILE STILL DOWNLOADS NOTHING AND MUST NOT START DOING SO. An install is an explicit click by
+ * an administrator who has been shown the release, the host, the asset name and the size first —
+ * fetching and then EXECUTING a binary from the internet is not a thing that happens on boot because
+ * a config flag was set. `startNativeRuntimeIfConfigured` therefore looks for a binary and degrades
+ * when there is none, exactly as it always did; it never acquires one. `config/version.ts` declines
+ * to spawn `git` at boot for the same family of reason.
+ *
+ * PATH is searched by READING it, not by shelling out to `which` — spawning a process to find out
+ * whether we can spawn a process is a circular kind of silly.
  *
  * WHO CALLS THIS: server.ts (boot + shutdown) and the `/settings/ai/native/runtime*` routes.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import {
   estimateNativeModelFit,
   findNativeModel,
+  nativeEngineBinaryFileName,
+  nativeEngineSidecarInstructions,
   nativeModelWithMeasuredSize,
+  type NativeEngineBinarySource,
   type NativeKvCacheType,
   type NativeModelDownloadRow,
   type NativeRuntimeEnvironment,
@@ -74,6 +84,9 @@ import { prisma } from "../config/prisma.js";
 import {
   NATIVE_AI_LOOPBACK_HOST,
   nativeAiPort,
+  nativeEngineDirectory,
+  nativeEngineReleaseTag,
+  nativeEngineRoot,
   nativeProviderBaseUrl,
   nativeRuntimeHealthUrl,
   nativeRuntimeModeSetting,
@@ -129,6 +142,15 @@ export interface NativeRuntimeIo {
   fileExists(target: string): boolean;
   pathEntries(): string[];
   pathExtensions(): string[];
+  /**
+   * Absolute paths where an engine THIS DEPLOYMENT INSTALLED would be, most-preferred first.
+   *
+   * A separate seam member rather than more `pathEntries`, because the two are not the same kind of
+   * thing: PATH is the operator's environment and this is a directory the app writes. Keeping them
+   * apart is what lets the status report WHICH of the three sources produced the binary it is about
+   * to spawn — a question an operator debugging a version mismatch has to be able to answer.
+   */
+  engineCandidates(): string[];
   platform(): NodeJS.Platform;
   /** True when the runtime answered `/health` with 200. Never throws — an unreachable server is an
    *  answer, not an exception. */
@@ -146,6 +168,34 @@ export const defaultNativeRuntimeIo: NativeRuntimeIo = {
   fileExists: (target) => existsSync(target),
   pathEntries: () => (process.env.PATH ?? "").split(path.delimiter).filter(Boolean),
   pathExtensions: () => (process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";").filter(Boolean) : [""]),
+  /**
+   * The pinned release first, then any other release still on disk, newest build number first.
+   *
+   * WHY THE FALLBACK EXISTS: bumping `nativeEnginePinnedReleaseTag` in a TimeSphere release would
+   * otherwise make every box that had installed the previous one report "no binary" until somebody
+   * noticed and reinstalled. An older engine that runs is worth more than a newer one that is not
+   * there, and the status names which release it found either way.
+   *
+   * SYNCHRONOUS AND SWALLOWING ITS ERRORS, because `resolveServerBinary` is called from the boot
+   * path and from a status endpoint, and neither may fail over a directory that does not exist yet —
+   * which is the ordinary state of every installation that has never pressed Install.
+   */
+  engineCandidates: () => {
+    const fileName = nativeEngineBinaryFileName(process.platform);
+    const pinned = nativeEngineReleaseTag();
+    const candidates = [path.join(nativeEngineDirectory(pinned), fileName)];
+    try {
+      const others = readdirSync(nativeEngineRoot(), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && entry.name !== pinned)
+        .map((entry) => entry.name)
+        .sort()
+        .reverse();
+      for (const tag of others) candidates.push(path.join(nativeEngineDirectory(tag), fileName));
+    } catch {
+      // No engine root yet. The pinned candidate above is still the right thing to check.
+    }
+    return candidates;
+  },
   platform: () => process.platform,
   async probeHealth(url, timeoutMs) {
     // NO EGRESS GATE HERE, and that is correct rather than an oversight: this URL is derived by
@@ -215,20 +265,44 @@ export async function resolveNativeRuntimeMode(): Promise<{ mode: NativeRuntimeM
 const BINARY_NAME = "llama-server";
 
 /**
- * The absolute path of `llama-server`, or the reason there isn't one.
+ * The absolute path of `llama-server`, WHERE IT CAME FROM, or the reason there isn't one.
+ *
+ * THREE SOURCES, IN THIS ORDER, AND THE ORDER IS A DECISION:
+ *   1. `NATIVE_AI_SERVER_BIN` — an explicit instruction from whoever owns the machine. It wins over
+ *      everything, and when it points at nothing the answer is that failure, never a quiet fallback
+ *      to something else: an operator who named a path is debugging THAT path.
+ *   2. The engine this deployment installed (services/native-engine.service.ts). Ahead of PATH
+ *      because it is the one this app fetched, verified and RAN before calling it installed, and
+ *      because a stale llama-server from some unrelated experiment sitting on PATH is exactly the
+ *      version mismatch nobody enjoys diagnosing.
+ *   3. PATH.
+ *
+ * THE `problem` SENTENCE IS NO LONGER A DEAD END, and that was the actual bug. It used to end at
+ * "nothing is downloaded to satisfy this — install llama.cpp on this host", which is a wall with an
+ * instruction painted on it: the operator had just watched a 940 MB model download and verify, and
+ * the panel's last word was "now go and build a C++ project". It now names the button that fixes it.
  *
  * Never throws and never spawns. PATH is READ and each candidate stat-ed, which is all `which` does
  * anyway — and doing it in-process means "is the binary present" cannot itself be the thing that
  * fails at boot.
  */
-export function resolveServerBinary(io: NativeRuntimeIo = defaultNativeRuntimeIo): { path: string | null; problem: string | null } {
+export function resolveServerBinary(io: NativeRuntimeIo = defaultNativeRuntimeIo): {
+  path: string | null;
+  source: NativeEngineBinarySource | null;
+  problem: string | null;
+} {
   const configured = nativeServerBinaryOverride();
   if (configured) {
-    if (io.fileExists(configured)) return { path: configured, problem: null };
+    if (io.fileExists(configured)) return { path: configured, source: "configured", problem: null };
     return {
       path: null,
-      problem: `NATIVE_AI_SERVER_BIN points at "${configured}", which does not exist on this host. Correct it or clear it to search PATH instead.`
+      source: null,
+      problem: `NATIVE_AI_SERVER_BIN points at "${configured}", which does not exist on this host. Correct it or clear it to use the engine installed from this screen, or PATH.`
     };
+  }
+
+  for (const candidate of io.engineCandidates()) {
+    if (io.fileExists(candidate)) return { path: candidate, source: "managed", problem: null };
   }
 
   const extensions = io.pathExtensions();
@@ -236,15 +310,17 @@ export function resolveServerBinary(io: NativeRuntimeIo = defaultNativeRuntimeIo
   for (const dir of searched) {
     for (const ext of extensions) {
       const candidate = path.join(dir, `${BINARY_NAME}${ext}`);
-      if (io.fileExists(candidate)) return { path: candidate, problem: null };
+      if (io.fileExists(candidate)) return { path: candidate, source: "path", problem: null };
     }
   }
   return {
     path: null,
+    source: null,
     problem:
-      `"${BINARY_NAME}" was not found on PATH (${searched.length} ${searched.length === 1 ? "directory" : "directories"} searched) and ` +
-      `NATIVE_AI_SERVER_BIN is not set. Nothing is downloaded to satisfy this — install llama.cpp on this host and point ` +
-      `NATIVE_AI_SERVER_BIN at the binary, or run it as a sidecar and set NATIVE_AI_RUNTIME_MODE=external.`
+      `"${BINARY_NAME}" is not installed on this host: nothing has been installed from this screen, NATIVE_AI_SERVER_BIN is not set, ` +
+      `and it is not on PATH (${searched.length} ${searched.length === 1 ? "directory" : "directories"} searched). ` +
+      `Use "Install the engine" above to fetch the pinned llama.cpp build for this machine — or point NATIVE_AI_SERVER_BIN at a ` +
+      `binary you installed yourself. ${nativeEngineSidecarInstructions}`
   };
 }
 
@@ -255,6 +331,7 @@ interface RuntimeState {
   detail: string;
   child: ChildProcess | null;
   binaryPath: string | null;
+  binarySource: NativeEngineBinarySource | null;
   binaryProblem: string | null;
   modelId: string | null;
   modelPath: string | null;
@@ -282,6 +359,7 @@ const runtime: RuntimeState = {
   detail: "Not started.",
   child: null,
   binaryPath: null,
+  binarySource: null,
   binaryProblem: null,
   modelId: null,
   modelPath: null,
@@ -322,6 +400,7 @@ export function resetNativeRuntimeState(): void {
     detail: "Not started.",
     child: null,
     binaryPath: null,
+    binarySource: null,
     binaryProblem: null,
     modelId: null,
     modelPath: null,
@@ -350,9 +429,23 @@ export function resetNativeRuntimeState(): void {
  * What the runtime is, right now. Safe to call at any time, in any mode, with nothing configured —
  * the settings screen polls it and it must never be the reason a page 500s.
  */
-export async function getNativeRuntimeStatus(): Promise<NativeRuntimeStatus> {
+export async function getNativeRuntimeStatus(io: NativeRuntimeIo = defaultNativeRuntimeIo): Promise<NativeRuntimeStatus> {
   const { mode, reason } = await resolveNativeRuntimeMode();
   const { kind } = mode === "off" ? { kind: "unknown" as NativeRuntimeEnvironment } : await environmentKind();
+
+  // RESOLVED ON EVERY EMBEDDED STATUS, not only after a start has been attempted.
+  //
+  // WHY THAT MATTERS AND IS NOT MERELY TIDY: the settings screen has to decide whether Restart can
+  // possibly work, and "is there a binary" is half that answer. Before this, `binaryPath` and
+  // `binaryProblem` were both null until somebody pressed Start — so on first paint the screen knew
+  // nothing about the binary and offered a Restart button that was certain to fail. It is a PATH
+  // read and a handful of `stat` calls, which is what the status endpoint's own polling can afford.
+  if (mode === "embedded" && !runtime.child) {
+    const resolved = resolveServerBinary(io);
+    runtime.binaryPath = resolved.path;
+    runtime.binarySource = resolved.source;
+    runtime.binaryProblem = resolved.problem;
+  }
 
   const base: NativeRuntimeStatus = {
     mode,
@@ -361,6 +454,7 @@ export async function getNativeRuntimeStatus(): Promise<NativeRuntimeStatus> {
     detail: runtime.detail,
     baseUrl: mode === "off" ? null : nativeProviderBaseUrl(),
     binaryPath: runtime.binaryPath,
+    binarySource: runtime.binarySource,
     binaryProblem: runtime.binaryProblem,
     modelId: runtime.modelId,
     modelPath: runtime.modelPath,
@@ -509,17 +603,28 @@ export async function startNativeRuntime(
   if (mode !== "embedded") {
     // Not an error: in external mode the runtime is somebody else's to start, and in `off` mode
     // there isn't one. Both are reported by the status, which is what the caller renders anyway.
-    return getNativeRuntimeStatus();
+    return getNativeRuntimeStatus(io);
   }
 
   const binary = resolveServerBinary(io);
   runtime.binaryPath = binary.path;
+  runtime.binarySource = binary.source;
   runtime.binaryProblem = binary.problem;
   if (!binary.path) {
     // THE CASE THIS FILE EXISTS TO GET RIGHT. No binary is a degraded feature, not a failed boot.
+    //
+    // `lastError` IS CLEARED HERE, NOT SET TO THE SAME SENTENCE, and that is a real fix rather than
+    // cosmetics. The three fields mean three different things — `detail` explains the state,
+    // `binaryProblem` is a fixable configuration problem, `lastError` is something that went wrong
+    // while running — and this branch used to write one string into all three. The settings screen
+    // then rendered the identical paragraph three times under three different icons, which reads as
+    // broken software even though the state underneath it was perfectly correct. A missing binary is
+    // not an error that occurred; it is a precondition that is not met, and `binaryProblem` is the
+    // field for it. (The screen deduplicates on content as well — see `runtimeMessageLines` in
+    // apps/web/src/utils/native-model-panel.ts — because two fields can still legitimately coincide.)
     setState("unavailable", binary.problem ?? `${BINARY_NAME} is not available on this host.`);
-    runtime.lastError = binary.problem;
-    return getNativeRuntimeStatus();
+    runtime.lastError = null;
+    return getNativeRuntimeStatus(io);
   }
 
   await stopNativeRuntime(io);
@@ -543,7 +648,7 @@ export async function startNativeRuntime(
     // ENOENT, EACCES, or a binary for the wrong architecture. Degrade, do not throw.
     runtime.lastError = `Could not start ${binary.path}: ${(error as Error).message}`;
     setState("unavailable", runtime.lastError);
-    return getNativeRuntimeStatus();
+    return getNativeRuntimeStatus(io);
   }
 
   runtime.child = child;
@@ -556,7 +661,7 @@ export async function startNativeRuntime(
     // — `restarting` with a scheduled attempt, or `failed` once the attempts ran out. Overwriting it
     // here would cancel the backoff for exactly the failure the backoff exists for: a runtime that
     // crashes seconds after every start.
-    if (runtime.state === "restarting" || runtime.state === "failed") return getNativeRuntimeStatus();
+    if (runtime.state === "restarting" || runtime.state === "failed") return getNativeRuntimeStatus(io);
     runtime.lastError =
       `${BINARY_NAME} did not become ready within ${Math.round(NATIVE_READY_TIMEOUT_MS / 1000)} seconds. ` +
       (runtime.stderrTail.length > 0 ? `Its last output was: ${runtime.stderrTail.slice(-3).join(" ").slice(0, 400)}` : "It produced no output.");
@@ -565,7 +670,7 @@ export async function startNativeRuntime(
     // that is bound, alive and useless was abandoned.
     await stopNativeRuntime(io);
     setState("failed", runtime.lastError);
-    return getNativeRuntimeStatus();
+    return getNativeRuntimeStatus(io);
   }
 
   runtime.readyAt = new Date();
@@ -573,7 +678,7 @@ export async function startNativeRuntime(
   runtime.nextRetryAt = null;
   runtime.lastError = null;
   setState("ready", `${BINARY_NAME} is serving ${launch.modelId} at ${nativeProviderBaseUrl()} with ${launch.contextTokens} tokens of context.`);
-  return getNativeRuntimeStatus();
+  return getNativeRuntimeStatus(io);
 }
 
 /** Polls `/health` until it answers or the budget runs out. The child dying mid-wait short-circuits
@@ -674,7 +779,7 @@ export async function stopNativeRuntime(io: NativeRuntimeIo = defaultNativeRunti
     if (runtime.state === "starting" || runtime.state === "ready" || runtime.state === "restarting") {
       setState("stopped", `${BINARY_NAME} is not running.`);
     }
-    return getNativeRuntimeStatus();
+    return getNativeRuntimeStatus(io);
   }
 
   runtime.stopping = true;
@@ -702,7 +807,7 @@ export async function stopNativeRuntime(io: NativeRuntimeIo = defaultNativeRunti
   }
   runtime.stopping = false;
   setState("stopped", `${BINARY_NAME} was stopped.`);
-  return getNativeRuntimeStatus();
+  return getNativeRuntimeStatus(io);
 }
 
 /**
@@ -731,7 +836,7 @@ function registerExitKill(): void {
 
 export async function restartNativeRuntime(io: NativeRuntimeIo = defaultNativeRuntimeIo): Promise<NativeRuntimeStatus> {
   if (!lastLaunch) {
-    return getNativeRuntimeStatus();
+    return getNativeRuntimeStatus(io);
   }
   runtime.attempts = 0;
   return startNativeRuntime(lastLaunch, io);

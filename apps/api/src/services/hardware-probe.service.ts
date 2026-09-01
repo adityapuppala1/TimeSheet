@@ -43,6 +43,7 @@ import {
   type NativeCapabilityReport,
   type NativeHardwareSnapshot,
   type NativeKvCacheType,
+  type NativeLibc,
   type NativeRuntimeEnvironment
 } from "@timesheet/shared";
 
@@ -165,6 +166,48 @@ export async function readCgroupCpuQuota(
     }
   }
   return { quotaCores: null, source: null };
+}
+
+/**
+ * WHICH C LIBRARY THIS LINUX USERLAND IS BUILT AGAINST — the one fact that decides whether a
+ * published llama.cpp binary can run here at all.
+ *
+ * WHY THIS LIVES IN THE HARDWARE PROBE rather than beside the installer that consumes it: it is a
+ * property of the machine, read through the same `HardwareProbeIo` seam as every other property of
+ * the machine, and it degrades to `null` on exactly the same terms. Putting it anywhere else would
+ * be a second probe of the same box, which is the mistake this file's own header warns about.
+ *
+ * WHY IT MATTERS SO MUCH HERE. llama.cpp publishes only glibc-linked Linux builds, and this app's
+ * image is `node:22-alpine`, which is musl. A glibc binary on musl does not fail with a diagnosis:
+ * the kernel's loader reports "no such file or directory" for the binary itself, which plainly
+ * exists. An operator handed that error debugs the wrong thing for an hour. So this is checked
+ * BEFORE anything is offered, and musl gets the sidecar instructions instead of a download.
+ *
+ * ── HOW IT IS READ, IN THE ORDER TRUST DECREASES ────────────────────────────────────────────
+ *
+ * 1. `/proc/self/maps` — the libraries THIS PROCESS actually has mapped. It is the only source that
+ *    answers about the running process rather than about the filesystem around it, and `ld-musl-*`
+ *    vs `libc.so.6`/`ld-linux-*` is unambiguous there.
+ * 2. `/etc/alpine-release` — present on every Alpine image and nowhere else. The fallback for a
+ *    hardened container where `/proc/self/maps` is unreadable.
+ *
+ * A `null` RESULT IS NOT TREATED AS glibc BY THE CALLER, and that is the whole discipline: the cost
+ * of guessing wrong in one direction is an operator who has to run a sidecar they could have avoided;
+ * in the other it is a binary that cannot start and an error message that lies about why.
+ */
+export async function detectLibcFlavour(io: HardwareProbeIo = defaultHardwareProbeIo): Promise<NativeLibc | null> {
+  if (io.platform() !== "linux") return null;
+
+  const maps = await io.readText("/proc/self/maps");
+  if (maps !== null) {
+    if (/ld-musl|libc\.musl-/.test(maps)) return "musl";
+    if (/libc\.so\.6|ld-linux/.test(maps)) return "glibc";
+  }
+  // Alpine ships this file and nothing else does. Only consulted when the authoritative source above
+  // would not answer — a container can make /proc unreadable, and refusing to look further would
+  // report "unknown" on the one distribution this check exists for.
+  if ((await io.readText("/etc/alpine-release")) !== null) return "musl";
+  return null;
 }
 
 /**

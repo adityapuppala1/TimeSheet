@@ -41,6 +41,7 @@
 
 import { nativeModelWeightBytes, type NativeModelEntry } from "./native-models.js";
 import type { NativeKvCacheType, NativeRuntimeEnvironment } from "./native-fit.js";
+import type { NativeEngineBinarySource } from "./native-engine.js";
 
 /* ── the download job ───────────────────────────────────────────────────────────────────────── */
 
@@ -278,9 +279,21 @@ export interface NativeRuntimeStatus {
   /** The OpenAI-compatible endpoint a `LLAMA_CPP` provider row is dispatched against, or null when
    *  the mode is `off`. Derived server-side — see apps/api/src/config/native-ai.ts. */
   baseUrl: string | null;
-  /** Resolved absolute path of `llama-server`, or null. Only meaningful in `embedded` mode. */
+  /** Resolved absolute path of `llama-server`, or null. Only meaningful in `embedded` mode, where it
+   *  is resolved on EVERY status read rather than only after a start — the screen has to know
+   *  whether Restart could possibly work before anybody presses anything. */
   binaryPath: string | null;
-  /** Why there is no binary, when there is none. Null when one was found or none is needed. */
+  /** Which of the three sources produced it: the operator's `NATIVE_AI_SERVER_BIN`, the engine this
+   *  deployment installed, or PATH. Reported because "there is a llama-server" and "there is the one
+   *  this panel installed" are different facts, and a version mismatch is diagnosed from the
+   *  difference. */
+  binarySource: NativeEngineBinarySource | null;
+  /** Why there is no binary, when there is none. Null when one was found or none is needed.
+   *
+   *  DIFFERENT FROM `lastError`, and keeping them different is load-bearing: this is a precondition
+   *  that is not met and is fixable from the screen, while `lastError` is something that went wrong
+   *  while running. They used to be set to the identical sentence when no binary was found, which
+   *  the settings screen then rendered three times under three icons. */
   binaryProblem: string | null;
   modelId: string | null;
   modelPath: string | null;

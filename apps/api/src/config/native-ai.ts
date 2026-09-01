@@ -39,6 +39,7 @@
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { nativeEnginePinnedReleaseTag } from "@timesheet/shared";
 import { env } from "./env.js";
 import { storageRoot } from "./storage-paths.js";
 
@@ -121,16 +122,51 @@ export function nativeModelDiskPath(): string {
 }
 
 /**
- * The operator's configured `llama-server` path, or "" for "search PATH".
+ * The operator's configured `llama-server` path, or "" for "search the managed directory, then
+ * PATH".
  *
- * WHERE THE BINARY COMES FROM, AND WHERE IT DOES NOT: nothing in this codebase downloads,
- * bundles or builds one. `config/version.ts` already declines to spawn `git` at boot for the same
- * reason — a runtime dependency on an external binary is a real operational cost, it belongs to
- * whoever runs the box, and making it opt-in is the difference between "AI is unavailable" and "the
- * product will not start".
+ * WHERE THE BINARY COMES FROM, AND WHEN. This file used to state flatly that nothing here downloads
+ * or builds one. That is no longer true and the change was deliberate: a product whose promise is
+ * "pick a model, download it, run it" cannot end at "now install llama.cpp yourself", which is a
+ * dead end wearing an instruction's clothing. What did NOT change is the part that mattered —
+ * nothing is fetched at BOOT. An install is an explicit click by an administrator who has been shown
+ * the release, the host, the asset name and the size first. See services/native-engine.service.ts.
  */
 export function nativeServerBinaryOverride(): string {
   return env.NATIVE_AI_SERVER_BIN.trim();
+}
+
+/**
+ * WHERE AN INSTALLED ENGINE LIVES. `<storage root>/engine/<release tag>`.
+ *
+ * TAGGED BY RELEASE, and that is not tidiness. Two installs of different releases must not overwrite
+ * each other's shared libraries: `llama-server` from b6099 loading `libggml.so` from some earlier
+ * build is an ABI mismatch that surfaces as a segfault at the first inference, minutes after an
+ * install that reported success. A directory per release makes an upgrade an addition rather than an
+ * in-place overwrite, and makes "which one is this box running" answerable by looking.
+ *
+ * NOT under `NATIVE_AI_MODEL_DIR`: that variable exists so gigabytes of weights can be pointed at a
+ * big volume, and an engine is tens of megabytes. It follows `storageRoot()` for the same reason the
+ * model directory defaults inside it — a deployment that has already moved storage onto a real
+ * volume gets this on the volume for free, and a container's writable layer is discarded on the next
+ * `docker compose up -d`.
+ */
+export function nativeEngineDirectory(releaseTag: string): string {
+  return path.join(storageRoot(), "engine", releaseTag);
+}
+
+/** The parent of every installed release, which is what an "is anything installed at all" search
+ *  has to enumerate. Separate from the tagged path above so neither has to know how the other spells
+ *  the layout. */
+export function nativeEngineRoot(): string {
+  return path.join(storageRoot(), "engine");
+}
+
+/** Which llama.cpp release this deployment installs — the build's reviewed pin unless an operator
+ *  named another one. `env.ts` has already refused anything that is not a tag, so this cannot return
+ *  a value that reaches URL construction as something else. */
+export function nativeEngineReleaseTag(): string {
+  return env.NATIVE_AI_ENGINE_RELEASE || nativeEnginePinnedReleaseTag;
 }
 
 /** What the operator asked for, before the environment probe gets a say. See
