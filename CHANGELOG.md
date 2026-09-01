@@ -10,6 +10,59 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🤖 Know the machine, know the models, and be honest about whether one fits the other
+
+- **The hardware probe does not lie in a container.** `os.totalmem()` reports the *host* — always. A
+  pod capped at 1 GiB on a 32 GiB node is told it has 32 GiB, is told a 3B model fits comfortably,
+  downloads two gigabytes and is OOM-killed the instant llama.cpp maps the weights. The kernel's real
+  answer lives in the cgroup, in two mutually incompatible layouts, each with its own way of spelling
+  "no limit" — and cgroup v1 spells it `9223372036854771712`, a number that reads as an eight-exabyte
+  allowance to anything that parses it as a limit. Both layouts are read, both sentinels are treated
+  as *absence*, and every downstream figure is the **minimum** of the host total and the cap. The same
+  applies to CPU: a pod with `cpu: "2"` on a sixty-four-core node is no longer told to run sixty-three
+  inference threads and then throttled for the rest of every scheduler period.
+- **An unknown that says so beats a confident wrong answer.** The probe reports physical cores as
+  distinct from logical ones (`os.cpus()` counts hyperthreads, which is double the useful thread
+  count for inference), and the instruction sets llama.cpp actually dispatches on — AVX2, AVX-512, and
+  NEON/dotprod on ARM. On Linux those come from `/proc/cpuinfo`. On Windows they come back **null**,
+  not `false`: "we could not read the flags" and "this CPU has no AVX2" are different facts leading to
+  different decisions, and the estimator has a documented pessimistic path for the first. Every probe
+  fails alone — an unreadable `/proc` file yields `null` for that one field and never an exception,
+  because a settings page that 500s over a missing detail has turned it into an outage. The runtime
+  label (bare metal / docker / kubernetes / WSL) ships the **signals that decided it**, so an operator
+  can spot the day the heuristic is wrong instead of arguing with a badge.
+- **A curated catalogue of six models, and the reason each one is in it.** Not a mirror of Hugging
+  Face — a claim this application is prepared to defend. Instruction-following and JSON reliability
+  above raw size, because five of this app's classifiers throw a hard 502 on malformed JSON and one of
+  them sits on the inbound-email path, where a model that returns almost-JSON drops real tickets. K-quants
+  only, Q4_K_M as the floor. And the thing no model card tells you: **grouped-query attention matters
+  more than parameter count** at the context this app needs. KV cache is `2 × layers × kv_heads ×
+  head_dim × ctx × bytes`, so at 16k tokens the 3.8B entry with plain multi-head attention costs
+  exactly 6 GiB of cache before a single weight is loaded, and the 3B beside it costs 604 MB. That is
+  a bigger lever than any size difference in the list, and encoding it is most of what this catalogue
+  is for.
+- **The fit estimator shows its parts, and every verdict carries a reason.** RAM required is weights
+  plus KV plus a stated runtime allowance, each reported separately, because an operator choosing
+  between 8k and 16k context needs to see *which number moved*. RAM available is the cgroup-aware
+  figure minus a reserve for MySQL and Node — a model that fits into "free RAM" and then evicts the
+  database's buffer pool has not fit, it has moved the slowness somewhere nobody will connect to the
+  model they just installed. The verdict is comfortable / tight / won't fit / unknown, and never a
+  bare score: *"Won't fit: needs 3.8 GB, 2.1 GB available after reserve"* is actionable, a red badge
+  is not. The generation-speed figure is derived from memory bandwidth rather than clock, because CPU
+  decoding is bandwidth-bound — every token reads the entire model — and since no machine will tell
+  you its bandwidth portably, the estimate carries `measured: false` and says in words what it
+  assumed. A later benchmark replaces it rather than argues with it.
+- **No file sizes are stated, deliberately.** An exact byte count can only be known from the file, and
+  a wrong one makes the estimator confidently wrong in the one direction that hurts. Until the
+  downloader can record a real `Content-Length`, weight size is derived from the quantisation's
+  published bits-per-weight and rounded *up*. An absent number the UI can label is worth more than a
+  plausible one it cannot.
+- `GET /settings/ai/native/capability` returns the snapshot plus a fit estimate for every catalogue
+  entry, Super-Admin only. It is strictly read-only by design, not by accident of being early: it
+  reads `/proc`, does arithmetic and returns. It starts nothing and downloads nothing. The maintenance
+  panel's Server health card now shares the same cgroup probe rather than growing a second one, which
+  also quietly fixes it having reported the host's memory to everyone running this app in a container.
+
 ### 🤖 Room for a model you run yourself, and a way to not waste ninety seconds on it
 
 - **`LLAMA_CPP` is a third provider kind**, alongside Anthropic and the OpenAI-compatible family. It

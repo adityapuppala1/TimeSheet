@@ -16,7 +16,7 @@ import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { env, serverTimezone } from "../config/env.js";
 import { getLoggingStatus } from "../config/logger.js";
-import { describeStorageLayout, validateDirectory } from "../config/storage-paths.js";
+import { describeStorageLayout, storageRoot, validateDirectory } from "../config/storage-paths.js";
 import { requireAuth, requirePermission, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
@@ -32,6 +32,7 @@ import {
 import { getGlobalNotificationSettings } from "../services/notify.service.js";
 import { getGlobalAISettings, getEnabledProviderConfigs, getAIUsageBreakdown, getAIUsageDailyDetail, getWeeklyAIUsageTrend, getAIFeatureUsage, listAvailableOpenAICompatibleModels, resolveApiKey, testProviderConnectivity } from "../services/ai.service.js";
 import { buildAiUsageWorkbook } from "../services/ai-usage-export.service.js";
+import { describeNativeCapability } from "../services/hardware-probe.service.js";
 import {
   listProviderConfigs,
   createProviderConfig,
@@ -701,6 +702,29 @@ settingsRouter.post("/ai/available-models", requireSuperAdmin, validate(availabl
   } catch (error) {
     res.json({ ok: false, models: [], message: (error as Error).message });
   }
+});
+
+/**
+ * WHAT THIS MACHINE COULD ACTUALLY RUN — the hardware snapshot (container-aware, see
+ * services/hardware-probe.service.ts) plus a fit estimate for every entry in the curated native
+ * model catalogue, so the picker can grey out what will not fit and say why in words.
+ *
+ * STRICTLY READ-ONLY, and that is a design constraint rather than an accident of this block being
+ * early. It reads `/proc` and `/sys`, does arithmetic, and returns. It starts nothing, downloads
+ * nothing and writes nothing — no audit entry either, because there is no state change to record
+ * and a settings page polling this would otherwise fill the audit log with noise.
+ *
+ * `requireSuperAdmin` to match every other GET in this file: this reports the host's CPU model,
+ * memory, container runtime and free disk, which is infrastructure detail an ordinary user has no
+ * business reading. No new permission key, for the reason given on the autonomy routes below —
+ * a new key needs idempotent backfill SQL in a migration, and this needs no finer grain than the
+ * neighbouring AI settings already have.
+ *
+ * The disk figure is measured on `storageRoot()`, the app's own data volume. A downloaded model
+ * will land in a subdirectory of it, and free space is a property of the volume, not the folder.
+ */
+settingsRouter.get("/ai/native/capability", requireSuperAdmin, async (_req, res) => {
+  res.json(await describeNativeCapability(storageRoot()));
 });
 
 /**

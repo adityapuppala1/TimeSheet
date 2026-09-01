@@ -26,6 +26,7 @@ import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { appVersion } from "../config/version.js";
 import { getTransportStatus } from "./mail.service.js";
+import { readCgroupMemory } from "./hardware-probe.service.js";
 
 /** Started once at module load so the histogram is already warm when the first poll arrives.
  *  Reset after every read — each poll reports the lag SINCE the previous poll, not since boot
@@ -87,11 +88,22 @@ export interface SystemHealthSnapshot {
     loadAvg: [number, number, number] | null;
   };
   memory: {
+    /** THE HOST's memory. `os.totalmem()` does not know about cgroups, so inside a container this
+     *  is the node's RAM and not this instance's budget — read `effectiveTotalBytes` for that. */
     totalBytes: number;
     freeBytes: number;
+    /** Against `totalBytes`, i.e. against the host. Unchanged deliberately: this panel's gauge has
+     *  always meant "how loaded is the box", and the container truth is exposed as the two fields
+     *  below rather than by quietly redefining an existing number under the same name. */
     usedPercent: number;
     /** Resident set of THIS Node process — how much of the box the API itself is using. */
     processRssBytes: number;
+    /** The cgroup's own ceiling, or null when there is none. Shared with the native-AI capability
+     *  probe rather than re-implemented — see services/hardware-probe.service.ts for why reading
+     *  this correctly (two cgroup layouts, two "unlimited" sentinels) is harder than it looks. */
+    cgroupLimitBytes: number | null;
+    /** min(host total, cgroup limit) — the figure anything sizing a workload should believe. */
+    effectiveTotalBytes: number;
   };
   disk: {
     path: string;
@@ -113,12 +125,15 @@ export interface SystemHealthSnapshot {
 
 export async function getSystemHealth(): Promise<SystemHealthSnapshot> {
   // Independent probes run concurrently — the CPU sample's 250ms window doubles as the wait.
-  const [cpuPercent, tenantPing, controlPing, diskInfo, mailStatus] = await Promise.all([
+  const [cpuPercent, tenantPing, controlPing, diskInfo, mailStatus, cgroupMemory] = await Promise.all([
     sampleCpuPercent(),
     measureDbPing(() => prisma.$queryRaw`SELECT 1`),
     measureDbPing(() => controlPrisma.$queryRaw`SELECT 1`),
     statfs(process.cwd()).catch(() => null),
-    getTransportStatus().catch(() => null)
+    getTransportStatus().catch(() => null),
+    // Never throws — every read inside degrades to null. Same probe the native-AI capability
+    // endpoint uses, so the two screens can't drift into disagreeing about this machine.
+    readCgroupMemory().catch(() => ({ limitBytes: null, usageBytes: null, source: null }))
   ]);
 
   const totalMem = os.totalmem();
@@ -183,7 +198,9 @@ export async function getSystemHealth(): Promise<SystemHealthSnapshot> {
       totalBytes: totalMem,
       freeBytes: freeMem,
       usedPercent: Math.round(((totalMem - freeMem) / totalMem) * 1000) / 10,
-      processRssBytes: process.memoryUsage().rss
+      processRssBytes: process.memoryUsage().rss,
+      cgroupLimitBytes: cgroupMemory.limitBytes,
+      effectiveTotalBytes: cgroupMemory.limitBytes === null ? totalMem : Math.min(totalMem, cgroupMemory.limitBytes)
     },
     disk: diskInfo
       ? {

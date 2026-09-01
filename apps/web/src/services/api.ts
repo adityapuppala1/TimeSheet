@@ -19,6 +19,7 @@ import type {
   GlobalSettings,
   GlobalTicketSettings,
   ModuleAssigneeRuleRow,
+  NativeCapabilityReport,
   OutboundWebhookEvent,
   RoleName,
   SecurityFindingSeverity,
@@ -2115,6 +2116,13 @@ export const settingsApi = {
    *  fall back to manual entry" case, same shape as testMailConnection. */
   fetchAvailableAiModels: async (payload: { baseUrl?: string; apiKey?: string }) =>
     (await api.post<{ ok: boolean; models: string[]; message?: string }>("/settings/ai/available-models", payload)).data,
+  /** What this server could actually run locally: a container-aware hardware snapshot plus a fit
+   *  estimate for every entry in `nativeModelCatalogue` (@timesheet/shared). Read-only — it starts
+   *  nothing and downloads nothing. Render `estimate.reason` and `estimate.warnings` verbatim
+   *  rather than deriving a badge from `verdict` alone; the words are the actionable half, and
+   *  re-deriving the fit here is how the screen ends up disagreeing with the server that has to
+   *  honour it. `speed.measured` is false — present that number as an estimate, never a benchmark. */
+  getNativeAiCapability: async () => (await api.get<NativeCapabilityReport>("/settings/ai/native/capability")).data,
   getSso: async () => (await api.get<SsoSettings>("/settings/sso")).data,
   /** `clientSecret`/`idpCertificate` are write-only, same masked-field convention as
    *  GlobalAISettings.apiKey — omit to leave the stored value untouched, pass "" to clear it.
