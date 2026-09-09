@@ -109,6 +109,24 @@ const CAPABILITIES: ReadonlyArray<AiCapabilitySpec> = [
     tools: []
   },
   {
+    id: "practice_update",
+    title: "Weekly practice update",
+    description:
+      "Writes the leadership update's executive summary, risks, priorities and decisions around figures counted from this workspace. Sends email; changes no records.",
+    featureToggle: "practiceUpdateEnabled",
+    // AUTONOMOUS, on the same reasoning as the three digests above: it writes prose around numbers
+    // somebody else counted, sends an email, and touches no record. It is ALREADY unattended when a
+    // super admin switches the Monday cadence on (practice-update.worker.ts), so any lower ceiling
+    // here would describe a product that does not exist.
+    maxLevel: "AUTONOMOUS",
+    ceilingReason: null,
+    // Everything it reads was authored inside this workspace: project names and codes, and progress
+    // and risk lines this server composed from counts. No ticket bodies, no inbound email — the
+    // narrative prompt is built by narrativeInputs(), which is the whole list.
+    actsOnUntrustedInput: false,
+    tools: []
+  },
+  {
     id: "status_report",
     title: "Stakeholder status report",
     description:

@@ -36,6 +36,11 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Switch } from "../components/ui/switch";
 import { toast } from "../components/ui/toaster";
 import { cn } from "../lib/utils";
+import {
+  PRACTICE_DRAFT_QUERY_KEY,
+  describeDraftFailure,
+  settleStoredDraftCache
+} from "../utils/practice-update-draft";
 
 /** The server's own message when it has one. A generated feature like this fails for reasons the
  *  API states precisely — "no recipients", "the email is switched off" — and swallowing those for a
@@ -346,7 +351,8 @@ function RecipientsCard() {
             <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
               AI drafting is off, so the written sections will start empty and the email falls back to
-              the underlying figures. Turn it on under Workspace Settings → AI → AI features.
+              the underlying figures. Turn on “Weekly practice update” under Workspace Settings → AI
+              → AI capabilities.
             </span>
           </p>
         )}
@@ -378,10 +384,15 @@ export function PracticeUpdatePage() {
    * being opened. Generating is always an explicit act, from Generate or Regenerate.
    */
   const stored = useQuery({
-    queryKey: ["practice-update", "draft"],
+    queryKey: PRACTICE_DRAFT_QUERY_KEY,
     queryFn: practiceUpdateApi.storedDraft,
     staleTime: 0
   });
+
+  /** The live answer to "is AI drafting on right now" — the same query RecipientsCard runs, which
+   *  React Query dedupes into one request. Needed up here because a draft carries the failure it
+   *  was born with, and only this says whether that failure is still true. */
+  const settings = useQuery({ queryKey: ["practice-update", "settings"], queryFn: practiceUpdateApi.settings });
 
   useEffect(() => {
     const restored = stored.data?.draft;
@@ -399,7 +410,10 @@ export function PracticeUpdatePage() {
       // Seeded from the model, then owned by the reviewer. Every later edit lives here, and this is
       // what `send` posts back — regenerating on send would throw the review away.
       setNarrative(data.narrative ?? EMPTY_NARRATIVE);
-      void queryClient.invalidateQueries({ queryKey: ["practice-update", "draft"] });
+      // Settled, not just invalidated — a fetch issued before this generate (or before the discard
+      // that preceded it) must not be allowed to land and seed the editor from a document that is
+      // no longer the current one. See settleStoredDraftCache.
+      void settleStoredDraftCache(queryClient, data);
     },
     onError: (error: unknown) => toast.error("Couldn't build the update", { description: serverMessage(error, "Try again.") })
   });
@@ -409,7 +423,10 @@ export function PracticeUpdatePage() {
     onSuccess: () => {
       setDraft(null);
       setNarrative(null);
-      void queryClient.invalidateQueries({ queryKey: ["practice-update", "draft"] });
+      // THE DISCARD BUG. Invalidating alone left a refetch issued BEFORE the DELETE free to resolve
+      // after it, carrying the old draft back into the cache — where the restore effect below,
+      // seeing `draft` at null again, put it straight back on screen.
+      void settleStoredDraftCache(queryClient, null);
       toast.success("Draft discarded");
     },
     onError: (error: unknown) => toast.error("Couldn't discard", { description: serverMessage(error, "Try again.") })
@@ -442,7 +459,9 @@ export function PracticeUpdatePage() {
       // the server did, so a refresh does not restore a document that has already gone out.
       setDraft(null);
       setNarrative(null);
-      void queryClient.invalidateQueries({ queryKey: ["practice-update", "draft"] });
+      // Identical race to discard's, and it clears the draft the identical way: an in-flight fetch
+      // that predates the send would otherwise restore a document that has already gone out.
+      void settleStoredDraftCache(queryClient, null);
       void queryClient.invalidateQueries({ queryKey: ["practice-update", "history"] });
     },
     onError: (error: unknown) => toast.error("Couldn't send", { description: serverMessage(error, "Try again.") })
@@ -561,12 +580,30 @@ export function PracticeUpdatePage() {
               {draft.data.isEmpty && <Badge variant="warning">Nothing was recorded in this period</Badge>}
             </div>
 
-            {draft.aiFailed && (
-              <p className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-2.5 text-xs">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-                <span>{draft.aiFailed}</span>
-              </p>
-            )}
+            {/* A draft carries the failure it was BORN with — `aiFailed` is stored on the row and
+                replayed by GET /draft. Once the setting it complains about is fixed, that sentence
+                is history, and presenting it as current makes the fix look like it did not work.
+                describeDraftFailure decides which of the two this is; the message is rephrased, not
+                hidden, because the written sections really are still empty. */}
+            {(() => {
+              const failure = describeDraftFailure(draft.aiFailed, settings.data?.aiNarrativeEnabled);
+              if (!failure) return null;
+              return (
+                <p
+                  className={cn(
+                    "flex items-start gap-2 rounded-md border p-2.5 text-xs",
+                    failure.stale ? "border-border bg-muted/30 text-muted-foreground" : "border-warning/40 bg-warning/10"
+                  )}
+                >
+                  {failure.stale ? (
+                    <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+                  )}
+                  <span>{failure.message}</span>
+                </p>
+              );
+            })()}
 
             {/* ---- The counted half. Deliberately read-only: these numbers are the reason anyone
                     trusts the document, and a document whose figures can be typed over is not a

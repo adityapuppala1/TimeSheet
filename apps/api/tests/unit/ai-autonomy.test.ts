@@ -263,6 +263,11 @@ describe("the ceilings themselves", () => {
         // nothing and reschedules nothing, so there is nothing here for autonomy to break.
         "change_conflict_brief",
         "change_risk_narrative",
+        // practice_update JOINED when it finally got a control at all. It is the fourth digest:
+        // prose around figures this server counted, sent by email, changing no record — and it is
+        // already unattended whenever a super admin switches the Monday cadence on, so capping it
+        // lower would describe a product that does not exist.
+        "practice_update",
         "project_risk_narrative",
         "security_weekly_digest",
         "weekly_digest"

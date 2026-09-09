@@ -371,6 +371,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
     where: "Sidebar → Practice update (super admin)",
     when: "A leadership update nobody fills in: counted from the workspace, drafted around the figures, reviewed before it sends.",
     steps: [
+      // Named because the page used to point at a switch that did not exist — the capability had no
+      // control of any kind until a customer reported it. The manual now names the real one.
+      "Switch \"Weekly practice update\" on under Workspace settings → AI → AI capabilities if you want the written sections drafted; without it the figures still go out, the prose is just yours to write.",
       "Generate the week — figures are counted, prose is drafted; the two are kept apart so a model outage still yields a complete update.",
       "Edit the written sections in the rich-text editor; Refine with AI keeps formatting.",
       "Your draft survives navigation and refreshes — only Regenerate or Discard clears it.",

@@ -67,7 +67,9 @@ const GROUPS: Array<{ title: string; hint: string; match: (c: AutonomyEntry) => 
     title: "Reports on a schedule",
     hint: "Already unattended: they send a summary and change no records.",
     match: (c) =>
-      ["weekly_digest", "security_weekly_digest", "bug_pattern_digest", "project_risk_narrative"].includes(c.capability)
+      ["weekly_digest", "security_weekly_digest", "bug_pattern_digest", "practice_update", "project_risk_narrative"].includes(
+        c.capability
+      )
   },
   {
     title: "Identity and measurement",

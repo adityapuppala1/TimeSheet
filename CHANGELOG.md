@@ -306,6 +306,33 @@ number, on purpose — an installation must never render history for a version t
   payment processor's quota and what it fetches is money — which is deliberately *not* the gate on
   the usage sweep sitting next to it, that one being a load decision about tenant databases.
 
+### 🐛 A switch that was never built, and a draft that came back from the dead
+
+- **The weekly practice update's AI drafting can be switched on.** `GlobalAISettings` carries a
+  boolean per AI capability, and every one of them had a control except this one: no entry in the
+  capability registry, no switch on the AI tab, and — the part that made it unfixable — no key in
+  the `.strict()` settings schema, so no route on this server would accept a write to it. It was
+  therefore `false` on every workspace ever installed, permanently; the feature refused itself with
+  "This AI feature is disabled for this workspace", and the page told the reader to turn it on under
+  a Workspace Settings switch that did not exist. A customer found that, not us.
+- It gets its control the way its three siblings have theirs: a capability in **AI capabilities**,
+  beside the weekly, security and bug-pattern digests, with the autonomy level that belongs to a
+  thing which writes prose around figures somebody else counted, sends an email and changes no
+  record. One mechanism, not a second switch somewhere else that could disagree with this one.
+- **A 35th flag cannot arrive orphaned.** A test now reads the *schema* for the column list and
+  fails when any `*Enabled` column has neither a registry entry nor a switch — the same shape as the
+  compile guard that already stops a notification preference shipping without a row.
+- **Discarding a draft discards it.** The stored draft is fetched with `staleTime: 0`, so a refetch
+  is very often already in flight; one issued before the discard resolved after it, still carrying
+  the deleted document, and the page — seeing an empty editor — restored it. The server was innocent
+  throughout. The discard now cancels what is on the wire before setting the cache to the state it
+  knows is true, and sending does the same, because sending clears the draft the identical way.
+- **A failure message stops outliving its cause.** `aiFailed` is stored on the draft row and
+  replayed on every load, so a draft generated while drafting was off kept reporting that after
+  somebody switched it on — making a fix that worked look like one that had not. When drafting is on
+  now, that particular message is reported as history, with the way out ("regenerate"), rather than
+  as a current fault. Every other failure, including AI being off workspace-wide, still reads as one.
+
 ### 🐛 A card that showed a number and would not let you change it
 
 - **Per-org numeric quotas are settable, not just viewable.** The override editor shipped with the

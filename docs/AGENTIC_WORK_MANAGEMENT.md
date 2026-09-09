@@ -94,8 +94,8 @@ This is the reason this theme is tractable in weeks rather than quarters.
 - **`Notification`**, `TicketRule`, `RequestForm`, `runForEveryOrg`, `domain-events.ts`.
 
 **The registered capabilities today** (from `ai-capability.registry.ts`, with their code ceilings):
-`weekly_digest`, `security_weekly_digest`, `bug_pattern_digest`, `project_risk_narrative` —
-`AUTONOMOUS`, because they send mail and change no records. `status_report`,
+`weekly_digest`, `security_weekly_digest`, `bug_pattern_digest`, `practice_update`,
+`project_risk_narrative` — `AUTONOMOUS`, because they send mail and change no records. `status_report`,
 `schedule_adjustment`, `blueprint_instantiate`, `assignment_rebalance`, `plan_breakdown`,
 `duplicate_detection`, `assignee_suggestion_explanation`, `triage`, `ci_failure_triage`,
 `security_finding_triage`, `pr_review_summary` — `AUTO_APPLY`. `risk_mitigation` — `SUGGEST`.

@@ -479,6 +479,11 @@ export const aiSettingsSchema = z.object({
       faceReviewSummaryEnabled: z.boolean().optional(),
       facePolicyCopilotEnabled: z.boolean().optional(),
       bugPatternDigestEnabled: z.boolean().optional(),
+      // Missing here until a customer reported it: the column existed, the feature checked it, and
+      // no route on the server would accept a write to it — so it was false on every workspace,
+      // permanently, and the page told people to flip a switch that did not exist.
+      // ai-settings-coverage.test.ts now fails when a *Enabled column has no control at all.
+      practiceUpdateEnabled: z.boolean().optional(),
       assigneeSuggestionAiEnabled: z.boolean().optional(),
       staleTicketNudgeEnabled: z.boolean().optional(),
       aiPrInlineReviewEnabled: z.boolean().optional(),
