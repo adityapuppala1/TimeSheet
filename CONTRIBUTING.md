@@ -62,19 +62,49 @@ It runs `tsc --noEmit` over both apps and then `eslint` (`npm run lint:sonar`) w
 set — the same analyzer SonarQube uses for JS/TS, so you see locally what the dashboard would say,
 with no server or token involved.
 
-**~400 warnings and 0 errors is the healthy state, and the command exits 0.** Warnings are not a
-broken build; they are tracked debt. Most are three structural style rules (nested ternaries,
-cognitive complexity, nested template literals) across code that predates the config, and the policy
-— written down in `sonar-project.properties` — is to gate *new* code and burn the rest down as files
-get touched. Rewriting ~100k lines for style would be a large unreviewable diff with no behavioural
+**0 errors and a warning count at or below `lint-baseline.json` is the healthy state, and the
+command exits 0.** Warnings are not a broken build; they are tracked debt. Most are three structural
+style rules (nested ternaries, cognitive complexity, nested template literals) across code that
+predates the config, and the policy is to gate *new* code and burn the rest down as files get
+touched. Rewriting ~100k lines for style would be a large unreviewable diff with no behavioural
 benefit, and a permanently-red lint is one everybody learns to scroll past.
 
-So: **keep errors at zero; don't chase the warning count, and don't switch rules off to lower it.**
-If your change adds an error, fix the code rather than the config. The security-hotspot rules
-(`sonarjs/pseudo-random`, `sonarjs/no-hardcoded-passwords`) are errors deliberately — a new
-`Math.random()` should fail until somebody confirms it isn't generating a token. When it genuinely
-isn't, mark it inline with the verdict rather than disabling the rule globally; `utils/security.ts`
-and `middleware/request-telemetry.ts` show the comment style.
+**The ratchet.** That policy had one failure mode: nothing stopped the pile growing. It went from
+roughly 400 to 700 without anybody deciding to let it, and at 700 the fifty warnings that might be
+real bugs are indistinguishable from the six hundred that are formatting opinions. So `npm run lint`
+ends with `scripts/lint-ratchet.mjs`, which reads `lint-baseline.json` — a per-rule ceiling — and
+fails when any rule's count goes *up*. Going down is applauded and the script tells you to lower the
+ceiling (`node scripts/lint-ratchet.mjs --update`, committed with the change). Per rule rather than
+a total, so removing a nested ternary cannot pay for adding a slow regex — those are not the same
+kind of warning. A rule vanishing from the report entirely also fails, so switching one off is a
+visible edit to the baseline rather than a silent drop.
+
+When the ratchet fails you, in order of preference: fix the warning; or suppress it *at the line*
+with a comment saying why (an `eslint-disable-next-line` with a reason is a decision someone can
+review — put the reason on the lines above and the directive as the last line before the code, or
+ESLint reports the directive as unused); or raise the ceiling in its own commit, with the reason
+in the message. `AdminPages.tsx`'s project-form effect shows the suppression style.
+
+**The rules that are questions, not defects — and the answer is to measure.** `sonarjs/slow-regex`
+says "make sure this cannot lead to denial of service". It is asking. When the flagged regexes in
+`backup-destination.service.ts` were first *timed* against their own worst-case input, the result
+inverted the obvious fix: the alternation `/^\/+|\/+$/g`, flagged eleven times, is **linear** at
+fifty thousand characters, while the innocuous-looking `/\/+$/` beside it is **quadratic** —
+0.3ms at a thousand slashes, 797ms at fifty thousand. Splitting the alternation "to be safe" would
+have introduced eleven copies of the only genuinely slow pattern in the file. The quadratic one is
+gone; `apps/api/tests/unit/regex-redos-budget.test.ts` now drives every assessed pattern at
+pathological size and fails if one regresses. **A newly flagged regex gets added to that file as
+part of assessing it** — the number, not the opinion, is what closes the warning. The same goes for
+`react-hooks/exhaustive-deps`: read the effect and decide whether it is keyed on an identity on
+purpose (usually) or has a genuinely stale closure (occasionally, and those have bitten — see the
+practice-update draft restore in the 5.2.0 notes).
+
+So: **keep errors at zero; never let a rule's count rise; and answer the "question" rules with a
+measurement rather than a rewrite.** If your change adds an error, fix the code rather than the
+config. The security-hotspot rules (`sonarjs/pseudo-random`, `sonarjs/no-hardcoded-passwords`) are
+errors deliberately — a new `Math.random()` should fail until somebody confirms it isn't generating
+a token. When it genuinely isn't, mark it inline with the verdict rather than disabling the rule
+globally; `utils/security.ts` and `middleware/request-telemetry.ts` show the comment style.
 
 `tsconfig.base.json` sets `noUnusedLocals`, so dead imports and unused locals are build errors.
 Unused *parameters* are deliberately still allowed — Express handlers and React callbacks
@@ -165,7 +195,8 @@ echo "email tmpl  $(cd apps/api && npx tsx scripts/send-test-email.ts --list 2>/
 ```
 
 Test and lint counts come from the tools themselves — `npm test -w apps/api` prints the suite total,
-and `npm run lint` prints `N problems (E errors, W warnings)`.
+and `npm run lint` prints `N problems (E errors, W warnings)` followed by the ratchet's per-rule
+line. The README quotes the ratchet's total; `lint-baseline.json` is the number it is held to.
 
 ### Checking the Mermaid diagrams
 

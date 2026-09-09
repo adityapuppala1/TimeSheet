@@ -62,6 +62,10 @@ export function FaceModelUpgradePrompt() {
     if (!eligible || !user) return;
     if (Date.now() < snoozedUntil(user.id)) return;
     setOpen(true);
+    // Keyed on the user IDENTITY on purpose. Depending on `user` re-runs this whenever the session
+    // query refetches, which would reopen a prompt the person has already snoozed. Only a different
+    // user should reopen it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eligible, user?.id]);
 
   const enroll = useMutation({

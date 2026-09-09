@@ -1914,6 +1914,11 @@ function ProjectBillingDialog({ project, onClose }: { project: any | null; onClo
       plannedStartDate: project.plannedStartDate ? String(project.plannedStartDate).slice(0, 10) : "",
       plannedEndDate: project.plannedEndDate ? String(project.plannedEndDate).slice(0, 10) : ""
     });
+    // Keyed on the project IDENTITY on purpose. The rule wants `project` itself, which changes
+    // reference on every refetch of the projects query — and re-running this effect would overwrite
+    // whatever the admin is halfway through typing into this form with the server's copy. Seeding
+    // on id is the behaviour, not an oversight.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id]);
 
   const save = useMutation({

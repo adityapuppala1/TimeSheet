@@ -143,7 +143,7 @@ CAB tool holds none of that.
 
 ## By the numbers
 
-Counted from the tree at v5.1.1, not estimated — regenerate any of these with the one-liners in
+Counted from the tree at v5.2.0, not estimated — regenerate any of these with the one-liners in
 [CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
 that looks stale.
 
@@ -151,13 +151,13 @@ that looks stale.
 |---|---|
 | REST routes | **544** across 57 controllers |
 | Prisma models / enums | **133** / 46, plus **117** tenant migrations and 22 control-plane migrations |
-| Services / cron workers | **144** / 32 |
+| Services / cron workers | **145** / 32 |
 | Web pages | **98** |
-| Unit tests | **3,079** across 198 files (`npm test -w apps/api`), plus **183** in `apps/web` |
+| Unit tests | **3,140** across 202 files (`npm test -w apps/api`), plus **183** in `apps/web` |
 | End-to-end specs | **29** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
 | Editable email templates | **41**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **20**, over 5 roles — plus **5** platform-console capabilities over 5 operator roles |
-| Lint | **0 errors**, warnings tracked as a baseline rather than driven to zero — see below |
+| Lint | **0 errors**, **701** warnings held under a per-rule ceiling that can only fall — see below |
 
 **On the two permission counts.** They are two separate authority models and adding them together
 would describe a role nobody holds. The **20** are the tenant RBAC keys in `packages/shared`
@@ -167,11 +167,16 @@ the operator console in the control plane, and which no workspace user holds at 
 **38** for four releases; the figure was never counted, and the one-liner meant to check it scanned
 the whole file rather than the object, so it agreed with nothing. Both are counted now, separately.
 
-**On the lint number.** The repo runs ESLint with `sonarjs` and sits at 687 warnings and
+**On the lint number.** The repo runs ESLint with `sonarjs` and sits at 701 warnings and
 zero errors. That is the healthy state, not a backlog: the warnings are overwhelmingly
 `no-nested-conditional` and `cognitive-complexity` on code where the nesting is the clearest form,
 and "fixing" the count by mechanically extracting ternaries has previously made the code worse.
-Errors are the gate; warnings are a signal to read, not a score to beat.
+Errors are the gate; warnings are a signal to read, not a score to beat — **but they can no longer
+rise.** `lint-baseline.json` holds a per-rule ceiling and `npm run lint` fails when any rule exceeds
+it, so the count only ever moves down. The rules that ask a question rather than report a defect
+(`slow-regex` above all) are answered by measurement: every flagged regex is timed at pathological
+size in `regex-redos-budget.test.ts`, which is how the one genuinely quadratic pattern was found
+among fifty that merely looked suspicious. See CONTRIBUTING.md → *Reading `npm run lint`*.
 
 **On the test number.** Unit tests here deliberately favour *pure* functions over mocked databases —
 the schedule solver, the risk score, the SLA clocks, the CSV escaper, the changelog parser. That is

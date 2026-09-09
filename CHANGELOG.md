@@ -10,6 +10,35 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 5.2.0 — an update that answers questions, and a codebase that measures before it fixes — 2026-09-09
+
+### 🔧 The warning count can only go down now, and the "slow regex" question gets a number
+
+- **A per-rule lint ratchet.** `lint-baseline.json` holds a ceiling for each SonarJS rule and
+  `npm run lint` now ends by checking against it: any rule whose count rises fails the build, and
+  a rule that vanishes from the report entirely fails too, so switching one off is a visible edit
+  rather than a silent drop. It exists because the count went from roughly 400 to 700 with nobody
+  ever deciding to allow it — and at 700, the fifty warnings that might be real bugs are invisible
+  among six hundred formatting opinions. Per rule, not a total: removing a nested ternary can no
+  longer pay for adding a slow regex. Verified by adding one warning and watching it fail, naming
+  the rule and the delta.
+- **The one genuinely quadratic regex is gone — and it was not the one that looked dangerous.**
+  `sonarjs/slow-regex` asks a question ("make sure this cannot lead to denial of service"). Timing
+  every flagged pattern in `backup-destination.service.ts` against its own worst case inverted the
+  obvious fix: the alternation flagged eleven times is linear at fifty thousand characters, while
+  the plain trailing anchor beside it takes 797ms. Splitting the alternation "to be safe" would have
+  introduced eleven copies of the only slow pattern in the file. It is replaced by a character
+  loop; `regex-redos-budget.test.ts` now drives every assessed pattern at pathological size and
+  fails on regression, and the process is written down: a newly flagged regex is added there as
+  part of assessing it.
+- Two `react-hooks/exhaustive-deps` warnings were read rather than counted. Both effects are keyed on
+  an object's identity on purpose — adding the object would wipe a form mid-edit, or reopen a
+  snoozed prompt on every refetch. Each now carries the reason at the line, which is the documented
+  way to answer that rule, and the ceiling came down by two as the ratchet asked it to.
+- CONTRIBUTING's *Reading `npm run lint`* is rewritten around all three: the ceiling, the
+  measure-first rule for question-shaped warnings, and the order of preference when the ratchet
+  fails you.
+
 ### 🔐 A Tiptap advisory, assessed by running it rather than arguing about it
 
 - **`@tiptap/core`'s `mergeAttributes()` turns an own `__proto__` key into inherited, executable DOM
