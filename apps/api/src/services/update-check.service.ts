@@ -35,18 +35,38 @@ const TOKEN = process.env.UPDATE_CHECK_TOKEN?.trim() || null;
 /** An hour. Releases happen weekly at most; checking faster only spends rate limit. */
 const CHECK_INTERVAL_MS = 60 * 60 * 1000;
 /**
- * How many releases of history the What's-new page gets.
+ * There is deliberately NO count cap on the release history any more, and the number that removed
+ * it is worth keeping here.
  *
- * RAISED FROM 15, which the 3.6.0 release crossed — and the way it announced itself is the reason
- * this comment exists: the page silently stopped showing v1.0.0. Nothing broke, no error appeared,
- * and a "Release history" that quietly drops its oldest entry is the kind of small dishonesty this
- * product is otherwise careful about. A test comparing the page against CHANGELOG.md caught it.
+ * A cap of 15 was raised to 40 when the 3.6.0 release crossed it and the page silently stopped
+ * showing v1.0.0. The comment that raised it said "40 is roughly four years at this release
+ * cadence, and the same test will fail again before anyone is misled." It failed again at 5.2.0 —
+ * six weeks later, not four years — dropping v1.0.0 for the second time in the same way.
  *
- * 40 rather than "no limit": the cap exists so a decade-old install does not ship a thousand-entry
- * payload to every page load, and that reasoning is still sound. 40 is roughly four years at this
- * release cadence, and the same test will fail again before anyone is misled.
+ * So the cap was MEASURED before being raised a third time. The bundled changelog at 41 releases
+ * serialises to 387KB. The newest 40 alone serialise to 386KB. The cap's entire effect was to save
+ * one kilobyte by discarding the one entry whose notes are 492 characters long; the payload is
+ * dominated by the largest entries (2.0.0 is 41KB, 2.5.0 and 5.1.0 are 37KB each), which a count
+ * cap never addresses. It bounded nothing and truncated history.
+ *
+ * The scenario it defended against — "a decade-old install shipping a thousand-entry payload" —
+ * cannot arrive through this path: an install bundles the CHANGELOG of ITS OWN build, which is
+ * exactly as long as its own history and not a byte longer. The remote half of the merge is bounded
+ * separately by the GitHub query. Neither input is unbounded, so their union needs no third cap.
+ *
+ * The What's-new page renders every entry collapsed (it is a changelog, not a wall), React Query
+ * caches the response, and the alternative is the "small dishonesty" the first raise was written to
+ * avoid. `update-check.service.test.ts` asserts every bundled version is shown; that test is the
+ * guard, and this comment is why nobody should reintroduce a number to make it pass.
  */
-const RELEASE_HISTORY_LIMIT = 40;
+
+/**
+ * How many rows each GitHub query asks for. This is the "bounded separately" above: it caps what
+ * the REMOTE side can contribute per fetch, and nothing else. It was previously the same constant as
+ * the history cap under the name RELEASE_HISTORY_LIMIT, which is how a page-size knob came to be
+ * read as a product decision about how much history to show. Two different questions, two names.
+ */
+const GITHUB_PAGE_SIZE = 40;
 
 export interface ReleaseInfo {
   version: string;
@@ -115,7 +135,7 @@ function githubFetch(path: string): Promise<Response> {
  * nicety that adds the written notes.
  */
 async function fetchTagsAsReleases(): Promise<ReleaseInfo[]> {
-  const response = await githubFetch(`tags?per_page=${RELEASE_HISTORY_LIMIT}`);
+  const response = await githubFetch(`tags?per_page=${GITHUB_PAGE_SIZE}`);
   if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
 
   const rows = (await response.json()) as Array<{ name?: string }>;
@@ -134,7 +154,7 @@ async function fetchTagsAsReleases(): Promise<ReleaseInfo[]> {
 }
 
 async function fetchReleases(): Promise<ReleaseInfo[]> {
-  const response = await githubFetch(`releases?per_page=${RELEASE_HISTORY_LIMIT}`);
+  const response = await githubFetch(`releases?per_page=${GITHUB_PAGE_SIZE}`);
   if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
 
   const rows = (await response.json()) as Array<{
@@ -279,11 +299,9 @@ function withBundledHistory(status: UpdateStatus): UpdateStatus {
   }
 
   // Newest first by SEMVER, because the list now has two origins and neither one's ordering can
-  // be trusted to interleave with the other's. `slice` keeps the panel bounded the same way the
-  // GitHub query is.
-  const releases = [...byVersion.values()]
-    .sort((a, b) => compareSemver(b.version, a.version))
-    .slice(0, RELEASE_HISTORY_LIMIT);
+  // be trusted to interleave with the other's. Not sliced — see the note above on why the count
+  // cap is gone: both inputs are already bounded, and the cap only ever removed real history.
+  const releases = [...byVersion.values()].sort((a, b) => compareSemver(b.version, a.version));
 
   return { ...status, releases, releasesSource: sourceOf(releases, knownToGithub) };
 }

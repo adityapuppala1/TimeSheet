@@ -10,6 +10,29 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 5.2.1 — the release history stops forgetting its first entry — 2026-09-09
+
+### 🐛 A count cap that saved one kilobyte by deleting v1.0.0
+
+- **The What's-new release history dropped its oldest entry the moment the changelog reached 41
+  versions.** A cap of 40 sat on the merged list — raised once already, from 15, when 3.6.0 crossed
+  it and the page silently lost v1.0.0 the first time. The comment that raised it estimated "roughly
+  four years at this release cadence"; it lasted six weeks. 5.2.0 was the 41st version, and v1.0.0
+  vanished again in exactly the same silent way.
+- **Measured before being raised a third time.** All 41 releases serialise to 387KB; the newest 40
+  to 386KB. The cap's whole effect was to save one kilobyte by discarding the one entry whose notes
+  are 492 characters long. The payload is driven by the largest entries — 2.0.0 is 41KB — which a
+  count never touches. The scenario it defended against, "a decade-old install shipping a
+  thousand-entry payload", cannot arrive this way: a build bundles its own changelog, exactly as
+  long as its own history. The cap is gone; the constant survives only as the GitHub query's page
+  size, renamed so a page-size knob can never again be read as a decision about how much history
+  to show.
+- **The guard worked; the process did not.** `update-check.service.test.ts` asserts every bundled
+  version is shown, and it went red on CI for both branches. It had passed locally because the full
+  suite ran *before* the version bump and only the changelog parser ran after — the bump itself was
+  the 41st entry. CONTRIBUTING's release steps now say so: bump, then the full suite, because the
+  bump is a change.
+
 ## 5.2.0 — an update that answers questions, and a codebase that measures before it fixes — 2026-09-09
 
 ### 🔧 The warning count can only go down now, and the "slow regex" question gets a number

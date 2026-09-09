@@ -276,10 +276,16 @@ unpushed — while the notes sat in the very bundle being served. See
    be corrected after shipping, and GitHub's copy wins the merge when it is non-empty.
 4. CD builds and pushes the tagged images automatically — nothing to do.
 
-**The guard.** `apps/api/tests/unit/changelog-releases.service.test.ts` fails the build when
-`VERSION` has no matching CHANGELOG.md heading, or when the `## Unreleased` section has gone
-missing. Step 1 half-done is therefore a red test, not a stale page nobody notices — which is how
-eighteen sections of finished work once sat under `## Unreleased` for nine days.
+**The guards — and run the WHOLE suite after step 1, not before it.**
+`apps/api/tests/unit/changelog-releases.service.test.ts` fails the build when `VERSION` has no
+matching CHANGELOG.md heading, or when the `## Unreleased` section has gone missing. Step 1
+half-done is therefore a red test, not a stale page nobody notices — which is how eighteen sections
+of finished work once sat under `## Unreleased` for nine days.
+`apps/api/tests/unit/update-check.service.test.ts` fails when any version in CHANGELOG.md is missing
+from the What's-new release history. That one reads the *real* changelog, so **the version bump is
+itself a change the full suite has to run after** — 5.2.0 went out red on both branches because the
+suite had run before the bump and only the parser test after, and the new heading was the 41st
+entry that tripped a cap nobody remembered was there.
 
 ## Security
 
