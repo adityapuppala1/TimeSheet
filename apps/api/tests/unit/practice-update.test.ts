@@ -19,6 +19,7 @@ import {
   type PracticeMetrics,
   type PracticeUpdateData
 } from "../../src/services/practice-update.service.js";
+import type { PracticeAnalytics } from "../../src/services/practice-analytics.service.js";
 import { buildPracticeUpdateEmail, narrativeInputs } from "../../src/services/practice-update-mail.service.js";
 
 describe("categoriseInitiative", () => {
@@ -118,8 +119,71 @@ const initiative = (over: Partial<PracticeInitiative> = {}): PracticeInitiative 
   openCount: 6,
   overdueCount: 0,
   hours: 38,
+  criticalOpen: 0,
+  highOpen: 0,
+  nextDueDate: null,
   progress: "4 closed · 5 raised · 38 h logged",
   risks: "",
+  ...over
+});
+
+/**
+ * The derived layer, defaulting to "nothing measured".
+ *
+ * NULLS RATHER THAN ZEROES IN THE BASELINE, on purpose: a fixture full of zeroes would let a
+ * rendering bug that prints "0%" for an unmeasured rate pass every test in this file. Each test
+ * that cares about a rate sets it explicitly.
+ */
+const analytics = (over: Partial<PracticeAnalytics> = {}): PracticeAnalytics => ({
+  delivery: {
+    closureRatePct: null,
+    onTimeClosurePct: null,
+    closedWithDueDate: 0,
+    medianCycleHours: null,
+    reopened: 0,
+    everResolved: 0,
+    reopenRatePct: null,
+    unassignedOpen: 0,
+    backlogOpen: 6,
+    dueNextWeek: 0
+  },
+  priority: { criticalOpen: 0, highOpen: 0, criticalClosed: 0, highClosed: 0, criticalOverdue: 0 },
+  quality: {
+    testRuns: 0,
+    runsPassed: 0,
+    runsFailed: 0,
+    testsPassed: 0,
+    testsFailed: 0,
+    runPassRatePct: null,
+    testPassRatePct: null,
+    gatesPassed: 0,
+    gatesWarned: 0,
+    gatesFailed: 0
+  },
+  security: {
+    verifiedFixed: 0,
+    awaitingVerification: 0,
+    scanRuns: 0,
+    newCritical: 0,
+    newHigh: 0,
+    medianOpenAgeDays: null,
+    oldestOpenDays: null
+  },
+  change: {
+    successful: 0,
+    withIssues: 0,
+    failed: 0,
+    rolledBack: 0,
+    successRatePct: null,
+    outcomeRecorded: 0,
+    emergency: 0,
+    awaitingApproval: 0,
+    scheduledNextWeek: 0
+  },
+  people: { topContributors: [], utilisationPct: null, capacityHours: null, billablePct: null, silentOwners: 0 },
+  poc: { started: 0, ongoing: 0, completed: 0, hours: 0 },
+  goals: { active: 0, achievedThisPeriod: 0, overdue: 0 },
+  ai: { agentRuns: 0, agentRunsFailed: 0, interactions: 0, spendUsd: null },
   ...over
 });
 
@@ -129,6 +193,8 @@ const data = (over: Partial<PracticeUpdateData> = {}): PracticeUpdateData => ({
   metrics: metrics(),
   previousMetrics: metrics({ ticketsClosed: 8, overdue: 9 }),
   initiatives: [initiative()],
+  analytics: analytics(),
+  previousAnalytics: analytics(),
   releases: [],
   isEmpty: false,
   ...over
@@ -225,6 +291,176 @@ describe("buildPracticeUpdateEmail — with a narrative", () => {
   });
 });
 
+/**
+ * The rendering half of the honesty rule.
+ *
+ * `practice-analytics.service.ts` is careful to return `null` for a rate whose denominator was
+ * zero — and every bit of that care is undone by one template that prints `${value}%` anyway. This
+ * block was written because a deliberate break that made the email print "0%" for an unmeasured
+ * rate passed the entire analytics suite: the service was right and the reader would still have
+ * been told the team delivered nothing on time in a week where nothing had a deadline.
+ */
+/**
+ * Reads the VALUE cell for one Key Metrics row, tags stripped.
+ *
+ * Scoped deliberately: an earlier version of these tests asserted `not.toContain("0%")` against the
+ * whole document and failed on the `width="100%"` in the table markup — a test that was wrong about
+ * code that was right, which is the most expensive kind. Asking for one row's value keeps the
+ * assertion about the thing being tested.
+ */
+function metricValue(html: string, label: string): string {
+  const at = html.indexOf(`>${label}</td>`);
+  if (at === -1) throw new Error(`no Key Metrics row labelled "${label}"`);
+  const rest = html.slice(at);
+  const cell = /<td[^>]*>([^<]*)<\/td>/.exec(rest.slice(rest.indexOf("</td>") + 5));
+  return (cell?.[1] ?? "").replace(/&amp;/g, "&").trim();
+}
+
+describe("an unmeasured rate never renders as a number", () => {
+  it("prints a dash, and says what the denominator was", () => {
+    const html = buildPracticeUpdateEmail(data(), null).sectionsHtml;
+
+    // The baseline fixture leaves every rate null. "0%" here would tell a director the team
+    // delivered nothing on time in a week where nothing had a deadline.
+    expect(metricValue(html, "Closure rate (closed ÷ raised)")).toBe("—");
+    expect(metricValue(html, "Delivered on time")).toBe("— (0 had a due date)");
+    expect(metricValue(html, "Billable share of hours")).toBe("—");
+    expect(metricValue(html, "Utilisation against capacity")).toBe("— (no capacity on file)");
+  });
+
+  it("prints the figure once there is something to divide by", () => {
+    const html = buildPracticeUpdateEmail(
+      data({
+        analytics: analytics({
+          delivery: { ...analytics().delivery, closureRatePct: 80, onTimeClosurePct: 50, closedWithDueDate: 4 }
+        })
+      }),
+      null
+    ).sectionsHtml;
+
+    expect(metricValue(html, "Closure rate (closed ÷ raised)")).toBe("80%");
+    expect(metricValue(html, "Delivered on time")).toBe("50% (4 had a due date)");
+  });
+
+  it("reports a rate's movement in POINTS, not as a percentage of a percentage", () => {
+    // 40% to 50% is a rise of ten points. Reporting it as "+25%" is how a modest week gets
+    // described to a director as a transformation.
+    const html = buildPracticeUpdateEmail(
+      data({
+        analytics: analytics({ delivery: { ...analytics().delivery, closureRatePct: 50 } }),
+        previousAnalytics: analytics({ delivery: { ...analytics().delivery, closureRatePct: 40 } })
+      }),
+      null
+    ).sectionsHtml;
+
+    expect(metricValue(html, "Closure rate (closed ÷ raised)")).toBe("50% (+10 pts)");
+  });
+});
+
+describe("the counted fallbacks name blockers nobody owns", () => {
+  it("raises unassigned work and unproven security fixes without a model", () => {
+    const html = buildPracticeUpdateEmail(
+      data({
+        analytics: analytics({
+          delivery: { ...analytics().delivery, unassignedOpen: 7, closureRatePct: 60 },
+          priority: { ...analytics().priority, criticalOverdue: 2 },
+          security: { ...analytics().security, awaitingVerification: 3 }
+        })
+      }),
+      null
+    ).sectionsHtml;
+
+    // None of these belong to a single initiative, so no initiative row would have carried them.
+    expect(html).toContain("2 critical tickets are past SLA");
+    expect(html).toContain("7 open tickets have no assignee");
+    expect(html).toContain("The backlog grew");
+    expect(html).toContain("claimed but not yet proven");
+  });
+
+  it("asks for decisions, not for effort", () => {
+    const html = buildPracticeUpdateEmail(
+      data({
+        analytics: analytics({
+          change: { ...analytics().change, awaitingApproval: 2 },
+          people: { ...analytics().people, utilisationPct: 118 }
+        })
+      }),
+      null
+    ).sectionsHtml;
+
+    // Both are things only somebody with authority can settle. Work in progress is deliberately
+    // absent from this section — a decisions list that fills up with status stops being read.
+    expect(html).toContain("2 changes are waiting on approval");
+    expect(html).toContain("118% of capacity");
+  });
+});
+
+/**
+ * A DRAFT STORED BEFORE THE ANALYTICS LAYER EXISTED STILL HAS TO RENDER.
+ *
+ * `PracticeUpdateRecord.data` is a JSON column, and the controller replays it with a bare
+ * `record.data as unknown as PracticeUpdateData` — a cast, which checks nothing at runtime. Every
+ * draft and every history row written before this release lacks `analytics`, so the moment the
+ * email started reading `data.analytics.priority` those rows became a 500 on:
+ *   - GET /practice-update/draft — the page a super admin opens
+ *   - the history detail view
+ *   - the send preview
+ *
+ * Nothing would have caught it: the type says the field is there, and every fixture in this file
+ * provides it. This block is the fixture that does not.
+ */
+describe("a draft stored before this release still renders", () => {
+  const legacy = () => {
+    const complete = data() as unknown as Record<string, unknown>;
+    const { analytics: _a, previousAnalytics: _p, ...withoutAnalytics } = complete;
+    return withoutAnalytics as unknown as PracticeUpdateData;
+  };
+
+  it("renders the whole email rather than throwing", () => {
+    const email = buildPracticeUpdateEmail(legacy(), null);
+
+    expect(email.subject).toContain("Weekly AI/ML Practice Update");
+    // Every section still arrives — the derived rows are what degrade, not the document.
+    for (const heading of ["Executive Summary", "Key Metrics", "Risks / Blockers", "Decisions / Support Required"]) {
+      expect(email.sectionsHtml).toContain(heading);
+    }
+    // And the counted figures the old draft DOES carry are still printed.
+    expect(email.sectionsHtml).toContain("Tickets closed");
+  });
+
+  it("shows the missing derived figures as unmeasured, never as zero", () => {
+    const html = buildPracticeUpdateEmail(legacy(), null).sectionsHtml;
+    // An old draft genuinely does not know its closure rate. Printing 0% would be inventing one.
+    expect(metricValue(html, "Closure rate (closed ÷ raised)")).toBe("—");
+  });
+
+  it("still builds the model's prompt from what the old draft does have", () => {
+    const inputs = narrativeInputs(legacy());
+    expect(inputs.metrics).toContain("DELIVERY");
+    expect(inputs.metrics).toContain("not measured");
+  });
+
+  it("never prints the word undefined into a leadership email", () => {
+    // The initiatives inside an old draft carry no severity split either. `undefined + undefined`
+    // is NaN, and `NaN === 0` is false — so the guard that was meant to hide the sub-line let it
+    // through, and the row rendered "undefined crit · undefined high" to a CEO.
+    const stale = data() as unknown as Record<string, unknown>;
+    const { analytics: _a, previousAnalytics: _p, ...withoutAnalytics } = stale;
+    const initiativeRow = initiative({ openCount: 8 }) as unknown as Record<string, unknown>;
+    delete initiativeRow.criticalOpen;
+    delete initiativeRow.highOpen;
+    delete initiativeRow.nextDueDate;
+
+    const html = buildPracticeUpdateEmail(
+      { ...withoutAnalytics, initiatives: [initiativeRow] } as unknown as PracticeUpdateData,
+      null
+    ).sectionsHtml;
+
+    expect(html).not.toContain("undefined");
+    expect(html).not.toContain("NaN");
+  });
+});
+
 describe("narrativeInputs", () => {
   it("gives the model the initiative IDs it is asked to key next steps by", () => {
     const inputs = narrativeInputs(data());
@@ -235,5 +471,33 @@ describe("narrativeInputs", () => {
   it("describes an empty period honestly rather than as a blank prompt", () => {
     const inputs = narrativeInputs(data({ initiatives: [] }));
     expect(inputs.initiatives).toBe("(no active initiatives with activity this period)");
+  });
+
+  it("tells the model a rate was NOT MEASURED rather than handing it a zero", () => {
+    // A model given "0%" will faithfully write a sentence about a failure that did not happen, and
+    // that sentence goes to a director under the team's name.
+    const inputs = narrativeInputs(data());
+    expect(inputs.metrics).toContain("not measured");
+    expect(inputs.metrics).not.toMatch(/Closure rate[^\n]*: 0%/);
+  });
+
+  it("gives the model the ratios and ages, not only the counts it could already see", () => {
+    const inputs = narrativeInputs(
+      data({
+        analytics: analytics({
+          delivery: { ...analytics().delivery, closureRatePct: 78, backlogOpen: 40 },
+          security: { ...analytics().security, medianOpenAgeDays: 63, oldestOpenDays: 120 },
+          people: { ...analytics().people, utilisationPct: 91, capacityHours: 200 }
+        })
+      })
+    );
+
+    // The three sentences worth having are built on these, and none is visible in a raw count.
+    expect(inputs.metrics).toContain("78%");
+    expect(inputs.metrics).toContain("median 63 days");
+    expect(inputs.metrics).toContain("91%");
+    // And the block labels, so the model can tell delivery figures from security ones.
+    expect(inputs.metrics).toContain("DELIVERY");
+    expect(inputs.metrics).toContain("SECURITY");
   });
 });

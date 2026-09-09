@@ -197,6 +197,7 @@ function InitiativeTable({ rows, nextStepFor }: { rows: PracticeInitiative[]; ne
             <th className="py-1.5 pr-3 font-semibold">Initiative</th>
             <th className="py-1.5 pr-3 font-semibold">Owner</th>
             <th className="py-1.5 pr-3 font-semibold">Status</th>
+            <th className="py-1.5 pr-3 text-right font-semibold">Open</th>
             <th className="py-1.5 pr-3 font-semibold">This period</th>
             <th className="py-1.5 pr-3 font-semibold">Next steps</th>
             <th className="py-1.5 font-semibold">Risks / dependencies</th>
@@ -211,13 +212,106 @@ function InitiativeTable({ rows, nextStepFor }: { rows: PracticeInitiative[]; ne
               </td>
               <td className="py-2 pr-3 text-muted-foreground">{row.owner ?? "—"}</td>
               <td className={cn("py-2 pr-3", RAG[row.status].className)}>{RAG[row.status].emoji}</td>
+              <td className="py-2 pr-3 text-right tabular-nums">
+                {row.openCount}
+                {(row.criticalOpen ?? 0) + (row.highOpen ?? 0) > 0 && (
+                  <div className="text-[11px] font-normal text-muted-foreground">
+                    {row.criticalOpen} crit · {row.highOpen} high
+                  </div>
+                )}
+              </td>
               <td className="py-2 pr-3 text-muted-foreground">{row.progress}</td>
-              <td className="py-2 pr-3 text-muted-foreground">{nextStepFor(row.id) || "—"}</td>
+              {/* The model writes a next step when it can. When it has not, the nearest real
+                  deadline beats a dash — it is a fact, and it is the thing a reviewer would
+                  otherwise go and look up. */}
+              <td className="py-2 pr-3 text-muted-foreground">
+                {nextStepFor(row.id) || (row.nextDueDate ? `Next deadline ${row.nextDueDate}` : "—")}
+              </td>
               <td className="py-2 text-muted-foreground">{row.risks || "—"}</td>
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** A rate, or an honest dash. Null means the denominator was zero — printing "0%" for "nothing was
+ *  measured" is the one mistake a metrics tile can make that changes what the reader believes. */
+function ratePct(value: number | null | undefined): string {
+  return value === null || value === undefined ? "—" : `${value}%`;
+}
+
+/**
+ * The counted half, as tiles.
+ *
+ * WHY THESE EIGHT AND NOT THE THIRTY IN THE EMAIL: this row exists so a reviewer can sanity-check
+ * the document before sending it, not so they can read the whole report twice. Each tile is one a
+ * reviewer would otherwise go and verify by hand — the ratios and the severity, rather than the raw
+ * counts that only say the week happened.
+ *
+ * Read-only on purpose, like the row it replaced: these numbers are the reason anyone trusts the
+ * document, and a document whose figures can be typed over is not a record of anything.
+ */
+function MetricTiles({ data }: Readonly<{ data: PracticeDraft["data"] }>) {
+  const a = data.analytics;
+  // A draft stored before the derived layer existed has none of it. Rather than render eight tiles
+  // of dashes, fall back to the four counted figures this page always showed — an old draft is
+  // still a complete document, and it is the counted half that made it one.
+  if (!a) {
+    return (
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        {[
+          ["Tickets closed", String(data.metrics.ticketsClosed)],
+          ["Hours logged", `${data.metrics.hours}`],
+          ["Overdue", String(data.metrics.overdue)],
+          ["SLA breaches", String(data.metrics.slaBreaches)]
+        ].map(([label, value]) => (
+          <div key={label} className="rounded-lg border border-border p-2.5">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+            <p className="text-lg font-black tabular-nums">{value}</p>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  const tiles: Array<{ label: string; value: string; sub?: string }> = [
+    { label: "Tickets closed", value: String(data.metrics.ticketsClosed), sub: `${data.metrics.ticketsCreated} raised` },
+    {
+      label: "Closure rate",
+      value: ratePct(a.delivery.closureRatePct),
+      sub: a.delivery.closureRatePct === null ? "nothing raised" : "closed ÷ raised"
+    },
+    {
+      label: "On time",
+      value: ratePct(a.delivery.onTimeClosurePct),
+      sub: `${a.delivery.closedWithDueDate} had a due date`
+    },
+    { label: "Open backlog", value: String(a.delivery.backlogOpen), sub: `${data.metrics.overdue} overdue` },
+    {
+      label: "Critical open",
+      value: String(a.priority.criticalOpen),
+      sub: a.priority.criticalOverdue > 0 ? `${a.priority.criticalOverdue} past SLA` : "none past SLA"
+    },
+    { label: "Hours logged", value: `${data.metrics.hours}`, sub: `${data.metrics.contributors} contributors` },
+    {
+      label: "Utilisation",
+      value: ratePct(a.people.utilisationPct),
+      sub: a.people.capacityHours === null ? "no capacity on file" : `of ${a.people.capacityHours} h`
+    },
+    { label: "SLA breaches", value: String(data.metrics.slaBreaches), sub: `${a.delivery.unassignedOpen} unassigned` }
+  ];
+
+  return (
+    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+      {tiles.map((tile) => (
+        <div key={tile.label} className="rounded-lg border border-border p-2.5">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{tile.label}</p>
+          <p className="text-lg font-black tabular-nums">{tile.value}</p>
+          {tile.sub && <p className="text-[11px] text-muted-foreground">{tile.sub}</p>}
+        </div>
+      ))}
     </div>
   );
 }
@@ -608,19 +702,7 @@ export function PracticeUpdatePage() {
             {/* ---- The counted half. Deliberately read-only: these numbers are the reason anyone
                     trusts the document, and a document whose figures can be typed over is not a
                     record of anything. ---- */}
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-              {[
-                ["Tickets closed", String(draft.data.metrics.ticketsClosed)],
-                ["Hours logged", `${draft.data.metrics.hours}`],
-                ["Overdue", String(draft.data.metrics.overdue)],
-                ["SLA breaches", String(draft.data.metrics.slaBreaches)]
-              ].map(([label, value]) => (
-                <div key={label} className="rounded-lg border border-border p-2.5">
-                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
-                  <p className="text-lg font-black tabular-nums">{value}</p>
-                </div>
-              ))}
-            </div>
+            <MetricTiles data={draft.data} />
 
             {grouped.map((group) => (
               <div key={group.key} className="grid gap-2">

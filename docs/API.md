@@ -1832,6 +1832,57 @@ the IP) for everything that can reach a model.
 
 ## Weekly AI/ML Practice Update
 
+### What the update counts, and what it refuses to claim
+
+The report has two halves and they fail independently, which is the whole design: **figures are
+counted, prose is drafted**. `practice-update.service.ts` produces the spine — tickets, hours,
+initiatives, releases — and `practice-analytics.service.ts` produces the derived layer that a
+director actually reads. `ai.service.ts#generatePracticeUpdate` writes the narrative around them and
+is allowed to fail; the update goes out either way.
+
+**Key Metrics arrives in themed blocks**, not one flat table, because it now carries more than
+thirty figures and a thirty-row list is skimmed rather than read:
+
+| Block | What it answers | Always present? |
+|---|---|---|
+| Delivery & flow | Are we keeping up? Closure rate, on-time %, median cycle time, backlog, reopens, unassigned, what falls due next week | Yes |
+| Severity | Critical and high, open and closed — and critical *and* overdue, the one figure that should always be zero | Yes |
+| Quality & testing | Suite runs and individual assertions, **rated separately**, plus quality gates | Only with CI connected |
+| Security | New and verified-fixed, awaiting verification, and the **age** of what is still open | Yes |
+| Change & release | Outcomes, success rate, emergency changes, what is scheduled next week | Only with change management on |
+| People & capacity | Hours, utilisation against real capacity, billable share, training hours, who holds work but logged nothing | Yes |
+| Goals | Active, achieved, past their end date | Only where goals exist |
+| AI practice | The team's own AI teammate runs, interactions and spend | Only where AI has run |
+
+**Three decisions in here are worth knowing before reading a figure:**
+
+1. **A rate with a zero denominator is `null`, and renders as `—`, never as `0%`.** "Nothing had a
+   due date" and "nothing was delivered on time" are opposite sentences that would otherwise print
+   identically. Every `*Pct` field is nullable, and the email prints the denominator beside the dash
+   so the reader knows which it is.
+2. **The suite pass rate and the test pass rate are both reported.** On real data they disagree
+   hard — 2 of 7 suites green while 62 of 64 assertions are. Both are true and they answer different
+   questions ("can we ship?" versus "how broken is it?"), and printing one alone makes a reader
+   conclude the other is a bug.
+3. **The backlog is reconstructed as at the period end**, from `createdAt`/`resolvedAt`, not read as
+   "currently open". A point-in-time count returns the same number for this period and the one
+   before, so the email would print "unchanged" every week — a confident claim about a trend nobody
+   measured. `unassignedOpen` is the opposite case: a ticket carries only its *current* assignee, so
+   there is no history to compare against, and it is deliberately rendered without a delta.
+
+**Rates move in percentage points.** 40% to 50% is reported as `+10 pts`, not `+25%`.
+
+**An unconfigured subsystem costs a row, never the report.** Every query against an optional table
+(CI, scanner, change management, goals, agents) is individually caught; a workspace with none of them
+gets a shorter update rather than a 500.
+
+**Backwards compatibility.** `PracticeUpdateRecord.data` is a JSON column replayed through a cast
+that checks nothing at runtime, so `analytics`, `previousAnalytics` and the per-initiative
+`criticalOpen`/`highOpen`/`nextDueDate` are **optional** in the type. A draft or history row written
+before this release renders with those rows unmeasured instead of throwing — guarded by
+`apps/api/tests/unit/practice-update.test.ts`.
+
+
 The consolidated leadership digest — one weekly view of Products, POCs/Innovation, Bugs/Stability,
 Security and Training, plus metrics, risks, next week's priorities and the decisions leadership is
 being asked to make. Rendered by `services/practice-update-mail.service.ts` from figures counted by

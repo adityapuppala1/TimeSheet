@@ -30,6 +30,7 @@ import type { TicketStatus } from "@prisma/client";
 import { securityDisciplineFindingTypes } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { isChangeManagementOn } from "./change.service.js";
+import { buildPracticeAnalytics, type PracticeAnalytics } from "./practice-analytics.service.js";
 
 export type PracticeCategory = "PRODUCT" | "POC" | "BUGS" | "SECURITY" | "TRAINING";
 
@@ -59,6 +60,17 @@ export interface PracticeInitiative {
   openCount: number;
   overdueCount: number;
   hours: number;
+  /** Open CRITICAL and HIGH tickets. "Critical/high-priority issues" is what the Bugs / Stability
+   *  section was asked for by name, and a single open count cannot answer it — twelve open lows and
+   *  twelve open criticals are the same number and a different conversation. */
+  criticalOpen?: number;
+  highOpen?: number;
+  /** The nearest unmet deadline on this initiative, ISO date, or null when nothing is dated. It is
+   *  what makes "Next steps" a fact rather than a guess when the model writes nothing.
+   *
+   *  All three are optional for the same reason `analytics` is: a stored draft written before this
+   *  release carries none of them, and the cast that replays it checks nothing. */
+  nextDueDate?: string | null;
   /** One line of what actually moved, assembled from the counts above. */
   progress: string;
   /** One line of what is in the way, or empty when nothing is. */
@@ -90,6 +102,20 @@ export interface PracticeUpdateData {
   /** Same shape as `metrics`, for the week before — every figure gets a delta or none does. */
   previousMetrics: PracticeMetrics;
   initiatives: PracticeInitiative[];
+  /**
+   * The derived layer — rates, quality gates, remediation, capacity. Computed alongside the counts
+   * above rather than in the email, so the web preview, the email and the AI prompt all read the
+   * same figures. See practice-analytics.service.ts.
+   *
+   * OPTIONAL because this type is also the shape a stored `PracticeUpdateRecord.data` is cast to,
+   * and every draft written before this layer existed has no such key. Marking it optional is what
+   * makes the compiler insist every reader handle that — the renderers go through `analyticsOf`,
+   * which substitutes `EMPTY_PRACTICE_ANALYTICS`. A freshly built report always has it.
+   */
+  analytics?: PracticeAnalytics;
+  /** Same shape, for the period before, so a rate can carry a direction and not just a value.
+   *  Optional for the same reason. */
+  previousAnalytics?: PracticeAnalytics;
   releases: Array<{ version: string; product: string | null; closedAt: string | null; state: string }>;
   /** Nothing at all happened in the period. The caller decides what to do about it rather than
    *  this returning a misleadingly cheerful empty report. */
@@ -288,7 +314,7 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
   });
   const ids = projects.map((p) => p.id);
 
-  const [metrics, previousMetrics, createdRows, closedRows, openRows, overdueRows, slaRows, hourRows, activityRows, bugRows, ownerRows, assigneeRows, releaseRows] =
+  const [metrics, previousMetrics, createdRows, closedRows, openRows, overdueRows, slaRows, hourRows, activityRows, bugRows, ownerRows, assigneeRows, releaseRows, priorityRows, dueRows] =
     await Promise.all([
       metricsFor(from, to),
       metricsFor(prevFrom, prevTo),
@@ -327,7 +353,20 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
           orderBy: { closedAt: "desc" },
           take: 20
         })
-        .catch(() => [])
+        .catch(() => []),
+      // Open CRITICAL/HIGH per project, for the per-initiative severity split.
+      prisma.ticket.groupBy({
+        by: ["projectId", "priority"],
+        where: { projectId: { in: ids }, deletedAt: null, status: { notIn: CLOSED_TICKET }, priority: { in: ["CRITICAL", "HIGH"] } },
+        _count: { _all: true }
+      }),
+      // The nearest unmet deadline per project. Ordered ascending and reduced in one pass rather
+      // than one query per project — same reason the rest of this function groups.
+      prisma.ticket.findMany({
+        where: { projectId: { in: ids }, deletedAt: null, status: { notIn: CLOSED_TICKET }, dueAt: { not: null } },
+        select: { projectId: true, dueAt: true },
+        orderBy: { dueAt: "asc" }
+      })
     ]);
 
   const created = countMap(createdRows);
@@ -337,6 +376,22 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
   const sla = countMap(slaRows);
   const bugs = countMap(bugRows);
   const hours = new Map(hourRows.filter((r) => r.projectId).map((r) => [r.projectId as string, Number(r._sum.totalHours ?? 0)]));
+
+  const criticalOpen = new Map<string, number>();
+  const highOpen = new Map<string, number>();
+  for (const row of priorityRows) {
+    if (!row.projectId) continue;
+    const n = typeof row._count === "object" && row._count !== null ? Number((row._count as { _all?: number })._all ?? 0) : 0;
+    const target = row.priority === "CRITICAL" ? criticalOpen : highOpen;
+    target.set(row.projectId, (target.get(row.projectId) ?? 0) + n);
+  }
+
+  // `dueRows` arrives ascending, so the FIRST row seen for a project is its nearest deadline.
+  const nextDue = new Map<string, Date>();
+  for (const row of dueRows) {
+    if (!row.projectId || !row.dueAt || nextDue.has(row.projectId)) continue;
+    nextDue.set(row.projectId, row.dueAt);
+  }
 
   const activityByProject = new Map<string, Map<string, number>>();
   for (const row of activityRows) {
@@ -383,7 +438,12 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
         projectHours > 0 ? `${projectHours} h logged` : null
       ].filter(Boolean);
 
+      const criticals = criticalOpen.get(project.id) ?? 0;
+      const highs = highOpen.get(project.id) ?? 0;
+
       const riskParts = [
+        // Severity leads: "3 overdue" and "3 overdue, 2 of them critical" prompt different meetings.
+        criticals > 0 ? `${criticals} critical open` : null,
         overdueCount > 0 ? `${overdueCount} overdue` : null,
         slaBreaches > 0 ? `${slaBreaches} SLA breach${slaBreaches === 1 ? "" : "es"}` : null,
         openCount > 0 && ticketsClosed === 0 && projectHours === 0 ? `${openCount} open, no movement this period` : null
@@ -407,6 +467,9 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
         openCount,
         overdueCount,
         hours: projectHours,
+        criticalOpen: criticals,
+        highOpen: highs,
+        nextDueDate: nextDue.has(project.id) ? iso(nextDue.get(project.id)!) : null,
         progress: progressParts.join(" · ") || "No activity recorded this period",
         risks: riskParts.join(" · ")
       };
@@ -414,12 +477,26 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
     // A project with nothing open and nothing done is not an initiative anyone needs a line about.
     .filter((i) => i.ticketsCreated + i.ticketsClosed + i.openCount > 0 || i.hours > 0);
 
+  // The POC set is taken from the initiatives that were just categorised rather than re-derived:
+  // a second opinion on which projects are POCs is how one section of an email starts contradicting
+  // another.
+  const pocInitiatives = initiatives.filter((i) => i.category === "POC");
+  const pocIds = pocInitiatives.map((i) => i.id);
+  const pocHours = pocInitiatives.reduce((sum, i) => sum + i.hours, 0);
+
+  const [analytics, previousAnalytics] = await Promise.all([
+    buildPracticeAnalytics({ start, end, pocProjectIds: pocIds, pocHours }),
+    buildPracticeAnalytics({ start: prevFrom, end: prevTo, pocProjectIds: pocIds, pocHours: 0 })
+  ]);
+
   return {
     period: { from: iso(start), to: iso(end), label },
     previous: { from: iso(prevFrom), to: iso(prevTo) },
     metrics,
     previousMetrics,
     initiatives,
+    analytics,
+    previousAnalytics,
     releases: releaseRows.map((r) => ({
       version: r.releaseVersion ?? "—",
       product: r.productName ?? null,

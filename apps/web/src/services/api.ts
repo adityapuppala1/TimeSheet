@@ -2748,8 +2748,80 @@ export interface PracticeInitiative {
   openCount: number;
   overdueCount: number;
   hours: number;
+  /** Open CRITICAL / HIGH. Twelve open lows and twelve open criticals are the same `openCount`
+   *  and a different conversation. */
+  criticalOpen?: number;
+  highOpen?: number;
+  /** Nearest unmet deadline on this initiative, or null when nothing on it is dated.
+   *  All three absent on a draft stored before this release. */
+  nextDueDate?: string | null;
   progress: string;
   risks: string;
+}
+
+/**
+ * The derived layer behind the update — rates, ages, quality gates, capacity.
+ *
+ * EVERY `*Pct` IS NULLABLE, and null means the denominator was zero, never zero percent. "Nothing
+ * had a due date" and "nothing was delivered on time" are opposite sentences that would otherwise
+ * render identically. See `apps/api/src/services/practice-analytics.service.ts`.
+ */
+export interface PracticeAnalytics {
+  delivery: {
+    closureRatePct: number | null;
+    onTimeClosurePct: number | null;
+    closedWithDueDate: number;
+    medianCycleHours: number | null;
+    reopened: number;
+    everResolved: number;
+    reopenRatePct: number | null;
+    unassignedOpen: number;
+    backlogOpen: number;
+    dueNextWeek: number;
+  };
+  priority: { criticalOpen: number; highOpen: number; criticalClosed: number; highClosed: number; criticalOverdue: number };
+  quality: {
+    testRuns: number;
+    runsPassed: number;
+    runsFailed: number;
+    testsPassed: number;
+    testsFailed: number;
+    runPassRatePct: number | null;
+    testPassRatePct: number | null;
+    gatesPassed: number;
+    gatesWarned: number;
+    gatesFailed: number;
+  };
+  security: {
+    verifiedFixed: number;
+    awaitingVerification: number;
+    scanRuns: number;
+    newCritical: number;
+    newHigh: number;
+    medianOpenAgeDays: number | null;
+    oldestOpenDays: number | null;
+  };
+  change: {
+    successful: number;
+    withIssues: number;
+    failed: number;
+    rolledBack: number;
+    successRatePct: number | null;
+    outcomeRecorded: number;
+    emergency: number;
+    awaitingApproval: number;
+    scheduledNextWeek: number;
+  };
+  people: {
+    topContributors: Array<{ name: string; hours: number; ticketsClosed: number }>;
+    utilisationPct: number | null;
+    capacityHours: number | null;
+    billablePct: number | null;
+    silentOwners: number;
+  };
+  poc: { started: number; ongoing: number; completed: number; hours: number };
+  goals: { active: number; achievedThisPeriod: number; overdue: number };
+  ai: { agentRuns: number; agentRunsFailed: number; interactions: number; spendUsd: number | null };
 }
 
 export interface PracticeMetrics {
@@ -2785,6 +2857,12 @@ export interface PracticeDraft {
     metrics: PracticeMetrics;
     previousMetrics: PracticeMetrics;
     initiatives: PracticeInitiative[];
+    /** ABSENT on a draft stored before this layer existed — `PracticeUpdateRecord.data` is a JSON
+     *  column replayed as-is, so old rows simply do not carry it. Optional so the compiler makes
+     *  every reader say what it does about that, rather than crashing the page a super admin opens
+     *  to send the update. */
+    analytics?: PracticeAnalytics;
+    previousAnalytics?: PracticeAnalytics;
     releases: Array<{ version: string; product: string | null; closedAt: string | null; state: string }>;
     isEmpty: boolean;
   };

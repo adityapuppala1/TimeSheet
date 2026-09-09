@@ -16,12 +16,41 @@ import { describe, expect, it } from "vitest";
 import { buildPracticeUpdateEmail } from "../../src/services/practice-update-mail.service.js";
 import type { PracticeUpdateData } from "../../src/services/practice-update.service.js";
 
+const EMPTY_ANALYTICS = {
+  delivery: {
+    closureRatePct: null,
+    onTimeClosurePct: null,
+    closedWithDueDate: 0,
+    medianCycleHours: null,
+    reopened: 0,
+    everResolved: 0,
+    reopenRatePct: null,
+    unassignedOpen: 0,
+    backlogOpen: 0,
+    dueNextWeek: 0
+  },
+  priority: { criticalOpen: 0, highOpen: 0, criticalClosed: 0, highClosed: 0, criticalOverdue: 0 },
+  quality: { testRuns: 0, runsPassed: 0, runsFailed: 0, testsPassed: 0, testsFailed: 0, runPassRatePct: null, testPassRatePct: null, gatesPassed: 0, gatesWarned: 0, gatesFailed: 0 },
+  security: { verifiedFixed: 0, awaitingVerification: 0, scanRuns: 0, newCritical: 0, newHigh: 0, medianOpenAgeDays: null, oldestOpenDays: null },
+  change: { successful: 0, withIssues: 0, failed: 0, rolledBack: 0, successRatePct: null, outcomeRecorded: 0, emergency: 0, awaitingApproval: 0, scheduledNextWeek: 0 },
+  people: { topContributors: [], utilisationPct: null, capacityHours: null, billablePct: null, silentOwners: 0 },
+  poc: { started: 0, ongoing: 0, completed: 0, hours: 0 },
+  goals: { active: 0, achievedThisPeriod: 0, overdue: 0 },
+  ai: { agentRuns: 0, agentRunsFailed: 0, interactions: 0, spendUsd: null }
+};
+
 const DATA = {
   period: { from: "2026-08-17", to: "2026-08-23", label: "17 Aug – 23 Aug 2026" },
   previous: { from: "2026-08-10", to: "2026-08-16" },
   metrics: { ticketsClosed: 3, ticketsRaised: 4, hours: 11.5, contributors: 2, overdue: 0, slaBreaches: 0, amber: 0, red: 0 },
   previousMetrics: { ticketsClosed: 1, ticketsRaised: 2, hours: 9, contributors: 2, overdue: 0, slaBreaches: 0, amber: 0, red: 0 },
   initiatives: [],
+  // The derived layer, zeroed. This file is about RENDERING rich text, so nothing here needs a
+  // realistic figure — but the email reads `analytics` to build its risk and decision fallbacks,
+  // and the `as unknown as` cast below means a missing block is a runtime crash rather than a
+  // compile error. Zeroes keep every fallback silent so the rich-text assertions stand alone.
+  analytics: EMPTY_ANALYTICS,
+  previousAnalytics: EMPTY_ANALYTICS,
   releases: [],
   isEmpty: false
 } as unknown as PracticeUpdateData;

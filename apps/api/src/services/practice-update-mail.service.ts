@@ -18,9 +18,10 @@ import { sanitizeRichText } from "../utils/sanitize.js";
 import {
   PRACTICE_CATEGORIES,
   RAG_EMOJI,
-  type PracticeMetrics,
+  type PracticeInitiative,
   type PracticeUpdateData
 } from "./practice-update.service.js";
+import { EMPTY_PRACTICE_ANALYTICS, type PracticeAnalytics } from "./practice-analytics.service.js";
 import type { PracticeUpdateNarrative } from "./ai.service.js";
 
 const { dataTable, periodStrip, escape } = emailBlocks;
@@ -158,22 +159,194 @@ function bulletList(items: string[] | undefined, fallback: string[]): string {
     .join("")}</ul>`;
 }
 
-function metricsTable(metrics: PracticeMetrics, previous: PracticeMetrics): string {
-  const rows: string[][] = [
-    ["Tickets closed", withDelta(metrics.ticketsClosed, previous.ticketsClosed)],
-    ["Tickets raised", withDelta(metrics.ticketsCreated, previous.ticketsCreated)],
-    ["Hours logged", withDelta(metrics.hours, previous.hours, " h")],
-    ["Contributors", withDelta(metrics.contributors, previous.contributors)],
-    ["Overdue tickets", withDelta(metrics.overdue, previous.overdue)],
-    ["SLA breaches", withDelta(metrics.slaBreaches, previous.slaBreaches)],
-    ["Open escalations", String(metrics.openEscalations)],
-    ["Changes raised / implemented", `${metrics.changesRaised} / ${metrics.changesImplemented}`],
-    ["Releases shipped", withDelta(metrics.releases, previous.releases)],
-    ["Open security findings (critical / high)", `${metrics.securityOpenCritical} / ${metrics.securityOpenHigh}`],
-    ["New security findings", withDelta(metrics.securityNewFindings, previous.securityNewFindings)],
-    ["Training & capability hours", withDelta(metrics.trainingHours, previous.trainingHours, " h")]
+/**
+ * The derived layer of a record, or an empty one.
+ *
+ * `PracticeUpdateRecord.data` is JSON replayed through a cast that checks nothing, so a draft or
+ * history row written before this layer existed arrives here with no `analytics` at all. Reading it
+ * unconditionally turned every one of those into a 500 on the page a super admin opens. Both
+ * renderers below go through this instead — a stored draft degrades to "unmeasured" rows and still
+ * sends, which is the whole point of keeping the counted half independent of anything clever.
+ */
+function analyticsOf(data: PracticeUpdateData, which: "analytics" | "previousAnalytics"): PracticeAnalytics {
+  return data[which] ?? EMPTY_PRACTICE_ANALYTICS;
+}
+
+/** A rate, or an honest dash. `null` here means the denominator was zero, and printing "0%" for
+ *  "nothing was measured" is the single most common way a report says something untrue. */
+function pct(value: number | null, note?: string): string {
+  if (value === null) return note ? `— (${note})` : "—";
+  return `${value}%${note ? ` (${note})` : ""}`;
+}
+
+/** A rate with its direction against the period before, in percentage POINTS — a rate that moved
+ *  from 40% to 50% rose by 10 points, not by 25%, and reporting the second is how a modest week
+ *  gets described as a transformation. */
+function pctDelta(current: number | null, previous: number | null, note?: string): string {
+  const base = pct(current, note);
+  if (current === null || previous === null) return base;
+  const diff = Number((current - previous).toFixed(1));
+  if (diff === 0) return `${base} (flat)`;
+  return `${base} (${diff > 0 ? "+" : ""}${diff} pts)`;
+}
+
+/**
+ * Key Metrics, in themed blocks rather than one thirty-row list.
+ *
+ * WHY BLOCKS: this section grew from twelve figures to more than thirty, and a flat table that long
+ * is skimmed rather than read — the reader loses which numbers belong to the same question. Each
+ * block is one question a director actually asks.
+ *
+ * WHY AN UNCONFIGURED BLOCK DISAPPEARS ENTIRELY: a workspace with no CI, no change management or no
+ * AI teammates would otherwise get a column of zeroes, and a row of zeroes reads as a bad week
+ * rather than as an absent integration. The blocks that are always present are the ones every
+ * workspace has data for by virtue of using the product at all.
+ */
+function metricsTable(data: PracticeUpdateData): string {
+  const m = data.metrics;
+  const p = data.previousMetrics;
+  const a = analyticsOf(data, "analytics");
+  const pa = analyticsOf(data, "previousAnalytics");
+
+  const block = (title: string, rows: Array<[string, string]>) =>
+    rows.length === 0
+      ? ""
+      : `<p style="margin:14px 0 4px;font-size:12px;font-weight:600;color:${MUTED};text-transform:uppercase;letter-spacing:.04em;">${escape(
+          title
+        )}</p>` +
+        dataTable({ head: ["Measure", "This period"], rows: rows.map(([k, v]) => [escape(k), escape(v)]), align: ["l", "r"] });
+
+  const delivery: Array<[string, string]> = [
+    ["Tickets closed", withDelta(m.ticketsClosed, p.ticketsClosed)],
+    ["Tickets raised", withDelta(m.ticketsCreated, p.ticketsCreated)],
+    // The ratio neither count shows on its own: above 100 the backlog shrank, below it grew.
+    ["Closure rate (closed ÷ raised)", pctDelta(a.delivery.closureRatePct, pa.delivery.closureRatePct)],
+    ["Open backlog", withDelta(a.delivery.backlogOpen, pa.delivery.backlogOpen)],
+    [
+      "Delivered on time",
+      pctDelta(
+        a.delivery.onTimeClosurePct,
+        pa.delivery.onTimeClosurePct,
+        `${a.delivery.closedWithDueDate} had a due date`
+      )
+    ],
+    ["Median cycle time", a.delivery.medianCycleHours === null ? "—" : `${a.delivery.medianCycleHours} h`],
+    ["Reopened this period", pct(a.delivery.reopenRatePct, `${a.delivery.reopened} of ${a.delivery.everResolved} resolved`)],
+    ["Overdue tickets", withDelta(m.overdue, p.overdue)],
+    ["Unassigned open tickets", String(a.delivery.unassignedOpen)],
+    ["SLA breaches", withDelta(m.slaBreaches, p.slaBreaches)],
+    ["Open escalations", String(m.openEscalations)],
+    ["Falls due next week", String(a.delivery.dueNextWeek)]
   ];
-  return dataTable({ head: ["Measure", "This period"], rows: rows.map(([a, b]) => [escape(a), escape(b)]), align: ["l", "r"] });
+
+  const severity: Array<[string, string]> = [
+    ["Critical open / closed", `${a.priority.criticalOpen} / ${a.priority.criticalClosed}`],
+    ["High open / closed", `${a.priority.highOpen} / ${a.priority.highClosed}`],
+    // The number that should always be zero, so it is stated even when it is.
+    ["Critical AND overdue", withDelta(a.priority.criticalOverdue, pa.priority.criticalOverdue)]
+  ];
+
+  const quality: Array<[string, string]> =
+    a.quality.testRuns + a.quality.gatesPassed + a.quality.gatesWarned + a.quality.gatesFailed === 0
+      ? []
+      : [
+          // Runs and assertions are labelled apart on purpose — see QualityAnalytics for why they
+          // can disagree by seventy points and both still be right.
+          ["Suite runs (passed / failed)", `${a.quality.testRuns} (${a.quality.runsPassed} / ${a.quality.runsFailed})`],
+          ["Suite pass rate", pctDelta(a.quality.runPassRatePct, pa.quality.runPassRatePct)],
+          ["Individual tests (passed / failed)", `${a.quality.testsPassed} / ${a.quality.testsFailed}`],
+          ["Test pass rate", pctDelta(a.quality.testPassRatePct, pa.quality.testPassRatePct)],
+          [
+            "Quality gates OK / warn / failed",
+            `${a.quality.gatesPassed} / ${a.quality.gatesWarned} / ${a.quality.gatesFailed}`
+          ]
+        ];
+
+  const security: Array<[string, string]> = [
+    ["Open findings (critical / high)", `${m.securityOpenCritical} / ${m.securityOpenHigh}`],
+    ["New findings this period", withDelta(m.securityNewFindings, p.securityNewFindings)],
+    ["New critical / high", `${a.security.newCritical} / ${a.security.newHigh}`],
+    // Proven fixed versus claimed fixed. The gap between the two is the honest remediation figure,
+    // and it is the distinction this product was built to make visible.
+    ["Verified fixed", withDelta(a.security.verifiedFixed, pa.security.verifiedFixed)],
+    ["Awaiting fix verification", String(a.security.awaitingVerification)],
+    [
+      "Age of open findings (median / oldest)",
+      a.security.medianOpenAgeDays === null ? "—" : `${a.security.medianOpenAgeDays} d / ${a.security.oldestOpenDays} d`
+    ],
+    ["Scans run", String(a.security.scanRuns)]
+  ];
+
+  const change: Array<[string, string]> =
+    m.changesRaised + m.changesImplemented + a.change.outcomeRecorded + a.change.awaitingApproval === 0
+      ? []
+      : [
+          ["Changes raised / implemented", `${m.changesRaised} / ${m.changesImplemented}`],
+          ["Releases shipped", withDelta(m.releases, p.releases)],
+          ["Change success rate", pct(a.change.successRatePct, `${a.change.outcomeRecorded} with a recorded outcome`)],
+          ["Failed / rolled back", `${a.change.failed} / ${a.change.rolledBack}`],
+          ["Emergency changes", withDelta(a.change.emergency, pa.change.emergency)],
+          ["Awaiting approval", String(a.change.awaitingApproval)],
+          ["Scheduled to start next week", String(a.change.scheduledNextWeek)]
+        ];
+
+  const people: Array<[string, string]> = [
+    ["Hours logged", withDelta(m.hours, p.hours, " h")],
+    ["Contributors", withDelta(m.contributors, p.contributors)],
+    [
+      "Utilisation against capacity",
+      pctDelta(
+        a.people.utilisationPct,
+        pa.people.utilisationPct,
+        a.people.capacityHours === null ? "no capacity on file" : `${a.people.capacityHours} h capacity`
+      )
+    ],
+    ["Billable share of hours", pctDelta(a.people.billablePct, pa.people.billablePct)],
+    ["Training & capability hours", withDelta(m.trainingHours, p.trainingHours, " h")],
+    ["Holding open work, logged nothing", String(a.people.silentOwners)]
+  ];
+
+  const goals: Array<[string, string]> =
+    a.goals.active + a.goals.achievedThisPeriod === 0
+      ? []
+      : [
+          ["Goals active", String(a.goals.active)],
+          ["Achieved this period", String(a.goals.achievedThisPeriod)],
+          ["Past their end date", String(a.goals.overdue)]
+        ];
+
+  // An AI/ML practice reporting on its own use of AI. Omitted where nothing has run.
+  const ai: Array<[string, string]> =
+    a.ai.agentRuns + a.ai.interactions === 0
+      ? []
+      : [
+          ["AI teammate runs (failed)", `${a.ai.agentRuns} (${a.ai.agentRunsFailed})`],
+          ["AI interactions", withDelta(a.ai.interactions, pa.ai.interactions)],
+          ["AI spend", a.ai.spendUsd === null ? "—" : `$${a.ai.spendUsd.toFixed(2)}`]
+        ];
+
+  return [
+    block("Delivery & flow", delivery),
+    block("Severity", severity),
+    block("Quality & testing", quality),
+    block("Security", security),
+    block("Change & release", change),
+    block("People & capacity", people),
+    block("Goals", goals),
+    block("AI practice", ai)
+  ].join("");
+}
+
+/** Who moved the most this period. Under People rather than as a section of its own: the request
+ *  asked for visibility of where effort went, not for a scoreboard. */
+function contributorTable(data: PracticeUpdateData): string {
+  const rows = analyticsOf(data, "analytics").people.topContributors.map((c) => [escape(c.name), `${c.hours} h`, String(c.ticketsClosed)]);
+  return dataTable({
+    head: ["Contributor", "Hours", "Tickets closed"],
+    rows,
+    align: ["l", "r", "r"],
+    empty: "Nobody logged time in this period."
+  });
 }
 
 /**
@@ -187,17 +360,75 @@ function initiativeTable(data: PracticeUpdateData, nextStepById: Map<string, str
       `<strong>${escape(i.name)}</strong>${i.code ? `<br><span style="color:${MUTED};font-size:11px;">${escape(i.code)}</span>` : ""}`,
       escape(i.owner ?? "—"),
       RAG_EMOJI[i.status],
+      // Open work, split by severity, because "8 open" and "8 open, 2 critical" are different rows
+      // to a reader deciding where to spend attention.
+      //
+      // Defaulted, because an initiative inside a draft stored before this release carries neither
+      // field: `undefined + undefined` is NaN, NaN === 0 is false, and the row would have rendered
+      // the words "undefined crit · undefined high" into a leadership email.
+      (i.criticalOpen ?? 0) + (i.highOpen ?? 0) === 0
+        ? String(i.openCount)
+        : `${i.openCount}<br><span style="color:${MUTED};font-size:11px;">${i.criticalOpen ?? 0} crit · ${i.highOpen ?? 0} high</span>`,
       escape(i.progress),
-      escape(nextStepById.get(i.id) ?? "—"),
+      // The model writes a next step when it can; when it cannot, the nearest real deadline on the
+      // initiative is a better answer than a dash, and it is a fact rather than a guess.
+      escape(nextStepById.get(i.id) ?? derivedNextStep(i)),
       escape(i.risks || "—")
     ]);
 
   return dataTable({
-    head: ["Initiative", "Owner", "Status", "This period", "Next steps", "Risks / dependencies"],
+    head: ["Initiative", "Owner", "Status", "Open", "This period", "Next steps", "Risks / dependencies"],
     rows,
-    align: ["l", "l", "l", "l", "l", "l"],
+    align: ["l", "l", "l", "r", "l", "l", "l"],
     empty: "Nothing in this area this period."
   });
+}
+
+/**
+ * What to print under "Next steps" when the model wrote nothing for this initiative.
+ *
+ * A dash tells the reader nothing and makes the column look broken. The nearest unmet deadline is
+ * the most useful fact the data can offer without inventing intent, and it degrades in a defined
+ * order: a dated commitment, then the shape of the backlog, then an honest "nothing scheduled".
+ */
+function derivedNextStep(i: PracticeInitiative): string {
+  if (i.nextDueDate) return `Next deadline ${i.nextDueDate}`;
+  if ((i.criticalOpen ?? 0) > 0) return `Clear ${i.criticalOpen} critical`;
+  if (i.overdueCount > 0) return `Clear ${i.overdueCount} overdue`;
+  if (i.openCount > 0) return `${i.openCount} open, none dated`;
+  return "Nothing scheduled";
+}
+
+/**
+ * What genuinely needs somebody with authority, when the model wrote nothing.
+ *
+ * Deliberately conservative: only items where the blocker is a DECISION rather than effort. A list
+ * that fills up with work in progress trains the reader to skip the section, which is the opposite
+ * of what a "Decisions / Support Required" heading is for.
+ */
+function decisionsFallback(data: PracticeUpdateData): string[] {
+  const a = analyticsOf(data, "analytics");
+  const m = data.metrics;
+  const lines = [
+    m.securityOpenCritical > 0
+      ? `${m.securityOpenCritical} critical security finding${
+          m.securityOpenCritical === 1 ? " remains" : "s remain"
+        } open and need${m.securityOpenCritical === 1 ? "s" : ""} a remediation owner.`
+      : null,
+    a.change.awaitingApproval > 0
+      ? `${a.change.awaitingApproval} change${a.change.awaitingApproval === 1 ? " is" : "s are"} waiting on approval.`
+      : null,
+    a.delivery.unassignedOpen > 0
+      ? `${a.delivery.unassignedOpen} open ticket${a.delivery.unassignedOpen === 1 ? "" : "s"} still need an owner.`
+      : null,
+    // Sustained over-capacity is a staffing decision, not something the team can work harder at.
+    a.people.utilisationPct !== null && a.people.utilisationPct > 100
+      ? `Utilisation ran at ${a.people.utilisationPct}% of capacity — sustained, that is a staffing decision.`
+      : null,
+    a.goals.overdue > 0 ? `${a.goals.overdue} goal${a.goals.overdue === 1 ? " is" : "s are"} past their end date and need re-planning.` : null
+  ].filter((line): line is string => Boolean(line));
+
+  return lines.length > 0 ? lines : ["No decisions are being requested this period."];
 }
 
 export interface PracticeUpdateEmail {
@@ -207,7 +438,7 @@ export interface PracticeUpdateEmail {
 }
 
 export function buildPracticeUpdateEmail(data: PracticeUpdateData, narrative: PracticeUpdateNarrative | null): PracticeUpdateEmail {
-  const { metrics, previousMetrics } = data;
+  const { metrics } = data;
   const nextStepById = new Map((narrative?.nextSteps ?? []).map((s) => [s.id, s.text]));
 
   const red = data.initiatives.filter((i) => i.status === "RED");
@@ -228,10 +459,34 @@ export function buildPracticeUpdateEmail(data: PracticeUpdateData, narrative: Pr
       : "Nothing is currently red.");
 
   // The facts behind each narrative section, used when no prose was written for it.
+  const a = analyticsOf(data, "analytics");
+  // Blockers that belong to nobody in particular, so no initiative row carries them and the model
+  // would have nothing to write from. Each one is a counted fact with a named consequence.
+  const systemicRisks = [
+    a.priority.criticalOverdue > 0
+      ? `${a.priority.criticalOverdue} critical ticket${a.priority.criticalOverdue === 1 ? " is" : "s are"} past SLA.`
+      : null,
+    a.delivery.unassignedOpen > 0
+      ? `${a.delivery.unassignedOpen} open ticket${a.delivery.unassignedOpen === 1 ? " has" : "s have"} no assignee.`
+      : null,
+    a.delivery.closureRatePct !== null && a.delivery.closureRatePct < 100
+      ? `The backlog grew: ${a.delivery.closureRatePct}% closure rate against what was raised.`
+      : null,
+    a.security.awaitingVerification > 0
+      ? `${a.security.awaitingVerification} security fix${a.security.awaitingVerification === 1 ? "" : "es"} claimed but not yet proven by a re-scan.`
+      : null,
+    a.change.failed + a.change.rolledBack > 0
+      ? `${a.change.failed + a.change.rolledBack} change${a.change.failed + a.change.rolledBack === 1 ? "" : "s"} failed or was rolled back.`
+      : null,
+    a.people.silentOwners > 0
+      ? `${a.people.silentOwners} ${a.people.silentOwners === 1 ? "person holds" : "people hold"} open work but logged no time.`
+      : null
+  ].filter((line): line is string => Boolean(line));
+
   const risksFallback =
-    red.length + amber.length === 0
+    red.length + amber.length + systemicRisks.length === 0
       ? ["Nothing is overdue or breaching SLA in this period."]
-      : [...red, ...amber].map((i) => `${RAG_EMOJI[i.status]} ${i.name} — ${i.risks || "no detail recorded"}`);
+      : [...[...red, ...amber].map((i) => `${RAG_EMOJI[i.status]} ${i.name} — ${i.risks || "no detail recorded"}`), ...systemicRisks];
 
   const sections = [
     strip,
@@ -241,7 +496,18 @@ export function buildPracticeUpdateEmail(data: PracticeUpdateData, narrative: Pr
       const has = data.initiatives.some((i) => i.category === key);
       // A category with nothing in it is omitted rather than printed empty — ten headings with
       // five "nothing here" boxes under them is how a weekly update starts getting deleted unread.
-      return has ? [sectionHeading(label), initiativeTable(data, nextStepById, key)] : [];
+      if (!has) return [];
+      // "New, ongoing and completed POCs" was asked for in those words, and the three counts are
+      // not readable off a table of initiatives.
+      const lifecycle =
+        key === "POC"
+          ? prose(
+              undefined,
+              `${a.poc.started} started this period · ${a.poc.ongoing} ongoing · ` +
+                `${a.poc.completed} completed · ${a.poc.hours} h invested`
+            )
+          : "";
+      return [sectionHeading(label), lifecycle, initiativeTable(data, nextStepById, key)];
     }),
     ...(data.releases.length > 0
       ? [
@@ -254,25 +520,22 @@ export function buildPracticeUpdateEmail(data: PracticeUpdateData, narrative: Pr
         ]
       : []),
     sectionHeading("Key Metrics"),
-    metricsTable(metrics, previousMetrics),
+    metricsTable(data),
+    sectionHeading("Where the effort went"),
+    contributorTable(data),
     sectionHeading("Risks / Blockers"),
     bulletList(narrative?.risks, risksFallback),
     sectionHeading("Next Week Priorities"),
-    bulletList(
-      narrative?.nextWeekPriorities,
-      red.map((i) => `Clear the backlog on ${i.name} (${i.risks || "overdue work"})`)
-    ),
+    bulletList(narrative?.nextWeekPriorities, [
+      // Dated commitments first: these are the only "next week" facts the data actually holds.
+      ...(a.delivery.dueNextWeek > 0 ? [`${a.delivery.dueNextWeek} tickets fall due next week.`] : []),
+      ...(a.change.scheduledNextWeek > 0
+        ? [`${a.change.scheduledNextWeek} change${a.change.scheduledNextWeek === 1 ? " is" : "s are"} scheduled to start next week.`]
+        : []),
+      ...red.map((i) => `Clear the backlog on ${i.name} (${i.risks || "overdue work"})`)
+    ]),
     sectionHeading("Decisions / Support Required"),
-    bulletList(
-      narrative?.decisionsRequired,
-      metrics.securityOpenCritical > 0
-        ? [
-            `${metrics.securityOpenCritical} critical security finding${
-              metrics.securityOpenCritical === 1 ? " remains" : "s remain"
-            } open and need${metrics.securityOpenCritical === 1 ? "s" : ""} a remediation owner.`
-          ]
-        : ["No decisions are being requested this period."]
-    )
+    bulletList(narrative?.decisionsRequired, decisionsFallback(data))
   ];
 
   return {
@@ -287,28 +550,121 @@ export function buildPracticeUpdateEmail(data: PracticeUpdateData, narrative: Pr
 export function narrativeInputs(data: PracticeUpdateData): { metrics: string; initiatives: string; releases: string } {
   const m = data.metrics;
   const p = data.previousMetrics;
+  const a = analyticsOf(data, "analytics");
+  const pa = analyticsOf(data, "previousAnalytics");
+
+  /** A rate for the prompt. Says "not measured" rather than "0%", for the same reason the email
+   *  prints a dash: a model handed "0%" will write a sentence about a failure that did not happen. */
+  const r = (value: number | null, unit = "%") => (value === null ? "not measured" : `${value}${unit}`);
+  const dir = (current: number | null, previous: number | null) => {
+    if (current === null || previous === null) return "";
+    const diff = Number((current - previous).toFixed(1));
+    return diff === 0 ? " (flat)" : ` (${diff > 0 ? "+" : ""}${diff} pts vs last period)`;
+  };
+
+  /**
+   * WHY THE PROMPT GETS SO MUCH MORE THAN THE HEADLINE COUNTS: an executive summary written from
+   * "42 closed, 38 raised, 190 hours" can only ever restate those three numbers, which the reader
+   * can already see in the table underneath. The sentences worth having — "the backlog grew for the
+   * third week", "two critical findings have been open a month", "utilisation is over capacity" —
+   * need the ratios, the ages and the directions. Every line below is a counted fact; none of it
+   * asks the model to judge, only to notice and to prioritise.
+   *
+   * Blocks whose subsystem is not configured are omitted rather than sent as zeroes. A model told
+   * "0 test runs, 0 quality gates" will faithfully report a testing collapse in a workspace that
+   * has simply never connected a CI system.
+   */
+  const lines = [
+    "DELIVERY",
+    `Tickets closed: ${withDelta(m.ticketsClosed, p.ticketsClosed)}; raised: ${withDelta(m.ticketsCreated, p.ticketsCreated)}`,
+    `Closure rate (closed ÷ raised): ${r(a.delivery.closureRatePct)}${dir(a.delivery.closureRatePct, pa.delivery.closureRatePct)} — above 100% means the backlog shrank`,
+    `Open backlog now: ${a.delivery.backlogOpen} (was ${pa.delivery.backlogOpen})`,
+    `Delivered on time: ${r(a.delivery.onTimeClosurePct)} of the ${a.delivery.closedWithDueDate} closed items that had a due date`,
+    `Median cycle time: ${r(a.delivery.medianCycleHours, " h")}`,
+    `Reopened within the period: ${a.delivery.reopened} of the ${a.delivery.everResolved} resolved in it (${r(a.delivery.reopenRatePct)})`,
+    `Overdue: ${withDelta(m.overdue, p.overdue)}; unassigned open: ${a.delivery.unassignedOpen}; SLA breaches: ${withDelta(m.slaBreaches, p.slaBreaches)}; open escalations: ${m.openEscalations}`,
+    `Falls due next week: ${a.delivery.dueNextWeek} tickets`,
+    "",
+    "SEVERITY",
+    `Critical: ${a.priority.criticalOpen} open, ${a.priority.criticalClosed} closed this period, ${a.priority.criticalOverdue} of the open ones past SLA`,
+    `High: ${a.priority.highOpen} open, ${a.priority.highClosed} closed this period`,
+    "",
+    "SECURITY",
+    `Open findings: ${m.securityOpenCritical} critical, ${m.securityOpenHigh} high`,
+    `New this period: ${withDelta(m.securityNewFindings, p.securityNewFindings)} (${a.security.newCritical} critical, ${a.security.newHigh} high)`,
+    `Verified fixed: ${withDelta(a.security.verifiedFixed, pa.security.verifiedFixed)}; claimed fixed but not yet proven by a re-scan: ${a.security.awaitingVerification}`,
+    `Open findings age: median ${r(a.security.medianOpenAgeDays, " days")}, oldest ${r(a.security.oldestOpenDays, " days")}`,
+    `Scans run: ${a.security.scanRuns}`,
+    "",
+    "PEOPLE & CAPACITY",
+    `Hours logged: ${withDelta(m.hours, p.hours, " h")} by ${m.contributors} people`,
+    `Utilisation against capacity: ${r(a.people.utilisationPct)}${dir(a.people.utilisationPct, pa.people.utilisationPct)}${
+      a.people.capacityHours === null ? " (no contracted hours on file)" : ` of ${a.people.capacityHours} h`
+    }`,
+    `Billable share: ${r(a.people.billablePct)}; training & capability hours: ${withDelta(m.trainingHours, p.trainingHours, " h")}`,
+    `Holding open work but logged no time: ${a.people.silentOwners} people`,
+    a.people.topContributors.length
+      ? `Most active: ${a.people.topContributors.map((c) => `${c.name} (${c.hours} h, ${c.ticketsClosed} closed)`).join("; ")}`
+      : "Most active: nobody logged time",
+    "",
+    "POCs",
+    `${a.poc.started} started this period, ${a.poc.ongoing} ongoing, ${a.poc.completed} completed, ${a.poc.hours} h invested`
+  ];
+
+  if (a.quality.testRuns + a.quality.gatesPassed + a.quality.gatesWarned + a.quality.gatesFailed > 0) {
+    lines.push(
+      "",
+      "QUALITY & TESTING",
+      `Suite runs: ${withDelta(a.quality.testRuns, pa.quality.testRuns)} — ${a.quality.runsPassed} passed, ${a.quality.runsFailed} failed (suite pass rate ${r(a.quality.runPassRatePct)}${dir(a.quality.runPassRatePct, pa.quality.runPassRatePct)})`,
+      `Individual tests: ${a.quality.testsPassed} passed, ${a.quality.testsFailed} failed (test pass rate ${r(a.quality.testPassRatePct)}) — a failing suite can still contain mostly passing tests, so these two rates differ legitimately`,
+      `Quality gates: ${a.quality.gatesPassed} OK, ${a.quality.gatesWarned} warned, ${a.quality.gatesFailed} failed`
+    );
+  }
+
+  if (m.changesRaised + m.changesImplemented + a.change.outcomeRecorded + a.change.awaitingApproval > 0) {
+    lines.push(
+      "",
+      "CHANGE & RELEASE",
+      `Changes raised: ${m.changesRaised}; implemented: ${m.changesImplemented}; releases shipped: ${withDelta(m.releases, p.releases)}`,
+      `Outcomes recorded: ${a.change.outcomeRecorded} — ${a.change.successful} successful, ${a.change.withIssues} with issues, ${a.change.failed} failed, ${a.change.rolledBack} rolled back (success rate ${r(a.change.successRatePct)})`,
+      `Emergency changes raised: ${a.change.emergency}; awaiting approval: ${a.change.awaitingApproval}; scheduled to start next week: ${a.change.scheduledNextWeek}`
+    );
+  }
+
+  if (a.goals.active + a.goals.achievedThisPeriod > 0) {
+    lines.push("", "GOALS", `${a.goals.active} active, ${a.goals.achievedThisPeriod} achieved this period, ${a.goals.overdue} past their end date`);
+  }
+
+  if (a.ai.agentRuns + a.ai.interactions > 0) {
+    lines.push(
+      "",
+      "AI PRACTICE (this team's own AI usage)",
+      `AI teammate runs: ${a.ai.agentRuns} (${a.ai.agentRunsFailed} failed); AI interactions: ${withDelta(a.ai.interactions, pa.ai.interactions)}; spend: ${
+        a.ai.spendUsd === null ? "not recorded" : `$${a.ai.spendUsd.toFixed(2)}`
+      }`
+    );
+  }
+
   return {
-    metrics: [
-      `Tickets closed: ${withDelta(m.ticketsClosed, p.ticketsClosed)}`,
-      `Tickets raised: ${withDelta(m.ticketsCreated, p.ticketsCreated)}`,
-      `Hours logged: ${withDelta(m.hours, p.hours, " h")} by ${m.contributors} people`,
-      `Overdue tickets: ${withDelta(m.overdue, p.overdue)}`,
-      `SLA breaches: ${withDelta(m.slaBreaches, p.slaBreaches)}`,
-      `Open escalations: ${m.openEscalations}`,
-      `Changes raised/implemented: ${m.changesRaised}/${m.changesImplemented}`,
-      `Releases shipped: ${withDelta(m.releases, p.releases)}`,
-      `Open security findings: ${m.securityOpenCritical} critical, ${m.securityOpenHigh} high; ${m.securityNewFindings} new this period`,
-      `Training & capability hours: ${withDelta(m.trainingHours, p.trainingHours, " h")}`
-    ].join("\n"),
+    metrics: lines.join("\n"),
     initiatives:
       data.initiatives
-        .map(
-          (i) =>
-            `[${i.category}] ${i.name} (id ${i.id}) — owner ${i.owner ?? "unassigned"} — ${i.status} — ${i.progress}${
-              i.risks ? ` — risks: ${i.risks}` : ""
-            }`
-        )
+        .map((i) => {
+          const detail = [
+            `owner ${i.owner ?? "unassigned"}`,
+            i.status,
+            i.progress,
+            `${i.openCount} open`,
+            (i.criticalOpen ?? 0) > 0 ? `${i.criticalOpen} critical` : null,
+            (i.highOpen ?? 0) > 0 ? `${i.highOpen} high` : null,
+            i.nextDueDate ? `next deadline ${i.nextDueDate}` : null,
+            i.risks ? `risks: ${i.risks}` : null
+          ]
+            .filter(Boolean)
+            .join(" — ");
+          return `[${i.category}] ${i.name} (id ${i.id}) — ${detail}`;
+        })
         .join("\n") || "(no active initiatives with activity this period)",
-    releases: data.releases.map((r) => `${r.version} — ${r.product ?? "—"} — closed ${r.closedAt ?? "—"}`).join("\n")
+    releases: data.releases.map((r2) => `${r2.version} — ${r2.product ?? "—"} — closed ${r2.closedAt ?? "—"}`).join("\n")
   };
 }

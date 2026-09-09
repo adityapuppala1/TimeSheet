@@ -10,6 +10,55 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 📊 The weekly practice update learns to answer the questions counts cannot
+
+- **Key Metrics went from twelve figures to more than thirty, in themed blocks.** Delivery and flow,
+  severity, quality and testing, security, change and release, people and capacity, goals, and the
+  practice's own AI usage. The old flat table restated what the reader could already see — 42 closed,
+  38 raised, 190 hours. The sentences worth having need ratios, ages and directions: the backlog grew
+  for the second week, the oldest open security finding is 63 days old, utilisation ran over capacity.
+  Blocks are used rather than a longer list because a thirty-row table is skimmed, and the reader
+  loses which numbers belong to the same question.
+- **What is now derived rather than absent.** Closure rate (closed ÷ raised, the one ratio that says
+  whether a team is keeping up, and invisible in either count alone), on-time delivery against real
+  due dates, median cycle time, reopen rate scoped to the week, unassigned open work, the backlog and
+  its trend, critical-and-overdue, suite and test pass rates, quality gates, verified-fixed versus
+  claimed-fixed security findings and the age of what is still open, change outcomes and success
+  rate, emergency changes, utilisation against real contracted capacity, billable share, who moved
+  the most this week, POCs started/ongoing/completed, goals past their end date, and the team's own
+  AI teammate runs and spend.
+- **A rate whose denominator is zero reads "—", never "0%".** "Nothing had a due date" and "nothing
+  was delivered on time" are opposite sentences that would otherwise print identically, and the
+  second is one a director acts on. Every rate is nullable end to end — through the service, the
+  email, the web preview and the model's prompt, which is told "not measured" rather than handed a
+  zero it would faithfully write a disaster sentence about.
+- **Both test pass rates are reported, because on real data they disagree.** A week can be 2 of 7
+  suites green and 62 of 64 assertions green — seventy points apart, both true, answering "can we
+  ship?" and "how broken is it?". Shown as one number, the reader concludes the other is a bug.
+- **The backlog is reconstructed as at the period end** rather than read as "currently open". A
+  point-in-time count returns the same number for this week and last, so the email would have printed
+  "unchanged" every single week — a confident claim about a trend nobody measured. Unassigned work is
+  the opposite case and is deliberately shown *without* a delta: a ticket carries only its current
+  assignee, so there is no history to compare against and any figure would be invented.
+- **Per initiative:** open work split by severity, and a next step that falls back to the nearest real
+  deadline when the model wrote none — a fact, rather than a dash in the column the format asks for.
+  The POC section states started / ongoing / completed / hours invested, which was requested in those
+  words and is not readable off a table of initiatives.
+- **Risks and Decisions now name blockers that belong to nobody.** Unassigned work, critical tickets
+  past SLA, security fixes claimed but not proven, changes waiting on approval, sustained
+  over-capacity — none of which sit on an initiative row, so no narrative could have been written
+  from them. Decisions stays deliberately narrow: only what a person with authority must settle, never
+  work merely in progress, because a decisions list that fills with status stops being read.
+- **An unconfigured subsystem costs a row, not the report.** No CI, no scanner, no change management,
+  no goals: each block is omitted whole rather than printed as zeroes, because a column of zeroes reads
+  as a bad week rather than as an absent integration — and a model shown "0 test runs" will report a
+  testing collapse in a workspace that has never connected one.
+- **A draft stored before this release still renders.** `PracticeUpdateRecord.data` is a JSON column
+  replayed through a cast that checks nothing at runtime, so every existing draft and history row
+  lacked the new fields — and reading them turned the page a super admin opens into a 500. Found by
+  writing the fixture that omits them and watching three tests go red before anything was fixed.
+
+
 ## 5.1.1 — nineteen advisories closed, none of them ours — 2026-09-09
 
 ### 🔐 A dependency audit that went red overnight, and the one bump that needed reading

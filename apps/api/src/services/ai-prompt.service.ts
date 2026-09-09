@@ -224,8 +224,18 @@ Respond with ONLY the recap paragraph — no preamble, no subject line.`
     description: "The narrative half of the consolidated weekly leadership update. The figures around it are counted from the database and go out whether or not this runs.",
     placeholders: [
       { name: "periodLabel", description: "The week being reported on.", sample: "17 Aug – 23 Aug 2026" },
-      { name: "metrics", description: "The week's counted figures, one per line, each with its change on the previous week.", sample: "Tickets closed: 47 (up from 35)" },
-      { name: "initiatives", description: "Every active initiative with its category, owner, RAG status, progress and risks.", sample: "[Products] Apollo — owner Mira Kapoor — GREEN — 12 closed · 38 h" },
+      {
+        name: "metrics",
+        description:
+          "The week's counted figures in labelled blocks (DELIVERY, SEVERITY, SECURITY, PEOPLE & CAPACITY, POCs, and QUALITY & TESTING / CHANGE & RELEASE / GOALS / AI PRACTICE where those are configured). Rates carry their direction in percentage points; a rate that could not be computed says \"not measured\".",
+        sample: "Closure rate (closed ÷ raised): 92.7% (-14.2 pts vs last period) — above 100% means the backlog shrank"
+      },
+      {
+        name: "initiatives",
+        description:
+          "Every active initiative with its category, owner, RAG status, progress, open count by severity, nearest deadline and risks.",
+        sample: "[PRODUCT] Apollo (id …) — owner Mira Kapoor — GREEN — 12 closed · 38 h logged — 9 open — 2 critical — next deadline 2026-09-15"
+      },
       { name: "releases", description: "Releases that shipped in the week.", sample: "v2.4.0 — TimeSphere — closed 2026-08-21" }
     ],
     required: ["metrics", "initiatives"],
@@ -233,6 +243,20 @@ Respond with ONLY the recap paragraph — no preamble, no subject line.`
 
 THE WEEK'S FIGURES (counted — never contradict these, never invent one that is not here):
 {{metrics}}
+
+HOW TO READ THEM. The blocks above carry ratios, ages and directions, not only counts. Those are
+what you have to offer that the tables underneath do not: the reader can already see that 42 tickets
+closed. They cannot see that the backlog grew for the second week, that the oldest open security
+finding is 63 days old, or that utilisation ran over capacity. Prefer a sentence built on a rate, a
+trend or an age over one that restates a count.
+
+"not measured" means the figure has no denominator — nothing had a due date, nobody has contracted
+hours on file. It does NOT mean zero, and it is never a failure to report. Say nothing about it, or
+say plainly that it is not being tracked.
+
+A block that is absent means that subsystem is not configured in this workspace. Never remark on
+its absence and never infer from it — an update that reports a testing collapse because no CI is
+connected is worse than one that says nothing about testing.
 
 INITIATIVES:
 {{initiatives}}
@@ -258,7 +282,14 @@ newlines inside a string, and quote every value. An empty array is the correct w
 here" — for risks that means nothing is at risk, and for decisions it means leadership needs to
 do nothing this week. An invented item wastes the one section they will definitely read.
 
-Write plainly, for someone outside the team. No jargon, no filler, no congratulation. Be specific: name the initiative, quote the number. Where a figure got worse, say so — an update that only reports good news stops being read.`
+Write plainly, for someone outside the team. No jargon, no filler, no congratulation. Be specific: name the initiative, quote the number. Where a figure got worse, say so — an update that only reports good news stops being read.
+
+Two habits worth more than the rest:
+- QUOTE THE FIGURE THAT MAKES THE POINT, not a rounder one nearby. "Closure rate fell to 78%" beats
+  "we closed fewer than we raised", because the second is an opinion and the first is checkable.
+- DISTINGUISH EFFORT FROM DECISIONS. "risks" is what is going wrong; "decisionsRequired" is only for
+  what a person with authority must settle — an owner to name, an approval to give, a priority to
+  choose, a headcount to fund. Work that is merely in progress belongs in neither.`
   },
   {
     feature: "status_report",

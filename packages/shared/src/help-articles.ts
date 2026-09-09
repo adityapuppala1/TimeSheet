@@ -382,10 +382,15 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Generate the week — figures are counted, prose is drafted; the two are kept apart so a model outage still yields a complete update.",
       "Edit the written sections in the rich-text editor; Refine with AI keeps formatting.",
       "Your draft survives navigation and refreshes — only Regenerate or Discard clears it.",
-      "Send. The exact HTML that went out is archived under History, with preview."
+      "Send. The exact HTML that went out is archived under History, with preview.",
+      "Key Metrics comes in themed blocks — delivery and flow, severity, quality and testing, security, change and release, people and capacity, goals, and the practice's own AI usage. A block whose subsystem you have not connected is left out entirely rather than shown as a column of zeroes.",
+      "A rate you have not given the workspace the data to compute reads as \"—\", never as 0%. \"Nothing had a due date\" and \"nothing was delivered on time\" are opposite sentences, and the update will not print the second when it means the first."
     ],
     screenshot: "practice-update.png",
-    keywords: ["practice update", "weekly", "digest", "leadership", "report", "email"]
+    keywords: [
+      "practice update", "weekly", "digest", "leadership", "report", "email",
+      "metrics", "closure rate", "utilisation", "on time", "cycle time", "pass rate", "poc"
+    ]
   },
   {
     id: "ai-teammates",
