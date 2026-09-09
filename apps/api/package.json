@@ -60,7 +60,7 @@
     "multer": "^2.2.0",
     "nanoid": "^5.1.5",
     "node-cron": "^4.2.1",
-    "nodemailer": "^9.0.3",
+    "nodemailer": "^10.0.1",
     "openai": "^6.45.0",
     "openid-client": "^6.8.4",
     "pdf-parse": "^1.1.1",

@@ -10,6 +10,38 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 5.1.1 — nineteen advisories closed, none of them ours — 2026-09-09
+
+### 🔐 A dependency audit that went red overnight, and the one bump that needed reading
+
+- **Nineteen newly-published advisories closed by upgrading, not by accepting.** Nothing in this
+  repository changed to cause them: the same dependency tree passed the gate a day earlier, and
+  then advisories were disclosed against `@xmldom/xmldom`, `fast-uri`, `multer`, `nodemailer` and
+  `sharp`. Four of the five had patched releases inside the ranges already declared, so they came in
+  on a lockfile refresh — xmldom 0.8.13 → 0.8.15, fast-uri 3.1.5 → 3.1.7, multer 2.2.0 → 2.3.0,
+  sharp 0.35.3 → 0.35.4.
+- **The xmldom set is the one that mattered most, and it is reachable.** It arrives through
+  `@node-saml/node-saml` — which parses SAML assertions, the single most attacker-controlled XML
+  this application handles — and through `mammoth`, which parses uploaded `.docx` files. The
+  advisories are injection bypasses of `requireWellFormed` plus quadratic-time and quadratic-memory
+  parsing. Neither parent has moved to xmldom 0.9, so the 0.8.15 patch line is what makes this
+  fixable at all without forcing SAML verification onto a major its own author has not adopted.
+- **Nodemailer needed a major, so its single breaking change was read rather than assumed.**
+  `^9.0.3` cannot reach the fixes; 10.0.0's only breaking change is requiring Node 20+, which CI
+  (22) and every supported deployment already satisfy — the rest of that release is a TypeScript
+  migration that deliberately preserved the `@types/nodemailer` layout and `Transporter`
+  assignability. It closes an addressparser denial of service and three delivery-integrity bypasses
+  (IDN/punycode and RFC 5322 comment mis-parsing, both of which could route mail to an
+  attacker-controlled domain, and a `resolveContent()` path that ignored
+  `disableFileAccess`/`disableUrlAccess`).
+- **Verified against a real SMTP conversation, not just a green suite.** The unit tests mock
+  nodemailer, so passing them proves nothing about the upgrade. A pooled transporter built with the
+  exact options `mail.service.ts` uses was pointed at a throwaway SMTP server: `verify()` succeeded,
+  a message was built and sent, the conversation reached `DATA`, and the recipient and acceptance
+  came back correct.
+- Three moderate advisories remain in the report and are not production-reachable; the one accepted
+  entry (`deepmerge-ts`) is unchanged and still carries the call sites it was reviewed against.
+
 ## 5.1.0 — a model of your own, and charts that count the team you have — 2026-09-09
 
 ### 🔧 The native runtime reaches the containers it was meant to run in

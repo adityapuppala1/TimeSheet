@@ -143,7 +143,7 @@ CAB tool holds none of that.
 
 ## By the numbers
 
-Counted from the tree at v5.1.0, not estimated — regenerate any of these with the one-liners in
+Counted from the tree at v5.1.1, not estimated — regenerate any of these with the one-liners in
 [CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
 that looks stale.
 
