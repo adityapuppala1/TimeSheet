@@ -10,6 +10,7 @@ import { Router } from "express";
 import { prisma } from "../config/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
+import { NOT_DEACTIVATED } from "../services/people-visibility.service.js";
 import { CHAT_INTAKE_SYSTEM_EMAIL } from "../services/chat-intake.service.js";
 import { EMAIL_INTAKE_SYSTEM_EMAIL } from "../services/email-intake.service.js";
 import { SECURITY_INGESTION_SYSTEM_EMAIL } from "../services/security-report.service.js";
@@ -36,10 +37,17 @@ teamRouter.use(requireAuth);
 /**
  * GET /api/team/reports
  * Direct reports of the current user, with timesheet roll-ups.
+ *
+ * DEACTIVATED REPORTS ARE DROPPED. Every row here is a per-person statistic and a door into the
+ * hours-trend dialog below, which is exactly what a deactivated colleague should stop having on
+ * screen. `managerId` is not cleared when somebody is deactivated — deliberately, because the
+ * reporting line is history worth keeping — so without this predicate a manager's team page grew
+ * monotonically and never shrank. What that person logged is still in every export and in the
+ * workspace totals; it is the named row and its trend that go.
  */
 teamRouter.get("/reports", async (req, res) => {
   const reports = await prisma.user.findMany({
-    where: { managerId: req.user!.id, deletedAt: null },
+    where: { managerId: req.user!.id, ...NOT_DEACTIVATED },
     select: {
       id: true,
       name: true,
@@ -107,12 +115,17 @@ function isoDate(date: Date): string {
 }
 
 teamRouter.get("/reports/:userId/hours-trend", async (req, res) => {
-  // The scope check IS the lookup: `managerId: req.user!.id, deletedAt: null` is the same
-  // predicate `/reports` filters the roster by, so a userId belonging to somebody else's team
-  // simply doesn't match and there is no window in which their rows could be aggregated. 404
-  // rather than 403 so this can't be used to probe which user ids exist outside my own team.
+  // The scope check IS the lookup: this is the same predicate `/reports` filters the roster by,
+  // so a userId belonging to somebody else's team simply doesn't match and there is no window in
+  // which their rows could be aggregated. 404 rather than 403 so this can't be used to probe
+  // which user ids exist outside my own team.
+  //
+  // It has to stay IDENTICAL to the roster's, which is why both spell it with the same constant.
+  // A deactivated report is no longer listed, so this dialog cannot be opened for them from the
+  // page — but a bookmarked or shared URL would still have reached the endpoint, and a trend
+  // that is hidden everywhere except to whoever kept the link is not hidden.
   const report = await prisma.user.findFirst({
-    where: { id: String(req.params.userId), managerId: req.user!.id, deletedAt: null },
+    where: { id: String(req.params.userId), managerId: req.user!.id, ...NOT_DEACTIVATED },
     select: { id: true, name: true }
   });
   if (!report) throw new AppError(404, "No such direct report.");
@@ -211,7 +224,9 @@ teamRouter.get("/escalations", async (req, res) => {
 teamRouter.get("/sla-summary", async (req, res) => {
   const myReportIds = (
     await prisma.user.findMany({
-      where: { managerId: req.user!.id, deletedAt: null },
+      // Same roster as `/reports` renders, so the card and the list beside it cannot disagree
+      // about who is on this team.
+      where: { managerId: req.user!.id, ...NOT_DEACTIVATED },
       select: { id: true }
     })
   ).map((u) => u.id);
@@ -360,7 +375,9 @@ function isoWeekKey(date: Date): string {
 teamRouter.get("/timesheet-anomalies", async (req, res) => {
   const myReportIds = (
     await prisma.user.findMany({
-      where: { managerId: req.user!.id, deletedAt: null },
+      // Same roster as `/reports` renders, so the card and the list beside it cannot disagree
+      // about who is on this team.
+      where: { managerId: req.user!.id, ...NOT_DEACTIVATED },
       select: { id: true }
     })
   ).map((u) => u.id);

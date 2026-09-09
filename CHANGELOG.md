@@ -306,6 +306,36 @@ number, on purpose — an installation must never render history for a version t
   payment processor's quota and what it fetches is money — which is deliberately *not* the gate on
   the usage sweep sitting next to it, that one being a load decision about tenant databases.
 
+### 🐛 The charts stop counting people who left
+
+- **A deactivated person no longer appears in any on-screen per-person breakdown.** They stayed on
+  the team leaderboard — permanently, since the ranking is an all-time resolved count nobody could
+  overtake. They held a lane in the workload heatmap, and one of its fifteen slots, pushing a
+  current colleague off the chart. They had a row in the utilisation table showing an eternal 0%,
+  a row in the approver league table, a place on their old manager's team page with a clickable
+  hours trend, and a permanent entry in the "Raised by" picker. Ask AI read their workload out
+  loud. Some screens already filtered them and some did not, which is worse than either: the same
+  person was present on one page and absent from the next, and nothing said which was right.
+- **Their work is untouched.** Tickets they were assigned still sit on the board and still count in
+  every total — somebody has to notice them and reassign them. Their hours still count in
+  `totals.hours`, their approvals still move the median approval latency. Only the named row goes,
+  because the complaint was about comparing a current team against people who have left, not about
+  pretending their work never happened.
+- **Downloads and emails still cover everybody**, and this is the sharper half of the change. A
+  quarter's export that quietly dropped the two people who left mid-quarter is not a report, it is
+  a wrong number with nothing on it to say so — and somebody invoices from that file. Exports, the
+  weekly digest, the practice update and the audit log all still see the whole workspace. So do the
+  Users table and the bulk actions, which is where you go precisely to find the inactive account.
+- **A chart that hides somebody says so.** Each narrowed breakdown returns a count of what it left
+  out, and a footnote reads "2 inactive people are hidden from this breakdown. Their work still
+  counts towards the totals, and exported reports still include them." Removing people silently
+  would have traded one wrong number for another: a manager who knows seven people logged time and
+  counts five rows cannot tell a deliberate exclusion from data loss.
+- **An unverified new joiner is still shown.** The rule is "not deactivated", not "is active" —
+  written that way after the first draft used `status: "ACTIVE"` and would have made every new
+  hire invisible on their own manager's team page until they clicked a verification link. The
+  distinction is now the name of the shared predicate, and a test names that person specifically.
+
 ### 🐛 A switch that was never built, and a draft that came back from the dead
 
 - **The weekly practice update's AI drafting can be switched on.** `GlobalAISettings` carries a

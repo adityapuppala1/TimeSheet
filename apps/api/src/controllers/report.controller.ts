@@ -29,6 +29,7 @@ import { tenantContext } from "../config/tenant-context.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { generateStatusReport } from "../services/ai.service.js";
+import { resolveVisiblePeopleNames, withoutHiddenPeople } from "../services/people-visibility.service.js";
 import { computeTimesheetCost } from "../services/billing-rate.service.js";
 import { buildTimesheetAnalytics } from "../services/timesheet-analytics.service.js";
 import {
@@ -380,8 +381,13 @@ reportRouter.get("/ticket-summary", async (_req, res) => {
 
   // Prisma groupBy can't include relations, so resolve assignee names with a second query
   // — the same manual-join pattern /admin-summary uses for byProject.
-  const assigneeIds = byAssignee.map((row) => row.assigneeId).filter((id): id is string => Boolean(id));
-  const assignees = await prisma.user.findMany({ where: { id: { in: assigneeIds } }, select: { id: true, name: true } });
+  //
+  // Deactivated people are dropped: this is a screen, and a departed colleague holding a lane in
+  // the workload bar is a comparison against somebody who has left. The status counts above are NOT
+  // narrowed to match — their tickets are still open and still somebody's problem. See
+  // people-visibility.service.ts for where that line is drawn and why.
+  const assignees = await resolveVisiblePeopleNames(byAssignee.map((row) => row.assigneeId));
+  const visibleByAssignee = withoutHiddenPeople(byAssignee, (row) => row.assigneeId, assignees);
 
   // Prisma has no native duration aggregate, so average resolution time is reduced in-app.
   const avgResolutionHours =
@@ -403,10 +409,11 @@ reportRouter.get("/ticket-summary", async (_req, res) => {
     total: byStatus.reduce((sum, row) => sum + row._count, 0),
     byStatus,
     byPriority,
-    byAssignee: byAssignee.map((row) => ({
+    byAssignee: visibleByAssignee.rows.map((row) => ({
       ...row,
-      assignee: assignees.find((a) => a.id === row.assigneeId)?.name ?? "Unknown"
+      assignee: assignees.get(row.assigneeId!)!
     })),
+    hiddenInactiveAssignees: visibleByAssignee.hiddenInactive,
     openSlaBreaches,
     openSlaBreachesYesterday,
     createdThisWeek,
@@ -588,8 +595,15 @@ reportRouter.get("/ticket-insights", async (_req, res) => {
   };
 
   // --- Workload heatmap: assignee x week, open-ticket count ---
-  const assigneeIds = Array.from(new Set(assignedTickets.map((t) => t.assigneeId!).filter(Boolean)));
-  const assigneeUsers = await prisma.user.findMany({ where: { id: { in: assigneeIds } }, select: { id: true, name: true } });
+  //
+  // Narrowed to people still active BEFORE the sort and the top-15 cut, not after. Filtering a
+  // ranked list afterwards would let a departed colleague go on consuming one of the fifteen
+  // slots and push a current one off the chart — the heatmap would be short a person AND wrong
+  // about who carries the most.
+  const assignedIds = Array.from(new Set(assignedTickets.map((t) => t.assigneeId!).filter(Boolean)));
+  const assigneeUsers = await resolveVisiblePeopleNames(assignedIds);
+  const assigneeIds = assignedIds.filter((id) => assigneeUsers.has(id));
+  const hiddenInactiveAssignees = assignedIds.length - assigneeIds.length;
   const hoursLoggedRows = await prisma.timesheet.findMany({
     where: { deletedAt: null, userId: { in: assigneeIds }, workDate: { gte: heatmapRangeStart } },
     select: { userId: true, workDate: true, totalHours: true }
@@ -611,7 +625,7 @@ reportRouter.get("/ticket-insights", async (_req, res) => {
       });
       return {
         assigneeId,
-        assigneeName: assigneeUsers.find((u) => u.id === assigneeId)?.name ?? "Unknown",
+        assigneeName: assigneeUsers.get(assigneeId)!,
         cells,
         totalOpen: cells.reduce((s, c) => s + c.openCount, 0)
       };
@@ -643,7 +657,11 @@ reportRouter.get("/ticket-insights", async (_req, res) => {
     hotspotByModule,
     reopenRate,
     firstResponseHours,
-    workloadHeatmap: { weeks: heatmapWeeks.map((w) => w.toISOString().slice(0, 10)), rows: workloadRows },
+    workloadHeatmap: {
+      weeks: heatmapWeeks.map((w) => w.toISOString().slice(0, 10)),
+      rows: workloadRows,
+      hiddenInactive: hiddenInactiveAssignees
+    },
     estimateVsActual
   });
 });
@@ -1056,22 +1074,26 @@ reportRouter.get("/leaderboard", async (_req, res) => {
     byAssignee.set(t.assigneeId!, entry);
   }
 
-  const assigneeIds = Array.from(byAssignee.keys());
-  const users = await prisma.user.findMany({ where: { id: { in: assigneeIds } }, select: { id: true, name: true } });
+  // A ranking of people, so it ranks people who are here. Leaving somebody who has left at the top
+  // of a board framed as recognition is the single most conspicuous version of this bug — and the
+  // ranking is against a fixed all-time resolved count, so a departed high performer would hold
+  // first place permanently, with nobody able to overtake them.
+  const users = await resolveVisiblePeopleNames(byAssignee.keys());
+  const assigneeIds = Array.from(byAssignee.keys()).filter((id) => users.has(id));
 
   const rows = assigneeIds
     .map((id) => {
       const entry = byAssignee.get(id)!;
       return {
         assigneeId: id,
-        assigneeName: users.find((u) => u.id === id)?.name ?? "Unknown",
+        assigneeName: users.get(id)!,
         resolvedCount: entry.resolvedCount,
         avgCycleHours: Number((entry.totalCycleHours / entry.resolvedCount).toFixed(1))
       };
     })
     .sort((a, b) => b.resolvedCount - a.resolvedCount);
 
-  res.json({ rows });
+  res.json({ rows, hiddenInactive: byAssignee.size - assigneeIds.length });
 });
 
 /**

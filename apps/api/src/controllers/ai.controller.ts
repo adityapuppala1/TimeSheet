@@ -15,6 +15,7 @@ import { requireAuth, requirePermission, requireSuperAdmin } from "../middleware
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
+import { resolveVisiblePeopleNames } from "../services/people-visibility.service.js";
 import {
   answerWorkspaceQuestion,
   classifyTicket,
@@ -235,10 +236,13 @@ async function buildInsightsSnapshotText(scope: Awaited<ReturnType<typeof ticket
     prisma.globalTicketSettings.findUnique({ where: { id: "global" }, select: { enableCostAnalytics: true } })
   ]);
 
-  const assigneeIds = byAssignee.map((r) => r.assigneeId).filter((id): id is string => Boolean(id));
-  const assignees = await prisma.user.findMany({ where: { id: { in: assigneeIds } }, select: { id: true, name: true } });
+  // Deactivated people are dropped, matching the Insights page this snapshot paraphrases. Ask AI reading out a
+  // workload for somebody who left — while the chart the user is looking at no longer lists them —
+  // would make the assistant look like it was hallucinating a colleague.
+  const assignees = await resolveVisiblePeopleNames(byAssignee.map((r) => r.assigneeId));
   const workloadLine = byAssignee
-    .map((r) => `${assignees.find((a) => a.id === r.assigneeId)?.name ?? "Unknown"}: ${r._count} open`)
+    .filter((r) => r.assigneeId && assignees.has(r.assigneeId))
+    .map((r) => `${assignees.get(r.assigneeId!)}: ${r._count} open`)
     .join(", ");
 
   const lines = [

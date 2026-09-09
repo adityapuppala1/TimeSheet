@@ -33,6 +33,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { DataTable } from "../components/ui/data-table";
 import { Skeleton } from "../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
+import { InactivePeopleNote } from "../components/InactivePeopleNote";
 import { reportApi, settingsApi } from "../services/api";
 
 const estimateVsActualColumns: ColumnDef<any, any>[] = [
@@ -451,6 +452,7 @@ export function Insights() {
                   </TableBody>
                 </Table>
               )}
+              <InactivePeopleNote count={data.workloadHeatmap.hiddenInactive} />
             </CardContent>
           </Card>
 
@@ -536,6 +538,7 @@ export function Insights() {
             {leaderboard.data && leaderboard.data.rows.length === 0 && (
               <p className="py-6 text-center text-sm text-muted-foreground">No resolved tickets yet.</p>
             )}
+            <InactivePeopleNote count={leaderboard.data?.hiddenInactive} className="px-0" />
           </CardContent>
         </Card>
       )}

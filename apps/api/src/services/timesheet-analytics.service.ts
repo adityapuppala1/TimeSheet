@@ -13,6 +13,7 @@
  * is a different claim from a median over all two hundred and nothing on a chart says which.
  */
 import { prisma } from "../config/prisma.js";
+import { NOT_DEACTIVATED, resolveVisiblePeopleNames } from "./people-visibility.service.js";
 import { capacityForBucket } from "./workload.service.js";
 import { getPlanningSettings } from "./planning.service.js";
 import {
@@ -112,6 +113,9 @@ export interface ApprovalLatency {
   /** Share of REVIEWED entries that blew their approval SLA. Null when nothing had a deadline. */
   breachRatePct: number | null;
   byApprover: Array<{ approverId: string; name: string; reviewed: number; medianHours: number | null }>;
+  /** Approvers dropped from `byApprover` because they are no longer active. Their reviews are
+   *  still inside every workspace-level figure above — only the named row is gone. */
+  hiddenInactiveApprovers: number;
 }
 
 export interface ActivityMixRow {
@@ -128,6 +132,10 @@ export interface TimesheetAnalytics {
   approvalLatency: ApprovalLatency;
   activityMix: ActivityMixRow[];
   totals: { hours: number; billableHours: number; entries: number; people: number };
+  /** People who logged hours in this window but are no longer active, so have no `utilisation`
+   *  row. `totals.people` still counts them — it answers "how many people's work is in these
+   *  numbers", and their work IS in them. Without this field the two would look inconsistent. */
+  hiddenInactivePeople: number;
   truncated: boolean;
 }
 
@@ -163,13 +171,24 @@ export async function buildTimesheetAnalytics(
   const workingDays = workingDaysBetween(from, to, workingDayNumbers);
 
   // ---------------------------------------------------------------- utilisation
+  //
+  // DEACTIVATED PEOPLE ARE DROPPED, and only here. This function backs exactly one caller —
+  // `/reports/analytics`,
+  // which is a screen — so the narrowing lives in it. The download of the same period comes from
+  // `timesheet-report.service.ts` instead and still contains everybody, which is the intended
+  // difference: an export is a record, a chart is a comparison, and comparing a current team
+  // against people who left is what made this worth changing.
+  //
+  // Utilisation is per-person by definition, so a leaver contributes nothing but a permanently
+  // idle-looking row. The hour TOTALS below are untouched and still count their work.
   const peopleIds = [...new Set(used.map((r) => r.userId))];
   const people = peopleIds.length
     ? await prisma.user.findMany({
-        where: { id: { in: peopleIds } },
+        where: { id: { in: peopleIds }, ...NOT_DEACTIVATED },
         select: { id: true, name: true, weeklyCapacityHours: true, plannedUtilizationPct: true }
       })
     : [];
+  const hiddenInactivePeople = peopleIds.length - people.length;
   const defaults = {
     weeklyCapacityHours: Number(settings.defaultWeeklyCapacityHours ?? 40),
     workingDaysPerWeek: workingDayNumbers.length || 5
@@ -224,10 +243,12 @@ export async function buildTimesheetAnalytics(
     entry.latencies.push((row.reviewedAt!.getTime() - row.submittedAt!.getTime()) / 3_600_000);
     perApprover.set(row.reviewedById, entry);
   }
-  const approverNames = perApprover.size
-    ? await prisma.user.findMany({ where: { id: { in: [...perApprover.keys()] } }, select: { id: true, name: true } })
-    : [];
-  const nameById = new Map(approverNames.map((u) => [u.id, u.name]));
+  // Same rule for the approver league table: it is a per-person comparison on a screen. The
+  // workspace-level latency figures directly above it (median, p90, slowest, breach rate) are
+  // computed over EVERY reviewed row, including those signed off by somebody since deactivated —
+  // an approval that was slow was slow, and dropping it would flatter the workspace.
+  const nameById = await resolveVisiblePeopleNames(perApprover.keys());
+  const hiddenInactiveApprovers = [...perApprover.keys()].filter((id) => !nameById.has(id)).length;
 
   const round1 = (n: number | null) => (n === null ? null : Number(n.toFixed(1)));
 
@@ -241,13 +262,15 @@ export async function buildTimesheetAnalytics(
     breachRatePct:
       withDeadline.length === 0 ? null : Number(((breached.length / withDeadline.length) * 100).toFixed(1)),
     byApprover: [...perApprover.entries()]
+      .filter(([id]) => nameById.has(id))
       .map(([id, entry]) => ({
         approverId: id,
-        name: nameById.get(id) ?? "Unknown",
+        name: nameById.get(id)!,
         reviewed: entry.latencies.length,
         medianHours: round1(median(entry.latencies))
       }))
-      .sort((a, b) => (b.medianHours ?? 0) - (a.medianHours ?? 0))
+      .sort((a, b) => (b.medianHours ?? 0) - (a.medianHours ?? 0)),
+    hiddenInactiveApprovers
   };
 
   // ---------------------------------------------------------------- activity mix
@@ -290,6 +313,7 @@ export async function buildTimesheetAnalytics(
       entries: used.length,
       people: peopleIds.length
     },
+    hiddenInactivePeople,
     truncated
   };
 }

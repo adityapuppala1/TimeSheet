@@ -278,10 +278,14 @@ export const HELP_ARTICLES: HelpArticle[] = [
     steps: [
       "Open Insights and set the range; every chart follows it.",
       "Export a 22-column CSV or a real Excel workbook from the report screens.",
-      "Schedule a dashboard to email daily/weekly/monthly — recipients need no account, and the report is built with YOUR access, stopping if you leave."
+      "Schedule a dashboard to email daily/weekly/monthly — recipients need no account, and the report is built with YOUR access, stopping if you leave.",
+      "Charts name only people who are still active; a footnote says how many were left out. Downloads and scheduled emails still cover everybody, so a period you invoice or audit against stays complete."
     ],
     screenshot: "insights.png",
-    keywords: ["insights", "report", "export", "csv", "excel", "schedule", "velocity", "sla", "analytics"]
+    keywords: [
+      "insights", "report", "export", "csv", "excel", "schedule", "velocity", "sla", "analytics",
+      "inactive", "deactivated", "leaver", "missing person", "hidden"
+    ]
   },
   {
     id: "goals",
@@ -310,6 +314,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Add a user with name, email and role — they receive a one-time password and must change it on first sign-in.",
       "Bulk-add via CSV upload when onboarding a team.",
       "Deactivate instead of delete: history is preserved, sign-in is blocked. Force-logout ends someone's sessions immediately.",
+      "A deactivated person drops out of every on-screen per-person breakdown — the leaderboard, the workload heatmap, utilisation, and their old manager's team page — so charts describe the team you have. Their tickets, hours and audit trail are untouched, still counted in every total, and still in exports.",
       "With SCIM configured, your identity provider creates and deactivates accounts automatically — see the SSO article."
     ],
     keywords: ["user", "create", "invite", "deactivate", "csv", "bulk", "password", "force logout", "manage users"]

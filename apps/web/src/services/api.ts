@@ -820,6 +820,9 @@ export interface TicketSummary {
   byStatus: Array<{ status: TicketStatus; _count: number }>;
   byPriority: Array<{ priority: TicketPriority; _count: number }>;
   byAssignee: Array<{ assigneeId: string; assignee: string; _count: number }>;
+  /** Assignees left out of `byAssignee` because they are no longer active. `total` and the status
+   *  counts still include their tickets — the work stays, only the person's row goes. */
+  hiddenInactiveAssignees?: number;
   openSlaBreaches: number;
   openSlaBreachesYesterday: number;
   createdThisWeek: number;
@@ -844,6 +847,8 @@ export interface TicketInsights {
       cells: Array<{ weekStart: string; openCount: number; hoursLogged: number }>;
       totalOpen: number;
     }>;
+    /** People dropped from the heatmap because they are no longer active. */
+    hiddenInactive?: number;
   };
   estimateVsActual: Array<{ ticketKey: string; title: string; estimatedHours: number; actualHours: number; varianceHours: number }>;
 }
@@ -1042,7 +1047,8 @@ export const reportApi = {
   securityInsights: async () => (await api.get<SecurityInsights>("/reports/security-insights")).data,
   sbomInventory: async () => (await api.get<SbomInventory>("/reports/sbom-inventory")).data,
   costInsights: async () => (await api.get<CostInsights>("/reports/cost-insights")).data,
-  leaderboard: async () => (await api.get<{ rows: LeaderboardRow[] }>("/reports/leaderboard")).data,
+  leaderboard: async () =>
+    (await api.get<{ rows: LeaderboardRow[]; hiddenInactive?: number }>("/reports/leaderboard")).data,
   /** An empty `projectId` is the ALL-PROJECTS request, not a missing argument — the server reads it
    *  as "the whole portfolio" and answers with a summary plus a section per project. */
   statusReport: async (projectId: string, periodDays = 7) =>
@@ -1107,9 +1113,15 @@ export interface TimesheetAnalytics {
     breached: number;
     breachRatePct: number | null;
     byApprover: Array<{ approverId: string; name: string; reviewed: number; medianHours: number | null }>;
+    /** Approvers dropped from `byApprover` because they are no longer active. Their reviews are
+     *  still inside every figure above them. */
+    hiddenInactiveApprovers?: number;
   };
   activityMix: Array<{ activity: string; hours: number; sharePct: number; cost: number | null; unratedEntries: number }>;
   totals: { hours: number; billableHours: number; entries: number; people: number };
+  /** People whose hours are in `totals` but who have no `utilisation` row, because they are no
+   *  longer active. Without this the two would look like they disagreed. */
+  hiddenInactivePeople?: number;
   truncated: boolean;
 }
 

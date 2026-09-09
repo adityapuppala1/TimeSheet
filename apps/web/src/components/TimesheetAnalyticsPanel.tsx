@@ -19,6 +19,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip as RTooltip } from "recharts";
 import { Activity, Clock, Gauge, HelpCircle } from "lucide-react";
 
+import { InactivePeopleNote } from "./InactivePeopleNote";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { DateRangePicker } from "./ui/date-range-picker";
 import { Skeleton } from "./ui/skeleton";
@@ -175,6 +176,7 @@ export function TimesheetAnalyticsPanel() {
                 Capacity is each person's contracted weekly hours scaled to the working days in this range, reduced by
                 their expected utilisation — the same figure the workload board uses, so the two cannot disagree.
               </p>
+              <InactivePeopleNote count={data.hiddenInactivePeople} className="px-0 pb-0 pt-0" />
             </div>
 
             {/* ---------------------------------------------------------------- approvals */}
@@ -236,6 +238,7 @@ export function TimesheetAnalyticsPanel() {
                   </table>
                 </div>
               )}
+              <InactivePeopleNote count={latency?.hiddenInactiveApprovers} className="px-0 pb-0 pt-0" />
             </div>
 
             {/* ---------------------------------------------------------------- activity mix */}

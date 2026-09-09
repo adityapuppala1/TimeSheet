@@ -145,6 +145,45 @@ halves of that (`tests/unit/branding-storage.test.ts`).
   emailed reset does; an admin reset is usually a response to a compromise, and a new hash alone
   evicts nobody
 
+### Deactivated people in the UI
+
+**One rule, one definition, one boundary.** `apps/api/src/services/people-visibility.service.ts`
+exports `NOT_DEACTIVATED` (`status != INACTIVE` **and** `deletedAt IS NULL`) plus
+`resolveVisiblePeopleNames` / `withoutHiddenPeople`, and every screen-facing per-person breakdown
+resolves its names through it. Deactivating somebody removes **their own numbers from the screens**
+and nothing else.
+
+**Why the predicate is "not INACTIVE" rather than "is ACTIVE".** `PENDING_VERIFICATION` is somebody
+invited but not yet verified — on their way in, not out. Under `status: "ACTIVE"` a new joiner would
+be missing from their own manager's team page until they clicked a verification link. Several older
+queries *do* filter `status: "ACTIVE"`, because they answer a different question ("who can be
+staffed, assigned or emailed", where an unverified account genuinely does not qualify); those are
+deliberately left alone, and a call site reading `...NOT_DEACTIVATED` cannot be mistaken for one.
+
+| Narrowed (a screen) | Untouched (a record) |
+|---|---|
+| `/reports/leaderboard`, `/reports/ticket-summary` `byAssignee`, `/reports/ticket-insights` workload heatmap | `/reports/export.{csv,xlsx,pdf}`, `/reports/timesheets/:id/export.csv` |
+| `/reports/analytics` `utilisation` + `approvalLatency.byApprover` | The weekly digest, the practice update, every scheduled email |
+| `/team/reports`, `/team/reports/:id/hours-trend`, `/team/sla-summary`, `/team/timesheet-anomalies` | The audit log, and anything answering "who did this" |
+| `/tickets` `byReporter` (which is also the "Raised by" picker) | `/users` and the bulk actions — where you go *to find* the inactive account |
+| Ask AI's Insights snapshot (`Top workload by assignee`) | Notification targeting, SCIM |
+
+**Totals are never recomputed.** A hidden person's tickets still count in `total`, their hours still
+count in `totals.hours` and `totals.people`, and their approvals still move the median. The work was
+really done; only the named row goes. Each narrowed payload therefore carries a count of what it
+dropped — `hiddenInactive`, `hiddenInactiveAssignees`, `hiddenInactivePeople`,
+`hiddenInactiveApprovers` — so the UI can print a footnote rather than looking like it lost data.
+All are **optional** in the web client's types, so a newer SPA against an older server degrades to
+no footnote instead of to `undefined`.
+
+**The work itself is never hidden.** A ticket assigned to somebody who has left stays on the board
+and in every count, because somebody has to notice it and reassign it.
+
+Guarded by `apps/api/tests/unit/inactive-people-hidden.test.ts`, which drives the real routers over
+a directory containing one of each kind of person — including the boundary cases: the export's
+`where` builder must carry no status predicate, and the export must still name a reviewer who has
+since been deactivated.
+
 ## Projects
 
 - `GET /projects`
@@ -511,11 +550,16 @@ scope and keep the visibility they have, because narrowing those would change wh
 - `GET /team/sla-summary` — same pattern, scoped to the calling manager's direct reports:
   `submittedYesterday`, `breachedYesterday`, `approvedLastWeek`, `openEscalationsYesterday`.
 - `GET /team/reports/:userId/hours-trend` — authenticated, with **no separate role check because
-  the lookup *is* the scope check**: the user is fetched with `managerId = <the caller>`, the same
-  predicate `GET /team/reports` filters the roster by, so a `userId` on somebody else's team
-  simply does not match and there is no window in which their rows could be aggregated. That miss
-  answers **404, not 403**, so the route cannot be used to probe which user ids exist outside the
-  caller's own team.
+  the lookup *is* the scope check**: the user is fetched with `managerId = <the caller>` **and the
+  shared `NOT_DEACTIVATED` predicate**, the same one `GET /team/reports` filters the roster by, so
+  a `userId` on somebody else's team simply does not match and there is no window in which their
+  rows could be aggregated. That miss answers **404, not 403**, so the route cannot be used to
+  probe which user ids exist outside the caller's own team.
+
+  The two predicates must stay identical, which is why both spell it with the same constant: a
+  deactivated report is no longer listed, so the dialog cannot be opened for them from the page —
+  but a bookmarked or shared URL would still have reached this endpoint, and a trend hidden
+  everywhere except from whoever kept the link is not hidden.
 
   Returns `{ user: { id, name }, currentMonth: { monthStart, weeks[] }, monthly[] }`. `weeks[]`
   carries `weekStart`/`weekEnd`/`hours`/`entries` for the ISO (Monday-start) weeks of the current
@@ -1481,6 +1525,12 @@ applied.
     each independently yields sets totalling 100.1%, which on a labelled pie reads as an
     arithmetic error — and a report caught being wrong about something trivial is not trusted
     about anything else.
+  - **Deactivated people have no `utilisation` row and no `byApprover` row**, and the counts
+    `hiddenInactivePeople` / `approvalLatency.hiddenInactiveApprovers` say how many were left out
+    so the screen can print a footnote instead of looking short. Every workspace-level figure
+    beside them — `totals.hours`, `totals.people`, the median/p90/breach-rate — still counts their
+    work: an approval that was slow was slow, and hours that were worked were worked. See
+    **Deactivated people in the UI** below.
 
 - `GET /reports/export.xlsx?groupBy=` *(`reports:view`)* — a real workbook: a **Summary** sheet
   carrying the grouped breakdown and an **Entries** sheet with every row, typed. CSV has no types,

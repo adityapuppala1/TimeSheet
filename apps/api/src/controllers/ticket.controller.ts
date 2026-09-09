@@ -31,6 +31,7 @@ import { preserveTenantContext, upload } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { processUpload } from "../services/attachment-storage.service.js";
 import { audit } from "../services/audit.service.js";
+import { resolveVisiblePeopleNames } from "../services/people-visibility.service.js";
 import { buildTicketMetricSeriesFor } from "../services/ticket-metrics.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
@@ -313,14 +314,16 @@ ticketRouter.get("/metrics", requirePermission(permissions.TICKETS_VIEW), async 
 
   // Names resolved in a second query rather than through an include, because `groupBy` cannot join.
   // Bounded by the number of distinct reporters, not by the ticket count.
-  const reporterIds = byReporterRows.map((r) => r.reporterId).filter(Boolean);
-  const reporterNames = await prisma.user.findMany({
-    where: { id: { in: reporterIds } },
-    select: { id: true, name: true }
-  });
-  const nameById = new Map(reporterNames.map((u) => [u.id, u.name]));
+  //
+  // Deactivated people are dropped. This list is both a per-person tally and the contents of the "Raised by"
+  // picker, so a deactivated colleague otherwise stayed permanently on offer as a filter — with a
+  // count that could never change again. Their TICKETS are untouched and still appear in the list
+  // and in `total`: somebody has to see the work an ex-colleague left behind, and only the person
+  // is hidden, never the work. See people-visibility.service.ts.
+  const nameById = await resolveVisiblePeopleNames(byReporterRows.map((r) => r.reporterId));
   const byReporter = byReporterRows
-    .map((row) => ({ userId: row.reporterId, name: nameById.get(row.reporterId) ?? "Unknown", count: row._count }))
+    .filter((row) => nameById.has(row.reporterId))
+    .map((row) => ({ userId: row.reporterId, name: nameById.get(row.reporterId)!, count: row._count }))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 
   const byStatus = tallyBy(byStatusRows, "status");
