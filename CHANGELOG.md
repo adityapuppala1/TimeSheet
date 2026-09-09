@@ -10,6 +10,22 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🔧 The changelog's opening promise is now true, and enforced
+
+- **This file opens by saying every version has a git tag and a GitHub Release. For eleven of forty
+  versions, it did not.** Three — 5.0.0, 2.2.0 and 2.1.0 — had no tag at all; eight more were tagged
+  and never released. 5.0.0 is the conspicuous one: a major, nine days old, fully documented here and
+  invisible on the releases page.
+- All three tags now exist, annotated, on the commit whose `VERSION` file actually carries that
+  number — verified per tag rather than inferred from the commit subject — and all eleven releases
+  carry the body copied from their section here, which is what this file has always claimed happens.
+  `v5.1.1` remains the one marked *Latest*.
+- **A CI job now fails when a documented version has no tag.** None of this was visible from inside
+  the repository: the changelog reads perfectly, every test passes, and the gap exists only on
+  GitHub — so the only thing that could have caught it is a check that looks there. It is a separate
+  job because it needs `fetch-tags`, which would otherwise slow every other job down for a check
+  that costs two seconds on its own.
+
 ### 🎨 The initiative table fits in an email again
 
 - **Open work moved under the initiative's name, and the table went back to six columns.** An email
