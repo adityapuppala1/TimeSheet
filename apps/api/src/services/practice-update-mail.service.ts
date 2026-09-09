@@ -357,18 +357,30 @@ function initiativeTable(data: PracticeUpdateData, nextStepById: Map<string, str
   const rows = data.initiatives
     .filter((i) => i.category === category)
     .map((i) => [
-      `<strong>${escape(i.name)}</strong>${i.code ? `<br><span style="color:${MUTED};font-size:11px;">${escape(i.code)}</span>` : ""}`,
+      // Name, code and open work in ONE cell rather than in three.
+      //
+      // WHY: an email body is ~560px wide, and the open count arrived as a seventh column — at which
+      // point "1 closed · 1 raised · 8.5 h logged" wrapped onto five lines and the table stopped
+      // being readable at exactly the moment it gained the information worth reading. Stock ("172
+      // open, 2 critical") belongs beside the thing it describes anyway; the columns that remain are
+      // all flow and judgement, which is what the requested format actually asks for.
+      //
+      // The severity counts are defaulted because an initiative inside a draft stored before this
+      // release carries neither field: `undefined + undefined` is NaN, `NaN === 0` is false, and the
+      // cell would have rendered "undefined crit · undefined high" into a leadership email.
+      `<strong>${escape(i.name)}</strong>` +
+        `<br><span style="color:${MUTED};font-size:11px;">` +
+        [
+          i.code ? escape(i.code) : null,
+          `${i.openCount} open`,
+          (i.criticalOpen ?? 0) > 0 ? `${i.criticalOpen} critical` : null,
+          (i.highOpen ?? 0) > 0 ? `${i.highOpen} high` : null
+        ]
+          .filter(Boolean)
+          .join(" · ") +
+        "</span>",
       escape(i.owner ?? "—"),
       RAG_EMOJI[i.status],
-      // Open work, split by severity, because "8 open" and "8 open, 2 critical" are different rows
-      // to a reader deciding where to spend attention.
-      //
-      // Defaulted, because an initiative inside a draft stored before this release carries neither
-      // field: `undefined + undefined` is NaN, NaN === 0 is false, and the row would have rendered
-      // the words "undefined crit · undefined high" into a leadership email.
-      (i.criticalOpen ?? 0) + (i.highOpen ?? 0) === 0
-        ? String(i.openCount)
-        : `${i.openCount}<br><span style="color:${MUTED};font-size:11px;">${i.criticalOpen ?? 0} crit · ${i.highOpen ?? 0} high</span>`,
       escape(i.progress),
       // The model writes a next step when it can; when it cannot, the nearest real deadline on the
       // initiative is a better answer than a dash, and it is a fact rather than a guess.
@@ -377,9 +389,9 @@ function initiativeTable(data: PracticeUpdateData, nextStepById: Map<string, str
     ]);
 
   return dataTable({
-    head: ["Initiative", "Owner", "Status", "Open", "This period", "Next steps", "Risks / dependencies"],
+    head: ["Initiative", "Owner", "Status", "This period", "Next steps", "Risks / dependencies"],
     rows,
-    align: ["l", "l", "l", "r", "l", "l", "l"],
+    align: ["l", "l", "l", "l", "l", "l"],
     empty: "Nothing in this area this period."
   });
 }

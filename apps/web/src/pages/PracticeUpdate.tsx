@@ -197,6 +197,10 @@ function InitiativeTable({ rows, nextStepFor }: { rows: PracticeInitiative[]; ne
             <th className="py-1.5 pr-3 font-semibold">Initiative</th>
             <th className="py-1.5 pr-3 font-semibold">Owner</th>
             <th className="py-1.5 pr-3 font-semibold">Status</th>
+            {/* The email folds this under the initiative name instead, because an email body is
+                ~560px and a seventh column makes every other one wrap. This page has the width, and
+                a reviewer checking the draft before it sends wants the stock figure in its own
+                column where it can be scanned down. Same data, two widths — not drift. */}
             <th className="py-1.5 pr-3 text-right font-semibold">Open</th>
             <th className="py-1.5 pr-3 font-semibold">This period</th>
             <th className="py-1.5 pr-3 font-semibold">Next steps</th>

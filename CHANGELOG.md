@@ -10,6 +10,19 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🎨 The initiative table fits in an email again
+
+- **Open work moved under the initiative's name, and the table went back to six columns.** An email
+  body is about 560px wide. Adding the open count as a seventh column pushed "1 closed · 1 raised ·
+  8.5 h logged" onto five wrapped lines — the table stopped being readable at exactly the moment it
+  gained the information worth reading. Stock belongs next to the thing it describes anyway, so the
+  name cell now carries "HICS-OPS · 172 open · 2 critical · 2 high" and every remaining column is
+  flow or judgement, which is what the requested format asks for.
+- The review page keeps the separate column: it has the width, and somebody checking a draft before
+  it sends wants to scan that figure down a column. Same data, two widths, and the difference is
+  written down in both files so it does not read as drift later.
+- Caught by rendering the finished email and looking at it, not by reading the markup.
+
 ### 🐛 Two SLA queues that were labelled as one
 
 - **"SLA breaches" in the practice update counted timesheet APPROVALS, not tickets** — and sat in a
