@@ -10,6 +10,25 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🐛 Two SLA queues that were labelled as one
+
+- **"SLA breaches" in the practice update counted timesheet APPROVALS, not tickets** — and sat in a
+  table otherwise entirely about tickets, one row under "Overdue tickets". A reader took the smaller
+  number to be tickets. On the development workspace the two differ by an order of magnitude: 23
+  approvals past SLA against 320 tickets.
+- It is not only a label. That same figure forces an initiative **red**, so a project went red for a
+  late approval queue inside a row that never mentions approvals — a red nobody could explain in the
+  meeting where somebody asks why. The per-initiative risk line now reads "23 approvals past SLA",
+  the metrics row reads "Timesheet approvals past SLA", and the model is told in the prompt that the
+  two are different queues and must not be added together.
+- Found by looking at the rendered page rather than the code: the new "Critical open — 2 past SLA"
+  tile landed beside "SLA breaches — 0", and two figures that cannot both be true is what made the
+  older one worth checking.
+- **The field name is deliberately unchanged.** `slaBreaches` is persisted inside stored drafts and
+  history rows; renaming it would make every one of them read `undefined` — the same failure this
+  release already fixed for the derived analytics. The identifier stays and is documented; the
+  labels around it now say which queue they mean.
+
 ### 🐛 Six settings rows that raced themselves on a workspace's first minute
 
 - **A concurrent first read of any lazily-created settings row could fail.** Six workspace

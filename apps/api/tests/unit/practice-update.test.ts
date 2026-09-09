@@ -461,6 +461,49 @@ describe("a draft stored before this release still renders", () => {
   });
 });
 
+/**
+ * TWO SLA QUEUES, AND THE REPORT MUST NOT LET THEM BE ADDED TOGETHER.
+ *
+ * `PracticeMetrics.slaBreaches` counts TIMESHEET APPROVALS past their SLA. `metrics.overdue` counts
+ * TICKETS past theirs. They were rendered adjacently, both labelled as SLA breaches, in a table
+ * otherwise entirely about tickets — so a reader took the smaller number to be tickets. On the dev
+ * workspace they differ by an order of magnitude (23 approvals against 320 tickets), and the
+ * approvals figure ALSO forces an initiative red, so a project went red for a late approval queue
+ * inside a row that never mentions approvals.
+ *
+ * The field name is deliberately unchanged: it is persisted inside `PracticeUpdateRecord.data`, and
+ * renaming it would make every stored draft and history row read `undefined` — the same bug this
+ * file already guards against for `analytics`. What is pinned here is that every LABEL says which
+ * queue it means.
+ */
+describe("the two SLA queues are never labelled the same", () => {
+  it("names the approvals queue as approvals, everywhere it surfaces", () => {
+    const html = buildPracticeUpdateEmail(data({ metrics: metrics({ slaBreaches: 4, overdue: 11 }) }), null).sectionsHtml;
+
+    expect(metricValue(html, "Timesheet approvals past SLA")).toContain("4");
+    // The bare phrase is what a reader mistook for tickets.
+    expect(html).not.toContain(">SLA breaches</td>");
+  });
+
+  it("tells the model they are different queues, so it cannot sum them", () => {
+    const inputs = narrativeInputs(data({ metrics: metrics({ slaBreaches: 4, overdue: 11 }) }));
+
+    expect(inputs.metrics).toContain("Tickets past SLA");
+    expect(inputs.metrics).toContain("Timesheet approvals past SLA");
+    expect(inputs.metrics).toContain("do not add them together");
+  });
+
+  it("says WHY an initiative is red, in the words of the queue that made it red", () => {
+    // A red nobody can explain in the meeting is worse than no red at all.
+    const html = buildPracticeUpdateEmail(
+      data({ initiatives: [initiative({ status: "RED", risks: "2 approvals past SLA" })] }),
+      null
+    ).sectionsHtml;
+
+    expect(html).toContain("2 approvals past SLA");
+  });
+});
+
 describe("narrativeInputs", () => {
   it("gives the model the initiative IDs it is asked to key next steps by", () => {
     const inputs = narrativeInputs(data());

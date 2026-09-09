@@ -130,7 +130,9 @@ export function PracticeUpdateHistory() {
                 <Badge variant="muted">{row.metrics.ticketsClosed} closed</Badge>
                 <Badge variant="muted">{row.metrics.hours}h logged</Badge>
                 {row.metrics.overdue > 0 && <Badge variant="warning">{row.metrics.overdue} overdue</Badge>}
-                {row.metrics.slaBreaches > 0 && <Badge variant="destructive">{row.metrics.slaBreaches} SLA</Badge>}
+                {row.metrics.slaBreaches > 0 && (
+                  <Badge variant="destructive">{row.metrics.slaBreaches} approvals past SLA</Badge>
+                )}
                 <Badge variant="muted">{row.initiativeCount} initiatives</Badge>
               </div>
             )}

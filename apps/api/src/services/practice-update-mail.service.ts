@@ -234,7 +234,7 @@ function metricsTable(data: PracticeUpdateData): string {
     ["Reopened this period", pct(a.delivery.reopenRatePct, `${a.delivery.reopened} of ${a.delivery.everResolved} resolved`)],
     ["Overdue tickets", withDelta(m.overdue, p.overdue)],
     ["Unassigned open tickets", String(a.delivery.unassignedOpen)],
-    ["SLA breaches", withDelta(m.slaBreaches, p.slaBreaches)],
+    ["Timesheet approvals past SLA", withDelta(m.slaBreaches, p.slaBreaches)],
     ["Open escalations", String(m.openEscalations)],
     ["Falls due next week", String(a.delivery.dueNextWeek)]
   ];
@@ -447,7 +447,7 @@ export function buildPracticeUpdateEmail(data: PracticeUpdateData, narrative: Pr
   const strip = periodStrip([
     { label: "Tickets closed", value: String(metrics.ticketsClosed), sub: `${metrics.ticketsCreated} raised` },
     { label: "Hours logged", value: `${metrics.hours}`, sub: `${metrics.contributors} contributors` },
-    { label: "At risk", value: String(red.length), sub: `${amber.length} amber · ${metrics.slaBreaches} SLA breaches` }
+    { label: "At risk", value: String(red.length), sub: `${amber.length} amber · ${metrics.slaBreaches} approvals past SLA` }
   ]);
 
   // 1. Executive summary.
@@ -582,7 +582,8 @@ export function narrativeInputs(data: PracticeUpdateData): { metrics: string; in
     `Delivered on time: ${r(a.delivery.onTimeClosurePct)} of the ${a.delivery.closedWithDueDate} closed items that had a due date`,
     `Median cycle time: ${r(a.delivery.medianCycleHours, " h")}`,
     `Reopened within the period: ${a.delivery.reopened} of the ${a.delivery.everResolved} resolved in it (${r(a.delivery.reopenRatePct)})`,
-    `Overdue: ${withDelta(m.overdue, p.overdue)}; unassigned open: ${a.delivery.unassignedOpen}; SLA breaches: ${withDelta(m.slaBreaches, p.slaBreaches)}; open escalations: ${m.openEscalations}`,
+    `Tickets past SLA: ${withDelta(m.overdue, p.overdue)}; unassigned open: ${a.delivery.unassignedOpen}; open escalations: ${m.openEscalations}`,
+    `Timesheet approvals past SLA (a different queue from the tickets above, do not add them together): ${withDelta(m.slaBreaches, p.slaBreaches)}`,
     `Falls due next week: ${a.delivery.dueNextWeek} tickets`,
     "",
     "SEVERITY",

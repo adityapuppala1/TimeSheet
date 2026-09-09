@@ -265,7 +265,7 @@ function MetricTiles({ data }: Readonly<{ data: PracticeDraft["data"] }>) {
           ["Tickets closed", String(data.metrics.ticketsClosed)],
           ["Hours logged", `${data.metrics.hours}`],
           ["Overdue", String(data.metrics.overdue)],
-          ["SLA breaches", String(data.metrics.slaBreaches)]
+          ["Approvals past SLA", String(data.metrics.slaBreaches)]
         ].map(([label, value]) => (
           <div key={label} className="rounded-lg border border-border p-2.5">
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
@@ -300,7 +300,7 @@ function MetricTiles({ data }: Readonly<{ data: PracticeDraft["data"] }>) {
       value: ratePct(a.people.utilisationPct),
       sub: a.people.capacityHours === null ? "no capacity on file" : `of ${a.people.capacityHours} h`
     },
-    { label: "SLA breaches", value: String(data.metrics.slaBreaches), sub: `${a.delivery.unassignedOpen} unassigned` }
+    { label: "Approvals past SLA", value: String(data.metrics.slaBreaches), sub: `${a.delivery.unassignedOpen} tickets unassigned` }
   ];
 
   return (

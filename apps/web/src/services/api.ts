@@ -2831,6 +2831,8 @@ export interface PracticeMetrics {
   billableHours: number;
   contributors: number;
   overdue: number;
+  /** TIMESHEET APPROVALS past SLA, not tickets. The name is persisted in stored drafts and
+   *  history rows, so it stays; every label around it says which queue it means. */
   slaBreaches: number;
   openEscalations: number;
   changesRaised: number;

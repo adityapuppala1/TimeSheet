@@ -84,6 +84,17 @@ export interface PracticeMetrics {
   billableHours: number;
   contributors: number;
   overdue: number;
+  /**
+   * TIMESHEET APPROVALS that blew their SLA in the period — NOT tickets.
+   *
+   * The name is kept because it is persisted inside `PracticeUpdateRecord.data` and every stored
+   * draft and history row already carries it; renaming the field would make those rows render
+   * `undefined`. What was wrong was every LABEL around it, which said "SLA breaches" beside a
+   * column of ticket figures, so a reader concluded that many TICKETS had breached. On the dev
+   * workspace the two differ by an order of magnitude — 23 approvals against 320 tickets past SLA
+   * — and this figure also forces an initiative RED, so a project was going red for late timesheet
+   * approvals inside a row that otherwise talks only about tickets.
+   */
   slaBreaches: number;
   openEscalations: number;
   changesRaised: number;
@@ -203,6 +214,9 @@ export function categoriseInitiative(input: {
  * one place, so the meeting that argues about a red can argue about a number.
  */
 export function ragFor(input: { overdueCount: number; openCount: number; slaBreaches: number }): RagStatus {
+  // `slaBreaches` here is TIMESHEET APPROVALS past SLA, not tickets — see PracticeMetrics. It still
+  // earns a RED: an approval queue nobody is clearing is a broken commitment to the people waiting
+  // on it. The row's risk text names it precisely so the red is explainable in the meeting.
   if (input.slaBreaches > 0) return "RED";
   if (input.openCount > 0 && input.overdueCount / input.openCount > 1 / 3) return "RED";
   return input.overdueCount > 0 ? "AMBER" : "GREEN";
@@ -445,7 +459,7 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
         // Severity leads: "3 overdue" and "3 overdue, 2 of them critical" prompt different meetings.
         criticals > 0 ? `${criticals} critical open` : null,
         overdueCount > 0 ? `${overdueCount} overdue` : null,
-        slaBreaches > 0 ? `${slaBreaches} SLA breach${slaBreaches === 1 ? "" : "es"}` : null,
+        slaBreaches > 0 ? `${slaBreaches} approval${slaBreaches === 1 ? "" : "s"} past SLA` : null,
         openCount > 0 && ticketsClosed === 0 && projectHours === 0 ? `${openCount} open, no movement this period` : null
       ].filter(Boolean);
 
