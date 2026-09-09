@@ -104,7 +104,7 @@ export const SLIDES = [
     title: "It runs on their infrastructure, or on ours",
     points: [
       ["One codebase, two shapes", "A single-organization on-premise install is the same code as multi-organization SaaS, with the tenant count set to one — not a stripped fork that drifts behind the hosted build."],
-      ["Nothing calls home", "Your AI provider key, your GitHub OAuth app, your Google and Microsoft clients, your database. No vendor-operated model client ever sits between a customer and their data."],
+      ["Nothing calls home", "Your AI provider key, your GitHub OAuth app, your Google and Microsoft clients, your database. No vendor-operated model client ever sits between a customer and their data — and with the on-server runtime the model itself never leaves the machine either, on CPUs, with no GPU and no account anywhere."],
       ["Ships the way ops expects", "A one-command installer, Docker Compose with overlays for an external database and HTTPS, and a Helm chart with autoscaling. Air-gapped installs read release notes from the bundled changelog."]
     ]
   },
@@ -120,7 +120,7 @@ export const SLIDES = [
       ["Proof as a first-class output", "A signed, page-numbered attestation of approved, identity-verified work, with the rate that applied at approval frozen into the record. Competitors need identity verification, approval workflow and rate history to exist together before they can ship the artefact at all."],
       ["An AI loop that closes", "Capture what the model was asked and answered, correct real failures into a golden set, version prompts without a deploy, then replay and score. This is infrastructure, not a feature."],
       ["The operator's console is part of the product", "Whoever runs the deployment gets one maintenance window armed across every workspace — which the workspaces cannot switch off — plus per-tenant database monitoring, a year of growth history, and guarded operations where a rebuild is refused outside a maintenance window. It has its own authority model too: five operator roles read from the database on every request, and a second pair of eyes on the actions that cannot be undone. Most products build this privately, badly, after the first incident."],
-      ["Bring-your-own-key as the default", "Every AI capability is off until switched on, and runs against the customer's own provider key under a budget the product enforces per call. We never resell inference."],
+      ["Bring-your-own-key as the default", "Every AI capability is off until switched on, and runs against the customer's own provider key under a budget the product enforces per call — or against a model their own server runs, where there is no key and no third party at all. We never resell inference."],
       ["Isolation you can point at", "A database per organization, not a shared table with a tenant column. There is no query to get wrong, because there is no shared connection for one to cross."],
       ["An agentic layer that adds no new power", "Teammates and flows compose capabilities that already exist, under the same review, undo and audit path. Switching one on grants nothing new — it only names who runs what, at what budget, with what authority."]
     ]

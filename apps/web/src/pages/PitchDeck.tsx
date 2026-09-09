@@ -137,7 +137,7 @@ const MOATS = [
   {
     icon: Lock,
     title: "Bring-your-own-key as the default",
-    body: "Every AI capability is off until switched on, and all of them run against the customer's own provider key under a budget the product enforces per call. We never resell inference.",
+    body: "Every AI capability is off until switched on, and all of them run against the customer's own provider key under a budget the product enforces per call — or against a model their own server runs, where there is no key and no third party at all. We never resell inference.",
     why: "It removes the single most common blocker to AI adoption in a regulated buyer: 'where does our data go, and what will this cost?' Both answers are the customer's own."
   },
   {
@@ -198,7 +198,7 @@ const DEPLOYMENT = [
   },
   {
     title: "Nothing calls home",
-    body: "Your AI provider key, your GitHub OAuth app, your Google and Microsoft clients, your database. No vendor-operated model client ever sits between a customer and their data."
+    body: "Your AI provider key, your GitHub OAuth app, your Google and Microsoft clients, your database. No vendor-operated model client ever sits between a customer and their data — and with the on-server runtime the model itself never leaves the machine either, on CPUs, with no GPU and no account anywhere."
   },
   {
     title: "Ships the way ops expects",

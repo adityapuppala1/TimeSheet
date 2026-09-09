@@ -229,6 +229,40 @@ telemetry:
   retentionDays: 14 # pruned nightly at 04:10; rows accumulate with traffic
   clusterName: "" # free text; Kubernetes cannot report its own cluster name
 
+# Native AI (llama.cpp) — a model running on your own hardware, no API key and no GPU.
+# See docs/DEPLOYMENT.md → "Running a model on your own server".
+#
+# OFF BY DEFAULT IN KUBERNETES, and the reason is the shape of this chart rather than the feature.
+# `api` runs two replicas and autoscales to ten. A model supervised INSIDE each api pod is loaded
+# once per replica, so a 3 GB model costs 3 GB × replicas of resident memory, every replica
+# downloads its own copy of the weights, and the uploads-style ReadWriteOnce PVC cannot be shared
+# between them to avoid it. None of that is visible until the cluster scales out and pods start
+# getting OOMKilled.
+#
+#   mode: external  (recommended) — you run `llama-server` as its own Deployment + Service, sized
+#                    once, and point `host` at it. The api pods stay small and stateless, and
+#                    scaling them costs nothing extra.
+#   mode: embedded  — each api pod supervises its own runtime and gets its own models PVC. Honest
+#                    only at replicaCount 1: set api.replicaCount=1 and api.autoscaling.enabled=false,
+#                    and give the pod memory limits that fit the model plus its KV cache (the fit
+#                    estimator in the app tells you the number before you download anything).
+#
+# The port is deliberately NOT exposed through the ingress: llama.cpp's server has no
+# authentication of its own, so anything that can reach it can spend the machine.
+nativeAi:
+  enabled: false
+  mode: external # external | embedded
+  # `external` only: the in-cluster address of the runtime you run yourself.
+  host: llama-server
+  port: 8080
+  # `embedded` only: where GGUF weights and the llama.cpp binary live, and how much room they get.
+  # A single small model is ~2-5 GB; the default holds two comfortably.
+  modelDir: /app/models
+  modelsVolumeSize: 20Gi
+  # Pin the llama.cpp release the "Install the engine" button fetches. Empty = the release this
+  # build pins, which is the version its checks were written against.
+  engineRelease: ""
+
 # Runs `prisma migrate deploy` against BOTH schemas as a Helm hook Job before the api
 # Deployment rolls out new pods - the Kubernetes equivalent of docker-compose.yml's inline
 # migrate-then-start command, but as its own short-lived Job rather than baked into every

@@ -143,17 +143,17 @@ CAB tool holds none of that.
 
 ## By the numbers
 
-Counted from the tree at v5.0.0, not estimated — regenerate any of these with the one-liners in
+Counted from the tree at v5.1.0, not estimated — regenerate any of these with the one-liners in
 [CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
 that looks stale.
 
 | | |
 |---|---|
-| REST routes | **532** across 57 controllers |
-| Prisma models / enums | **131** / 46, plus **114** tenant migrations and 21 control-plane migrations |
-| Services / cron workers | **136** / 31 |
-| Web pages | **97** |
-| Unit tests | **2,820** across 188 files (`npm test -w apps/api`), plus **107** in `apps/web` |
+| REST routes | **544** across 57 controllers |
+| Prisma models / enums | **133** / 46, plus **117** tenant migrations and 22 control-plane migrations |
+| Services / cron workers | **144** / 32 |
+| Web pages | **98** |
+| Unit tests | **3,079** across 198 files (`npm test -w apps/api`), plus **183** in `apps/web` |
 | End-to-end specs | **29** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
 | Editable email templates | **41**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **20**, over 5 roles — plus **5** platform-console capabilities over 5 operator roles |
@@ -223,7 +223,7 @@ docs/
 
 - Node.js 20+ (tested with Node v24.12.0 / npm 11.6.2)
 - A running MySQL 8 server reachable from your machine (XAMPP's bundled MySQL works fine — default install listens on `localhost:3306` with user `root` and an **empty password**)
-- Optional, only if you want AI features live: an API key for whichever provider you choose (Anthropic, OpenAI, Groq, etc. — see **Turning on AI features (BYOK)** below), or a local Ollama/LM Studio install with no key at all
+- Optional, only if you want AI features live: an API key for whichever provider you choose (Anthropic, OpenAI, Groq, etc. — see **Turning on AI features (BYOK)** below), a local Ollama/LM Studio install with no key at all, or nothing whatsoever — the **native runtime** downloads and runs a model on this server's own CPUs
 - Optional, only if you want email-to-ticket intake live: IMAP access to a mailbox (an app password works fine, same pattern as the existing SMTP setup)
 
 ## Installation (local, no Docker)
@@ -377,10 +377,12 @@ AI is off by default, and the underlying model provider is admin-chosen per work
 your own key for whichever vendor you already have an account with. To try it:
 
 1. Log in as Super Admin → **Workspace Settings → AI**.
-2. Pick a **Provider**: Anthropic (native), or any OpenAI-compatible vendor — OpenAI, Groq,
+2. Pick a **Provider**: Anthropic (native), any OpenAI-compatible vendor — OpenAI, Groq,
    Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi, Nvidia NIM, a local Ollama/LM Studio
    install (no key needed), or **Custom endpoint** for anything else that speaks the same
-   protocol. Picking a preset fills in its base URL; you can still override it.
+   protocol — or **Native (llama.cpp)**, a model this server downloads and runs itself on the
+   CPUs it already has, with no key and no account anywhere (see the next section). Picking a
+   preset fills in its base URL; you can still override it.
 3. Paste an **API key** and click Save (skip this for a local Ollama/LM Studio install). The key
    is encrypted at rest (AES-256-GCM) and never sent back to the browser once saved — only an
    "is a key saved" flag is. Anthropic alone also honors `ANTHROPIC_API_KEY` in `apps/api/.env`
@@ -403,6 +405,38 @@ Not every OpenAI-compatible endpoint supports the same structured-output request
 runtimes like Ollama/LM Studio in particular often don't) — triage and duplicate-detection ask
 for JSON via the prompt itself when needed and validate the response locally either way, so a
 provider that lacks native structured output degrades gracefully instead of hard-failing.
+
+### Running a model on this server (no key, no GPU)
+
+**Workspace Settings → AI → Run a model on this server.** The alternative to bringing a key is
+bringing nothing: the server fetches a `llama.cpp` build and a GGUF model, runs it as a local
+OpenAI-compatible endpoint, and registers it as one more provider in the same ranked list — same
+fallback, same budget, same usage log. Nothing leaves the machine.
+
+It leads with what the machine *is* rather than asking you to guess: CPU model and physical cores,
+the memory this process may actually use (a cgroup limit is read where one exists, so a container
+capped at 4 GB is not told it has 32), free disk under the model directory, and the environment it
+detected **with the evidence attached** — "Kubernetes, detected from KUBERNETES_SERVICE_HOST is
+set" — because a label nobody can check is a label nobody should trust.
+
+From that it judges each model in a small curated catalogue *before* you download a gigabyte, and
+shows the arithmetic: weights at the chosen quantisation, plus the KV cache for the chosen context
+window, plus a reserve for the rest of the application. Then it benchmarks what it actually
+downloaded instead of quoting a spec sheet, so the tokens-per-second beside a model is a
+measurement from this hardware.
+
+Two operational notes that matter more than the feature does:
+
+- **A model is memory-resident.** Sizing is per machine, not per workspace, and the panel's
+  estimate is the number to trust over any published "minimum requirements".
+- **In Kubernetes, run it as a sidecar.** The Helm chart's `nativeAi.mode` defaults to `external`
+  for this reason: an embedded runtime is loaded once per api replica, so a 3 GB model costs
+  3 GB × replicas and every replica downloads its own copy of the weights. `embedded` is honest at
+  `api.replicaCount: 1` and is guarded by its own PVC; anything larger should point at one
+  `llama-server` Deployment sized once. See `deploy/helm/timesphere/values.yaml`.
+
+Compose users get both env forwarding and a persistent `api-models` volume out of the box; a GGUF
+left on a container's own filesystem is re-downloaded on every rebuild.
 
 ## Preventing setup issues
 

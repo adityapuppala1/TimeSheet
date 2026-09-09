@@ -1465,6 +1465,73 @@ Setting `imageRetentionDays: 0` stores templates only. **No GPU** — at these l
 human-paced demand it solves nothing, and it would reintroduce the native compiled dependency
 the wasm build deliberately avoids.
 
+## Running a model on your own server
+
+The alternative to bringing an API key is bringing nothing. **Workspace Settings → AI → Run a
+model on this server** fetches a `llama.cpp` build and a GGUF model, supervises it as a local
+OpenAI-compatible endpoint, and registers it as one more provider in the same ranked list — same
+fallback chain, same budget, same `AIUsageLog`. No key, no GPU, and no request leaving the machine.
+
+Everything below is about *where the pieces live*. The feature stays off until a workspace turns it
+on, so an install that never touches the AI tab is unaffected by any of it.
+
+### The variables
+
+| Variable | Default | What it decides |
+|---|---|---|
+| `NATIVE_AI_RUNTIME_MODE` | `auto` | `embedded` — this process supervises its own `llama-server`. `external` — something else runs it and we only speak to it. `off`. `auto` asks the hardware probe. |
+| `NATIVE_AI_SERVER_BIN` | *(empty)* | Absolute path to `llama-server`. Empty searches the model directory, then `PATH`. |
+| `NATIVE_AI_ENGINE_RELEASE` | *(empty)* | Which llama.cpp release the **Install the engine** button fetches. Empty uses the release this build pins — the one its checks were written against. |
+| `NATIVE_AI_HOST` / `NATIVE_AI_PORT` | `127.0.0.1` / `8080` | Where the runtime listens, and in `external` mode where to find it. |
+| `NATIVE_AI_MODEL_DIR` | beside the uploads tree | Where GGUF files land. **Must be on a mounted volume** — see below. |
+
+### The one thing that will bite you: the model directory
+
+A GGUF is measured in gigabytes. Left on a container's own filesystem it is re-downloaded on every
+`up --build` and it inflates the writable layer by the size of the weights.
+
+- **Compose** — both `docker-compose.yml` and `docker-compose.external-db.yml` already forward
+  every variable above and mount a named `api-models` volume at `/app/models`. Nothing to do.
+- **Helm** — see `nativeAi` in `values.yaml`. `embedded` provisions its own PVC
+  (`nativeAi.modelsVolumeSize`, 20Gi by default) and mounts it; `external` provisions nothing.
+- **Bare metal / systemd** — point `NATIVE_AI_MODEL_DIR` at a real directory on a disk with room,
+  not at `/tmp`.
+
+### Sizing, and why Kubernetes defaults to a sidecar
+
+**A model is memory-resident, and it is resident per process.** The panel in the app computes the
+requirement before you download anything — weights at the chosen quantisation, plus the KV cache
+for the chosen context window, plus a reserve for the rest of the application — and reads a cgroup
+limit where one exists, so a container capped at 4 GB is not told it has 32. That number is the one
+to trust; it is arithmetic about your machine rather than a published minimum.
+
+The consequence in a cluster is what `nativeAi.mode` defaults to `external` for: the api Deployment
+runs two replicas and autoscales to ten, an embedded runtime is loaded once **per replica**, and a
+3 GB model therefore costs 3 GB × replicas of resident memory while every replica downloads its own
+copy of the weights into its own ReadWriteOnce PVC. Nothing warns you — it simply starts getting
+pods OOMKilled as the cluster scales out.
+
+So:
+
+- **`mode: external`** (the default) — run `llama-server` as its own Deployment and Service, sized
+  once, and set `nativeAi.host` to it. The api pods stay small and stateless and scale for free.
+  **Keep it inside the cluster**: llama.cpp's server has no authentication of its own, so anything
+  that can reach it can spend the machine. This chart deliberately does not expose it through the
+  ingress.
+- **`mode: embedded`** — honest at `api.replicaCount: 1` with `api.autoscaling.enabled: false`, and
+  with memory limits that fit the model plus its cache. Fine for a single-node on-prem install,
+  which is the shape most people asking for this actually have.
+
+Compose is the easy case: one api container, one model, one volume.
+
+### Verifying it
+
+The panel tells you what it did rather than asking you to trust it — engine version, model file and
+size on disk, and a **measured** tokens-per-second from a benchmark run on this hardware after the
+download, not a figure from a spec sheet. If the runtime cannot start, the provider is marked down
+and every AI call falls through to the next provider in the list exactly as it would for a rejected
+API key; the application does not stop.
+
 ## Environment variable reference
 
 See `.env.example` for the full list with inline comments. The multi-tenancy-specific ones,

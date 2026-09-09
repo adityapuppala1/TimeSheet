@@ -42,6 +42,7 @@ import {
   ClipboardCheck,
   Clock,
   Coins,
+  Cpu,
   CreditCard,
   Eye,
   FileCheck2,
@@ -405,7 +406,13 @@ const FEATURES: Feature[] = [
     icon: Bot,
     group: "AI, governed",
     title: "AI, bring your own key",
-    body: "Auto-triage, duplicate detection, a writing assistant, comment summaries, drafted status reports and \"Ask AI\" search — on Anthropic, OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi, Nvidia NIM, your own local Ollama, or any OpenAI-compatible endpoint you point it at."
+    body: "Auto-triage, duplicate detection, a writing assistant, comment summaries, drafted status reports and \"Ask AI\" search — on Anthropic, OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi, Nvidia NIM, your own local Ollama, any OpenAI-compatible endpoint you point it at, or a model this server runs itself with no key and no third party at all."
+  },
+  {
+    icon: Cpu,
+    group: "AI, governed",
+    title: "A model on your own server, no key and no GPU",
+    body: "Pick a model from a curated list and this server downloads it, runs it and measures it — on the CPUs you already have. It reads the machine first (physical cores, the memory this process may actually use, the disk under the model directory, and whether a container limit is capping any of it), then says whether a given model fits before you download a gigabyte, and shows the arithmetic behind the answer. It benchmarks what it downloaded rather than quoting a spec sheet, and slots in as one more provider in the same ranked list, with the same fallback, so a machine that is too busy simply falls through to the next one."
   },
   {
     icon: FlaskConical,
@@ -519,7 +526,7 @@ const AI_GUARDRAILS = [
   {
     icon: KeyRound,
     title: "Bring your own key, any provider",
-    body: "Point AI features at Anthropic, OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi, Nvidia NIM, or a self-hosted Ollama/LM Studio. Your key is encrypted at rest and never sent back to the browser once saved — switch providers without touching code."
+    body: "Point AI features at Anthropic, OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi, Nvidia NIM, or a self-hosted Ollama/LM Studio — or at a model this server runs itself, where there is no key to protect and no request leaves the building. Your key is encrypted at rest and never sent back to the browser once saved; switch providers without touching code."
   },
   {
     icon: Sparkles,

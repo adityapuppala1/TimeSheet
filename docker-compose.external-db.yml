@@ -103,6 +103,26 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # Hourly GitHub release check. UPDATE_CHECK=off for an air-gapped install; only the literal
       # "off" disables it. UPDATE_CHECK_TOKEN is needed only for a PRIVATE repo.
+      # ── Native AI (llama.cpp), docs/DEPLOYMENT.md → "Running a model on your own server" ──
+      # Off unless a workspace turns it on in Workspace settings → AI; these only say WHERE the
+      # pieces live when it is.
+      #
+      # `auto` lets the hardware probe decide whether this container may supervise its own
+      # `llama-server` (it may — it is a normal Linux process) or must point at one somebody else
+      # runs. Set `external` and NATIVE_AI_HOST when you run the runtime as a sidecar, which is the
+      # shape to prefer once more than one API replica exists: a model loaded per replica multiplies
+      # the RAM bill by the replica count, and every replica downloads its own copy of the weights.
+      NATIVE_AI_RUNTIME_MODE: ${NATIVE_AI_RUNTIME_MODE:-auto}
+      NATIVE_AI_SERVER_BIN: ${NATIVE_AI_SERVER_BIN:-}
+      NATIVE_AI_ENGINE_RELEASE: ${NATIVE_AI_ENGINE_RELEASE:-}
+      # Loopback by default. A sidecar means naming its service here — and that address is
+      # unauthenticated, so it must stay on the compose network and never reach a published port.
+      NATIVE_AI_HOST: ${NATIVE_AI_HOST:-127.0.0.1}
+      NATIVE_AI_PORT: ${NATIVE_AI_PORT:-8080}
+      # A GGUF is measured in gigabytes, so this MUST be a mounted volume. Left on the container's
+      # own filesystem it is re-downloaded on every `up --build` and it inflates the writable
+      # layer by the size of the weights — see `api-models` below.
+      NATIVE_AI_MODEL_DIR: ${NATIVE_AI_MODEL_DIR:-/app/models}
       UPDATE_CHECK: ${UPDATE_CHECK:-on}
       UPDATE_CHECK_REPO: ${UPDATE_CHECK_REPO:-}
       UPDATE_CHECK_TOKEN: ${UPDATE_CHECK_TOKEN:-}
@@ -110,6 +130,11 @@ services:
       - "4000:4000"
     volumes:
       - api-uploads:/app/uploads
+      # GGUF weights and the llama.cpp binary. Separate from uploads because the two have nothing
+      # in common but a filesystem: this one is large, re-downloadable and machine-specific, and
+      # somebody moving uploads to an NFS share or a backup rotation should not drag gigabytes of
+      # model weights along with it.
+      - api-models:/app/models
     # No `depends_on` on a bundled mysql service — there isn't one in this file. Your own MySQL
     # server is assumed already up and reachable; the migration step below fails fast (crashing
     # the container, which `restart: unless-stopped` + the installer's health-check auto-heal
@@ -135,3 +160,4 @@ services:
 
 volumes:
   api-uploads:
+  api-models:

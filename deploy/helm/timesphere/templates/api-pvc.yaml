@@ -11,3 +11,27 @@ spec:
   resources:
     requests:
       storage: {{ .Values.api.uploadsVolumeSize }}
+
+{{- if and .Values.nativeAi.enabled (eq .Values.nativeAi.mode "embedded") }}
+---
+# GGUF weights and the llama.cpp binary, kept apart from the uploads claim on purpose: this one is
+# large, re-downloadable and specific to the machine that runs the model, and an operator resizing
+# or backing up attachments should not be dragging gigabytes of model weights along with them.
+#
+# ReadWriteOnce, like the uploads claim — which is exactly why `embedded` is only honest at a single
+# api replica. A second pod on another node cannot mount this, and would silently download its own
+# copy of the weights into its ephemeral layer.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "timesphere.fullname" . }}-api-models
+  labels:
+    {{- include "timesphere.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.nativeAi.modelsVolumeSize }}
+{{- end }}

@@ -60,7 +60,16 @@ spec:
           volumeMounts:
             - name: uploads
               mountPath: /app/uploads
+            {{- if and .Values.nativeAi.enabled (eq .Values.nativeAi.mode "embedded") }}
+            - name: models
+              mountPath: {{ .Values.nativeAi.modelDir }}
+            {{- end }}
       volumes:
         - name: uploads
           persistentVolumeClaim:
             claimName: {{ include "timesphere.fullname" . }}-api-uploads
+        {{- if and .Values.nativeAi.enabled (eq .Values.nativeAi.mode "embedded") }}
+        - name: models
+          persistentVolumeClaim:
+            claimName: {{ include "timesphere.fullname" . }}-api-models
+        {{- end }}

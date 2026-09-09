@@ -10,6 +10,32 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 5.1.0 — a model of your own, and charts that count the team you have — 2026-09-09
+
+### 🔧 The native runtime reaches the containers it was meant to run in
+
+- **Every `NATIVE_AI_*` variable is now forwarded by both Compose files, and the model directory is
+  a named volume.** It had existed only in `env.ts` and `.env.example`, which means it did not exist
+  inside a container at all — and the failure would have been quiet and expensive: a GGUF written to
+  the container's own filesystem is re-downloaded on every `up --build` and inflates the writable
+  layer by the size of the weights. `api-models` is deliberately separate from `api-uploads`,
+  because one is large, re-downloadable and specific to the machine, and somebody moving attachments
+  to an NFS share should not drag gigabytes of model weights along with them.
+- **The Helm chart gains a `nativeAi` block, and it defaults to `external` rather than to the
+  obvious thing.** The api Deployment runs two replicas and autoscales to ten; an embedded runtime
+  is loaded once *per replica*, so a 3 GB model costs 3 GB × replicas of resident memory and every
+  replica downloads its own copy into its own ReadWriteOnce PVC. Nothing warns you — pods simply
+  start being OOMKilled as the cluster scales out. `external` points the pods at one `llama-server`
+  sized once; `embedded` provisions and mounts its own models PVC and is honest at a single replica.
+  The runtime is never exposed through the ingress: llama.cpp's server has no authentication of its
+  own, so anything that can reach it can spend the machine.
+- **CI renders both modes.** The chart was already rendered three ways on the stated principle that
+  its real branches are its conditionals — these two were new conditionals nothing rendered, so the
+  embedded render now asserts a models PVC exists and the external render asserts it does not.
+- `docs/DEPLOYMENT.md` gains **Running a model on your own server** — the variables, the volume trap,
+  the sizing arithmetic, and why Kubernetes wants a sidecar. The README, the landing page and the
+  pitch deck stop describing the provider list as key-only.
+
 ### 🤖 The screen an administrator actually uses to run a model on their own server
 
 - **"Run a model on this server", in Workspace settings → AI.** Everything the last three releases

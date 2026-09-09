@@ -84,3 +84,18 @@ data:
   API_TELEMETRY_RETENTION_DAYS: {{ .retentionDays | quote }}
   CLUSTER_NAME: {{ .clusterName | quote }}
   {{- end }}
+  {{- with .Values.nativeAi }}
+  {{- if .enabled }}
+  # Native AI. `embedded` lets the api pod supervise its own llama-server; `external` points at one
+  # you run. See values.yaml for why external is the default in a cluster that autoscales.
+  NATIVE_AI_RUNTIME_MODE: {{ .mode | quote }}
+  NATIVE_AI_ENGINE_RELEASE: {{ .engineRelease | quote }}
+  {{- if eq .mode "external" }}
+  NATIVE_AI_HOST: {{ .host | quote }}
+  NATIVE_AI_PORT: {{ .port | quote }}
+  {{- else }}
+  NATIVE_AI_MODEL_DIR: {{ .modelDir | quote }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+

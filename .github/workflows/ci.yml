@@ -540,6 +540,32 @@ jobs:
             --set api.verticalAutoscaling.enabled=true \
             --set ingress.wildcardHost='*.timesphere.example.com' > /tmp/render-telemetry.yaml
 
+      # Native AI, rendered BOTH ways, because its two modes produce different manifests and the
+      # three renders above walk past both of them: `embedded` adds a second PersistentVolumeClaim
+      # and a volume mount on the api Deployment, `external` adds neither and only sets two env
+      # keys. A chart branch nothing renders is a chart branch nobody knows is broken.
+      - name: helm template (native AI, embedded runtime)
+        run: |
+          helm template ts deploy/helm/timesphere \
+            --set nativeAi.enabled=true \
+            --set nativeAi.mode=embedded \
+            --set api.replicaCount=1 \
+            --set api.autoscaling.enabled=false > /tmp/render-native-embedded.yaml
+          grep -q "api-models" /tmp/render-native-embedded.yaml \
+            || { echo "::error::embedded native AI rendered no models PVC"; exit 1; }
+
+      - name: helm template (native AI, external runtime)
+        run: |
+          helm template ts deploy/helm/timesphere \
+            --set nativeAi.enabled=true \
+            --set nativeAi.host=llama-server > /tmp/render-native-external.yaml
+          grep -q "NATIVE_AI_HOST" /tmp/render-native-external.yaml \
+            || { echo "::error::external native AI rendered no runtime address"; exit 1; }
+          if grep -q "api-models" /tmp/render-native-external.yaml; then
+            echo "::error::external native AI must not claim a models volume — nothing local runs the model"
+            exit 1
+          fi
+
       # `helm template` will happily emit text that is not valid YAML when an indentation helper is
       # wrong (a missing `nindent`, a `with` block off by two spaces) — helm itself does not parse
       # what it prints. Only loading each render proves the chart produces manifests the API server
