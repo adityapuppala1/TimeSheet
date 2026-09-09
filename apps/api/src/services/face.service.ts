@@ -44,6 +44,7 @@ import { decryptSecret, encryptSecret } from "../utils/encryption.js";
 import { isFaceVerificationAllowed } from "./plan-limits.service.js";
 import { dispatchNotification } from "./notify.service.js";
 import { templates } from "./mail-templates.js";
+import { lazyCreateSettings } from "../utils/lazy-create-settings.js";
 
 const require = createRequire(import.meta.url);
 
@@ -498,11 +499,17 @@ export async function effectiveMatchThreshold(userId: string, globalThreshold: n
 
 /** Upsert-on-read singleton, same pattern as every other global settings row in this app. */
 export async function getFaceSettings() {
-  return prisma.globalFaceVerificationSettings.upsert({
-    where: { id: FACE_GLOBAL_ID },
-    update: {},
-    create: { id: FACE_GLOBAL_ID }
-  });
+  // Lazily created on first read, so two concurrent reads on a workspace that has no row yet
+  // both attempt the INSERT and the loser gets a P2002. See utils/lazy-create-settings.ts.
+  return lazyCreateSettings(
+    () =>
+      prisma.globalFaceVerificationSettings.upsert({
+        where: { id: FACE_GLOBAL_ID },
+        update: {},
+        create: { id: FACE_GLOBAL_ID }
+      }),
+    () => prisma.globalFaceVerificationSettings.findUnique({ where: { id: FACE_GLOBAL_ID } })
+  );
 }
 
 /**

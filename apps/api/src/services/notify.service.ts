@@ -22,6 +22,7 @@ import { prisma } from "../config/prisma.js";
 import { sendMail } from "./mail.service.js";
 import { renderEmailTemplate } from "./template-store.service.js";
 import { templates } from "./mail-templates.js";
+import { lazyCreateSettings } from "../utils/lazy-create-settings.js";
 
 export type NotificationCategory =
   | "timesheet.submitted"
@@ -186,11 +187,12 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
 const GLOBAL_ID = "global";
 
 export async function getGlobalNotificationSettings() {
-  return prisma.globalNotificationSettings.upsert({
-    where: { id: GLOBAL_ID },
-    update: {},
-    create: { id: GLOBAL_ID }
-  });
+  // Lazily created on first read, so two concurrent reads on a workspace that has no row yet
+  // both attempt the INSERT and the loser gets a P2002. See utils/lazy-create-settings.ts.
+  return lazyCreateSettings(
+    () => prisma.globalNotificationSettings.upsert({ where: { id: GLOBAL_ID }, update: {}, create: { id: GLOBAL_ID } }),
+    () => prisma.globalNotificationSettings.findUnique({ where: { id: GLOBAL_ID } })
+  );
 }
 
 export async function dispatchNotification(args: DispatchArgs) {

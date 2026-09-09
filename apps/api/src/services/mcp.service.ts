@@ -15,6 +15,7 @@ import type { RequestUser } from "../middleware/auth.js";
 import { isMaintenanceActive } from "./maintenance.service.js";
 import { defaultEnabledFor, isToolEnabled, MCP_TOOLS, type McpEnablementSettings } from "./mcp-tools.js";
 import { loadRequestUser } from "./principal.service.js";
+import { lazyCreateSettings } from "../utils/lazy-create-settings.js";
 
 const GLOBAL_ID = "global";
 
@@ -30,11 +31,12 @@ export type McpSettings = McpEnablementSettings & {
 /** Upserted on read, same convention as every other Global* settings table — the first GET seeds
  *  the closed-by-default row instead of requiring a seed step. */
 export async function getGlobalMcpSettings(): Promise<McpSettings> {
-  const row = await prisma.globalMcpSettings.upsert({
-    where: { id: GLOBAL_ID },
-    update: {},
-    create: { id: GLOBAL_ID }
-  });
+  // Lazily created on first read, so two concurrent reads on a workspace that has no row yet
+  // both attempt the INSERT and the loser gets a P2002. See utils/lazy-create-settings.ts.
+  const row = await lazyCreateSettings(
+    () => prisma.globalMcpSettings.upsert({ where: { id: GLOBAL_ID }, update: {}, create: { id: GLOBAL_ID } }),
+    () => prisma.globalMcpSettings.findUnique({ where: { id: GLOBAL_ID } })
+  );
   return {
     enabled: row.enabled,
     allowWrites: row.allowWrites,

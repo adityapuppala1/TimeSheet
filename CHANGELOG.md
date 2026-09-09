@@ -10,6 +10,29 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🐛 Six settings rows that raced themselves on a workspace's first minute
+
+- **A concurrent first read of any lazily-created settings row could fail.** Six workspace
+  singletons — AI, change management, email intake, face verification, MCP, notifications — are
+  created by an `upsert` on the read path, and an `upsert` is not atomic against a concurrent
+  `upsert` of the same missing row: both callers find nothing, both attempt the INSERT, and the
+  loser gets `P2002`. It bites only on a workspace whose row does not exist yet, which is exactly
+  a new tenant's first minute, when the first page load fires a dozen requests at once.
+- Found by running the weekly practice update against a freshly provisioned org: two concurrent
+  `isChangeManagementOn()` calls raced, one threw, and the report fell through to "change management
+  is off" — not a crash, a **wrong answer**, on that report's first ever run. `getGlobalAISettings`
+  is the one with the most at stake, since every AI preflight calls it: the version of this that
+  reaches a customer is "AI is broken on my first day".
+- **The fix is not a lock.** Losing the race is harmless — the row the winner created is the row
+  this caller wanted. Catching the violation and re-reading once is correct and free on the path
+  that runs a million times, where serialising every settings read for the life of a workspace would
+  be a permanent cost for a transient problem. It refuses to retry a non-`P2002`, refuses to retry
+  twice, and rethrows the original error when the re-read finds nothing rather than reporting a
+  missing row as success.
+- An anti-drift check fails on a seventh settings getter written the old way, because this only
+  shows up on a new workspace under concurrency — not a case anybody writes a test for while
+  building their own feature.
+
 ### 📊 The weekly practice update learns to answer the questions counts cannot
 
 - **Key Metrics went from twelve figures to more than thirty, in themed blocks.** Delivery and flow,

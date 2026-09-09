@@ -35,16 +35,23 @@ import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";
 import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
+import { lazyCreateSettings } from "../utils/lazy-create-settings.js";
 
 const SETTINGS_ID = "global";
 
 /** Workspace switches, upserted on read — same shape as getGlobalTicketSettings. */
 export async function getChangeSettings() {
-  return prisma.globalChangeSettings.upsert({
-    where: { id: SETTINGS_ID },
-    update: {},
-    create: { id: SETTINGS_ID, remindHoursBefore: [24, 1] }
-  });
+  // Lazily created on first read, so two concurrent reads on a workspace that has no row yet
+  // both attempt the INSERT and the loser gets a P2002. See utils/lazy-create-settings.ts.
+  return lazyCreateSettings(
+    () =>
+      prisma.globalChangeSettings.upsert({
+        where: { id: SETTINGS_ID },
+        update: {},
+        create: { id: SETTINGS_ID, remindHoursBefore: [24, 1] }
+      }),
+    () => prisma.globalChangeSettings.findUnique({ where: { id: SETTINGS_ID } })
+  );
 }
 
 /**

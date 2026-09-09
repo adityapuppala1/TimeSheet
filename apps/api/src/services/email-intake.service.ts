@@ -34,6 +34,7 @@ import { classifyTicket, getGlobalAISettings, EXTERNAL_INTAKE_CONFIDENCE_CEILING
 import { dispatchNotification, dispatchTransactional, templates } from "./notify.service.js";
 import { computeTicketDueDate, getGlobalTicketSettings, issueTicketKey } from "./ticket.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
+import { lazyCreateSettings } from "../utils/lazy-create-settings.js";
 
 const GLOBAL_ID = "global";
 
@@ -55,11 +56,12 @@ export interface ParsedInboundEmail {
 }
 
 export async function getGlobalEmailIntakeSettings() {
-  return prisma.emailIntakeSettings.upsert({
-    where: { id: GLOBAL_ID },
-    update: {},
-    create: { id: GLOBAL_ID }
-  });
+  // Lazily created on first read, so two concurrent reads on a workspace that has no row yet
+  // both attempt the INSERT and the loser gets a P2002. See utils/lazy-create-settings.ts.
+  return lazyCreateSettings(
+    () => prisma.emailIntakeSettings.upsert({ where: { id: GLOBAL_ID }, update: {}, create: { id: GLOBAL_ID } }),
+    () => prisma.emailIntakeSettings.findUnique({ where: { id: GLOBAL_ID } })
+  );
 }
 
 function matchesRule(email: ParsedInboundEmail, rule: { matchType: string; matchValue: string }): boolean {

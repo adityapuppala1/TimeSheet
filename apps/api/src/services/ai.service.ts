@@ -64,6 +64,7 @@ import { assertPublicEgressTarget } from "../utils/egress.js";
 import { resolvePrompt } from "./ai-prompt.service.js";
 import { getEffectiveAiBudgetCeiling } from "./plan-limits.service.js";
 import { htmlToPlainText, htmlToText, plainTextToRichText } from "../utils/sanitize.js";
+import { lazyCreateSettings } from "../utils/lazy-create-settings.js";
 
 const GLOBAL_ID = "global";
 
@@ -124,11 +125,12 @@ function economyModelFor(settings: { provider: string; model: string }): string 
 
 /** Upsert-on-read singleton row (id="global") — first call ever made seeds the defaults (AI off). */
 export async function getGlobalAISettings() {
-  return prisma.globalAISettings.upsert({
-    where: { id: GLOBAL_ID },
-    update: {},
-    create: { id: GLOBAL_ID }
-  });
+  // Lazily created on first read, so two concurrent reads on a workspace that has no row yet
+  // both attempt the INSERT and the loser gets a P2002. See utils/lazy-create-settings.ts.
+  return lazyCreateSettings(
+    () => prisma.globalAISettings.upsert({ where: { id: GLOBAL_ID }, update: {}, create: { id: GLOBAL_ID } }),
+    () => prisma.globalAISettings.findUnique({ where: { id: GLOBAL_ID } })
+  );
 }
 
 type AISettingsRow = Awaited<ReturnType<typeof getGlobalAISettings>>;
