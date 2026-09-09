@@ -10,6 +10,25 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🔐 A Tiptap advisory, assessed by running it rather than arguing about it
+
+- **`@tiptap/core`'s `mergeAttributes()` turns an own `__proto__` key into inherited, executable DOM
+  attributes.** Moderate, and the only upstream fix is Tiptap 2 → 3 — a major across eight packages
+  that would rewrite every rich-text surface in the product. Whether that risk is worth taking turns
+  entirely on reachability, which is a question with an answer.
+- **It is not reachable through this application's storage.** Every rich-text value is written
+  through `sanitizeRichText`, an allow-list naming `href`/`rel`/`target` on `<a>` and `style` on
+  everything else, discarding the rest. `__proto__` cannot express itself through it — proven with
+  the attack shapes an attacker would actually use, including casing and whitespace variants, rather
+  than asserted from reading the configuration.
+- **The allow-list is now pinned, because the whole argument rests on it.** Ten attributes are
+  probed through the real sanitiser and each pinned as kept or dropped. Widening the list is a
+  perfectly legitimate thing to want — this makes it a decision rather than an accident, and the
+  failure message says what else has to be re-assessed in the same breath. Verified by widening it
+  on purpose and watching the guard go red.
+- The upgrade is not cancelled, only shown not to be urgent here. This was surfaced by the
+  Dependabot job failing repeatedly on a fix it cannot apply automatically.
+
 ### 🔧 The changelog's opening promise is now true, and enforced
 
 - **This file opens by saying every version has a git tag and a GitHub Release. For eleven of forty
