@@ -64,7 +64,7 @@ import {
   Waypoints,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
 import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRefine";
 import { PlanCalendar } from "../components/PlanCalendar";
@@ -74,8 +74,11 @@ import { SavedViewsBar, type TicketFilters } from "../components/SavedViewsBar";
 import { PageHeader } from "../components/PageHeader";
 import { TicketCustomFields } from "../components/TicketCustomFields";
 import { TicketSprintFields } from "../components/TicketSprintFields";
+import { ProjectMark } from "../components/ProjectMark";
+import { ViewsBar } from "../components/ViewsBar";
 import { readProjectSelection, withoutProjectSelection } from "../lib/project-tree";
 import { formatGroupLabel, groupRuns } from "../lib/group-rows";
+import { cn } from "../lib/utils";
 import { displayValue, fieldsForTicket } from "../lib/custom-fields";
 import { isDefaultColumns, resolveVisibleColumns, type ColumnSpec } from "../lib/table-columns";
 import { TicketMetricsPanel } from "../components/TicketMetricsPanel";
@@ -133,7 +136,7 @@ export function iconForType(type: string) {
 /** Re-exported rather than defined here: the metric tiles above the table need the same palette,
  *  and they live in their own component, so the maps moved to lib/ticket-visuals.ts to avoid a
  *  circular import. TicketKanban.tsx still imports both from this module. */
-import { PRIORITY_VARIANT, STATUS_VARIANT } from "../lib/ticket-visuals";
+import { PRIORITY_VARIANT, STATUS_VARIANT, TONE_ACCENT_CLASS } from "../lib/ticket-visuals";
 export { PRIORITY_VARIANT, STATUS_VARIANT };
 
 export function serverMessage(err: any, fallback: string) {
@@ -215,7 +218,12 @@ const ticketColumns: ColumnDef<TicketRow, any>[] = [
     id: "project",
     accessorFn: (row) => row.project.name,
     header: "Project",
-    cell: (info) => <span className="text-muted-foreground">{info.getValue()}</span>
+    cell: (info) => (
+      <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+        <ProjectMark id={info.row.original.project.id} name={info.row.original.project.name} size="xs" />
+        {info.getValue()}
+      </span>
+    )
   },
   {
     accessorKey: "type",
@@ -447,6 +455,29 @@ function SprintFilter({ enabled, projectId, value, onChange }: Readonly<{ enable
   );
 }
 
+/**
+ * How a group's heading is drawn, by axis. Status and priority carry their tone as a dot — the
+ * SAME tone the badge in every row uses (lib/ticket-visuals.ts), so a heading and its rows can
+ * never disagree about what colour "In progress" is. Project groups carry the project's mark.
+ * Everything else is the formatted label.
+ */
+function groupHeading(axis: string | undefined, projects: ReadonlyArray<{ id: string; name: string }>) {
+  return (value: unknown): ReactNode => {
+    const label = formatGroupLabel(value);
+    if (axis === "status" && typeof value === "string" && value in STATUS_VARIANT) {
+      return <span className="inline-flex items-center gap-2"><span aria-hidden className={cn("h-2.5 w-2.5 rounded-full", TONE_ACCENT_CLASS[STATUS_VARIANT[value as TicketStatus] ?? "muted"])} />{label}</span>;
+    }
+    if (axis === "priority" && typeof value === "string" && value in PRIORITY_VARIANT) {
+      return <span className="inline-flex items-center gap-2"><span aria-hidden className={cn("h-2.5 w-2.5 rounded-full", TONE_ACCENT_CLASS[PRIORITY_VARIANT[value as TicketPriority] ?? "muted"])} />{label}</span>;
+    }
+    if (axis === "project" && typeof value === "string") {
+      const project = projects.find((p) => p.name === value);
+      return <span className="inline-flex items-center gap-2">{project && <ProjectMark id={project.id} name={project.name} size="xs" />}{label}</span>;
+    }
+    return label;
+  };
+}
+
 /** Grouping applies to the List view only — Board groups by status itself, Timeline and Calendar
  *  answer a scheduling question. */
 function groupingFor(viewMode: string, groupBy: string) {
@@ -619,30 +650,35 @@ export function Tickets() {
         description="Bugs, tasks, and improvements — assign, track, and resolve."
         actions={
           <>
-          <div className="flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-border p-0.5">
-            <Button className="shrink-0" variant={viewMode === "list" ? "default" : "ghost"} size="sm" onClick={() => setViewMode("list")}>
-              <ListChecks className="h-3.5 w-3.5" />List
-            </Button>
-            <Button className="shrink-0" variant={viewMode === "board" ? "default" : "ghost"} size="sm" onClick={() => setViewMode("board")}>
-              <LayoutGrid className="h-3.5 w-3.5" />Board
-            </Button>
-            {/* Only rendered once the workspace has the capability — an org that never turns on
-                planning sees exactly the two-button toggle it always had. */}
-            {planFeatures.timeline && (
-              <Button className="shrink-0" variant={viewMode === "timeline" ? "default" : "ghost"} size="sm" onClick={() => setViewMode("timeline")}>
-                <GanttChartSquare className="h-3.5 w-3.5" />Timeline
-              </Button>
-            )}
-            {planFeatures.planning && (
-              <Button className="shrink-0" variant={viewMode === "calendar" ? "default" : "ghost"} size="sm" onClick={() => setViewMode("calendar")}>
-                <CalendarRange className="h-3.5 w-3.5" />Calendar
-              </Button>
-            )}
-          </div>
           <Button className="shrink-0" onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" />New ticket
           </Button>
           </>
+        }
+      />
+
+      {/* The Views Bar: same tickets, different lens — List, Board, Timeline, Calendar — as tabs
+          directly under the header, with this page's saved views after them. Planning-gated views
+          appear only once the workspace has the capability, exactly as the old button group did. */}
+      <ViewsBar
+        views={[
+          { id: "list" as const, label: "List", icon: ListChecks },
+          { id: "board" as const, label: "Board", icon: LayoutGrid },
+          ...(planFeatures.timeline ? [{ id: "timeline" as const, label: "Timeline", icon: GanttChartSquare }] : []),
+          ...(planFeatures.planning ? [{ id: "calendar" as const, label: "Calendar", icon: CalendarRange }] : [])
+        ]}
+        active={viewMode}
+        onChange={setViewMode}
+        trailing={
+          <SavedViewsBar
+            viewMode={viewMode}
+            filters={filters}
+            columns={savedColumns}
+            onApply={(saved, columns) => {
+              setFilters({ ...DEFAULT_TICKET_FILTERS, ...saved });
+              setSavedColumns(columns);
+            }}
+          />
         }
       />
 
@@ -669,6 +705,22 @@ export function Tickets() {
             centring would float the "Assigned to me" button halfway up the row instead of sitting
             it on the same baseline as the controls it belongs with. */}
         <CardContent className="flex flex-wrap items-end gap-3 pt-6">
+          {/* Grouping is a List-view property, so it lives with the filters a saved view carries and
+              is hidden in the views that already group in their own way (Board by status). */}
+          {viewMode === "list" && (
+            <div className="grid w-full gap-1.5 sm:w-auto">
+              <Label htmlFor="ticket-group-by">Group by</Label>
+              <Select value={filters.groupBy} onValueChange={(v) => setFilters((f) => ({ ...f, groupBy: v }))}>
+                <SelectTrigger id="ticket-group-by" className="w-full sm:w-[150px]">
+                  <SelectValue placeholder="No grouping" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No grouping</SelectItem>
+                  {TICKET_GROUPINGS.map((g) => <SelectItem key={g.id} value={g.id}>{g.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div className="grid w-full gap-1.5 sm:w-auto">
             <Label htmlFor="ticket-filter-project">Project</Label>
             {/* Changing the project resets the module: a module belongs to exactly one project, so
@@ -773,22 +825,6 @@ export function Tickets() {
               </SelectContent>
             </Select>
           </div>
-          {/* Grouping is a List-view property, so it lives with the filters a saved view carries and
-              is hidden in the views that already group in their own way (Board by status). */}
-          {viewMode === "list" && (
-            <div className="grid w-full gap-1.5 sm:w-auto">
-              <Label htmlFor="ticket-group-by">Group by</Label>
-              <Select value={filters.groupBy} onValueChange={(v) => setFilters((f) => ({ ...f, groupBy: v }))}>
-                <SelectTrigger id="ticket-group-by" className="w-full sm:w-[150px]">
-                  <SelectValue placeholder="No grouping" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No grouping</SelectItem>
-                  {TICKET_GROUPINGS.map((g) => <SelectItem key={g.id} value={g.id}>{g.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
           {/* No label of its own — it is a toggle, not a field, and the button's own text already
               names it. `h-10` matches SelectTrigger so the row keeps one baseline. */}
           <Button
@@ -799,20 +835,6 @@ export function Tickets() {
           >
             Assigned to me
           </Button>
-          {/* Sits with the filters it saves, not in the header — the thing being named is what is
-              on this row. Renders nothing at all when planning is off. */}
-          {/* Merged over the defaults rather than assigned: a view saved before Type and Raised by
-              existed carries neither, and replacing state with it outright would set both to
-              `undefined` — which axios then serialises as the literal string "undefined". */}
-          <SavedViewsBar
-            viewMode={viewMode}
-            filters={filters}
-            columns={savedColumns}
-            onApply={(saved, columns) => {
-              setFilters({ ...DEFAULT_TICKET_FILTERS, ...saved });
-              setSavedColumns(columns);
-            }}
-          />
         </CardContent>
       </Card>
 
@@ -897,7 +919,7 @@ export function Tickets() {
                 if (item.kind === "header") {
                   return (
                     <div key={`group-${item.key}`} className="mt-1 flex items-center gap-2 px-1 text-sm font-semibold">
-                      <span className="truncate">{item.label}</span>
+                      <span className="truncate">{groupHeading(grouping?.id, projects.data ?? [])(item.key)}</span>
                       <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">{item.count}</span>
                     </div>
                   );
@@ -924,6 +946,7 @@ export function Tickets() {
                     <p className="truncate font-medium leading-snug">{row.title}</p>
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span className="inline-flex items-center gap-1"><TypeIcon className="h-3.5 w-3.5" />{row.type}</span>
+                      <ProjectMark id={row.project.id} name={row.project.name} size="xs" />
                       <span className="truncate">{row.project.name}</span>
                       {overdue ? (
                         <span className="inline-flex items-center gap-1 font-semibold text-destructive">
@@ -978,6 +1001,7 @@ export function Tickets() {
               emptyAction={clearFiltersAction}
               pageSize={20}
               groupBy={grouping?.id}
+              groupLabel={groupHeading(grouping?.id, projects.data ?? [])}
             />
           </div>
         </CardContent>

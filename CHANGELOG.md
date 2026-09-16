@@ -10,6 +10,17 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🎨 The tickets workspace looks like a work-management tool
+
+- **A Views Bar.** List, Board, Timeline and Calendar are tabs directly under the page title,
+  with your saved views at the end of the bar; the header keeps only "New ticket".
+- **Colour you can scan.** Every project carries a colour mark with its initials — the same
+  colour in the sidebar tree, the tickets table, the phone cards and project group headings. The
+  colour is derived from the project, so it matches on every device without setup.
+- **Status-coloured groups.** Grouping the list by status or priority gives each heading the same
+  colour dot as the pills in its rows. The Group menu leads the toolbar and shows the current
+  grouping.
+
 ### 🏃 Sprints, behind a default-off toggle
 
 - **Schema and switch only in this step; no sprint UI yet.** A `Sprint` table (per project: name,

@@ -67,8 +67,9 @@ the palette's hints and the Help article all render from it.
 
 - **Breadcrumb.** Every in-app page shows *Section › Page* under the top bar, derived from the
   sidebar's own navigation table — never typed per page, so it cannot drift from the sidebar.
-- **Projects tree** in the sidebar (under *Work*): the projects you can see, each folding open to
-  its modules. A row opens Tickets filtered to that project or module; which projects you left
+- **Projects tree** in the sidebar (under *Work*): the projects you can see, each with a colour
+  mark (derived from the project, so it is the same on every device and wherever the project is
+  named), folding open to its modules. A row opens Tickets filtered to that project or module; which projects you left
   open is remembered per browser. There is no submodule tier because a ticket carries a project
   and optionally a module, never a submodule. Not shown in the slim 68px rail.
 - **Phone and tablet:** the sidebar becomes a drawer (menu button, top left) and the five
@@ -77,12 +78,14 @@ the palette's hints and the Help article all render from it.
 
 ## 5. Tickets — views, grouping, columns, saved views
 
-**Views:** List · Board · Timeline · Calendar, from the switcher in the page header. Filters carry
-across all four.
+**Views bar:** List · Board · Timeline · Calendar as tabs directly under the page title, with your
+saved views after them. Filters carry across all four. The toolbar under the bar leads with the
+**Group by** menu, which shows the current grouping.
 
-**Group by** (List view): Status, Priority, Type, Project or Assignee. Each group gets a heading
-with its size across *everything the filters match*, not just the page on screen, and collapses on
-click. Your column sort still applies within each group. Phone cards group the same way.
+**Group by** (List view): Status, Priority, Type, Project, Assignee or Sprint. Each group gets a
+heading with its size across *everything the filters match*, not just the page on screen, and
+collapses on click. Status and priority headings carry the same colour as the pills in their rows;
+project headings carry the project's mark. Your column sort still applies within each group. Phone cards group the same way.
 
 **Columns:** the **Columns** button on the table lets you hide built-in columns and show one for
 any custom field. Custom-field columns start hidden, so a table never widens because an admin

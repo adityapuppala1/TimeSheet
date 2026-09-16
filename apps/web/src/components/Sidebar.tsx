@@ -48,6 +48,7 @@ import { useState } from "react";
 import { Link, NavLink, useLocation } from "react-router";
 import { permissions, type Permission } from "@timesheet/shared";
 import { readProjectSelection, ticketsHref } from "../lib/project-tree";
+import { ProjectMark } from "./ProjectMark";
 import { cn } from "../lib/utils";
 import { usePlanningFeatures } from "../lib/use-planning";
 import type { PlanningEffective } from "../services/api";
@@ -346,7 +347,8 @@ function ProjectTree({ onNavigate }: { onNavigate?: () => void }) {
                   <span aria-hidden className="h-7 w-7 shrink-0" />
                 )}
                 <Link to={ticketsHref(project.id)} onClick={onNavigate} className={rowClass(projectActive)} aria-current={projectActive ? "page" : undefined}>
-                  <FolderKanban className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  {/* Identity colour + initials (lib/identity-colors.ts): the tree scans by colour before it reads. */}
+                  <ProjectMark id={project.id} name={project.name} size="sm" />
                   <span className="truncate">{project.name}</span>
                 </Link>
               </div>
