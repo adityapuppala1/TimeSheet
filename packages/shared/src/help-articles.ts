@@ -89,9 +89,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Add your phone number so approvers can reach you about urgent items.",
       "Until you choose a theme, the app follows your device's light/dark setting, including changes while the app is open. Toggle light/dark with the sun/moon button in the top bar or Toggle theme in the command palette to save an explicit choice for this browser. The top-bar button uses a sweep animation unless reduced motion is enabled.",
       "Under Profile → Appearance, pick System, Light or Dark, and one of seven accent colours. The choice saves to your profile the moment you click it — no Save button — so every device you sign in on matches, and a saved profile choice wins over whatever this browser remembered from before.",
-      "Every accent meets WCAG AA contrast in both themes; that was measured, not assumed, and the default Teal is exactly the colour the app always had."
+      "Every accent meets WCAG AA contrast in both themes; that was measured, not assumed (npm run check:contrast re-measures it), and the default Teal is the app's own primary.",
+      "Density: Comfortable (the default) or Compact, which tightens the type scale while every button and field keeps its 44px target. It saves to your profile like the theme and accent."
     ],
-    keywords: ["profile", "avatar", "photo", "phone", "theme", "dark mode", "light mode", "appearance", "accent", "colour", "color", "system theme", "palette"]
+    keywords: ["profile", "avatar", "photo", "phone", "theme", "dark mode", "light mode", "appearance", "accent", "colour", "color", "system theme", "palette", "density", "compact"]
   },
   {
     id: "keyboard-shortcuts",
@@ -189,6 +190,24 @@ export const HELP_ARTICLES: HelpArticle[] = [
     notes: "Tickets can also arrive without this form: email intake, Slack/Teams/Google Chat/Telegram, and public request forms all land as routed tickets when configured.",
     screenshot: "tickets.png",
     keywords: ["ticket", "raise", "create", "bug", "task", "issue", "priority", "duplicate", "triage"]
+  },
+  {
+    id: "tickets-workspace",
+    category: "Tickets",
+    title: "The tickets workspace: views, groups and the two-column ticket",
+    where: "Tickets in the sidebar. The Views Bar (List · Board · Timeline · Calendar) sits under the page title; Group by and Columns are on the list.",
+    when: "Whenever you read or shape a backlog — by status, by project, by sprint — and want the list to do the sorting for you.",
+    steps: [
+      "Switch views from the Views Bar under the title: List, Board, and — with planning on — Timeline and Calendar. Save view keeps the filters, grouping and columns you chose.",
+      "Group by Status, Priority, Type, Project, Assignee or Sprint. Each group has a heading (status and priority groups carry their colour dot; project groups their mark) and an Add ticket row at the bottom that opens the dialog pre-filled to land in that group. Filters pre-fill the header's New ticket the same way.",
+      "Change a status from the list: the status pill on a row (or phone card) is a menu of the other statuses. The server decides what is legal; a refusal shows its reason.",
+      "Tick Columns to show or hide columns, including one per custom field and Sprint; a saved view remembers the set.",
+      "Open a ticket: drag its sheet wider than 960px or press Maximize, and the fields sit beside Comments and Activity in two columns. Hide activity keeps the details in focus; the choice is remembered in this browser.",
+      "In the Calendar view choose Month or Week. If you can plan, drag a chip onto another day: a scheduled item keeps its length, an unscheduled one becomes scheduled on that day."
+    ],
+    notes:
+      "Every project has a colour mark — chosen under Administration → Projects (Edit project), or derived from its id until someone chooses. Keyboard: arrows move between views, Enter toggles a group, a row opens on Enter, and the shortcuts dialog (press ?) lists the rest.",
+    keywords: ["tickets", "views", "views bar", "board", "list", "group by", "grouping", "columns", "status", "calendar", "week", "drag", "two-column", "sheet", "add ticket", "project colour", "project color"]
   },
   {
     id: "work-ticket",
@@ -314,7 +333,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     when: "Your team works in fixed iterations and wants to know, day by day, whether the iteration is on track.",
     steps: [
       "Pick a project and press New sprint: a name, an optional goal, and start and end dates (two weeks is usual). One sprint can be active per project at a time.",
-      "Open a ticket and choose its sprint in the Sprint field; give it story points (whole or half numbers). Filter or group the Tickets list by sprint.",
+      "Open a ticket and choose its sprint in the Sprint field; give it story points (whole or half numbers). Filter or group the Tickets list by sprint — a ticket created from a sprint-filtered or sprint-grouped list lands in that sprint, and the New ticket dialog offers a Sprint field.",
       "Press Start sprint when work begins and Complete sprint when it ends. Deleting a sprint un-plans its tickets — nothing is deleted.",
       "Read the burndown: remaining points per day against the ideal line. It is replayed from the ticket status history, so it is exact for the days that have happened and blank for the days that have not."
     ],

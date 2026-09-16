@@ -135,7 +135,7 @@ const TOUR = [
     label: "Tickets",
     icon: LayoutGrid,
     title: "Tickets that arrive already sorted",
-    body: "List and Kanban, checklists, cross-ticket links, and a Dev tab wired to your real repositories. Items that came in by email or chat carry an intake badge, and AI-classified ones show a Review badge until a human agrees.",
+    body: "List, Board, Timeline and Calendar in one Views Bar; group by status, project or sprint and add a ticket straight into the group; change a status from the row; open a ticket into two columns with the thread beside the fields. Checklists, cross-ticket links, and a Dev tab wired to your real repositories. Items that came in by email or chat carry an intake badge, and AI-classified ones show a Review badge until a human agrees.",
     image: "/product/tickets.png"
   },
   {

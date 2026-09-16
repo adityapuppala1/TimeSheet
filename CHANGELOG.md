@@ -24,6 +24,11 @@ number, on purpose — an installation must never render history for a version t
   colours, or "Auto" for the derived one; the mark changes everywhere at once — sidebar tree,
   tickets table, cards, group headings. Stored as a palette id, so only measured, legible colours
   can be saved. Additive migration; existing projects keep their derived colour.
+- **The manual and the landing page describe the new workspace.** A Help article, "The tickets
+  workspace", covers the Views Bar, grouping with Add ticket per group, Columns, status from the
+  list, the two-column ticket and the Calendar's Week and drag; Ask AI answers from the same text.
+  The Sprints article notes that a ticket created from a sprint view lands in it; the appearance
+  article gains Density. The landing page's Tickets entry names the same surfaces.
 - **Keyboard: open a ticket from the table, jump views with Home/End.** Rows in the tickets table
   are now reachable by Tab and open on Enter or Space (a keyboard user previously had no way to
   open a ticket from the desktop table); the Views Bar honours Home and End as the tabs pattern
