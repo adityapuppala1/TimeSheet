@@ -110,7 +110,18 @@ applies to shows a **Fields** section in its detail sheet, above the tabs:
 
 Engineering: `GET`/`PUT /api/tickets/:id/custom-fields`, `apps/web/src/components/TicketCustomFields.tsx`.
 
-## 7. Empty states everywhere
+## 7. Custom dashboards
+
+**Where:** `/app/dashboards` (planning feature on). Build a grid from a **closed catalogue** of
+widgets — every tile is one server-defined query, so two dashboards showing "Open work" can never
+disagree, and a shared dashboard shows each viewer only their own permitted projects. Twelve
+widgets: open items, overdue, hours logged, budget burn, created vs resolved, status mix,
+**priority mix**, **open work by project**, project risk, capacity, upcoming milestones, my queue.
+The two in bold arrived with V12 and use exactly the definition of "open" the status mix uses.
+
+Engineering: `apps/api/src/services/dashboard.service.ts` (`WIDGET_CATALOGUE`, `resolveWidget`).
+
+## 8. Empty states everywhere
 
 Lists and panels that have nothing to show use one design: an icon, a title, a line of explanation
 and, where one honestly exists, a next action. Where the input sits right beside the list (ticket

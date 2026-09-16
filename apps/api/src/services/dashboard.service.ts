@@ -32,7 +32,9 @@ export const WIDGET_TYPES = [
   "RISK_BANDS",
   "WORKLOAD_SUMMARY",
   "UPCOMING_MILESTONES",
-  "MY_QUEUE"
+  "MY_QUEUE",
+  "PRIORITY_MIX",
+  "PROJECT_MIX"
 ] as const;
 export type WidgetType = (typeof WIDGET_TYPES)[number];
 
@@ -64,7 +66,12 @@ export const WIDGET_CATALOGUE: WidgetDescriptor[] = [
   { type: "RISK_BANDS", label: "Project risk", shape: "BREAKDOWN", description: "How many projects are green, amber and red." },
   { type: "WORKLOAD_SUMMARY", label: "Capacity", shape: "STAT", description: "Booked against available capacity." },
   { type: "UPCOMING_MILESTONES", label: "Upcoming milestones", shape: "TABLE", description: "The next dated milestones." },
-  { type: "MY_QUEUE", label: "My queue", shape: "TABLE", description: "What is assigned to the person viewing." }
+  { type: "MY_QUEUE", label: "My queue", shape: "TABLE", description: "What is assigned to the person viewing." },
+  // Two more breakdowns over the same open-work definition STATUS_MIX uses, so the three tiles can
+  // never disagree about what "open" means. Neither touches people, so neither needs the
+  // inactive-user visibility rule.
+  { type: "PRIORITY_MIX", label: "Priority mix", shape: "BREAKDOWN", description: "Open work by priority." },
+  { type: "PROJECT_MIX", label: "Open work by project", shape: "BREAKDOWN", description: "Where open work sits across your projects." }
 ];
 
 export interface WidgetResult {
@@ -199,6 +206,43 @@ export async function resolveWidget(params: {
         type,
         shape,
         points: grouped.map((g) => ({ label: g.status.replace(/_/g, " ").toLowerCase(), value: g._count._all }))
+      };
+    }
+
+    case "PRIORITY_MIX": {
+      const grouped = await prisma.ticket.groupBy({
+        by: ["priority"],
+        where: { projectId: { in: scoped }, deletedAt: null, status: { notIn: ["CLOSED"] } },
+        _count: { _all: true }
+      });
+      // Fixed severity order, not count order: a tile that reshuffles as numbers move is harder to
+      // read week over week than one where CRITICAL is always the first bar.
+      const order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
+      return {
+        type,
+        shape,
+        points: grouped
+          .sort((a, b) => order.indexOf(a.priority) - order.indexOf(b.priority))
+          .map((g) => ({ label: g.priority.toLowerCase(), value: g._count._all }))
+      };
+    }
+
+    case "PROJECT_MIX": {
+      const [grouped, projects] = await Promise.all([
+        prisma.ticket.groupBy({
+          by: ["projectId"],
+          where: { projectId: { in: scoped }, deletedAt: null, status: { notIn: ["CLOSED"] } },
+          _count: { _all: true }
+        }),
+        prisma.project.findMany({ where: { id: { in: scoped } }, select: { id: true, name: true } })
+      ]);
+      const nameOf = new Map(projects.map((p) => [p.id, p.name]));
+      return {
+        type,
+        shape,
+        points: grouped
+          .map((g) => ({ label: nameOf.get(g.projectId) ?? g.projectId, value: g._count._all }))
+          .sort((a, b) => b.value - a.value)
       };
     }
 

@@ -5533,7 +5533,9 @@ export const WIDGET_TYPES = [
   "RISK_BANDS",
   "WORKLOAD_SUMMARY",
   "UPCOMING_MILESTONES",
-  "MY_QUEUE"
+  "MY_QUEUE",
+  "PRIORITY_MIX",
+  "PROJECT_MIX"
 ] as const;
 export type WidgetTypeValue = (typeof WIDGET_TYPES)[number];
 
