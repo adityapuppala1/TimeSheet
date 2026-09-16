@@ -35,6 +35,9 @@ vi.mock("../../src/services/planning.service.js", async () => {
 });
 vi.mock("../../src/services/notify.service.js", () => ({ dispatchNotification: vi.fn().mockResolvedValue(undefined), dispatchTransactional: vi.fn().mockResolvedValue({ ok: true }) }));
 vi.mock("../../src/services/audit.service.js", () => ({ audit: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../../src/services/face.service.js", () => ({ isFaceVerificationRequired: vi.fn().mockResolvedValue(false), consumeVerification: vi.fn(), bindVerificationToRecord: vi.fn() }));
+vi.mock("../../src/services/ticket-rules.service.js", () => ({ applyTicketRules: vi.fn().mockResolvedValue(null) }));
+vi.mock("../../src/services/domain-events.js", () => ({ emitDomainEvent: vi.fn(), emitTicketStatusChanged: vi.fn() }));
 
 const { sprintRouter } = await import("../../src/controllers/sprint.controller.js");
 const { ticketRouter } = await import("../../src/controllers/ticket.controller.js");
@@ -70,9 +73,12 @@ beforeEach(() => {
       groupBy: vi.fn().mockResolvedValue([{ sprintId: SPRINT.id, _sum: { storyPoints: 8 } }]),
       findMany: vi.fn().mockResolvedValue([]),
       findFirst: vi.fn().mockResolvedValue(TICKET),
+      create: vi.fn().mockImplementation(async ({ data }: any) => ({ ...TICKET, ...data, id: "new", source: "MANUAL", externalReporterEmail: null, project: { id: data.projectId, code: "X", name: "P", color: null }, module: null, reporter: null, assignee: null })),
       update: vi.fn().mockImplementation(async ({ data }: any) => ({ ...TICKET, ...data, project: { id: "33333333-3333-4333-8333-333333333333", code: "X", name: "P" }, module: null, reporter: null, assignee: null, labels: [], _count: { comments: 0, attachments: 0 } }))
     },
     auditLog: { findMany: vi.fn().mockResolvedValue([]) },
+    project: { update: vi.fn().mockResolvedValue({ code: "X", ticketSeq: 7 }) },
+    $transaction: (fn: (tx: unknown) => Promise<unknown>) => fn(client),
     // The lead is on project 3333… only.
     userProjectAssignment: { findMany: vi.fn().mockResolvedValue([{ projectId: "33333333-3333-4333-8333-333333333333" }]), findFirst: vi.fn().mockResolvedValue({ id: "a" }) },
     user: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null) },
@@ -146,5 +152,38 @@ describe("ticket membership", () => {
   it("refuses points finer than a half", async () => {
     const res = await request(buildApp()).patch(`/api/tickets/${TICKET.id}`).send({ storyPoints: 1.3 });
     expect(res.status).toBe(422);
+  });
+});
+
+/**
+ * V12 3.17 — the sprint on creation. A ticket created from a list grouped or filtered by sprint
+ * must land in that sprint, so POST accepts `sprintId` under the SAME own-project rule the PATCH
+ * applies (one helper, one message). The refusal happens before the transaction: no ticket key
+ * is burned for a request that will not stand.
+ */
+describe("sprint on creation", () => {
+  const body = { projectId: "33333333-3333-4333-8333-333333333333", type: "BUG", title: "Landing in the sprint", priority: "LOW" };
+
+  it("stores the sprint of the ticket's own project", async () => {
+    vi.mocked(client.sprint.findFirst).mockResolvedValue(SPRINT as never);
+    const res = await request(buildApp()).post("/api/tickets").send({ ...body, sprintId: SPRINT.id });
+    expect(res.status).toBe(201);
+    expect(client.sprint.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: SPRINT.id, projectId: body.projectId } }));
+    expect(vi.mocked(client.ticket.create).mock.calls[0][0].data).toMatchObject({ sprintId: SPRINT.id, key: "X-7" });
+  });
+
+  it("refuses a sprint from another project with the PATCH's message, before any key is issued", async () => {
+    const res = await request(buildApp()).post("/api/tickets").send({ ...body, sprintId: "99999999-9999-4999-8999-999999999999" });
+    expect(res.status).toBe(422);
+    expect(res.body.message).toMatch(/different project/);
+    expect(client.project.update).not.toHaveBeenCalled();
+    expect(client.ticket.create).not.toHaveBeenCalled();
+  });
+
+  it("an empty sprintId means no sprint, exactly as before", async () => {
+    const res = await request(buildApp()).post("/api/tickets").send({ ...body, sprintId: "" });
+    expect(res.status).toBe(201);
+    expect(client.sprint.findFirst).not.toHaveBeenCalled();
+    expect(vi.mocked(client.ticket.create).mock.calls[0][0].data.sprintId).toBeUndefined();
   });
 });

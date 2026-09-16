@@ -24,6 +24,12 @@ number, on purpose — an installation must never render history for a version t
   colours, or "Auto" for the derived one; the mark changes everywhere at once — sidebar tree,
   tickets table, cards, group headings. Stored as a palette id, so only measured, legible colours
   can be saved. Additive migration; existing projects keep their derived colour.
+- **New tickets land in the sprint you are looking at.** With the list filtered or grouped by
+  sprint, "Add ticket" under a group and the header's **New ticket** pre-select that sprint; the
+  dialog gains a Sprint field (only with sprints on and a project chosen). Ticket creation accepts
+  `sprintId` under the same own-project rule as editing. Also fixed: on desktop, "Group by Sprint"
+  put every row under one heading because the table had no sprint column — there is now a hidden
+  Sprint column (show it from Columns) and grouping works as it already did on phones.
 - **Two-column ticket panel.** Drag the ticket sheet to 960px or wider, or maximize it, and the
   fields and description sit in the main column with Comments, Files, Checklist and Activity in a
   right column that scrolls on its own. **Hide activity** closes that column to keep the details

@@ -84,6 +84,7 @@ import { ViewsBar } from "../components/ViewsBar";
 import { readProjectSelection, withoutProjectSelection } from "../lib/project-tree";
 import { formatGroupLabel, groupRuns } from "../lib/group-rows";
 import { cn } from "../lib/utils";
+import { draftFor, draftFromFilters, type TicketDraftInitial } from "../lib/ticket-draft";
 import { displayValue, fieldsForTicket } from "../lib/custom-fields";
 import { isDefaultColumns, resolveVisibleColumns, type ColumnSpec } from "../lib/table-columns";
 import { TicketMetricsPanel } from "../components/TicketMetricsPanel";
@@ -331,6 +332,16 @@ const ticketColumns: ColumnDef<TicketRow, any>[] = [
     }
   },
   {
+    /* V12 3.17: the sprint as a column, hidden until chosen from Columns. It exists first so the
+       table can GROUP by sprint — the group value is read from the column of the same id, and
+       until this column existed "Group by Sprint" on desktop put every row under one heading
+       (the phone cards, which key off the axis directly, were right all along). */
+    id: "sprint",
+    accessorFn: (row) => row.sprint?.name ?? "",
+    header: "Sprint",
+    cell: ({ row }) => (row.original.sprint ? <span className="text-sm">{row.original.sprint.name}</span> : <span className="text-xs text-muted-foreground">Not in a sprint</span>)
+  },
+  {
     accessorKey: "dueAt",
     header: "Due",
     cell: ({ row }) => {
@@ -413,7 +424,7 @@ function customFieldColumns(defs: CustomFieldRow[] | undefined): ColumnDef<Ticke
 function columnSpecs(all: ColumnDef<TicketRow, any>[]): ColumnSpec[] {
   return all.map((c) => {
     const id = c.id ?? String((c as { accessorKey?: string }).accessorKey);
-    return { id, label: typeof c.header === "string" ? c.header : id, canHide: c.enableHiding !== false, defaultHidden: id.startsWith("cf_") };
+    return { id, label: typeof c.header === "string" ? c.header : id, canHide: c.enableHiding !== false, defaultHidden: id.startsWith("cf_") || id === "sprint" };
   });
 }
 
@@ -459,35 +470,6 @@ function SprintFilter({ enabled, projectId, value, onChange }: Readonly<{ enable
       </Select>
     </div>
   );
-}
-
-/**
- * What "+ Add ticket" under a group pre-fills: the group's own field (priority, type, project) and
- * the active project/module/type/priority filters — so what you create lands where you are
- * looking. Status is not creatable (every ticket opens as OPEN) and a sprint is not yet accepted
- * by the create endpoint (V12 state file, Open Questions), so those axes pre-fill only the filters.
- */
-function draftFromFilters(filters: TicketFilters): TicketDraftInitial {
-  const initial: TicketDraftInitial = {};
-  if (filters.projectId !== "all") initial.projectId = filters.projectId;
-  if (filters.moduleId !== "all") initial.moduleId = filters.moduleId;
-  if (filters.type !== "all") initial.type = filters.type;
-  if (filters.priority !== "all") initial.priority = filters.priority as TicketPriority;
-  return initial;
-}
-
-function draftFor(axis: string | undefined, value: unknown, filters: TicketFilters, projects: ReadonlyArray<{ id: string; name: string }>): TicketDraftInitial {
-  const initial = draftFromFilters(filters);
-  if (axis === "priority" && typeof value === "string" && value in PRIORITY_VARIANT) initial.priority = value as TicketPriority;
-  if (axis === "type" && typeof value === "string" && value) initial.type = value;
-  if (axis === "project" && typeof value === "string") {
-    const project = projects.find((p) => p.name === value);
-    if (project) {
-      initial.projectId = project.id;
-      if (initial.moduleId && filters.projectId !== project.id) delete initial.moduleId;
-    }
-  }
-  return initial;
 }
 
 /** The row at the bottom of a group — the source's "Add task at the bottom of a group of tasks". */
@@ -597,6 +579,13 @@ export function Tickets() {
   // separate "planning" page would have meant two places to filter and two mental models.
   const [viewMode, setViewMode] = useState<"list" | "board" | "timeline" | "calendar">("list");
   const { features: planFeatures } = usePlanningFeatures();
+  /* V12 3.17: the filtered project's sprints, so "Add ticket" under a sprint group can name the
+     sprint by id. Same query key as the Sprint filter, so this is a cache read, not a request. */
+  const projectSprints = useQuery({
+    queryKey: ["sprints", filters.projectId],
+    queryFn: () => sprintApi.list(filters.projectId),
+    enabled: planFeatures.sprints && filters.projectId !== "all"
+  });
   const canEditPlan = Boolean(user?.permissions.includes(permissions.PLAN_WRITE));
   const [timelineZoom, setTimelineZoom] = useState<TimelineZoom>("week");
   const [showBaseline, setShowBaseline] = useState(true);
@@ -710,7 +699,15 @@ export function Tickets() {
         description="Bugs, tasks, and improvements — assign, track, and resolve."
         actions={
           <>
-          <Button className="shrink-0" onClick={() => setCreateOpen(true)}>
+          {/* Seeded from the active filters (V12 3.17): a ticket created from a filtered list
+              lands inside the filter — the same rule the "Add ticket" row under a group follows. */}
+          <Button
+            className="shrink-0"
+            onClick={() => {
+              setCreateInitial(draftFromFilters(filters));
+              setCreateOpen(true);
+            }}
+          >
             <Plus className="h-4 w-4" />New ticket
           </Button>
           </>
@@ -981,7 +978,7 @@ export function Tickets() {
                     <AddToGroupRow
                       key={`footer-${item.key}`}
                       onClick={() => {
-                        setCreateInitial(draftFor(grouping?.id, item.value, filters, projects.data ?? []));
+                        setCreateInitial(draftFor(grouping?.id, item.value, filters, projects.data ?? [], projectSprints.data ?? []));
                         setCreateOpen(true);
                       }}
                     />
@@ -1088,7 +1085,7 @@ export function Tickets() {
               groupFooter={(value) => (
                 <AddToGroupRow
                   onClick={() => {
-                    setCreateInitial(draftFor(grouping?.id, value, filters, projects.data ?? []));
+                    setCreateInitial(draftFor(grouping?.id, value, filters, projects.data ?? [], projectSprints.data ?? []));
                     setCreateOpen(true);
                   }}
                 />
@@ -1119,7 +1116,7 @@ export function Tickets() {
 }
 
 /** What a grouped or filtered view pre-fills when a ticket is created from it. */
-export type TicketDraftInitial = Partial<{ projectId: string; moduleId: string; type: string; priority: TicketPriority }>;
+export type { TicketDraftInitial } from "../lib/ticket-draft";
 
 function CreateTicketDialog({
   open,
@@ -1144,7 +1141,8 @@ function CreateTicketDialog({
     title: "",
     description: "",
     priority: "MEDIUM" as TicketPriority,
-    assigneeId: ""
+    assigneeId: "",
+    sprintId: ""
   });
   const [suggestion, setSuggestion] = useState<AITriageSuggestion | null>(null);
   const [duplicates, setDuplicates] = useState<AIDuplicateMatch[]>([]);
@@ -1171,6 +1169,12 @@ function CreateTicketDialog({
     queryFn: () => projectApi.assignments(draft.projectId),
     enabled: Boolean(draft.projectId)
   });
+  const { features: planFeatures } = usePlanningFeatures();
+  const draftSprints = useQuery({
+    queryKey: ["sprints", draft.projectId],
+    queryFn: () => sprintApi.list(draft.projectId),
+    enabled: planFeatures.sprints && Boolean(draft.projectId)
+  });
   const ticketTypesQuery = useQuery({ queryKey: ["ticket-types"], queryFn: () => ticketTypeApi.list() });
   const assigneeSuggestions = useQuery({
     // Deliberately NOT keyed on draft.title — the ranking never depends on it, and refetching
@@ -1194,7 +1198,7 @@ function CreateTicketDialog({
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
 
   function resetDraft() {
-    setDraft({ projectId: "", moduleId: "", type: "BUG", title: "", description: "", priority: "MEDIUM", assigneeId: "" });
+    setDraft({ projectId: "", moduleId: "", type: "BUG", title: "", description: "", priority: "MEDIUM", assigneeId: "", sprintId: "" });
     setSuggestion(null);
     setDuplicates([]);
     setAiConfidence(null);
@@ -1212,6 +1216,7 @@ function CreateTicketDialog({
         description: draft.description || undefined,
         priority: draft.priority,
         assigneeId: draft.assigneeId || undefined,
+        sprintId: draft.sprintId || undefined,
         aiConfidence: aiConfidence ?? undefined,
         // Single-use proof of a live identity check; only sent when the workspace policy
         // covers this user. The server independently decides whether it was required.
@@ -1330,7 +1335,7 @@ function CreateTicketDialog({
               <Label>Project</Label>
               <Select
                 value={draft.projectId}
-                onValueChange={(v) => setDraft((d) => ({ ...d, projectId: v, moduleId: "", assigneeId: "" }))}
+                onValueChange={(v) => setDraft((d) => ({ ...d, projectId: v, moduleId: "", assigneeId: "", sprintId: "" }))}
               >
                 <SelectTrigger><SelectValue placeholder="Select project" /></SelectTrigger>
                 <SelectContent>
@@ -1348,6 +1353,20 @@ function CreateTicketDialog({
               </Select>
             </div>
           </div>
+          {/* V12 3.17: the sprint the ticket opens in. Only with the feature on, a project chosen
+              and sprints to choose from — otherwise the dialog is exactly what it was. */}
+          {planFeatures.sprints && draft.projectId && (draftSprints.data?.length ?? 0) > 0 && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="create-ticket-sprint">Sprint <span className="text-muted-foreground">(optional)</span></Label>
+              <Select value={draft.sprintId || "none"} onValueChange={(v) => setDraft((d) => ({ ...d, sprintId: v === "none" ? "" : v }))}>
+                <SelectTrigger id="create-ticket-sprint"><SelectValue placeholder="Not in a sprint" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Not in a sprint</SelectItem>
+                  {(draftSprints.data ?? []).map((sp) => <SelectItem key={sp.id} value={sp.id}>{sp.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div className="grid gap-1.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <Label>Title</Label>

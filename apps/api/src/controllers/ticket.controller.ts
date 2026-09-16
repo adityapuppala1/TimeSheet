@@ -576,6 +576,9 @@ const createSchema = z.object({
     description: z.string().max(20000).optional(),
     priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).default("MEDIUM"),
     assigneeId: z.string().uuid().optional().or(z.literal("")),
+    /// V12 3.17: the sprint the ticket opens in — so a ticket created from a list grouped or
+    /// filtered by sprint lands in that group. Same own-project rule as the PATCH.
+    sprintId: z.string().uuid().optional().or(z.literal("")),
     aiConfidence: z.number().min(0).max(1).optional(),
     /// Id of a PASSED, unconsumed face-verification attempt (POST /api/face/verify). Only
     /// required when the workspace's face-verification policy covers this user + action —
@@ -595,6 +598,10 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
     throw new AppError(422, "Assignee is not a member of this project");
   }
   await assertValidTicketType(req.body.type);
+  // Checked before the identity gate and the transaction, like the other 422s above: a refused
+  // sprint must not consume a verification or burn a ticket key.
+  const sprintData: Record<string, unknown> = {};
+  if (req.body.sprintId) await applySprintFields({ sprintId: req.body.sprintId }, req.body.projectId, sprintData);
 
   // Identity gate — before the transaction below, so a failed check can never leave a
   // partially-created ticket (or burn a ticket key) behind. The consumed attempt is bound to
@@ -627,6 +634,7 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
         reporterId: req.user!.id,
         assigneeId,
         aiConfidence: req.body.aiConfidence,
+        ...sprintData,
         dueAt: computeTicketDueDate(createdAt, priority, slaSettings)
       },
       include: {

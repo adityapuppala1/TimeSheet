@@ -141,6 +141,11 @@ turning it off hides the pages without touching data.
 - **Burndown:** remaining points per day against the ideal line, replayed from the audited status
   changes — exact for days that have happened, blank for days that have not. With no estimates it
   reads open tickets instead and says so. Deleting a sprint un-plans its tickets, never deletes.
+- **Creating into a sprint:** filter the Tickets list by a sprint, or group it by sprint, and both
+  **New ticket** and the **Add ticket** row under a group open the dialog with that sprint chosen
+  in a **Sprint** field (shown only when sprints are on and a project is picked). The new ticket
+  lands in the group you were looking at. The Sprint column exists too — hidden until you tick it
+  under **Columns**.
 
 Engineering: `apps/api/src/controllers/sprint.controller.ts`, `apps/api/src/services/sprint.service.ts`
 (pure `burndown`), `apps/web/src/pages/Sprints.tsx`, `apps/web/src/components/TicketSprintFields.tsx`.
