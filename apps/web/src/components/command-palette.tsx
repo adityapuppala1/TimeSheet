@@ -1,13 +1,18 @@
 /**
  * WHAT: the Cmd/Ctrl-K command palette — permission-filtered route search/navigation, quick
- * actions, and an "Ask AI" natural-language search dialog over the ticket backlog. Also exports
+ * actions, a deterministic record search over tickets and projects (by key, code, title or name,
+ * under the caller's scope — see api/services/search.service.ts), and an "Ask AI"
+ * natural-language search dialog over the ticket backlog. Also exports
  * `useCommandPaletteHotkey`, the keyboard-shortcut listener that opens it.
+ *
+ * WHY TWO SEARCHES: "WEB-123" wants the record, now, with no model in the loop; "that ticket
+ * about the login loop" wants the model. Record hits appear as you type; Ask AI stays a choice.
  * WHY permission-filtered: the same palette renders for every role, but a route/action a user
  * can't actually use (e.g. Admin Pages for an EMPLOYEE) is filtered out entirely rather than
  * shown-disabled — a command palette listing things you can't do isn't useful.
  * WHO renders this: `components/Topbar.tsx`.
  */
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import {
@@ -41,6 +46,7 @@ import {
   UserRound,
   Users,
   Users2, CircleHelp } from "lucide-react";
+import { ticketsHref } from "../lib/project-tree";
 import { permissions } from "@timesheet/shared";
 import {
   CommandDialog,
@@ -60,7 +66,7 @@ import { AiStrands } from "./ui/ai-strands";
 import { BorderGlow } from "./ui/border-glow";
 import { useAuthStore } from "../store/auth";
 import { usePlanningFeatures } from "../lib/use-planning";
-import { aiApi, authApi, type PlanningEffective } from "../services/api";
+import { aiApi, authApi, searchApi, type PlanningEffective } from "../services/api";
 import { toast } from "./ui/toaster";
 import { toggleTheme as switchTheme } from "../lib/theme";
 
@@ -129,6 +135,33 @@ export function CommandPalette({ open, onOpenChange }: Props) {
   const canAskAI = Boolean(user?.permissions.includes(permissions.TICKETS_VIEW));
   const { features } = usePlanningFeatures();
 
+  // Record search. The input is controlled so the query can be read; it is DEBOUNCED so a person
+  // typing "PropTech" costs one request, not eight. Below two characters nothing is asked — the
+  // server returns nothing for that anyway, and the static commands already fill the list.
+  const [query, setQuery] = useState("");
+  const [debounced, setDebounced] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(query.trim()), 200);
+    return () => clearTimeout(t);
+  }, [query]);
+  useEffect(() => {
+    if (!open) {
+      setQuery("");
+      setDebounced("");
+    }
+  }, [open]);
+  const records = useQuery({
+    queryKey: ["quick-search", debounced],
+    queryFn: () => searchApi.quick(debounced),
+    enabled: open && debounced.length >= 2,
+    staleTime: 30_000,
+    // Keep the previous hits on screen while the next keystroke's results load, so the list does
+    // not blink empty between letters.
+    placeholderData: (prev) => prev
+  });
+  const ticketHits = records.data?.tickets ?? [];
+  const projectHits = records.data?.projects ?? [];
+
   const visibleRoutes = useMemo(
     () =>
       navRoutes.filter((route) => {
@@ -172,9 +205,41 @@ export function CommandPalette({ open, onOpenChange }: Props) {
   return (
     <>
       <CommandDialog open={open} onOpenChange={onOpenChange}>
-        <CommandInput placeholder="Type a command, search a page or action..." />
+        <CommandInput
+          value={query}
+          onValueChange={setQuery}
+          placeholder="Search tickets, projects, pages or actions..."
+        />
         <CommandList>
-        <CommandEmpty>No matching commands.</CommandEmpty>
+        <CommandEmpty>{records.isFetching ? "Searching…" : "No matching commands or records."}</CommandEmpty>
+        {/* Server hits carry the live query as a cmdk keyword: cmdk filters every item against the
+            input text, and a ticket found by its title would otherwise be hidden by its own key
+            failing that client-side match. The keyword makes a server match a client match. */}
+        {ticketHits.length > 0 && (
+          <CommandGroup heading="Tickets">
+            {ticketHits.map((t) => (
+              <CommandItem key={t.id} value={`ticket ${t.key} ${t.title}`} keywords={[debounced]} onSelect={() => jump(`/app/tickets?open=${t.id}`)}>
+                <Ticket className="text-muted-foreground" />
+                {/* nowrap: a key is one token; "E2EARCH90096-635" split over three lines read as three tickets. */}
+                <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground">{t.key}</span>
+                <span className="truncate">{t.title}</span>
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">{t.projectName}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
+        {projectHits.length > 0 && (
+          <CommandGroup heading="Projects">
+            {projectHits.map((p) => (
+              <CommandItem key={p.id} value={`project ${p.code} ${p.name}`} keywords={[debounced]} onSelect={() => jump(ticketsHref(p.id))}>
+                <FolderKanban className="text-muted-foreground" />
+                <span className="truncate">{p.name}</span>
+                <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">{p.code}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
+        {(ticketHits.length > 0 || projectHits.length > 0) && <CommandSeparator />}
         <CommandGroup heading="Navigate">
           {visibleRoutes.map((route) => (
             <CommandItem key={route.to} value={`${route.label} ${route.hint ?? ""}`} onSelect={() => jump(route.to)}>

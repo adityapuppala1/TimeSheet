@@ -81,6 +81,7 @@ import { maintenanceRouter } from "./controllers/maintenance.controller.js";
 import { ssoRouter } from "./controllers/sso.controller.js";
 import { teamRouter } from "./controllers/team.controller.js";
 import { ticketRouter } from "./controllers/ticket.controller.js";
+import { searchRouter } from "./controllers/search.controller.js";
 import { ticketTypeRouter } from "./controllers/ticket-type.controller.js";
 import { timesheetRouter } from "./controllers/timesheet.controller.js";
 import { userRouter } from "./controllers/user.controller.js";
@@ -501,6 +502,7 @@ app.use("/api/users", userRouter);
 app.use("/api/projects", projectRouter);
 app.use("/api/timesheets", timesheetRouter);
 app.use("/api/tickets", ticketRouter);
+app.use("/api/search", searchRouter);
 app.use("/api/ticket-types", ticketTypeRouter);
 // The activity catalog behind the timesheet form's "Activity" field. Mounted next to
 // /api/ticket-types because it is the same shape of thing for the other half of the product.

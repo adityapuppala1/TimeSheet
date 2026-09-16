@@ -10,6 +10,20 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🔎 The command palette finds tickets and projects as you type
+
+- **Ctrl/⌘ K now searches records, not just pages.** Type a ticket key, part of a title, a project
+  code or a project name and the palette shows up to five tickets and five projects above the
+  usual commands. A ticket opens straight into its detail sheet; a project opens Tickets filtered
+  to it. Key-prefix matches rank first, so "WEB-1" finds WEB-1x before a ticket whose title
+  mentions it. One request per pause in typing, nothing under two characters.
+- **Same visibility as everywhere else.** The new `GET /api/search` reads through the exact
+  project scope every ticket route already enforces, and only people who can open Tickets get
+  the ticket group. Deterministic and model-free by design; "Ask AI" remains the natural-language
+  path and is unchanged.
+- People are not searched yet: no page can open one person directly, and a result you cannot open
+  is noise. It arrives with the first such page.
+
 ### 🐛 Email templates showed "Send all templates as test" twice
 
 - The header rollout moved the button into the page header's actions slot but left the original

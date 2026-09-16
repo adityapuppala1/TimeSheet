@@ -3264,6 +3264,17 @@ export interface TicketCollaboratorRow {
   createdAt: string;
 }
 
+export interface QuickSearchResult {
+  tickets: Array<{ id: string; key: string; title: string; status: string; projectName: string }>;
+  projects: Array<{ id: string; code: string; name: string }>;
+}
+
+/** The command palette's deterministic record search — tickets and projects the caller may see,
+ *  by key/code/title/name. Distinct from `aiApi.ask`, which is the natural-language path. */
+export const searchApi = {
+  quick: async (q: string) => (await api.get<QuickSearchResult>("/search", { params: { q } })).data
+};
+
 export const ticketApi = {
   /** Per-project open/closed counts for one person's tickets, counted server-side. Defaults to the
    *  caller; another assignee needs the same permission the list route requires. */
