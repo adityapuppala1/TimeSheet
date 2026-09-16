@@ -45,8 +45,9 @@ import {
   TrendingUp,
   UserRound,
   Users,
-  Users2, CircleHelp } from "lucide-react";
+  Users2, CircleHelp, Keyboard } from "lucide-react";
 import { ticketsHref } from "../lib/project-tree";
+import { comboForRoute, formatCombo, SHORTCUTS } from "../lib/shortcuts";
 import { permissions } from "@timesheet/shared";
 import {
   CommandDialog,
@@ -124,10 +125,16 @@ const navRoutes: NavRoute[] = [
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Opens the "?" shortcuts dialog Topbar owns. */
+  onOpenShortcuts?: () => void;
 }
 
-export function CommandPalette({ open, onOpenChange }: Props) {
+export function CommandPalette({ open, onOpenChange, onOpenShortcuts }: Props) {
   const navigate = useNavigate();
+  const combo = (id: string) => {
+    const def = SHORTCUTS.find((d) => d.id === id);
+    return def ? formatCombo(def.combo) : undefined;
+  };
   const user = useAuthStore((s) => s.user);
   const logoutStore = useAuthStore((s) => s.logout);
   const [, force] = useState(0);
@@ -246,19 +253,24 @@ export function CommandPalette({ open, onOpenChange }: Props) {
               <route.icon className="text-muted-foreground" />
               <span>{route.label}</span>
               {route.hint && <span className="text-xs text-muted-foreground">{route.hint}</span>}
+              {/* The same key the "?" dialog shows, from the same table — never typed here. */}
+              {comboForRoute(route.to) && <CommandShortcut>{formatCombo(comboForRoute(route.to)!)}</CommandShortcut>}
             </CommandItem>
           ))}
         </CommandGroup>
         <CommandSeparator />
         <CommandGroup heading="Quick actions">
-          <CommandItem value="new timesheet entry" onSelect={() => jump("/app/timesheet")}>
+          {/* "⌘ N" used to be printed here with nothing listening — and Chrome reserves Ctrl/⌘+N
+              regardless. The hint now comes from lib/shortcuts.ts, where a listener exists for it. */}
+          <CommandItem value="new timesheet entry log time" onSelect={() => jump("/app/timesheet")}>
             <CalendarPlus2 className="text-muted-foreground" />
             <span>New timesheet entry</span>
-            <CommandShortcut>⌘ N</CommandShortcut>
+            {combo("new-timesheet") && <CommandShortcut>{combo("new-timesheet")}</CommandShortcut>}
           </CommandItem>
-          <CommandItem value="new ticket bug task" onSelect={() => jump("/app/tickets")}>
+          <CommandItem value="new ticket bug task create" onSelect={() => jump("/app/tickets?new=1")}>
             <TicketPlus className="text-muted-foreground" />
             <span>New ticket</span>
+            {combo("new-ticket") && <CommandShortcut>{combo("new-ticket")}</CommandShortcut>}
           </CommandItem>
           {canAskAI && (
             <CommandItem
@@ -272,6 +284,17 @@ export function CommandPalette({ open, onOpenChange }: Props) {
               <span className="ai-gradient-text">Ask AI</span>
             </CommandItem>
           )}
+          <CommandItem
+            value="keyboard shortcuts keys hotkeys"
+            onSelect={() => {
+              onOpenChange(false);
+              onOpenShortcuts?.();
+            }}
+          >
+            <Keyboard className="text-muted-foreground" />
+            <span>Keyboard shortcuts</span>
+            <CommandShortcut>?</CommandShortcut>
+          </CommandItem>
           <CommandItem value="toggle theme dark light" onSelect={handleToggleTheme}>
             <Sun className="text-muted-foreground dark:hidden" />
             <Moon className="hidden text-muted-foreground dark:block" />
@@ -374,15 +397,6 @@ function AskAIDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (ope
   );
 }
 
-export function useCommandPaletteHotkey(onOpen: () => void) {
-  useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if ((event.key === "k" || event.key === "K") && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        onOpen();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onOpen]);
-}
+// The Ctrl/⌘+K listener that used to live here moved into lib/shortcuts.ts + ShortcutsDialog.tsx's
+// `useGlobalShortcuts`, so the palette chord and every other shortcut share one table and one
+// listener.

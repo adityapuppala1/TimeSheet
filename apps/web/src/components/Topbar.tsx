@@ -16,7 +16,8 @@ import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { NotificationsBell } from "./NotificationsBell";
 import { AnimatedThemeToggler } from "./ui/animated-theme-toggler";
-import { CommandPalette, useCommandPaletteHotkey } from "./command-palette";
+import { CommandPalette } from "./command-palette";
+import { ShortcutsDialog, useGlobalShortcuts } from "./ShortcutsDialog";
 import { ProductTour, shouldAutoStartTour, useTourController } from "./ProductTour";
 import { authApi, fileUrl } from "../services/api";
 import { useAuthStore } from "../store/auth";
@@ -25,8 +26,11 @@ export function Topbar() {
   const user = useAuthStore((s) => s.user);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
-  useCommandPaletteHotkey(() => setPaletteOpen(true));
+  // Every keyboard shortcut in the app, from the one table in lib/shortcuts.ts — installed once,
+  // here, because this bar renders exactly once per authenticated page.
+  useGlobalShortcuts({ onPalette: () => setPaletteOpen(true), onHelp: () => setShortcutsOpen(true) });
 
   // The guided tour. Opens itself once, for a genuinely new account, in a browser session that
   // hasn't seen it — and is available on demand from the profile menu below for everyone else.
@@ -106,7 +110,8 @@ export function Topbar() {
         </div>
       </header>
 
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} onOpenShortcuts={() => setShortcutsOpen(true)} />
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <MobileDrawerNav open={drawerOpen} onOpenChange={setDrawerOpen} />
       <ProductTour running={tourRunning} onClose={stopTour} />
     </>

@@ -10,6 +10,20 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### ⌨️ Keyboard shortcuts you can discover, from one table
+
+- **Press `?` anywhere** for the shortcuts dialog, listing only what your role can use: Ctrl/⌘ K
+  for the palette, `N` to log time, `C` to create a ticket (the dialog opens on arrival), and
+  `G` then a letter to jump — H home, L log timesheet, T tickets, W my work, I inbox, P profile.
+  The palette prints the same keys beside its items, from the same table, so nothing can be
+  advertised in one place and dead in another.
+- **A letter is a letter while you type.** Single keys and sequences are ignored inside fields,
+  editors, comboboxes and open dialogs. The palette chord still works everywhere.
+- **Fixed: the palette showed "⌘ N" with nothing listening.** Nothing could have: browsers keep
+  Ctrl/⌘ N, T and W for themselves and a page cannot intercept them, so no shortcut here uses them
+  (a test forbids it). The label now reads `N`, and it works.
+- New Help article "Keyboard shortcuts" under Getting started (also answers Ask AI).
+
 ### 🔎 The command palette finds tickets and projects as you type
 
 - **Ctrl/⌘ K now searches records, not just pages.** Type a ticket key, part of a title, a project

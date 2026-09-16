@@ -372,6 +372,17 @@ export function Tickets() {
     if (!linked.projectId) return;
     setFilters((f) => ({ ...f, projectId: linked.projectId!, moduleId: linked.moduleId ?? "all" }));
   }, [linked.projectId, linked.moduleId]);
+  // `?new=1` — the "c" shortcut and the palette's New ticket land here and want the dialog open on
+  // arrival. Consumed immediately so a refresh or back-navigation does not reopen it.
+  const wantsNew = searchParams.get("new") === "1";
+  useEffect(() => {
+    if (!wantsNew) return;
+    setCreateOpen(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("new");
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the flag appears
+  }, [wantsNew]);
   /** A hand-made change to the project or module filter also drops the tree's parameters from the
    *  URL — otherwise the address bar would keep naming a project the page is no longer showing. */
   const chooseProject = (projectId: string, moduleId = "all") => {
