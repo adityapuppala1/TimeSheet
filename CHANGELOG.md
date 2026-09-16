@@ -10,6 +10,28 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🎨 Every button, input and select now clears the 44px touch minimum
+
+- **The root font-size is 14px at every width, so every rem-based Tailwind height was 14/16 of what
+  its class name said.** `h-10` — the default button, every input, every select — rendered at 35px;
+  `h-11` at 38.5px; even `h-12` at 42px. Every primary control in the product sat under the 44px
+  touch minimum (WCAG 2.5.5, Apple HIG, Material), and it passed every eye because the numbers
+  *look* right in the source. Found by measuring accent swatches at 390px and then confirming at
+  768 and 1366 — not by reading `button.tsx`, where nothing looks wrong.
+- The `default`, `lg` and `icon` button sizes, the `Input`, the `SelectTrigger`, and the top bar's
+  two explicit overrides are now absolute `44px`. `sm` is left exactly as it was: it is the
+  deliberate compact size for dense toolbars and table rows, and the touch rule is about primary
+  actions, not every affordance.
+- **What is deliberately NOT changed, and why**, measured on the two densest pages: the rich-text
+  toolbar (32px — a compact toolbar by design, the same exception as `sm`), table-header sort
+  controls and inline group toggles (14px text controls, not primary actions), the date picker (its
+  own component, its own unit), and `size="sm"` callers. Each is a design decision; sweeping them to
+  44px would wreck the toolbar and the table headers. Recorded in the V12 state file as the shell
+  unit's remaining scope.
+- Verified in the live app at 390 and 1366, light and dark, on Tickets and Log timesheet: zero
+  horizontal overflow, the 56px top bar holds the taller controls, the segmented view switcher and
+  the primary button match height.
+
 ### 🎨 Appearance is yours now: three theme modes and seven accents, saved to your profile
 
 - **Profile → Appearance: System, Light or Dark, plus an accent colour.** Until now the app had one

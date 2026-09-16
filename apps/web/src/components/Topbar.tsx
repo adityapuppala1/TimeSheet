@@ -68,7 +68,7 @@ export function Topbar() {
         <button
           type="button"
           onClick={() => setPaletteOpen(true)}
-          className="focus-ring group relative flex h-10 min-w-0 flex-1 max-w-xl items-center gap-2 rounded-md border border-input bg-background px-3 text-sm text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
+          className="focus-ring group relative flex h-[44px] min-w-0 flex-1 max-w-xl items-center gap-2 rounded-md border border-input bg-background px-3 text-sm text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
           aria-label="Open command palette"
           data-tour="command-search"
         >
@@ -93,7 +93,7 @@ export function Topbar() {
               what interacted badly with sticky positioning (see index.css's html comment). */}
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
-              <Button data-tour="user-menu" variant="ghost" className="h-10 gap-2 rounded-full border border-border px-2 pr-3">
+              <Button data-tour="user-menu" variant="ghost" className="h-[44px] gap-2 rounded-full border border-border px-2 pr-3">
                 <Avatar className="h-7 w-7">
                   {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
                   <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
