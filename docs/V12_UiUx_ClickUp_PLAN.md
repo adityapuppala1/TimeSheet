@@ -160,7 +160,7 @@ The matrix covers every requested area. Remaining Unverified details are explici
 ## Feature Flags
 | Flag | Default | Controls |
 |---|---|---|
-| `GlobalPlanningSettings.enableSprints` (Workspace Settings → Planning → Sprints) | **off** | Everything sprint-shaped: `effective.sprints = enableSprints && enablePlanning`; API routes will call `assertSprintsEnabled`; the UI will gate the nav item and pages on `effective.sprints`. Turning it off hides, never deletes. |
+| `GlobalPlanningSettings.enableSprints` (Workspace Settings → Planning → Sprints) | **off** | Everything sprint-shaped: `effective.sprints = enableSprints && enablePlanning`; every `/api/sprints` route and the ticket PATCH's sprint keys call `assertSprintsEnabled` (403 naming the switch); the nav item, `/app/sprints` page, ticket-sheet fields and Tickets filter all gate on `effective.sprints`. Verified live both ways 2026-09-16. Turning it off hides, never deletes. |
 
 ## Auto-Heal Log
 | Date | Symptom | Root cause | Fix | Commit |
