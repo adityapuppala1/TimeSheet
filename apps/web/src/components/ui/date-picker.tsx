@@ -104,7 +104,7 @@ export function DatePicker({
           type="button"
           variant="outline"
           disabled={disabled}
-          className={cn("h-10 w-full justify-start gap-2 font-normal", !value && "text-muted-foreground", className)}
+          className={cn("h-[44px] w-full justify-start gap-2 font-normal", !value && "text-muted-foreground", className)}
         >
           <CalendarIcon className="h-4 w-4 shrink-0" />
           <span className="truncate">{value ? formatDisplay(value) : placeholder}</span>
@@ -251,7 +251,7 @@ export function DateTimePicker({
           type="button"
           variant="outline"
           disabled={disabled}
-          className={cn("h-10 w-full justify-start gap-2 font-normal", !date && "text-muted-foreground", className)}
+          className={cn("h-[44px] w-full justify-start gap-2 font-normal", !date && "text-muted-foreground", className)}
         >
           <CalendarIcon className="h-4 w-4 shrink-0" />
           <span className="truncate">{label}</span>
@@ -390,7 +390,7 @@ export function TimeField({
     >
       <AriaDateInput
         className={cn(
-          "focus-within:ring-ring flex h-10 w-full items-center rounded-md border border-input bg-background px-3 py-2 text-sm",
+          "focus-within:ring-ring flex h-[44px] w-full items-center rounded-md border border-input bg-background px-3 py-2 text-sm",
           "focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-offset-background",
           disabled && "cursor-not-allowed opacity-60"
         )}

@@ -3,10 +3,10 @@
 > Branch: V12_UiUx_ClickUp — NEVER merge to main.
 
 ## Current Status
-- Phase: 2 — theme lifecycle (done) → mode + accents (done) → shell: touch-target sizing (done this session) → hierarchy nav / breadcrumb / view tabs / density next.
+- Phase: 2 — theme lifecycle (done) → mode + accents (done) → shell: touch targets (done) → PageHeader + derived breadcrumb, 2 of 26 pages migrated (done this session) → remaining 24 pages, then hierarchy nav / density.
 - Last updated: 2026-09-16 by Claude Code (Fable 5.1), resumed from Codex per §3.
 - Resumed baseline: lint PASS (701 warnings, zero errors, ratchet passes); API 3140/3140; web 191/191. Matched the previous handoff exactly.
-- Post-change checks (touch-target unit, run AFTER the last edit, sequentially): lint PASS (701 warnings, zero errors, ratchet passes); API 3147/3147; web 202/202; `git diff --check` clean.
+- Post-change checks (header unit, AFTER the last edit, sequential): lint PASS (701 warnings, zero errors, ratchet passes); API 3147/3147; web 208/208 (+6); `git diff --check` clean.
 - Starting commit this session: `ca22309`. Branch otherwise untouched; no push, no main change.
 - Prior checkpoint: resolve current with `git log -1`.
 
@@ -18,13 +18,14 @@
 - [x] Phase 2 first unit: preserve implicit OS preference and synchronize existing theme controls, with regression tests.
 - [x] Phase 2 next unit: explicit light/dark/system selection and seven original accent palettes in Profile → Appearance; per-user persistence via the existing profile PATCH and one additive nullable JSON column (`User.appearance`). Contrast measured (WCAG 2.1 AA, both surfaces, both roles) before any palette shipped; verified live at 390/768/1366 in light+dark, keyboard, reload, ≥44px targets.
 - [x] Phase 2 shell (part 1): touch-target sizing. Root font is 14px, so `h-10` = 35px; `default`/`lg`/`icon` buttons, `Input`, `SelectTrigger` and the top bar's two overrides are now absolute 44px. Deliberately left (design decisions, each its own unit): rich-text toolbar 32px, table-header sort/group text controls, the date picker, `size="sm"` callers.
-- [ ] Phase 2 shell (part 2): hierarchy navigation, breadcrumb/view tabs, density, responsive containment on existing components. Date picker height is the first candidate.
+- [x] Phase 2 shell (part 2a): `components/PageHeader.tsx` — title block + breadcrumb DERIVED from `nav` via the sidebar's `matchPath`/`end` rule; migrated Tickets (icon + actions slot) and Profile (plain). Date-picker triggers → 44px; range picker `h-9` kept (filter control).
+- [ ] Phase 2 shell (part 2b): migrate the remaining 24 `text-2xl font-black tracking-tight` pages to PageHeader in slices of ~6, screenshotting each slice at 390/1366. Then hierarchy navigation in the sidebar, density, responsive containment.
 - [ ] Phase 3: implement verified gaps by priority, with tests and shipping surfaces updated.
 - [ ] Phase 4: responsive/accessibility/workflow checks and continuous hardening.
 - [ ] Phase 5: branch-only release preparation and clean install/update validation.
 
 ## In Progress / Half-done
-- Nothing half-finished. Appearance unit and touch-target unit both complete and verified; all temp specs removed; screenshots `v12-targets-*.png` at repo root are ignored artefacts — delete or ignore, do not commit.
+- Nothing half-finished. Three units complete and verified. `v12-header-*.png` at repo root are artefacts — deleted before commit. 24 pages still on the hand-rolled header: `grep -rl 'text-2xl font-black tracking-tight' apps/web/src/pages` lists them.
 - Final verification commands: `npm run lint`, `npm run test -w apps/api`, `npm run test -w apps/web`, `git diff --check` — run SEQUENTIALLY (parallel runs starve the workers) and AFTER the last edit, including any version bump (the 5.2.0 lesson in CONTRIBUTING).
 - Local ignored artefacts: `test-results/run-shots/v12-appearance-*.png` (five frames: before, indigo light, indigo dark, phone dark, tablet dark). Do not commit them.
 
@@ -151,6 +152,7 @@ The matrix covers every requested area. Remaining Unverified details are explici
 | 2026-09-16 | Falsification harness reported 7/7 breaks GREEN on first pass | Detector parsed vitest text, and a cp1252 encode crash truncated the read; the tests were RED the whole time | Detect red by process exit code, never by text. Re-run: 7/7 RED, then restored | — (harness only) |
 | 2026-09-16 | Every `h-10` control (default button, input, select) measured 35px at every width; audit of `h-11` sites found the same | Root font-size 14px globally; rem utilities render at 14/16. `button.tsx` variants, `input.tsx`, `select.tsx`, Topbar overrides | Absolute `44px` on the primitives. Verified live on Tickets + Log timesheet at 390/1366, both themes, zero overflow | Touch-target unit commit |
 | 2026-09-16 | Dark-mode frame showed grey select boxes on the dark surface | Test forced the `dark` class without `theme.ts`'s repaint — an artefact, not a defect. Through the real toggle the combobox bg is rgb(17,20,29) | None needed. Lesson recorded: force theme through `toggleTheme`/`applyMode`, never by class | — |
+| 2026-09-16 | Live frame showed a GREEN accent while the profile was NULL | The test browser's localStorage still held a previous session's `timesheet:accent` — exactly the 'browser leftover' the profile preference is designed to override, and a NULL profile correctly changes nothing | None. Design working as intended; noted so nobody chases it | — |
 
 ## Open Questions / Blockers
 - `RTK.md` referenced by user AGENTS instructions is absent; no matching repository file found.
@@ -164,6 +166,11 @@ The matrix covers every requested area. Remaining Unverified details are explici
 - The graphify pre-grep hook fires on every Grep. Query first; it is faster than the refusal.
 
 ## Session Log (newest first)
+### 2026-09-16 — Claude Code (Fable 5.1), shell part 2a: PageHeader + derived breadcrumb
+- Did: resumed per §3 (git matched; baseline 701/0, 3147, 208). Date-picker triggers → 44px. Built `PageHeader` with `navItemFor`/`crumbsFor` deriving Section › Page from the exported `nav` table using the sidebar's own active rule; migrated Tickets and Profile; 6 pure tests including one over the REAL table (every sectioned route → two crumbs). Changelog updated. No dependency, env var, flag or migration.
+- Verified with: live Playwright at 390/1366, light + real dark: crumb renders on Tickets, current page unlinked, absent on Profile (not in nav), switcher + New ticket intact, zero overflow. Sequential gates after the last edit: lint 701/0 + ratchet, API 3147/3147, web 208/208, diff-check clean.
+- Left off at: shell part 2b — migrate the remaining 24 pages in slices, then sidebar hierarchy and density.
+
 ### 2026-09-16 — Claude Code (Fable 5.1), shell part 1: touch targets
 - Did: resumed per §3 (git matched the file; baseline 701/0, 3147, 202). Audited every `h-11` site: most decorative; the real finding is broader — root font 14px makes `h-10` 35px, so default/lg/icon buttons, Input, SelectTrigger and two Topbar overrides were all under 44px. Fixed with absolute px; `sm` and the compact toolbar/table controls deliberately kept, with reasons in the changelog. No dependency, env var, flag or migration.
 - Verified with: live Playwright on Tickets + Log timesheet at 390 and 1366, light and real dark: zero overflow, primitives at 44px, top bar holds them; remaining sub-44 controls enumerated and each classified as a design decision. Sequential gates after the last edit: lint 701/0 + ratchet, API 3147/3147, web 202/202, diff-check clean.

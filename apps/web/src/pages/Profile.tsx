@@ -27,6 +27,7 @@ import {
   AlertDialogTitle
 } from "../components/ui/alert-dialog";
 import { FaceEnrollmentCard } from "../components/FaceEnrollmentCard";
+import { PageHeader } from "../components/PageHeader";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -334,12 +335,7 @@ export function Profile() {
 
   return (
     <div className="grid gap-5">
-      <div>
-        <h1 className="text-2xl font-black tracking-tight">My profile</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Update your photo, bio, contact info, and credentials. Changes apply immediately.
-        </p>
-      </div>
+      <PageHeader title="My profile" description="Update your photo, bio, contact info, and credentials. Changes apply immediately." />
 
       <Card>
         <CardHeader>

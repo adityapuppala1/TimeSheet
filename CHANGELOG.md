@@ -10,6 +10,23 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🎨 A page header with a breadcrumb that is derived, never typed
+
+- **`PageHeader` replaces the title block 26 of 50 pages hand-rolled**, and adds the breadcrumb the
+  V12 shell asks for — Section › Page — read from the sidebar's own `nav` table. A breadcrumb typed
+  per page is a second copy of the sidebar's labels that drifts the day one is renamed; this one
+  cannot, because there is one table. It uses the sidebar's own active-route rule (`matchPath` with
+  the same `end` flag), so the crumb can never name a different page than the sidebar highlights.
+- A route not in the table gets no crumb rather than a wrong one; from a child route (a ticket's
+  detail) the page crumb becomes the way back; on the page itself it is plain text, because a link
+  to where you already are does nothing.
+- Shipped as the primitive plus two migrated pages — Tickets (icon variant, with its view switcher
+  moved into the `actions` slot and its 390px containment moved with it) and Profile (plain variant)
+  — verified live at both widths in both themes. The remaining 24 pages migrate in follow-up slices
+  so each can be looked at, not swept.
+- Date picker triggers join the 44px rule (three `h-10` → `44px`). The range picker's `h-9` is left:
+  it is a dashboard/report filter control, the same compact-toolbar category as `size="sm"`.
+
 ### 🎨 Every button, input and select now clears the 44px touch minimum
 
 - **The root font-size is 14px at every width, so every rem-based Tailwind height was 14/16 of what

@@ -71,6 +71,7 @@ import { PlanCalendar } from "../components/PlanCalendar";
 import { TicketApprovalsPanel } from "../components/TicketApprovalsPanel";
 import { ProofingPanel } from "../components/ProofingPanel";
 import { SavedViewsBar, type TicketFilters } from "../components/SavedViewsBar";
+import { PageHeader } from "../components/PageHeader";
 import { TicketMetricsPanel } from "../components/TicketMetricsPanel";
 import { TicketPlanningPanel } from "../components/TicketPlanningPanel";
 import { PlanTimeline, TimelineLegend, scheduledItemIds, type TimelineZoom } from "../components/PlanTimeline";
@@ -449,23 +450,16 @@ export function Tickets() {
 
   return (
     <div className="grid gap-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary/10 text-primary">
-            <TicketIcon className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-black tracking-tight">Tickets</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Bugs, tasks, and improvements — assign, track, and resolve.</p>
-          </div>
-        </div>
-        {/* `min-w-0` + `flex-wrap` are load-bearing at 390px, not tidying. Going from two view
-            buttons to four pushed this row past the viewport, and because `body { overflow-x:
-            clip }` hides the damage rather than scrolling it, the symptom was the page header
-            silently dragged off-screen — the exact failure documented on the Workspace Settings
-            grid track in index.css. The switcher below owns its own overflow so it can never
-            export width to the page again. */}
-        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+      {/* The switcher's `min-w-0` + `flex-wrap` containment is load-bearing at 390px (see the
+          history in git for the header this replaced): four view buttons once dragged the header
+          off-screen while `overflow-x: clip` hid it. PageHeader's `actions` slot carries the same
+          classes, so the guarantee moved with the markup rather than being re-derived. */}
+      <PageHeader
+        title="Tickets"
+        icon={TicketIcon}
+        description="Bugs, tasks, and improvements — assign, track, and resolve."
+        actions={
+          <>
           <div className="flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-border p-0.5">
             <Button className="shrink-0" variant={viewMode === "list" ? "default" : "ghost"} size="sm" onClick={() => setViewMode("list")}>
               <ListChecks className="h-3.5 w-3.5" />List
@@ -489,8 +483,9 @@ export function Tickets() {
           <Button className="shrink-0" onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" />New ticket
           </Button>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {/* Above the filter row rather than below it: the tiles ARE filters, and a summary that sits
           under the controls it drives reads as a result rather than a starting point. Hidden on the
