@@ -187,15 +187,15 @@ export function EmailTemplatesPage() {
 
   return (
     <div className="grid gap-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <PageHeader
+      {/* The bulk-test button lives in the header's actions slot and nowhere else. Slice 2 of the
+          header rollout briefly rendered it twice — once here and once in the old flex row the
+          migration had replaced only half of — which a screenshot caught. */}
+      <PageHeader
         title="Email templates"
         icon={Mail}
         description={<>Edit the subject and body of every transactional email. Variables in {`{{double_braces}}`} are replaced at send time.</>}
         actions={<BulkTestButton />}
       />
-        <BulkTestButton />
-      </div>
 
       <TransportStatusBanner status={transport.data} loading={transport.isLoading} />
 

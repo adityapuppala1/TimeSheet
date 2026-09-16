@@ -10,6 +10,12 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🐛 Email templates showed "Send all templates as test" twice
+
+- The header rollout moved the button into the page header's actions slot but left the original
+  behind in the old title row. One button now, at every width. Every other migrated page was swept
+  for the same half-replaced wrapper; none had it.
+
 ### 🎨 Density joins theme and accent in Profile → Appearance
 
 - **Comfortable or Compact, saved to your profile.** Comfortable is exactly today's rendering.
