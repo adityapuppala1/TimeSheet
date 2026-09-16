@@ -13,9 +13,13 @@
  * `remainingCount` series, so a team that never estimates still gets a burndown that means
  * something. Days after today carry `null` — a burndown does not forecast; the ideal line does.
  *
- * WHY MEMBERSHIP IS READ AS OF NOW: a ticket moved out of the sprint is no longer part of its
- * story, and one moved in was planned in late. Sprint membership is not audited today (Open
- * Questions in the V12 state file); the honest series is over the current membership.
+ * MEMBERSHIP IS REPLAYED TOO (V12 6.1): every join and leave is audited as
+ * `ticket.sprint_changed` with `{ from, to }`, so a ticket counts on a day only if it was in the
+ * sprint at the end of that day — one moved out mid-sprint keeps its early days and loses the
+ * later ones, one planned in late appears from the day it joined. A ticket with no membership
+ * events (a sprint that predates the audit) reads as a member throughout, which is exactly the
+ * series it had before. The ideal line runs over the CURRENT members' total: it is the plan as
+ * it stands, not a history.
  *
  * WHO CALLS THIS: controllers/sprint.controller.ts.
  */
@@ -57,6 +61,20 @@ export interface BurndownTicket {
   storyPoints: number | null;
   /** Status changes, any order; each carries the status the ticket moved TO and when. */
   transitions: Array<{ at: Date; to: string }>;
+  /** Joins and leaves of THIS sprint, any order. Absent or empty = a member throughout. */
+  membership?: Array<{ at: Date; joined: boolean }>;
+}
+
+/** Whether the ticket was in the sprint at the end of a day. With events, the state before the
+ *  first one is the opposite of that event (a "left" implies it was in; a "joined" implies it
+ *  was out); after that, the last event on or before the day decides. */
+export function memberAtEndOf(ticket: BurndownTicket, dayEnd: Date): boolean {
+  const events = ticket.membership ?? [];
+  if (events.length === 0) return true;
+  const sorted = [...events].sort((a, b) => a.at.getTime() - b.at.getTime());
+  const before = sorted.filter((e) => e.at <= dayEnd);
+  if (before.length === 0) return !sorted[0].joined;
+  return before[before.length - 1].joined;
 }
 
 export interface BurndownPoint {
@@ -87,7 +105,9 @@ export function statusAtEndOf(ticket: BurndownTicket, dayEnd: Date): string | nu
 }
 
 export function burndown(days: string[], tickets: BurndownTicket[], today: Date = new Date()): BurndownPoint[] {
-  const total = tickets.reduce((sum, t) => sum + (t.storyPoints ?? 0), 0);
+  // The ideal line is the plan as it stands: current members only (a ticket whose last membership
+  // event is a leave is history, not plan).
+  const total = tickets.filter((t) => memberAtEndOf(t, new Date(8.64e15))).reduce((sum, t) => sum + (t.storyPoints ?? 0), 0);
   const steps = Math.max(1, days.length - 1);
   const todayKey = today.toISOString().slice(0, 10);
   return days.map((date, i) => {
@@ -97,6 +117,7 @@ export function burndown(days: string[], tickets: BurndownTicket[], today: Date 
     let points = 0;
     let count = 0;
     for (const t of tickets) {
+      if (!memberAtEndOf(t, dayEnd)) continue;
       const status = statusAtEndOf(t, dayEnd);
       if (status === null || DONE.has(status)) continue;
       points += t.storyPoints ?? 0;

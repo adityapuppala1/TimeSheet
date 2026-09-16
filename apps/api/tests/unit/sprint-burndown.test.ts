@@ -5,7 +5,7 @@
  * happened carry null rather than a guess; the ideal line runs from the total to zero.
  */
 import { describe, expect, it } from "vitest";
-import { assertSprintTransition, burndown, sprintDays, statusAtEndOf, type BurndownTicket } from "../../src/services/sprint.service.js";
+import { assertSprintTransition, burndown, memberAtEndOf, sprintDays, statusAtEndOf, type BurndownTicket } from "../../src/services/sprint.service.js";
 
 const d = (s: string) => new Date(`${s}T10:00:00.000Z`);
 const t = (over: Partial<BurndownTicket> & { id: string }): BurndownTicket => ({
@@ -76,5 +76,42 @@ describe("assertSprintTransition", () => {
     expect(() => assertSprintTransition("PLANNED", "COMPLETED")).toThrow(/cannot move/);
     expect(() => assertSprintTransition("COMPLETED", "ACTIVE")).toThrow(/cannot move/);
     expect(() => assertSprintTransition("ACTIVE", "ACTIVE")).not.toThrow();
+  });
+});
+
+/* V12 6.1 — membership replayed from `ticket.sprint_changed`. */
+describe("memberAtEndOf", () => {
+  const end = (s: string) => new Date(`${s}T23:59:59.999Z`);
+  it("no events means a member throughout (sprints that predate the audit keep their series)", () => {
+    expect(memberAtEndOf(t({ id: "a" }), end("2026-09-01"))).toBe(true);
+  });
+  it("a late join appears from the day it joined; the state before the first event is its opposite", () => {
+    const late = t({ id: "b", membership: [{ at: d("2026-09-03"), joined: true }] });
+    expect(memberAtEndOf(late, end("2026-09-02"))).toBe(false);
+    expect(memberAtEndOf(late, end("2026-09-03"))).toBe(true);
+  });
+  it("an early leave keeps the days before it and loses the days after; a rejoin brings it back", () => {
+    const gone = t({ id: "c", membership: [{ at: d("2026-09-03"), joined: false }] });
+    expect(memberAtEndOf(gone, end("2026-09-02"))).toBe(true);
+    expect(memberAtEndOf(gone, end("2026-09-03"))).toBe(false);
+    const back = t({ id: "d", membership: [{ at: d("2026-09-03"), joined: false }, { at: d("2026-09-05"), joined: true }] });
+    expect(memberAtEndOf(back, end("2026-09-04"))).toBe(false);
+    expect(memberAtEndOf(back, end("2026-09-05"))).toBe(true);
+  });
+});
+
+describe("burndown with membership", () => {
+  const days = sprintDays(new Date("2026-09-01"), new Date("2026-09-05"));
+  const today = new Date("2026-09-05T12:00:00.000Z");
+  it("a ticket moved out on the 3rd counts on the 1st–3rd (leave at 10:00 → out by day end) and not after; the ideal line ignores it", () => {
+    const stays = t({ id: "s", storyPoints: 5 });
+    const moved = t({ id: "m", storyPoints: 3, membership: [{ at: d("2026-09-03"), joined: false }] });
+    const points = burndown(days, [stays, moved], today);
+    expect(points.map((p) => p.remainingPoints)).toEqual([8, 8, 5, 5, 5]);
+    expect(points[0].idealPoints).toBe(5);
+  });
+  it("a ticket planned in on the 4th appears from the 4th", () => {
+    const late = t({ id: "l", storyPoints: 2, membership: [{ at: d("2026-09-04"), joined: true }] });
+    expect(burndown(days, [late], today).map((p) => p.remainingCount)).toEqual([0, 0, 0, 1, 1]);
   });
 });

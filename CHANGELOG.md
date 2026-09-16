@@ -10,6 +10,15 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🏃 The burndown remembers who was in the sprint
+
+- **Sprint membership is audited and replayed.** Every join and leave writes
+  `ticket.sprint_changed` with the sprint on each side, on creation and on a real change. The
+  burndown counts a ticket on a day only if it was in the sprint at that day's end, so a ticket
+  moved out mid-sprint keeps its early days and loses the later ones, and one planned in late
+  appears from the day it joined. Sprints that predate the audit keep exactly the series they
+  had. The ideal line stays over the current members' total: the plan as it stands.
+
 ## 5.3.0 — the tickets workspace grows up — 2026-09-17
 
 ### 🎨 The tickets workspace looks like a work-management tool

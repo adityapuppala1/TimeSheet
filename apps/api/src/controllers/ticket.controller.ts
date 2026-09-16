@@ -651,6 +651,8 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
   }
 
   await audit(req.user!.id, "ticket.created", "Ticket", ticket.id, { key: ticket.key });
+  // V12 6.1: membership is its own event, so a burndown can replay joins and leaves.
+  if (ticket.sprintId) await audit(req.user!.id, "ticket.sprint_changed", "Ticket", ticket.id, { from: null, to: ticket.sprintId });
   emitDomainEvent("ticket.created", { ticket });
 
   // Rules engine (Workspace Settings → Ticketing → Automation rules) — only runs when the creator
@@ -807,6 +809,11 @@ ticketRouter.patch("/:id", requirePermission(permissions.TICKETS_WRITE), validat
     }
   });
   await audit(req.user!.id, "ticket.updated", "Ticket", ticket.id, data);
+  // V12 6.1: a real change of sprint is its own audit event (`{ from, to }`, either side may be
+  // null) — the burndown replays these; the generic update above carries the raw body, not this.
+  if ("sprintId" in data && (data.sprintId ?? null) !== (existing.sprintId ?? null)) {
+    await audit(req.user!.id, "ticket.sprint_changed", "Ticket", ticket.id, { from: existing.sprintId ?? null, to: data.sprintId ?? null });
+  }
   res.json(ticket);
 });
 

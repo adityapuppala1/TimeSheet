@@ -156,9 +156,22 @@ sprintRouter.get("/:id/burndown", requirePermission(permissions.TICKETS_VIEW), a
   // Scope again on the tickets: a sprint is project-scoped, but the caller's scope is what the
   // rest of the app enforces on rows, so the same filter is applied here rather than trusted.
   const scope = await ticketProjectScope(req);
+  const scopeWhere = scope.unrestricted ? {} : { projectId: { in: scope.projectIds } };
+  // V12 6.1: the candidates are the CURRENT members plus every ticket that ever joined or left
+  // this sprint (its membership audit names the sprint on either side), so a ticket moved out
+  // mid-sprint still contributes the days it was in.
+  const membershipRows = await prisma.auditLog.findMany({
+    where: {
+      entity: "Ticket",
+      action: "ticket.sprint_changed",
+      OR: [{ metadata: { path: "$.to", equals: sprint.id } }, { metadata: { path: "$.from", equals: sprint.id } }]
+    },
+    select: { entityId: true, createdAt: true, metadata: true }
+  });
+  const everMember = new Set(membershipRows.map((r) => r.entityId).filter((id): id is string => Boolean(id)));
   const tickets = await prisma.ticket.findMany({
-    where: { sprintId: sprint.id, deletedAt: null, ...(scope.unrestricted ? {} : { projectId: { in: scope.projectIds } }) },
-    select: { id: true, createdAt: true, status: true, storyPoints: true }
+    where: { deletedAt: null, ...scopeWhere, OR: [{ sprintId: sprint.id }, ...(everMember.size ? [{ id: { in: [...everMember] } }] : [])] },
+    select: { id: true, createdAt: true, status: true, storyPoints: true, sprintId: true }
   });
   const ids = tickets.map((t) => t.id);
   const rows = ids.length
@@ -175,18 +188,27 @@ sprintRouter.get("/:id/burndown", requirePermission(permissions.TICKETS_VIEW), a
     list.push({ at: row.createdAt, to });
     byTicket.set(row.entityId, list);
   }
+  const membershipByTicket = new Map<string, Array<{ at: Date; joined: boolean }>>();
+  for (const row of membershipRows) {
+    if (!row.entityId) continue;
+    const meta = row.metadata as { from?: string | null; to?: string | null } | null;
+    const list = membershipByTicket.get(row.entityId) ?? [];
+    list.push({ at: row.createdAt, joined: meta?.to === sprint.id });
+    membershipByTicket.set(row.entityId, list);
+  }
   const input: BurndownTicket[] = tickets.map((t) => ({
     id: t.id,
     createdAt: t.createdAt,
     status: t.status,
     storyPoints: t.storyPoints === null ? null : Number(t.storyPoints),
-    transitions: byTicket.get(t.id) ?? []
+    transitions: byTicket.get(t.id) ?? [],
+    membership: membershipByTicket.get(t.id) ?? []
   }));
   const days = sprintDays(sprint.startDate, sprint.endDate);
   res.json({
     sprint: { id: sprint.id, name: sprint.name, status: sprint.status, startDate: sprint.startDate, endDate: sprint.endDate },
-    totalPoints: input.reduce((sum, t) => sum + (t.storyPoints ?? 0), 0),
-    ticketCount: input.length,
+    totalPoints: input.filter((t) => tickets.find((x) => x.id === t.id)?.sprintId === sprint.id).reduce((sum, t) => sum + (t.storyPoints ?? 0), 0),
+    ticketCount: tickets.filter((t) => t.sprintId === sprint.id).length,
     points: burndown(days, input)
   });
 });

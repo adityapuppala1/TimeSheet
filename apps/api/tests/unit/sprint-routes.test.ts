@@ -34,7 +34,8 @@ vi.mock("../../src/services/planning.service.js", async () => {
   };
 });
 vi.mock("../../src/services/notify.service.js", () => ({ dispatchNotification: vi.fn().mockResolvedValue(undefined), dispatchTransactional: vi.fn().mockResolvedValue({ ok: true }) }));
-vi.mock("../../src/services/audit.service.js", () => ({ audit: vi.fn().mockResolvedValue(undefined) }));
+const auditSpy = vi.fn().mockResolvedValue(undefined);
+vi.mock("../../src/services/audit.service.js", () => ({ audit: (...a: unknown[]) => auditSpy(...a) }));
 vi.mock("../../src/services/face.service.js", () => ({ isFaceVerificationRequired: vi.fn().mockResolvedValue(false), consumeVerification: vi.fn(), bindVerificationToRecord: vi.fn() }));
 vi.mock("../../src/services/ticket-rules.service.js", () => ({ applyTicketRules: vi.fn().mockResolvedValue(null) }));
 vi.mock("../../src/services/domain-events.js", () => ({ emitDomainEvent: vi.fn(), emitTicketStatusChanged: vi.fn() }));
@@ -185,5 +186,23 @@ describe("sprint on creation", () => {
     expect(res.status).toBe(201);
     expect(client.sprint.findFirst).not.toHaveBeenCalled();
     expect(vi.mocked(client.ticket.create).mock.calls[0][0].data.sprintId).toBeUndefined();
+  });
+});
+
+/* V12 6.1 — membership is its own audit event, on create and on a real change. */
+describe("membership audit", () => {
+  it("PATCH into a sprint writes ticket.sprint_changed { from: null, to }", async () => {
+    auditSpy.mockClear();
+    vi.mocked(client.sprint.findFirst).mockResolvedValue(SPRINT as never);
+    const res = await request(buildApp()).patch(`/api/tickets/${TICKET.id}`).send({ sprintId: SPRINT.id });
+    expect(res.status).toBe(200);
+    const call = auditSpy.mock.calls.find((c) => c[1] === "ticket.sprint_changed");
+    expect(call?.[4]).toEqual({ from: null, to: SPRINT.id });
+  });
+  it("a PATCH that does not touch the sprint writes no membership event", async () => {
+    auditSpy.mockClear();
+    const res = await request(buildApp()).patch(`/api/tickets/${TICKET.id}`).send({ storyPoints: 1 });
+    expect(res.status).toBe(200);
+    expect(auditSpy.mock.calls.some((c) => c[1] === "ticket.sprint_changed")).toBe(false);
   });
 });
