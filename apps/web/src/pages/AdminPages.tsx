@@ -129,6 +129,9 @@ import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
 import { useAuthStore } from "../store/auth";
 import { PageHeader } from "../components/PageHeader";
+import { ProjectMark } from "../components/ProjectMark";
+import { IDENTITY_COLORS } from "../lib/identity-colors";
+import { cn } from "../lib/utils";
 
 const roles = ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEAM_LEAD", "EMPLOYEE"];
 
@@ -1186,7 +1189,7 @@ export function ProjectsPage() {
   const [pendingArchive, setPendingArchive] = useState<{ id: string; name: string } | null>(null);
   const [managingTeam, setManagingTeam] = useState<{ id: string; name: string } | null>(null);
   const [billingProject, setBillingProject] = useState<any | null>(null);
-  const [editingProject, setEditingProject] = useState<{ id: string; name: string; description: string } | null>(null);
+  const [editingProject, setEditingProject] = useState<{ id: string; name: string; description: string; color: string | null } | null>(null);
   /** The project whose module/submodule tree is open for renaming. Kept as an id-lookup into
    *  the live query data, so renames show in the dialog without re-opening it. */
   const [hierarchyProjectId, setHierarchyProjectId] = useState<string | null>(null);
@@ -1214,8 +1217,8 @@ export function ProjectsPage() {
   }, [hierarchyProject, hierarchyFilter]);
 
   const editProject = useMutation({
-    mutationFn: (payload: { id: string; name: string; description: string }) =>
-      projectApi.update(payload.id, { name: payload.name.trim(), description: payload.description.trim() || null }),
+    mutationFn: (payload: { id: string; name: string; description: string; color: string | null }) =>
+      projectApi.update(payload.id, { name: payload.name.trim(), description: payload.description.trim() || null, color: payload.color }),
     onSuccess: () => {
       toast.success("Project updated");
       queryClient.invalidateQueries({ queryKey: ["projects"] });
@@ -1297,7 +1300,16 @@ export function ProjectsPage() {
         }
       },
       { accessorKey: "code", header: "Code", cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span> },
-      { accessorKey: "name", header: "Name", cell: (info) => <span className="font-medium">{info.getValue()}</span> },
+      {
+        accessorKey: "name",
+        header: "Name",
+        cell: (info) => (
+          <span className="inline-flex items-center gap-2 font-medium">
+            <ProjectMark id={info.row.original.id} name={info.row.original.name} color={info.row.original.color} size="xs" />
+            {info.getValue()}
+          </span>
+        )
+      },
       {
         accessorKey: "status",
         header: "Status",
@@ -1362,7 +1374,7 @@ export function ProjectsPage() {
               variant="ghost"
               size="sm"
               onClick={() =>
-                setEditingProject({ id: row.original.id, name: row.original.name, description: row.original.description ?? "" })
+                setEditingProject({ id: row.original.id, name: row.original.name, description: row.original.description ?? "", color: row.original.color ?? null })
               }
             >
               <Pencil className="h-3.5 w-3.5" />Edit
@@ -1496,6 +1508,38 @@ export function ProjectsPage() {
                   maxLength={160}
                   onChange={(e) => setEditingProject({ ...editingProject, name: e.target.value })}
                 />
+              </div>
+              {/* Identity colour (V12): the mark every surface draws for this project. "Automatic" is
+                  the colour derived from the id — what the project showed before a choice existed. */}
+              <div className="grid gap-1.5">
+                <p id="edit-project-color-label" className="text-sm font-medium">Colour</p>
+                <div role="radiogroup" aria-labelledby="edit-project-color-label" className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={editingProject.color === null}
+                    aria-label="Automatic colour"
+                    title="Automatic"
+                    onClick={() => setEditingProject({ ...editingProject, color: null })}
+                    className={cn("grid h-[44px] min-w-[44px] place-items-center rounded-md border px-2 text-xs", editingProject.color === null ? "border-primary bg-primary/10" : "border-border")}
+                  >
+                    Auto
+                  </button>
+                  {IDENTITY_COLORS.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={editingProject.color === c.id}
+                      aria-label={c.id}
+                      title={c.id}
+                      onClick={() => setEditingProject({ ...editingProject, color: c.id })}
+                      className={cn("grid h-[44px] w-[44px] place-items-center rounded-md border-2 transition-transform", editingProject.color === c.id ? "border-foreground" : "border-transparent hover:scale-105")}
+                    >
+                      <ProjectMark id={editingProject.id} name={editingProject.name} color={c.id} size="sm" />
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="grid gap-1.5">
                 <Label htmlFor="edit-project-desc">Description</Label>

@@ -13,15 +13,15 @@
  * with the wipe rather than a frame behind it.
  */
 import { useSyncExternalStore } from "react";
-import { identityColorFor, initialsFor } from "../lib/identity-colors";
+import { IDENTITY_COLORS, identityColorFor, initialsFor } from "../lib/identity-colors";
 import { currentTheme, subscribeTheme } from "../lib/theme";
 import { cn } from "../lib/utils";
 
 const SIZE_CLASS = { xs: "h-4 w-4 text-[9px]", sm: "h-6 w-6 text-[10px]", md: "h-8 w-8 text-xs" } as const;
 
-export function ProjectMark({ id, name, size = "sm", className }: Readonly<{ id: string; name: string; size?: "xs" | "sm" | "md"; className?: string }>) {
+export function ProjectMark({ id, name, color: chosen, size = "sm", className }: Readonly<{ id: string; name: string; /** A stored identity colour id; absent/null = derived from the id. */ color?: string | null; size?: "xs" | "sm" | "md"; className?: string }>) {
   const theme = useSyncExternalStore(subscribeTheme, currentTheme, () => "light" as const);
-  const color = identityColorFor(id);
+  const color = IDENTITY_COLORS.find((c) => c.id === chosen) ?? identityColorFor(id);
   const fill = theme === "dark" ? color.dark : color.light;
   const box = SIZE_CLASS[size];
   return (

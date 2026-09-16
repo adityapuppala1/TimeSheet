@@ -148,7 +148,7 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
     // returns it in full.
     omit: { description: true },
     include: {
-      project: { select: { id: true, code: true, name: true } },
+      project: { select: { id: true, code: true, name: true, color: true } },
       module: { select: { id: true, name: true } },
       reporter: { select: USER_SUMMARY },
       // Kanban swimlanes group cards by assignee.manager (see TicketKanban.tsx) — the list
@@ -503,7 +503,7 @@ ticketRouter.get("/:id", requirePermission(permissions.TICKETS_VIEW), async (req
   const ticket = await prisma.ticket.findFirst({
     where: { id: String(req.params.id), deletedAt: null },
     include: {
-      project: { select: { id: true, code: true, name: true } },
+      project: { select: { id: true, code: true, name: true, color: true } },
       module: { select: { id: true, name: true } },
       reporter: { select: USER_SUMMARY },
       assignee: { select: USER_SUMMARY },
@@ -630,7 +630,7 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
         dueAt: computeTicketDueDate(createdAt, priority, slaSettings)
       },
       include: {
-        project: { select: { id: true, code: true, name: true } },
+        project: { select: { id: true, code: true, name: true, color: true } },
         module: { select: { id: true, name: true } },
         reporter: { select: USER_SUMMARY },
         assignee: { select: USER_SUMMARY }
@@ -669,7 +669,7 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
         finalTicket = await prisma.ticket.findUniqueOrThrow({
           where: { id: ticket.id },
           include: {
-            project: { select: { id: true, code: true, name: true } },
+            project: { select: { id: true, code: true, name: true, color: true } },
             module: { select: { id: true, name: true } },
             reporter: { select: USER_SUMMARY },
             assignee: { select: USER_SUMMARY }
@@ -792,7 +792,7 @@ ticketRouter.patch("/:id", requirePermission(permissions.TICKETS_WRITE), validat
     where: { id: existing.id },
     data,
     include: {
-      project: { select: { id: true, code: true, name: true } },
+      project: { select: { id: true, code: true, name: true, color: true } },
       module: { select: { id: true, name: true } },
       reporter: { select: USER_SUMMARY },
       assignee: { select: USER_SUMMARY }
@@ -923,7 +923,7 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
     where: { id: existing.id },
     data,
     include: {
-      project: { select: { id: true, code: true, name: true } },
+      project: { select: { id: true, code: true, name: true, color: true } },
       module: { select: { id: true, name: true } },
       reporter: { select: USER_SUMMARY },
       assignee: { select: USER_SUMMARY }
@@ -1056,7 +1056,7 @@ ticketRouter.patch("/:id/assign", requirePermission(permissions.TICKETS_ASSIGN),
     where: { id: existing.id },
     data: { assigneeId: req.body.assigneeId },
     include: {
-      project: { select: { id: true, code: true, name: true } },
+      project: { select: { id: true, code: true, name: true, color: true } },
       module: { select: { id: true, name: true } },
       reporter: { select: USER_SUMMARY },
       assignee: { select: USER_SUMMARY }

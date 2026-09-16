@@ -74,7 +74,7 @@ export async function quickSearch(req: any, rawQuery: string): Promise<QuickSear
         ...projectWhere,
         OR: [{ name: { contains: q } }, { code: { contains: q } }]
       },
-      select: { id: true, code: true, name: true },
+      select: { id: true, code: true, name: true, color: true },
       orderBy: { name: "asc" },
       take: SEARCH_LIMIT
     }),

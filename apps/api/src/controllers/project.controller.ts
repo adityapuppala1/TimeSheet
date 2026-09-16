@@ -11,7 +11,7 @@
  */
 import { Router } from "express";
 import { z } from "zod";
-import { permissions } from "@timesheet/shared";
+import { IDENTITY_COLOR_IDS, permissions } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
@@ -123,6 +123,8 @@ const patchProjectSchema = z.object({
       // Client billing — see services/billing-rate.service.ts. NOTE: this schema is `.strict()`,
       // so any new Project field MUST be listed here or the edit form 400s on save.
       clientName: z.string().max(160).nullable().optional(),
+      // V12 identity colour: an id from the shared palette, or null to go back to the derived hue.
+      color: z.enum(IDENTITY_COLOR_IDS).nullable().optional(),
       defaultHourlyRate: z.coerce.number().min(0).max(100000).nullable().optional(),
       billingCurrency: z.string().length(3).nullable().optional(),
       // Planning layer (V6). Same `.strict()` warning as above applies to these too.
@@ -149,6 +151,7 @@ projectRouter.patch(
     if (typeof req.body.slaApprovalHours === "number") data.slaApprovalHours = req.body.slaApprovalHours;
     if ("submissionDeadlineDayOfMonth" in req.body) data.submissionDeadlineDayOfMonth = req.body.submissionDeadlineDayOfMonth;
     if ("clientName" in req.body) data.clientName = req.body.clientName || null;
+    if ("color" in req.body) data.color = req.body.color ?? null;
     if ("defaultHourlyRate" in req.body) data.defaultHourlyRate = req.body.defaultHourlyRate ?? null;
     // Normalised to uppercase so "usd" and "USD" don't read as two different currencies when the
     // attestation refuses to mix them.

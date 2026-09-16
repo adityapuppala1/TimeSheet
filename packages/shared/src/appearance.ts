@@ -138,3 +138,16 @@ export function isAccentId(value: unknown): value is AccentId {
 export function isDensity(value: unknown): value is Density {
   return typeof value === "string" && (DENSITIES as readonly string[]).includes(value);
 }
+
+/**
+ * IDENTITY COLOURS — the palette a person may assign to a project (and, later, anything else
+ * that needs a colour of its own). Ids only: the web owns the HSL values per theme
+ * (apps/web/src/lib/identity-colors.ts); the API validates a saved choice against this list so an
+ * arbitrary value that fails contrast can never be stored. Distinct from ACCENT_PALETTES on
+ * purpose — an accent is the chrome's colour, an identity colour names a thing.
+ */
+export const IDENTITY_COLOR_IDS = ["sky", "violet", "rose", "amber", "emerald", "indigo", "teal", "plum"] as const;
+export type IdentityColorId = (typeof IDENTITY_COLOR_IDS)[number];
+export function isIdentityColorId(value: unknown): value is IdentityColorId {
+  return typeof value === "string" && (IDENTITY_COLOR_IDS as readonly string[]).includes(value);
+}

@@ -64,7 +64,7 @@ export async function computeMyWork(userId: string, now: Date = new Date()): Pro
       id: true, key: true, title: true, startDate: true, endDate: true, dueAt: true, priority: true,
       status: true, type: true, isMilestone: true, progressPct: true, estimatedHours: true,
       workflowStatus: { select: { name: true, category: true, color: true } },
-      project: { select: { id: true, code: true, name: true } },
+      project: { select: { id: true, code: true, name: true, color: true } },
       linksTo: {
         // Incoming BLOCKS/FS edges whose SOURCE is not finished — i.e. what is holding this up.
         where: { type: { in: ["BLOCKS", "FINISH_TO_START"] } },

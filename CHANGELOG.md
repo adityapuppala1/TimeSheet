@@ -20,6 +20,10 @@ number, on purpose — an installation must never render history for a version t
 - **Status-coloured groups.** Grouping the list by status or priority gives each heading the same
   colour dot as the pills in its rows. The Group menu leads the toolbar and shows the current
   grouping.
+- **Choose a project's colour.** Edit a project (Administration → Projects) and pick one of eight
+  colours, or "Auto" for the derived one; the mark changes everywhere at once — sidebar tree,
+  tickets table, cards, group headings. Stored as a palette id, so only measured, legible colours
+  can be saved. Additive migration; existing projects keep their derived colour.
 - **Change a status from the list.** The status pill on every row and phone card is now a menu of
   the other statuses. The server decides what is legal, exactly as it does from the ticket sheet;
   a refusal shows its reason and points to the sheet, and a workspace that verifies identity on

@@ -450,6 +450,9 @@ model Project {
   /// is the field it grows out of.
   /// Shown on a Verified Work Attestation so the artifact names who the work was for.
   clientName        String?  @db.VarChar(160)
+  /// V12: a person-chosen identity colour — one of `IDENTITY_COLOR_IDS` in packages/shared. NULL
+  /// renders as the colour derived from the id, which is what every project showed before.
+  color             String?  @db.VarChar(20)
   /// Optional per-project rate override. Takes precedence over User.hourlyRate when a timesheet
   /// on this project is approved — the real agency case is "Client A pays more than Client B for
   /// the same person." Null = fall back to the individual's own rate.

@@ -265,6 +265,7 @@ function readOpenProjects(): Set<string> {
 interface TreeProject {
   id: string;
   name: string;
+  color?: string | null;
   modules?: Array<{ id: string; name: string }>;
 }
 
@@ -348,7 +349,7 @@ function ProjectTree({ onNavigate }: { onNavigate?: () => void }) {
                 )}
                 <Link to={ticketsHref(project.id)} onClick={onNavigate} className={rowClass(projectActive)} aria-current={projectActive ? "page" : undefined}>
                   {/* Identity colour + initials (lib/identity-colors.ts): the tree scans by colour before it reads. */}
-                  <ProjectMark id={project.id} name={project.name} size="sm" />
+                  <ProjectMark id={project.id} name={project.name} color={project.color} size="sm" />
                   <span className="truncate">{project.name}</span>
                 </Link>
               </div>

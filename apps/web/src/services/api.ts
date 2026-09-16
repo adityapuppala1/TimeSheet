@@ -2998,7 +2998,7 @@ export interface TicketRow {
   dueAt: string | null;
   slaBreachAt: string | null;
   createdAt: string;
-  project: { id: string; code: string; name: string };
+  project: { id: string; code: string; name: string; color?: string | null };
   module: { id: string; name: string } | null;
   reporter: TicketUserSummary;
   assignee: TicketAssigneeSummary | null;

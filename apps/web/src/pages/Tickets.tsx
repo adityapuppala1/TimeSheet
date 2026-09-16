@@ -221,7 +221,7 @@ const ticketColumns: ColumnDef<TicketRow, any>[] = [
     header: "Project",
     cell: (info) => (
       <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-        <ProjectMark id={info.row.original.project.id} name={info.row.original.project.name} size="xs" />
+        <ProjectMark id={info.row.original.project.id} name={info.row.original.project.name} color={info.row.original.project.color} size="xs" />
         {info.getValue()}
       </span>
     )
@@ -516,7 +516,7 @@ function groupHeading(axis: string | undefined, projects: ReadonlyArray<{ id: st
     }
     if (axis === "project" && typeof value === "string") {
       const project = projects.find((p) => p.name === value);
-      return <span className="inline-flex items-center gap-2">{project && <ProjectMark id={project.id} name={project.name} size="xs" />}{label}</span>;
+      return <span className="inline-flex items-center gap-2">{project && <ProjectMark id={project.id} name={project.name} color={(project as { color?: string | null }).color} size="xs" />}{label}</span>;
     }
     return label;
   };
@@ -1024,7 +1024,7 @@ export function Tickets() {
                     <p className="truncate font-medium leading-snug">{row.title}</p>
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span className="inline-flex items-center gap-1"><TypeIcon className="h-3.5 w-3.5" />{row.type}</span>
-                      <ProjectMark id={row.project.id} name={row.project.name} size="xs" />
+                      <ProjectMark id={row.project.id} name={row.project.name} color={row.project.color} size="xs" />
                       <span className="truncate">{row.project.name}</span>
                       {overdue ? (
                         <span className="inline-flex items-center gap-1 font-semibold text-destructive">
