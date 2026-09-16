@@ -155,6 +155,9 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
       assignee: { select: { ...USER_SUMMARY, managerId: true, manager: { select: { id: true, name: true } } } },
       labels: { include: { label: true } },
       _count: { select: { comments: true, attachments: true } },
+      // Custom-field values ride along as `{ key: value }` so the list can show them as columns.
+      // Two small columns per value; a workspace with no fields pays one empty array per row.
+      customFieldValues: { select: { value: true, field: { select: { key: true } } } },
       // Kanban's red "CI failing" badge (see docs/ROADMAP.md's "Auto testing on branch/PR
       // push" theme) needs only the single latest run's status, not the full history — `take: 1`
       // keeps this a cheap per-ticket lookup instead of loading every TestRun row.
@@ -163,7 +166,12 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
     orderBy: { createdAt: "desc" },
     take: 200
   });
-  res.json(tickets);
+  res.json(
+    tickets.map(({ customFieldValues, ...ticket }) => ({
+      ...ticket,
+      customFields: Object.fromEntries(customFieldValues.map((v) => [v.field.key, v.value ?? null]))
+    }))
+  );
 });
 
 /**

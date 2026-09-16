@@ -2978,6 +2978,8 @@ export type AiFeedbackValue = "up" | "down" | null;
 
 export interface TicketRow {
   id: string;
+  /** `{ fieldKey: value }` from the list endpoint — the table's custom-field columns read it. */
+  customFields?: Record<string, unknown>;
   key: string;
   type: TicketType;
   title: string;

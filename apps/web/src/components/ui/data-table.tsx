@@ -19,15 +19,19 @@ import {
   getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
+  type Column,
   type ColumnDef,
   type Row,
-  type SortingState
+  type SortingState,
+  type VisibilityState
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { Columns3, ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { formatGroupLabel, groupCounts, groupRuns, type GroupRun } from "../../lib/group-rows";
 import { cn } from "../../lib/utils";
 import { Button } from "./button";
+import { Checkbox } from "./checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 import { Input } from "./input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./table";
@@ -67,6 +71,14 @@ interface DataTableProps<TData> {
   groupBy?: string;
   /** Renders a group's heading; default is `formatGroupLabel` ("IN_PROGRESS" → "In progress"). */
   groupLabel?: (value: unknown) => ReactNode;
+  /**
+   * CONTROLLED column visibility: the ids to show. Columns with `enableHiding: false` always show.
+   * When provided, a "Columns" control appears in the toolbar and every change is reported through
+   * `onVisibleColumnsChange` — the page owns the list so a saved view can carry it. Omit for the
+   * old behaviour (every column, no control).
+   */
+  visibleColumns?: readonly string[];
+  onVisibleColumnsChange?: (ids: string[]) => void;
 }
 
 export function DataTable<TData>({
@@ -83,8 +95,22 @@ export function DataTable<TData>({
   className,
   rowClassName,
   groupBy,
-  groupLabel
+  groupLabel,
+  visibleColumns,
+  onVisibleColumnsChange
 }: DataTableProps<TData>) {
+  // MEMOISED for the same reason `effectiveSorting` is: react-table treats a fresh state object as
+  // a change, and a change here re-derives row models on every render.
+  const columnVisibility = useMemo<VisibilityState>(() => {
+    if (!visibleColumns) return {};
+    const shown = new Set(visibleColumns);
+    const out: VisibilityState = {};
+    for (const col of columns) {
+      const id = col.id ?? (col as { accessorKey?: string }).accessorKey;
+      if (id && col.enableHiding !== false) out[id] = shown.has(id);
+    }
+    return out;
+  }, [columns, visibleColumns]);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   // The group column sorts first; whatever the person sorted by stays as the tie-breaker within
@@ -106,7 +132,7 @@ export function DataTable<TData>({
   const table = useReactTable({
     data,
     columns,
-    state: { sorting: effectiveSorting, globalFilter, pagination },
+    state: { sorting: effectiveSorting, globalFilter, pagination, columnVisibility },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
     onPaginationChange: setPagination,
@@ -171,7 +197,7 @@ export function DataTable<TData>({
     // track lets items shrink below min-content, which is what finally lets the inner
     // overflow container do its job.
     <div className={cn("grid grid-cols-[minmax(0,1fr)] gap-3", className)}>
-      {(enableSearch || toolbar) && (
+      {(enableSearch || toolbar || visibleColumns) && (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           {enableSearch ? (
             <div className="relative w-full sm:max-w-xs">
@@ -186,7 +212,16 @@ export function DataTable<TData>({
           ) : (
             <div />
           )}
-          {toolbar}
+          <div className="flex flex-wrap items-center gap-2">
+            {toolbar}
+            {visibleColumns && (
+              <ColumnsControl
+                columns={table.getAllLeafColumns().filter((c) => c.getCanHide())}
+                visible={visibleColumns}
+                onChange={(ids) => onVisibleColumnsChange?.(ids)}
+              />
+            )}
+          </div>
         </div>
       )}
 
@@ -339,5 +374,57 @@ export function DataTable<TData>({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The "Columns" popover: one checkbox per hideable column, labelled by its header when that is a
+ * string and by its id otherwise. Emits the full visible list, so the page (and a saved view)
+ * holds one plain array rather than a diff.
+ */
+function ColumnsControl<TData>({
+  columns,
+  visible,
+  onChange
+}: Readonly<{ columns: Column<TData, unknown>[]; visible: readonly string[]; onChange: (ids: string[]) => void }>) {
+  const shown = new Set(visible);
+  const hiddenCount = columns.filter((c) => !shown.has(c.id)).length;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-[44px] gap-1.5" aria-label="Choose columns">
+          <Columns3 className="h-3.5 w-3.5" aria-hidden="true" />
+          Columns
+          {hiddenCount > 0 && <span className="rounded-full bg-muted px-1.5 text-[11px] tabular-nums text-muted-foreground">{hiddenCount} hidden</span>}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-60 p-2">
+        <p className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Columns</p>
+        <ul className="grid gap-0.5" role="group" aria-label="Visible columns">
+          {columns.map((col) => {
+            const header = col.columnDef.header;
+            const label = typeof header === "string" ? header : ((col.columnDef.meta as { label?: string } | undefined)?.label ?? col.id);
+            const on = shown.has(col.id);
+            return (
+              <li key={col.id}>
+                <label className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md px-2 text-sm hover:bg-muted">
+                  <Checkbox
+                    checked={on}
+                    onCheckedChange={(c) => {
+                      const next = new Set(shown);
+                      if (c) next.add(col.id);
+                      else next.delete(col.id);
+                      // Keep the table's own order so the saved list reads the way the header does.
+                      onChange(columns.filter((k) => next.has(k.id)).map((k) => k.id));
+                    }}
+                  />
+                  <span className="truncate">{label}</span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }

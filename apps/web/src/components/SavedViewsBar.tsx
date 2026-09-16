@@ -63,11 +63,15 @@ const VIEW_TYPE: Record<string, SavedViewRow["viewType"]> = {
 export function SavedViewsBar({
   viewMode,
   filters,
+  columns = null,
   onApply
 }: {
   viewMode: keyof typeof VIEW_TYPE;
   filters: TicketFilters;
-  onApply: (filters: TicketFilters) => void;
+  /** The List view's visible column ids, or null for the defaults. `SavedView.columns` has
+   *  existed since the table was built; this is the first thing to write it. */
+  columns?: string[] | null;
+  onApply: (filters: TicketFilters, columns: string[] | null) => void;
 }) {
   const { features } = usePlanningFeatures();
   const user = useAuthStore((s) => s.user);
@@ -92,7 +96,8 @@ export function SavedViewsBar({
         name: name.trim(),
         viewType,
         scope: shared ? "SHARED" : "PERSONAL",
-        filters: filters as unknown as Record<string, unknown>
+        filters: filters as unknown as Record<string, unknown>,
+        columns
       }),
     onSuccess: () => {
       setName("");
@@ -124,7 +129,7 @@ export function SavedViewsBar({
             variant="outline"
             className="h-8 rounded-r-none pr-2"
             onClick={() => {
-              onApply({ ...(v.filters as unknown as TicketFilters) });
+              onApply({ ...(v.filters as unknown as TicketFilters) }, v.columns ?? null);
               toast.success(`Applied "${v.name}"`);
             }}
           >

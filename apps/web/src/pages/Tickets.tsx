@@ -64,7 +64,7 @@ import {
   Waypoints,
   X
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRefine";
 import { PlanCalendar } from "../components/PlanCalendar";
@@ -75,6 +75,8 @@ import { PageHeader } from "../components/PageHeader";
 import { TicketCustomFields } from "../components/TicketCustomFields";
 import { readProjectSelection, withoutProjectSelection } from "../lib/project-tree";
 import { formatGroupLabel, groupRuns } from "../lib/group-rows";
+import { displayValue, fieldsForTicket } from "../lib/custom-fields";
+import { isDefaultColumns, resolveVisibleColumns, type ColumnSpec } from "../lib/table-columns";
 import { TicketMetricsPanel } from "../components/TicketMetricsPanel";
 import { TicketPlanningPanel } from "../components/TicketPlanningPanel";
 import { PlanTimeline, TimelineLegend, scheduledItemIds, type TimelineZoom } from "../components/PlanTimeline";
@@ -109,7 +111,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { plainTextLength, safeHtml } from "../lib/safe-html";
-import { aiApi, fileUrl, labelApi, planApi, projectApi, settingsApi, ticketApi, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLineageEvent, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow } from "../services/api";
+import { aiApi, fileUrl, labelApi, planApi, projectApi, settingsApi, ticketApi, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLineageEvent, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow , planningApi, type CustomFieldRow } from "../services/api";
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
 import { usePlanningFeatures } from "../lib/use-planning";
@@ -153,6 +155,7 @@ const ticketColumns: ColumnDef<TicketRow, any>[] = [
     id: "serial",
     header: "S.No",
     enableSorting: false,
+    enableHiding: false,
     /** Accesses the KEY even though the cell renders a position. Two reasons: the "Search these
      *  results" box filters on accessor values, so without this, replacing the Key column would
      *  have silently broken searching for "HICS-TS-3" — the way people actually look a ticket up;
@@ -183,6 +186,7 @@ const ticketColumns: ColumnDef<TicketRow, any>[] = [
   {
     accessorKey: "title",
     header: "Title",
+    enableHiding: false,
     cell: ({ row }) => (
       <div className="flex max-w-[280px] items-center gap-1.5">
         {row.original.source === "EMAIL" && (
@@ -368,6 +372,32 @@ function ticketQueryParams(filters: TicketFilters, userId: string | undefined) {
   };
 }
 
+/** One table column per active TICKET custom field, reading the `customFields` map the list
+ *  endpoint sends. Hidden by default — a table must not widen because an admin added a field —
+ *  and switched on from the Columns control, where the choice is saved with the view. */
+function customFieldColumns(defs: CustomFieldRow[] | undefined): ColumnDef<TicketRow, any>[] {
+  return fieldsForTicket(defs, null).map((f) => ({
+    id: `cf_${f.key}`,
+    header: f.label,
+    // The accessor yields the DISPLAY text, not the raw value. react-table lets a column join the
+    // search box only if the FIRST row's value is a string or number; a sparse field is null on
+    // row one and the column silently dropped out of searching — found live when "Acme" matched
+    // nothing with the Client column on screen. Text also makes the sort read the way the cell does.
+    accessorFn: (row: TicketRow) => displayValue(f, row.customFields?.[f.key] ?? null),
+    cell: ({ getValue }: { getValue: () => unknown }) => <span className="text-sm">{String(getValue())}</span>,
+    enableSorting: true
+  }));
+}
+
+/** What the Columns control and a saved view reason about: every column, its label, and whether
+ *  it starts hidden or cannot be hidden at all. */
+function columnSpecs(all: ColumnDef<TicketRow, any>[]): ColumnSpec[] {
+  return all.map((c) => {
+    const id = c.id ?? String((c as { accessorKey?: string }).accessorKey);
+    return { id, label: typeof c.header === "string" ? c.header : id, canHide: c.enableHiding !== false, defaultHidden: id.startsWith("cf_") };
+  });
+}
+
 /** Grouping applies to the List view only — Board groups by status itself, Timeline and Calendar
  *  answer a scheduling question. */
 function groupingFor(viewMode: string, groupBy: string) {
@@ -485,6 +515,15 @@ export function Tickets() {
   // sorted by group label first so every run is contiguous, then headers interleaved.
   const grouping = groupingFor(viewMode, filters.groupBy);
   const cardItems = buildTicketCardItems(tickets.data ?? [], grouping);
+
+  // Columns. Built-ins plus one per custom field; the VISIBLE set is page state (null = defaults)
+  // so a saved view can carry it, and so views saved before columns existed (null) keep today's
+  // look. `resolveVisibleColumns` ignores ids of fields since deleted.
+  const fieldDefs = useQuery({ queryKey: ["custom-fields"], queryFn: () => planningApi.listCustomFields(), staleTime: 5 * 60_000 });
+  const allColumns = useMemo(() => [...ticketColumns, ...customFieldColumns(fieldDefs.data)], [fieldDefs.data]);
+  const specs = useMemo(() => columnSpecs(allColumns), [allColumns]);
+  const [savedColumns, setSavedColumns] = useState<string[] | null>(null);
+  const visibleColumns = useMemo(() => resolveVisibleColumns(specs, savedColumns), [specs, savedColumns]);
 
   /**
    * The tiles' counts. Keyed on the same `filters` object the list is keyed on, so the two refetch
@@ -713,7 +752,11 @@ export function Tickets() {
           <SavedViewsBar
             viewMode={viewMode}
             filters={filters}
-            onApply={(saved) => setFilters({ ...DEFAULT_TICKET_FILTERS, ...saved })}
+            columns={savedColumns}
+            onApply={(saved, columns) => {
+              setFilters({ ...DEFAULT_TICKET_FILTERS, ...saved });
+              setSavedColumns(columns);
+            }}
           />
         </CardContent>
       </Card>
@@ -869,7 +912,9 @@ export function Tickets() {
 
           <div className="hidden p-3 sm:block">
             <DataTable
-              columns={ticketColumns}
+              columns={allColumns}
+              visibleColumns={visibleColumns}
+              onVisibleColumnsChange={(ids) => setSavedColumns(isDefaultColumns(specs, ids) ? null : ids)}
               data={tickets.data ?? []}
               isLoading={tickets.isLoading}
               onRowClick={(row) => openTicket(row.id)}

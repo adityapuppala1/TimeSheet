@@ -10,6 +10,17 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🧮 Choose the ticket table's columns, custom fields included
+
+- **A "Columns" control on the tickets table** lets you hide built-in columns and show a column
+  for any custom field. Custom-field columns start hidden, so the table never widens on its own;
+  S.No and Title always stay. The control counts what is hidden.
+- **Saved with the view.** A saved view now remembers its columns as well as its filters and
+  grouping. Views saved earlier keep today's columns. A column for a field that was later deleted
+  is simply ignored.
+- The ticket list now carries each ticket's custom-field values, so those columns cost no extra
+  requests.
+
 ### 🧩 Custom fields, on the ticket
 
 - **A "Fields" section in the ticket sheet** shows every custom field that applies to the ticket's
