@@ -87,6 +87,7 @@ import { safeHtml } from "../lib/safe-html";
 import { computeTrend } from "../lib/trend";
 import { useAuthStore } from "../store/auth";
 import { copyText } from "../lib/clipboard";
+import { PageHeader } from "../components/PageHeader";
 
 const FALLBACK_DEFAULT = `<h2>Title</h2>
 <p>Hi {{name}}, your action is required.</p>
@@ -187,17 +188,12 @@ export function EmailTemplatesPage() {
   return (
     <div className="grid gap-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary/10 text-primary">
-            <Mail className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-black tracking-tight">Email templates</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Edit the subject and body of every transactional email. Variables in {`{{double_braces}}`} are replaced at send time.
-            </p>
-          </div>
-        </div>
+        <PageHeader
+        title="Email templates"
+        icon={Mail}
+        description={<>Edit the subject and body of every transactional email. Variables in {`{{double_braces}}`} are replaced at send time.</>}
+        actions={<BulkTestButton />}
+      />
         <BulkTestButton />
       </div>
 

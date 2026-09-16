@@ -29,6 +29,7 @@ import {
 import { Badge } from "../components/ui/badge";
 import { Input } from "../components/ui/input";
 import { useAuthStore } from "../store/auth";
+import { PageHeader } from "../components/PageHeader";
 
 function ArticleCard({ article }: { readonly article: HelpArticle }) {
   return (
@@ -117,17 +118,11 @@ export function HelpPage() {
 
   return (
     <div className="mx-auto grid w-full max-w-4xl gap-5">
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-          <BookOpen className="h-5 w-5" />
-        </div>
-        <div className="min-w-0">
-          <h1 className="text-2xl font-black tracking-tight">Help & how-to</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Every flow, from signing in to shipping a change — shown for what your role can actually do.
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title={"Help & how-to"}
+        icon={BookOpen}
+        description="Every flow, from signing in to shipping a change — shown for what your role can actually do."
+      />
 
       {/* Sticky, because on a page this long the search box IS the navigation. */}
       <div className="sticky top-16 z-10 -mx-2 grid gap-2.5 rounded-xl border border-border bg-background/95 p-3 backdrop-blur">

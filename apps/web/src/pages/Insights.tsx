@@ -35,6 +35,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { InactivePeopleNote } from "../components/InactivePeopleNote";
 import { reportApi, settingsApi } from "../services/api";
+import { PageHeader } from "../components/PageHeader";
 
 const estimateVsActualColumns: ColumnDef<any, any>[] = [
   {
@@ -182,15 +183,11 @@ export function Insights() {
 
   return (
     <div className="grid gap-5">
-      <div className="flex items-center gap-3">
-        <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary/10 text-primary">
-          <BarChart3 className="h-5 w-5" />
-        </div>
-        <div>
-          <h1 className="text-2xl font-black tracking-tight">Insights</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Ticket velocity, SLA health, workload, and quality signals across the workspace.</p>
-        </div>
-      </div>
+      <PageHeader
+        title="Insights"
+        icon={BarChart3}
+        description="Ticket velocity, SLA health, workload, and quality signals across the workspace."
+      />
 
       {insights.isLoading && <Skeleton className="h-24 w-full" />}
 

@@ -119,6 +119,7 @@ import { PlanningSettingsCard } from "./settings/PlanningSettingsCard";
 import { StorageAndLogsCard } from "./settings/StorageAndLogsCard";
 import { AIProviderListCard } from "./settings/AIProviderListCard";
 import { NativeModelRunnerCard } from "./settings/NativeModelRunnerCard";
+import { PageHeader } from "../components/PageHeader";
 
 // Matches the exact chart styling convention used in Insights.tsx (this repo's `dataviz`
 // skill): CSS-variable colors only, fixed categorical order never re-cycled by rank.
@@ -317,21 +318,13 @@ export function WorkspaceSettingsPage() {
 
   return (
     <div className="grid min-w-0 gap-5">
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-          <ShieldCheck className="h-5 w-5" />
-        </div>
-        {/* min-w-0 so the description wraps instead of setting a floor on the row's width; the
-            icon gets `shrink-0` so the wrap doesn't squash it into an ellipse. */}
-        <div className="min-w-0">
-          <h1 className="text-2xl font-black tracking-tight">Workspace settings</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {isSuperAdmin
+      <PageHeader
+        title="Workspace settings"
+        icon={ShieldCheck}
+        description={<>{isSuperAdmin
               ? "Tune workspace-wide reminders, notification channels, and BCC behavior. Changes apply to everyone."
-              : "Read-only view. Only the super admin can change these settings."}
-          </p>
-        </div>
-      </div>
+              : "Read-only view. Only the super admin can change these settings."}</>}
+      />
 
       {/* `grid-cols-[minmax(0,1fr)]` is load-bearing, not tidying — and `min-w-0` alone is NOT
           enough here, which is the subtle part. A grid ITEM defaults to `min-width: auto`, so the

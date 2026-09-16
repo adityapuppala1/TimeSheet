@@ -128,6 +128,7 @@ import {
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
 import { useAuthStore } from "../store/auth";
+import { PageHeader } from "../components/PageHeader";
 
 const roles = ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEAM_LEAD", "EMPLOYEE"];
 
@@ -3649,13 +3650,7 @@ function StatusReportCard() {
 function Workspace({ title, subtitle, icon, children }: { title: string; subtitle: string; icon?: ReactNode; children: ReactNode }) {
   return (
     <div className="grid gap-5">
-      <div className="flex items-center gap-3">
-        {icon && <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary/10 text-primary">{icon}</div>}
-        <div>
-          <h1 className="text-2xl font-black tracking-tight">{title}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
-        </div>
-      </div>
+      <PageHeader title={title} description={subtitle} icon={icon} />
       {children}
     </div>
   );

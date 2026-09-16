@@ -36,6 +36,14 @@ number, on purpose — an installation must never render history for a version t
   platform-admin login), the platform console shell, and the change *detail* page whose title is a
   record key. None has a sidebar or a nav entry to derive from, so none gets `PageHeader`. Nine
   in-app pages remain; they are listed in the V12 state file.
+- **Slice 2 migrated: the remaining nine in-app pages — thirteen routes.** AI activity log, Audit
+  log, Email templates, Help, Insights, Security & DevOps insights, What's new, Workspace settings,
+  and every admin route (Users, Projects, Approvals, Reports) through the one `Workspace` wrapper
+  `AdminPages.tsx` already used — so four routes migrated by changing one function. `PageHeader`
+  now accepts its icon as a component *or* an already-rendered node, because that wrapper has
+  always passed a node. Help and What's new are profile-menu routes with no sidebar entry, so they
+  correctly render **no** crumb rather than a wrong one. The rollout is complete: every in-app page
+  is on `PageHeader`.
 
 ### 🎨 Every button, input and select now clears the 44px touch minimum
 

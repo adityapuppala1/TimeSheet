@@ -55,6 +55,7 @@ import { safeHtml } from "../lib/safe-html";
 import { systemApi, type ReleaseInfo } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { copyText } from "../lib/clipboard";
+import { PageHeader } from "../components/PageHeader";
 
 /** Markdown → sanitized HTML. `async: false` keeps marked synchronous (no highlighting plugins),
  *  and safeHtml strips anything DOMPurify's allowlist doesn't recognise — the load-bearing step. */
@@ -332,17 +333,11 @@ export function WhatsNewPage() {
 
   return (
     <div className="grid gap-5">
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-          <Sparkles className="h-5 w-5" />
-        </div>
-        <div className="min-w-0">
-          <h1 className="text-2xl font-black tracking-tight">What's new</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            The version this workspace is running, and what each release changed.
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title="What's new"
+        icon={Sparkles}
+        description="The version this workspace is running, and what each release changed."
+      />
 
       {/* ------------------------------------------------ current version */}
       <Card>

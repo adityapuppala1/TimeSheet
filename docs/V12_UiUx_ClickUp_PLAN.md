@@ -3,10 +3,10 @@
 > Branch: V12_UiUx_ClickUp — NEVER merge to main.
 
 ## Current Status
-- Phase: 2 — theme lifecycle (done) → mode + accents (done) → shell: touch targets (done) → PageHeader + derived breadcrumb: 8 of 17 in-app pages migrated (slice 1 done this session) → 9 remain, then hierarchy nav / density.
+- Phase: 2 — theme lifecycle (done) → mode + accents (done) → shell: touch targets (done) → PageHeader + derived breadcrumb: ALL 17 in-app pages migrated (slice 2 done this session) → sidebar hierarchy nav, density, responsive containment next.
 - Last updated: 2026-09-16 by Claude Code (Fable 5.1), resumed from Codex per §3.
 - Resumed baseline: lint PASS (701 warnings, zero errors, ratchet passes); API 3140/3140; web 191/191. Matched the previous handoff exactly.
-- Post-change checks (slice 1, AFTER the last edit, sequential): lint PASS (701 warnings, zero errors, ratchet passes); API 3147/3147; web 208/208; `git diff --check` clean.
+- Post-change checks: per unit in the Session Log; slice 2's gates are appended there on completion.
 - Starting commit this session: `ca22309`. Branch otherwise untouched; no push, no main change.
 - Prior checkpoint: resolve current with `git log -1`.
 
@@ -20,13 +20,14 @@
 - [x] Phase 2 shell (part 1): touch-target sizing. Root font is 14px, so `h-10` = 35px; `default`/`lg`/`icon` buttons, `Input`, `SelectTrigger` and the top bar's two overrides are now absolute 44px. Deliberately left (design decisions, each its own unit): rich-text toolbar 32px, table-header sort/group text controls, the date picker, `size="sm"` callers.
 - [x] Phase 2 shell (part 2a): `components/PageHeader.tsx` — title block + breadcrumb DERIVED from `nav` via the sidebar's `matchPath`/`end` rule; migrated Tickets (icon + actions slot) and Profile (plain). Date-picker triggers → 44px; range picker `h-9` kept (filter control).
 - [x] Phase 2 shell (part 2b, slice 1): Timesheet, History, Changes, ChangeCalendar, Team, Dashboard (`breadcrumb={false}` — the landmark) on PageHeader; actions cells moved verbatim; verified live 390/1366 + dark.
-- [ ] Phase 2 shell (part 2b, slice 2): the 9 remaining IN-APP pages — AIActivityLog, AdminPages, AuditLog, EmailTemplates (2 h1), Help, Insights, SecurityInsights, WhatsNew, WorkspaceSettings. NOT candidates (no sidebar/nav to derive from — do not migrate): Login, ForgotPassword, ResetPassword, Reactivate, TrialFeedback, Landing, PlatformAdminLogin, platform-admin/console-ui, ChangeDetail (title is a record key). Then sidebar hierarchy, density, responsive containment.
+- [x] Phase 2 shell (part 2b, slice 2): AIActivityLog, AuditLog, EmailTemplates (+BulkTestButton action), Help, Insights, SecurityInsights, WhatsNew, WorkspaceSettings, and AdminPages via its `Workspace` wrapper (Users/Projects/Approvals/Reports). PageHeader.icon accepts component OR node. Help/WhatsNew: no nav entry → no crumb, by design. Header rollout COMPLETE.
+- [ ] Phase 2 shell (part 3): sidebar hierarchy navigation (Project → Module → Submodule, from the existing Prisma hierarchy), density preference (the JSON column already anticipates it), responsive containment audit on the remaining tables/boards.
 - [ ] Phase 3: implement verified gaps by priority, with tests and shipping surfaces updated.
 - [ ] Phase 4: responsive/accessibility/workflow checks and continuous hardening.
 - [ ] Phase 5: branch-only release preparation and clean install/update validation.
 
 ## In Progress / Half-done
-- Nothing half-finished. Four units complete and verified. `v12-slice1-*.png` at repo root are artefacts — deleted before commit. The grep for the old class over-counts (see slice 2 in Next Actions for the real 9); `AdminPages.tsx` hosts several routes under one file — read it before migrating.
+- Nothing half-finished. Five units complete and verified. `v12-slice2-*.png` at repo root are artefacts — deleted before commit. The only remaining `text-2xl font-black tracking-tight` matches are non-candidates (public/auth pages, platform console shell, ChangeDetail's record-key title, EmailTemplates' stat tile) — do not migrate them.
 - Final verification commands: `npm run lint`, `npm run test -w apps/api`, `npm run test -w apps/web`, `git diff --check` — run SEQUENTIALLY (parallel runs starve the workers) and AFTER the last edit, including any version bump (the 5.2.0 lesson in CONTRIBUTING).
 - Local ignored artefacts: `test-results/run-shots/v12-appearance-*.png` (five frames: before, indigo light, indigo dark, phone dark, tablet dark). Do not commit them.
 
@@ -155,6 +156,7 @@ The matrix covers every requested area. Remaining Unverified details are explici
 | 2026-09-16 | Dark-mode frame showed grey select boxes on the dark surface | Test forced the `dark` class without `theme.ts`'s repaint — an artefact, not a defect. Through the real toggle the combobox bg is rgb(17,20,29) | None needed. Lesson recorded: force theme through `toggleTheme`/`applyMode`, never by class | — |
 | 2026-09-16 | Live frame showed a GREEN accent while the profile was NULL | The test browser's localStorage still held a previous session's `timesheet:accent` — exactly the 'browser leftover' the profile preference is designed to override, and a NULL profile correctly changes nothing | None. Design working as intended; noted so nobody chases it | — |
 | 2026-09-16 | `PageHeader` import in Timesheet.tsx typechecked as 'cannot find name' though the line was present | The migration script inserted after the first line beginning `import ` — which in that file was INSIDE the leading `/** … */` doc comment, so the statement was a comment | Moved the import below the comment; the other five pages had landed as real statements and were checked by grep, not assumed | Slice 1 commit |
+| 2026-09-16 | Live probe reported every slice-2 page as 'h1 not found', then later runs died mid-flight with 'browser closed' after 5+ min | Three separate probe faults, zero page faults: (a) `isVisible()` does not auto-wait — use `toBeVisible`; (b) I hand-typed a crumb section ('Analytics') the nav table files under Administration — derive expectations from `nav`, read as text since importing Sidebar.tsx drags in `import.meta`; (c) the shared auth snapshot's refresh secret rotates and a long run is revoked mid-flight (auth.setup.ts documents this) — log in fresh via the API per test, as responsive.spec.ts does | Probe rewritten three times; pages unchanged. 19 route×width checks green with crumbs matching nav exactly before the session-rotation kill | — (probe only) |
 
 ## Open Questions / Blockers
 - `RTK.md` referenced by user AGENTS instructions is absent; no matching repository file found.
@@ -168,6 +170,11 @@ The matrix covers every requested area. Remaining Unverified details are explici
 - The graphify pre-grep hook fires on every Grep. Query first; it is faster than the refusal.
 
 ## Session Log (newest first)
+### 2026-09-16 — Claude Code (Fable 5.1), shell part 2b slice 2 — header rollout complete
+- Did: resumed per §3 (git matched; baseline 701/0, 3147, 208). Extended PageHeader.icon to accept a rendered node; migrated the nine remaining in-app pages (AdminPages via its `Workspace` wrapper = 4 routes in one edit); confirmed the leftover grep matches are non-candidates. Changelog updated. No dependency, env var, flag or migration.
+- Verified with: typecheck clean; live Playwright with nav-DERIVED crumb expectations — 19 route×width checks green (every crumb exactly [section, label]; Help/WhatsNew correctly crumb-less; zero overflow) before the shared snapshot's rotation killed the session. Final fresh-login probe: all 10 routes × 2 widths green (the 11-minute run reached 9; What's new confirmed in a separate 24 s run — h1 present, no crumb, overflow −10). Gates AFTER the last edit, sequential: lint 701 warnings / 0 errors (ratchet passes); API 3147/3147; web 208/208; `git diff --check` clean.
+- Left off at: shell part 3 — sidebar hierarchy (Project → Module → Submodule), density, containment audit.
+
 ### 2026-09-16 — Claude Code (Fable 5.1), shell part 2b slice 1
 - Did: resumed per §3 (git matched; baseline 701/0, 3147, 208). Classified the 24 old-header files: 17 in-app pages are candidates, 7 public/auth/console pages and the change detail page are not. Migrated the six Work-section pages to PageHeader, moving every actions cell verbatim; Dashboard gets no crumb (landmark). Changelog updated. No dependency, env var, flag or migration.
 - Verified with: live Playwright over all six at 390/1366 — right crumb section or none, h1 present, Dashboard actions intact, zero overflow — plus a real-dark frame of Changes with its four kept actions. Sequential gates after the last edit: lint 701/0 + ratchet, API 3147/3147, web 208/208, diff-check clean.

@@ -16,6 +16,7 @@ import { DataTable } from "../components/ui/data-table";
 import { Label } from "../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { auditApi, type AuditEntry } from "../services/api";
+import { PageHeader } from "../components/PageHeader";
 
 const actionIcon: Record<string, typeof ShieldCheck> = {
   "timesheet.approved": ShieldCheck,
@@ -103,12 +104,10 @@ export function AuditLog() {
 
   return (
     <div className="grid gap-5">
-      <div>
-        <h1 className="text-2xl font-black tracking-tight">Audit log</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Tamper-evident trail of administrative and approval actions across the workspace.
-        </p>
-      </div>
+      <PageHeader
+        title="Audit log"
+        description="Tamper-evident trail of administrative and approval actions across the workspace."
+      />
 
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">

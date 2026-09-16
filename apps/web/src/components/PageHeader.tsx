@@ -50,12 +50,19 @@ export function crumbsFor(pathname: string, items: readonly NavItem[] = nav): Ar
   return crumbs;
 }
 
+/** A component is a function (or forwardRef object with `render`); a rendered node is neither. */
+function isIconComponent(icon: unknown): icon is React.ComponentType<{ className?: string }> {
+  return typeof icon === "function" || (typeof icon === "object" && icon !== null && "render" in (icon as object));
+}
+
 export interface PageHeaderProps {
   title: string;
   description?: ReactNode;
-  /** A lucide icon component. Renders the tinted tile half the pages already use; omit for the
-   *  plain variant the other half use. Both shapes are preserved on purpose. */
-  icon?: React.ComponentType<{ className?: string }>;
+  /** A lucide icon component — or an already-rendered node, which is how AdminPages' `Workspace`
+   *  wrapper has always passed it (`icon={<Users2 className="h-5 w-5" />}`). Accepting both means
+   *  four admin routes migrate by changing one wrapper rather than four call sites. Omit for the
+   *  plain variant half the pages use; both shapes are preserved on purpose. */
+  icon?: React.ComponentType<{ className?: string }> | ReactNode;
   /** Right-hand controls — view switchers, primary buttons. Wrapped and width-contained. */
   actions?: ReactNode;
   /** Off by default on pages that are their own landmark (the dashboard); on everywhere else. */
@@ -91,7 +98,7 @@ export function PageHeader({ title, description, icon: Icon, actions, breadcrumb
         <div className="flex min-w-0 items-center gap-3">
           {Icon && (
             <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-              <Icon className="h-5 w-5" />
+              {isIconComponent(Icon) ? <Icon className="h-5 w-5" /> : Icon}
             </div>
           )}
           <div className="min-w-0">

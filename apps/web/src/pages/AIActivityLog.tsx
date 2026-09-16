@@ -20,6 +20,7 @@ import { DataTable } from "../components/ui/data-table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { toast } from "../components/ui/toaster";
 import { projectApi, ticketApi, type AiFeedbackValue, type TicketRow } from "../services/api";
+import { PageHeader } from "../components/PageHeader";
 
 const PRIORITY_VARIANT: Record<string, BadgeProps["variant"]> = {
   LOW: "muted",
@@ -162,17 +163,11 @@ export function AIActivityLog() {
 
   return (
     <div className="grid gap-5">
-      <div className="flex items-center gap-3">
-        <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary/10 text-primary">
-          <Sparkles className="h-5 w-5" />
-        </div>
-        <div>
-          <h1 className="text-2xl font-black tracking-tight">AI activity log</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Every ticket an AI classifier touched — email-sourced intake or an accepted manual triage suggestion.
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title="AI activity log"
+        icon={Sparkles}
+        description="Every ticket an AI classifier touched — email-sourced intake or an accepted manual triage suggestion."
+      />
 
       <Card>
         <CardContent className="flex flex-wrap items-center gap-3 pt-6">

@@ -21,6 +21,7 @@ import { StatCard } from "../components/ui/stat-card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { computeTrend } from "../lib/trend";
 import { reportApi } from "../services/api";
+import { PageHeader } from "../components/PageHeader";
 
 const SEVERITY_BADGE: Record<string, "destructive" | "warning" | "info" | "muted"> = {
   CRITICAL: "destructive",
@@ -67,14 +68,12 @@ export function SecurityInsightsPage() {
 
   return (
     <div className="grid gap-5">
-      <div>
-        <h1 className="text-2xl font-black tracking-tight">Security &amp; DevOps insights</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Open findings, risk trend, and remediation speed across every connected scan source — SAST, DAST, secrets, and
+      <PageHeader
+        title={"Security & DevOps insights"}
+        description={<>Open findings, risk trend, and remediation speed across every connected scan source — SAST, DAST, secrets, and
           supply-chain. Code-quality and lint results are ingested too and reported in their own section further down; they never
-          count towards the security figures. Configure ingestion from Workspace Settings → Security &amp; DevOps.
-        </p>
-      </div>
+          count towards the security figures. Configure ingestion from Workspace Settings → Security &amp; DevOps.</>}
+      />
 
       {insights.isLoading && <Skeleton className="h-32 w-full" />}
 
