@@ -10,6 +10,13 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 📘 A user guide for the V12 line
+
+- New `docs/UI_GUIDE.md` covers appearance, the palette and record search, every keyboard
+  shortcut, the sidebar tree and breadcrumb, tickets grouping/columns/saved views, custom fields
+  on a ticket and the empty-state design, each with the file it lives in. README gains a feature
+  row and an index entry for it.
+
 ### 📥 Triage the Inbox from the keyboard
 
 - **J and K move between items, E marks the selected one done (or undoes it), S snoozes it until

@@ -1,0 +1,126 @@
+# UI guide — personalisation, navigation and working faster
+
+> Written for people who use TimeSphere every day. Every feature below exists in the app as of the
+> V12 line; the file and route it lives at is named so an engineer can find it too. Where a
+> behaviour was measured rather than assumed, the measurement is stated.
+
+Related: [ONBOARDING_AND_TOUR.md](ONBOARDING_AND_TOUR.md) (first sign-in, the tour) ·
+[API.md](API.md) (the endpoints behind these screens) · the in-app manual at `/app/help`, which
+also answers Ask AI.
+
+---
+
+## 1. Appearance — theme, accent, density
+
+**Where:** `/app/profile` → the **Appearance** card. Saved to your profile, so every device you
+sign in on matches; a saved choice wins over whatever a shared browser had before.
+
+| Setting | Choices | Notes |
+|---|---|---|
+| Theme | System · Light · Dark | *System* follows your OS and is stored as "no choice", never as a value — so it keeps following the OS after a reload. |
+| Accent | Teal (default) · Indigo · Violet · Rose · Amber · Emerald · Sky | Every accent was measured against WCAG 2.1 AA on both themes, as a fill with text on it and as text on the page. Dark-theme fills carry dark text because no hue passes AA as white-on-dark. Teal is the app's original colour, pixel-identical to before the setting existed. |
+| Density | Comfortable · Compact | Compact moves the root font from 14px to 13px, the same lever the app has always used for density; every rem-based size follows. Buttons, inputs and selects stay at 44px in both. |
+
+The top-bar moon/sun toggle and the command palette's "Toggle theme" change the same setting.
+
+Engineering: `packages/shared/src/appearance.ts` (the one definition both apps compile against),
+`apps/web/src/lib/theme.ts`, `User.appearance` JSON column, `PATCH /api/auth/profile`.
+
+## 2. Command palette and record search
+
+**Open it:** `Ctrl K` (`⌘ K` on a Mac) from anywhere, even while typing in a field, or click the
+search box in the top bar.
+
+- **Pages and actions** you can use, filtered by your role — a page you cannot open is not listed.
+- **Records as you type:** two or more characters return up to five **tickets** (by key or title)
+  and five **projects** (by code or name). A ticket opens straight into its detail sheet; a project
+  opens Tickets filtered to it. Key-prefix matches rank first, so `WEB-1` finds `WEB-1x` before a
+  ticket whose title merely mentions it. One request per pause in typing.
+- **Ask AI** stays a separate item for natural-language questions over the backlog.
+
+Record search reads through the same project scope every ticket route enforces, so it can never
+show you a ticket you could not open. Engineering: `GET /api/search?q=`,
+`apps/api/src/services/search.service.ts`, `apps/web/src/components/command-palette.tsx`.
+
+## 3. Keyboard shortcuts
+
+Press `?` anywhere for the full list **for your role and the page you are on**. Single keys and
+sequences are ignored while you are typing in a field, an editor or an open dialog; the palette
+chord works everywhere.
+
+| Keys | Does |
+|---|---|
+| `Ctrl K` / `⌘ K` | Command palette |
+| `?` | Shortcuts dialog |
+| `N` | Log time |
+| `C` | Create a ticket (the dialog opens on arrival) |
+| `G` then `H` / `L` / `T` / `W` / `I` / `P` | Go to Home / Log timesheet / Tickets / My work / Inbox / Profile |
+| **Inbox only:** `J` / `K` | Next / previous item (marks it read, keeps it in view) |
+| **Inbox only:** `E` | Mark the selected item done — on the To-do tab the item leaves the queue and the selection advances; on the Done tab, `E` undoes |
+| **Inbox only:** `S` | Snooze until later today |
+
+None of the app's shortcuts use `Ctrl N`, `Ctrl T` or `Ctrl W`: browsers reserve those and a page
+cannot intercept them. Engineering: one table in `apps/web/src/lib/shortcuts.ts`; the `?` dialog,
+the palette's hints and the Help article all render from it.
+
+## 4. Getting around
+
+- **Breadcrumb.** Every in-app page shows *Section › Page* under the top bar, derived from the
+  sidebar's own navigation table — never typed per page, so it cannot drift from the sidebar.
+- **Projects tree** in the sidebar (under *Work*): the projects you can see, each folding open to
+  its modules. A row opens Tickets filtered to that project or module; which projects you left
+  open is remembered per browser. There is no submodule tier because a ticket carries a project
+  and optionally a module, never a submodule. Not shown in the slim 68px rail.
+- **Phone and tablet:** the sidebar becomes a drawer (menu button, top left) and the five
+  everyday destinations sit in a bottom bar. Every table scrolls inside its own container; the page
+  itself never scrolls sideways (measured at 390 and 768px across every app route).
+
+## 5. Tickets — views, grouping, columns, saved views
+
+**Views:** List · Board · Timeline · Calendar, from the switcher in the page header. Filters carry
+across all four.
+
+**Group by** (List view): Status, Priority, Type, Project or Assignee. Each group gets a heading
+with its size across *everything the filters match*, not just the page on screen, and collapses on
+click. Your column sort still applies within each group. Phone cards group the same way.
+
+**Columns:** the **Columns** button on the table lets you hide built-in columns and show one for
+any custom field. Custom-field columns start hidden, so a table never widens because an admin
+added a field; S.No and Title always stay. The button counts what is hidden.
+
+**Saved views** remember filters, grouping *and* columns. Views saved before these existed keep
+their look. A column for a field that was later deleted is simply ignored.
+
+**Empty states** say why: with filters narrowing the list, "No tickets match these filters" and a
+**Clear filters** button; with nothing applied, "No tickets yet" and no button it cannot honour.
+
+## 6. Custom fields on a ticket
+
+Admins define fields under **Workspace settings → Planning**. Every ticket whose type the field
+applies to shows a **Fields** section in its detail sheet, above the tabs:
+
+- Editors by type: text · number and currency · date · URL · single select · multi-select chips ·
+  checkbox · people picker.
+- Each field saves on its own (change for selects and chips, blur or Enter for typed fields), then
+  shows what the server *kept* — `12,000` typed into a number field comes back as `12000`.
+- A rejected value (required, bad URL, unknown option) shows the reason beside the field and keeps
+  your input to fix. Clearing a field really clears it.
+- People who can see but not work on the ticket get the values as text. Tickets in a workspace
+  with no fields look exactly as before.
+
+Engineering: `GET`/`PUT /api/tickets/:id/custom-fields`, `apps/web/src/components/TicketCustomFields.tsx`.
+
+## 7. Empty states everywhere
+
+Lists and panels that have nothing to show use one design: an icon, a title, a line of explanation
+and, where one honestly exists, a next action. Where the input sits right beside the list (ticket
+comments, checklist, links) there is deliberately no button. Engineering:
+`apps/web/src/components/ui/empty-state.tsx`, promoted from the platform console's kit.
+
+---
+
+## Verifying a change to any of this
+
+The V12 branch's state file, `docs/V12_UiUx_ClickUp_PLAN.md`, records for each unit how it was
+verified (live Playwright at 390 and 1366px, light and dark, plus unit tests), what was measured,
+and every probe or product fault found along the way in its Auto-Heal Log.
