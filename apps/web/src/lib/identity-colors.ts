@@ -28,10 +28,10 @@ export const IDENTITY_COLORS: readonly IdentityColor[] = [
   { id: "sky", light: "204 80% 40%", dark: "204 80% 62%" },
   { id: "violet", light: "268 60% 48%", dark: "268 65% 70%" },
   { id: "rose", light: "340 65% 45%", dark: "340 70% 68%" },
-  { id: "amber", light: "32 85% 38%", dark: "36 85% 58%" },
+  { id: "amber", light: "32 85% 34%", dark: "36 85% 58%" },
   { id: "emerald", light: "156 60% 32%", dark: "156 55% 52%" },
   { id: "indigo", light: "232 58% 50%", dark: "232 65% 72%" },
-  { id: "teal", light: "186 70% 34%", dark: "184 65% 52%" },
+  { id: "teal", light: "186 70% 31%", dark: "184 65% 52%" },
   { id: "plum", light: "300 45% 42%", dark: "300 50% 68%" }
 ];
 

@@ -199,6 +199,12 @@ Engineering: `apps/api/src/services/workload.service.ts` (`ticketLoadForBucket`)
 
 ## Verifying a change to any of this
 
+Colour first: `npm run check:contrast` measures every pair listed in `scripts/contrast-check.mjs`
+(identity marks, accents, status dots, plan marks, the capacity ramp, buttons) against WCAG 2.1 AA
+in both themes, straight from `index.css` and the shared palettes, and exits non-zero on a failure.
+Redundant indicators (a dot beside its label) are reported, not gating.
+
+
 The V12 branch's state file, `docs/V12_UiUx_ClickUp_PLAN.md`, records for each unit how it was
 verified (live Playwright at 390 and 1366px, light and dark, plus unit tests), what was measured,
 and every probe or product fault found along the way in its Auto-Heal Log.

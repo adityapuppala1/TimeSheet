@@ -81,7 +81,7 @@ export interface AccentPalette {
 export const ACCENT_PALETTES = {
   teal: {
     label: "Teal",
-    light: { primary: "186 82% 32%", foreground: "0 0% 100%" },
+    light: { primary: "186 82% 30%", foreground: "0 0% 100%" }, // 30%: 4.76:1 with white (scripts/contrast-check.mjs)
     dark: { primary: "184 74% 44%", foreground: "224 38% 8%" }
   },
   indigo: {

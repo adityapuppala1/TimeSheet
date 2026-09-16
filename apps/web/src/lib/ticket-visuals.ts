@@ -51,7 +51,8 @@ export const TONE_ACCENT_CLASS: Record<Tone, string> = {
   warning: "bg-warning",
   destructive: "bg-destructive",
   info: "bg-info",
-  muted: "bg-muted-foreground/40",
+  // Opaque on purpose: at 40% alpha the dot fell to 1.8:1 against a card (4.2 contrast check).
+  muted: "bg-muted-foreground",
   default: "bg-primary",
   secondary: "bg-secondary",
   outline: "bg-border"

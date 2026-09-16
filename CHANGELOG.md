@@ -24,6 +24,12 @@ number, on purpose — an installation must never render history for a version t
   colours, or "Auto" for the derived one; the mark changes everywhere at once — sidebar tree,
   tickets table, cards, group headings. Stored as a palette id, so only measured, legible colours
   can be saved. Additive migration; existing projects keep their derived colour.
+- **Contrast, measured and kept.** `npm run check:contrast` measures 78 colour pairs the app
+  draws (identity marks, accents, status dots, plan marks, the capacity ramp, buttons) against
+  WCAG 2.1 AA from the token files, both themes, and fails when one slips. Fixed on the way: the
+  amber and teal project marks and the brand teal button darken slightly so white text reads at
+  4.5:1 or better; the muted status dot is opaque; every capacity-ramp step has a measured text
+  colour in both themes, and the dark over-capacity red darkens so its figure is legible.
 - **Phones: Ask AI no longer scrolls sideways.** The glow ring around AI surfaces reached past a
   390px screen and stretched the page; below the small breakpoint it now fits the page gutter.
   Found by the responsive sweep, which now covers fourteen more routes and the V12 states

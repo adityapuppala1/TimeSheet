@@ -95,7 +95,8 @@ function totalsFigure(totals: WorkloadRowData["totals"], measure: WorkloadMeasur
 
 const RAMP_CLASS = ["bg-capacity-0", "bg-capacity-1", "bg-capacity-2", "bg-capacity-3", "bg-capacity-4"] as const;
 /** Steps 3 and 4 are dark enough that dark-on-them fails contrast; the rest keep body colour. */
-const RAMP_TEXT = ["text-muted-foreground", "text-foreground", "text-foreground", "text-white", "text-white"] as const;
+/** Text colour per ramp step comes from `--capacity-N-foreground` (index.css), measured per theme. */
+const rampTextStyle = (step: 0 | 1 | 2 | 3 | 4) => ({ color: `hsl(var(--capacity-${step}-foreground))` });
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const isoPlusDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
@@ -379,11 +380,8 @@ export function WorkloadPage() {
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <div
-                                  className={cn(
-                                    "grid h-9 place-items-center rounded text-[11px] tabular-nums",
-                                    RAMP_CLASS[step],
-                                    RAMP_TEXT[step]
-                                  )}
+                                  className={cn("grid h-9 place-items-center rounded text-[11px] tabular-nums", RAMP_CLASS[step])}
+                                  style={rampTextStyle(step)}
                                 >
                                   {cellFigure(cell, measure)}
                                 </div>

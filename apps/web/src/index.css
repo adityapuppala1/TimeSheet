@@ -13,7 +13,7 @@
     --popover: 0 0% 100%;
     --popover-foreground: 224 38% 12%;
 
-    --primary: 186 82% 32%;
+    --primary: 186 82% 30%;           /* 30%, not 32%: white text on it reads 4.76:1 (AA) — scripts/contrast-check.mjs */
     --primary-foreground: 0 0% 100%;
 
     --secondary: 214 32% 93%;
@@ -39,7 +39,7 @@
 
     --border: 216 24% 86%;
     --input: 216 24% 86%;
-    --ring: 186 82% 32%;
+    --ring: 186 82% 30%;
 
     --radius: 0.625rem;
 
@@ -67,7 +67,7 @@
     --plan-lane: 210 30% 99%;
     --plan-lane-alt: 214 24% 96%;
     --plan-grid: 216 24% 90%;
-    --plan-bar: 186 82% 32%;        /* = primary */
+    --plan-bar: 186 82% 30%;        /* = primary */
     --plan-bar-fg: 0 0% 100%;
     --plan-bar-parent: 190 70% 22%; /* primary, darkened — summary rows sit visually "under" */
     --plan-baseline: 222 14% 55%;   /* muted-foreground; used as a 1px outline only */
@@ -80,6 +80,12 @@
     --capacity-2: 186 60% 62%;
     --capacity-3: 186 76% 42%;      /* at capacity */
     --capacity-4: 0 78% 52%;        /* OVER capacity — hue break is the signal */
+    /* Text on each ramp step; each pair measured ≥ 4.5:1 by scripts/contrast-check.mjs. */
+    --capacity-0-foreground: 222 14% 42%;
+    --capacity-1-foreground: 224 38% 12%;
+    --capacity-2-foreground: 224 38% 12%;
+    --capacity-3-foreground: 224 38% 12%;
+    --capacity-4-foreground: 0 0% 100%;
 
     --risk-green: 152 64% 38%;      /* = success */
     --risk-amber: 32 96% 52%;       /* = warning */
@@ -177,7 +183,12 @@
     --capacity-1: 186 30% 30%;
     --capacity-2: 186 45% 40%;
     --capacity-3: 184 74% 50%;
-    --capacity-4: 0 72% 56%;
+    --capacity-4: 0 72% 48%;        /* darker than --destructive so white text reads ≥ 4.5:1 */
+    --capacity-0-foreground: 214 14% 65%;
+    --capacity-1-foreground: 210 30% 96%;
+    --capacity-2-foreground: 220 50% 8%;
+    --capacity-3-foreground: 220 50% 8%;
+    --capacity-4-foreground: 0 0% 100%;
 
     --risk-green: 152 60% 46%;
     --risk-amber: 32 92% 58%;

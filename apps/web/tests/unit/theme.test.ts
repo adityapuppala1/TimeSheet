@@ -181,10 +181,11 @@ describe("the three-way mode", () => {
 describe("accents", () => {
   it("defaults to the brand teal, painted with the EXACT existing values", () => {
     cleanup = initializeTheme();
-    // "Never chose" must be pixel-identical to before this feature existed — index.css's own
-    // light primary — or the deploy that adds accents changes everyone's screen.
+    // "Never chose" must be pixel-identical to index.css's own light primary, or choosing "teal"
+    // would change a screen that never chose anything. Both moved to 30% lightness together in
+    // V12 4.2 so white button text clears 4.5:1 (scripts/contrast-check.mjs pins both).
     expect(currentAccent()).toBe("teal");
-    expect(paintedPrimary()).toBe("186 82% 32%");
+    expect(paintedPrimary()).toBe("186 82% 30%");
   });
 
   it("repaints under the CURRENT theme, and again when the theme flips", () => {

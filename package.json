@@ -14,6 +14,7 @@
     "lint": "npm run lint -w apps/api && npm run lint -w apps/web && npm run lint:sonar && npm run lint:ratchet",
     "lint:sonar": "eslint apps/api/src apps/web/src packages/shared/src",
     "lint:ratchet": "node scripts/lint-ratchet.mjs",
+    "check:contrast": "node scripts/contrast-check.mjs",
     "test": "npm run test -w apps/api && npm run test -w apps/web",
     "doctor": "npm run doctor -w apps/api",
     "doctor:heal": "npm run doctor:heal -w apps/api",
