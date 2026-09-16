@@ -20,6 +20,14 @@ number, on purpose — an installation must never render history for a version t
 - **Status-coloured groups.** Grouping the list by status or priority gives each heading the same
   colour dot as the pills in its rows. The Group menu leads the toolbar and shows the current
   grouping.
+- **Change a status from the list.** The status pill on every row and phone card is now a menu of
+  the other statuses. The server decides what is legal, exactly as it does from the ticket sheet;
+  a refusal shows its reason and points to the sheet, and a workspace that verifies identity on
+  status changes is sent to the sheet, where that check lives. Board columns wear their status
+  colour as a top border and dot, from the same colour map as the pills.
+- **Fixed:** the phone ticket cards were a button containing the new pill button, which the
+  browser flags as invalid; the card is now a keyboard-operable region, so Enter and Space still
+  open the ticket.
 - **Add a ticket where you are looking.** Every group in a grouped list ends with an "Add ticket"
   row; the new ticket opens pre-filled with that group's priority, type or project, and with the
   project, module, type and priority filters you have applied.

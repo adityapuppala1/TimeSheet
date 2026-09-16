@@ -75,6 +75,7 @@ import { PageHeader } from "../components/PageHeader";
 import { TicketCustomFields } from "../components/TicketCustomFields";
 import { TicketSprintFields } from "../components/TicketSprintFields";
 import { ProjectMark } from "../components/ProjectMark";
+import { StatusPill } from "../components/StatusPill";
 import { ViewsBar } from "../components/ViewsBar";
 import { readProjectSelection, withoutProjectSelection } from "../lib/project-tree";
 import { formatGroupLabel, groupRuns } from "../lib/group-rows";
@@ -245,10 +246,10 @@ const ticketColumns: ColumnDef<TicketRow, any>[] = [
   {
     accessorKey: "status",
     header: "Status",
-    cell: (info) => {
-      const status = info.getValue() as TicketStatus;
-      return <Badge variant={STATUS_VARIANT[status]}>{status.replace("_", " ")}</Badge>;
-    }
+    // The pill is the row's status control (V12 look pass, slice 3). Opening the ticket from the
+    // pill's menu goes through the same `?open=` the page reads, so a module-level column def
+    // needs no page callback.
+    cell: (info) => <StatusPill ticketId={info.row.original.id} status={info.getValue() as TicketStatus} onOpenTicket={openTicketByUrl} />
   },
   {
     id: "files",
@@ -519,6 +520,15 @@ function groupHeading(axis: string | undefined, projects: ReadonlyArray<{ id: st
     }
     return label;
   };
+}
+
+/** Opens a ticket's sheet from a module-level column cell: the page reads `?open=` on every
+ *  navigation, so writing the parameter is the same as the page's own `openTicket`. */
+function openTicketByUrl(id: string) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("open", id);
+  window.history.pushState({}, "", url);
+  window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
 /** Grouping applies to the List view only — Board groups by status itself, Timeline and Calendar
@@ -985,18 +995,30 @@ export function Tickets() {
                 const overdue = Boolean(row.slaBreachAt);
                 const avatarSrc = fileUrl(row.assignee?.avatarUrl);
                 return (
-                  <button
+                  // A div with the button role, not a <button>: the card now contains its own
+                  // control (the status pill), and a button inside a button is invalid HTML that
+                  // the browser flags. Enter/Space open the ticket, as a button would.
+                  <div
                     key={row.id}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => openTicket(row.id)}
-                    className="grid gap-2 rounded-lg border border-border bg-card p-3 text-left text-sm shadow-sm"
+                    onKeyDown={(e) => {
+                      if (e.target !== e.currentTarget) return;
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openTicket(row.id);
+                      }
+                    }}
+                    className="focus-ring grid cursor-pointer gap-2 rounded-lg border border-border bg-card p-3 text-left text-sm shadow-sm"
+                    data-ticket-card
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-mono text-xs text-muted-foreground">{row.key}</span>
                       <div className="flex items-center gap-1.5">
                         {row.source === "EMAIL" && <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
                         <Badge variant={PRIORITY_VARIANT[row.priority]}>{row.priority}</Badge>
-                        <Badge variant={STATUS_VARIANT[row.status]}>{row.status.replace("_", " ")}</Badge>
+                        <StatusPill ticketId={row.id} status={row.status} onOpenTicket={openTicket} />
                       </div>
                     </div>
                     <p className="truncate font-medium leading-snug">{row.title}</p>
@@ -1036,7 +1058,7 @@ export function Tickets() {
                         <span className="shrink-0 text-xs text-muted-foreground">Unassigned</span>
                       )}
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             {!tickets.isLoading && (tickets.data ?? []).length === 0 && (

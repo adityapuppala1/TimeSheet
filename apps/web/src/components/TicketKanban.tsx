@@ -16,6 +16,7 @@ import { AlertTriangle, Mail, Rows3, SquareStack, XCircle } from "lucide-react";
 import { useState } from "react";
 import { ticketStatuses, type TicketStatus } from "@timesheet/shared";
 import { iconForType, initialsFor, PRIORITY_VARIANT, serverMessage, STATUS_VARIANT } from "../pages/Tickets";
+import { TONE_ACCENT_CLASS, TONE_BORDER_CLASS } from "../lib/ticket-visuals";
 import { fileUrl, ticketApi, type TicketRow } from "../services/api";
 import { useFaceStatus } from "../lib/use-face-status";
 import { FaceVerificationDialog } from "./FaceVerificationDialog";
@@ -108,10 +109,13 @@ function KanbanColumn({
   return (
     <div
       ref={setNodeRef}
-      className={`grid w-72 shrink-0 auto-rows-min gap-2 rounded-lg border p-2 transition-colors ${isOver ? "border-primary bg-primary/5" : "border-border bg-muted/20"}`}
+      // The column wears its status colour as a top border and a dot — the SAME tone the badge and
+      // the list's group heading use (lib/ticket-visuals.ts), so a column and a pill can never disagree.
+      className={`grid w-72 shrink-0 auto-rows-min gap-2 rounded-lg border border-t-2 p-2 transition-colors ${isOver ? "border-primary bg-primary/5" : "border-border bg-muted/30"} ${TONE_BORDER_CLASS[STATUS_VARIANT[status] ?? "muted"]}`}
     >
       <div className="flex items-center justify-between px-1 py-1">
         <div className="flex items-center gap-2">
+          <span aria-hidden className={`h-2.5 w-2.5 rounded-full ${TONE_ACCENT_CLASS[STATUS_VARIANT[status] ?? "muted"]}`} />
           <Badge variant={STATUS_VARIANT[status]}>{COLUMN_LABEL[status]}</Badge>
         </div>
         <span className="text-xs text-muted-foreground">{tickets.length}</span>

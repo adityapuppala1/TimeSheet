@@ -57,6 +57,18 @@ export const TONE_ACCENT_CLASS: Record<Tone, string> = {
   outline: "bg-border"
 };
 
+/** A Board column's top border, per semantic tone. */
+export const TONE_BORDER_CLASS: Record<Tone, string> = {
+  success: "border-t-success",
+  warning: "border-t-warning",
+  destructive: "border-t-destructive",
+  info: "border-t-info",
+  muted: "border-t-muted-foreground/40",
+  default: "border-t-primary",
+  secondary: "border-t-secondary",
+  outline: "border-t-border"
+};
+
 /** The ring a tile wears while its filter is the one currently applied. */
 export const TONE_ACTIVE_RING_CLASS: Record<Tone, string> = {
   success: "ring-success/50 bg-success/5",

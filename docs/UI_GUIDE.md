@@ -94,6 +94,11 @@ added a field; S.No and Title always stay. The button counts what is hidden.
 **Saved views** remember filters, grouping *and* columns. Views saved before these existed keep
 their look. A column for a field that was later deleted is simply ignored.
 
+**Status from the list:** the status pill on every row (table and phone cards) is a menu; pick the
+next status without opening the ticket. The server decides what is legal, exactly as it does from
+the ticket sheet, and a refusal shows its reason and points you to the sheet. Board columns wear
+the same status colour as a top border.
+
 **Empty states** say why: with filters narrowing the list, "No tickets match these filters" and a
 **Clear filters** button; with nothing applied, "No tickets yet" and no button it cannot honour.
 

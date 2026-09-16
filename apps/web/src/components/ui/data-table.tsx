@@ -258,12 +258,25 @@ export function DataTable<TData>({
             if (entry === null || entry === undefined) return null;
             if (!("original" in (entry as object))) return entry as ReactNode;
             const row = entry as Row<TData>;
-            const Wrapper = onRowClick ? "button" : "div";
+            // A div with the button role rather than a <button>: cells may carry their own controls
+            // (a status pill), and a button inside a button is invalid HTML. Enter/Space still open.
             return (
-              <Wrapper
+              <div
                 key={row.id}
-                type={onRowClick ? "button" : undefined}
+                role={onRowClick ? "button" : undefined}
+                tabIndex={onRowClick ? 0 : undefined}
                 onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                onKeyDown={
+                  onRowClick
+                    ? (e) => {
+                        if (e.target !== e.currentTarget) return;
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onRowClick(row.original);
+                        }
+                      }
+                    : undefined
+                }
                 className={cn(
                   "grid gap-1.5 rounded-lg border border-border bg-card p-3 text-left text-sm shadow-sm",
                   onRowClick && "cursor-pointer"
@@ -294,7 +307,7 @@ export function DataTable<TData>({
                     </div>
                   );
                 })}
-              </Wrapper>
+              </div>
             );
           })}
       </div>
