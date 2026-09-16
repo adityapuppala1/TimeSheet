@@ -100,6 +100,15 @@ next status without opening the ticket. The server decides what is legal, exactl
 the ticket sheet, and a refusal shows its reason and points you to the sheet. Board columns wear
 the same status colour as a top border.
 
+**The ticket sheet in two columns.** The sheet still opens at its remembered width. Drag its left
+edge out to 960px or wider, or press **Maximize** (top-right; `Home` on the resize handle), and it
+becomes two columns: status, assignee, collaborators, labels, description, watchers, sprint and
+custom fields on the left; the Comments · Files · Checklist · … · Activity tabs on the right, in
+their own scroll. **Hide activity** at the end of the badge row closes the right column so the
+details and description have the whole width at a readable measure; **Show activity** brings it
+back. The choice is remembered in this browser. Below 960px, and on a phone, the sheet is the
+single column it always was.
+
 **Empty states** say why: with filters narrowing the list, "No tickets match these filters" and a
 **Clear filters** button; with nothing applied, "No tickets yet" and no button it cannot honour.
 

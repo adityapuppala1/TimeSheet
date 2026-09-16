@@ -41,6 +41,8 @@ import {
   ChevronUp,
   Eye,
   EyeOff,
+  PanelRightClose,
+  PanelRightOpen,
   GanttChartSquare,
   GitBranch,
   LayoutGrid,
@@ -74,6 +76,8 @@ import { SavedViewsBar, type TicketFilters } from "../components/SavedViewsBar";
 import { PageHeader } from "../components/PageHeader";
 import { TicketCustomFields } from "../components/TicketCustomFields";
 import { TicketSprintFields } from "../components/TicketSprintFields";
+import { useMediaQuery } from "../lib/use-media-query";
+import { SPLIT_MIN_SHEET_WIDTH, canSplit, readActivityHidden, ticketSheetLayout, writeActivityHidden } from "../lib/ticket-sheet-layout";
 import { ProjectMark } from "../components/ProjectMark";
 import { StatusPill } from "../components/StatusPill";
 import { ViewsBar } from "../components/ViewsBar";
@@ -109,6 +113,7 @@ import {
   SheetHeader,
   SheetMaximizeButton,
   SheetResizeHandle,
+  type SheetResizeState,
   SheetTitle,
   useSheetResize
 } from "../components/ui/sheet";
@@ -1565,6 +1570,30 @@ function ticketErrorHint(error: unknown): string {
   return "Something went wrong fetching it. Close this and try again — if it keeps happening, the API may be down.";
 }
 
+/**
+ * V12 3.16 — the two-column task panel. The tab strip (Comments … Activity) is the reference's
+ * "right activity section": it moves beside the fields when the sheet is wide enough, and a
+ * person may close it "to keep the task details and description in focus". The choice is
+ * remembered per browser like the width is. Nothing changes below the threshold.
+ */
+function useTicketSheetLayout(sheetSize: SheetResizeState) {
+  const viewportWide = useMediaQuery(`(min-width: ${SPLIT_MIN_SHEET_WIDTH}px)`);
+  const storage = typeof window === "undefined" ? undefined : window.localStorage;
+  const [activityHidden, setActivityHidden] = useState(() => readActivityHidden(storage));
+  const layoutInput = {
+    resizable: sheetSize.resizable,
+    width: sheetSize.width,
+    maximized: sheetSize.maximized,
+    viewportWidth: viewportWide ? SPLIT_MIN_SHEET_WIDTH : 0
+  };
+  const toggleActivity = () => {
+    const next = !activityHidden;
+    setActivityHidden(next);
+    writeActivityHidden(storage, next);
+  };
+  return { layout: ticketSheetLayout({ ...layoutInput, activityHidden }), splitPossible: canSplit(layoutInput), activityHidden, toggleActivity };
+}
+
 function TicketDetailSheet({
   ticketId,
   onClose,
@@ -1685,6 +1714,7 @@ function TicketDetailSheet({
   /** Panel width, remembered per browser. Declared above the early return so the hook order is
    *  identical whether or not a ticket is open. */
   const sheetSize = useSheetResize({ storageKey: "timesphere.ticket-sheet-width" });
+  const { layout, splitPossible, activityHidden, toggleActivity } = useTicketSheetLayout(sheetSize);
 
   if (!ticketId) return null;
   const ticket = detail.data;
@@ -1780,10 +1810,34 @@ function TicketDetailSheet({
                     <ShieldCheck className="mr-1 h-3 w-3" />Identity verified
                   </Badge>
                 )}
+                {/* The source's "close one or both sections": ends the badge row rather than
+                    taking a row of its own, so the header does not grow when it appears. */}
+                {splitPossible && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto h-[44px]"
+                    onClick={toggleActivity}
+                    aria-pressed={activityHidden}
+                    data-activity-toggle
+                  >
+                    {activityHidden ? <PanelRightOpen className="h-4 w-4" /> : <PanelRightClose className="h-4 w-4" />}
+                    {activityHidden ? "Show activity" : "Hide activity"}
+                  </Button>
+                )}
               </div>
             </SheetHeader>
 
-            <div className="grid gap-5 py-4">
+            <div
+              data-sheet-layout={layout}
+              className={cn(
+                "py-4",
+                layout === "split" && "grid items-start gap-6 grid-cols-[minmax(0,1fr)_minmax(360px,440px)]",
+                layout === "focus" && "mx-auto w-full max-w-3xl"
+              )}
+            >
+            <div className="grid gap-5">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="grid gap-1.5">
                   <Label className="text-xs uppercase text-muted-foreground">Status</Label>
@@ -1953,7 +2007,15 @@ function TicketDetailSheet({
 
               {/* Admin-defined fields for this ticket type. Renders nothing when none apply. */}
               <TicketCustomFields ticketId={ticket.id} ticketType={ticket.type} canEdit={canWork} />
+            </div>
 
+            {/* The activity column. In the split layout it keeps its own scroll so a long thread
+                does not carry the fields off-screen; stacked, it follows the fields as before. */}
+            {layout !== "focus" && (
+            <aside
+              aria-label="Comments and activity"
+              className={cn(layout === "split" ? "sticky top-0 max-h-[calc(100vh-2rem)] overflow-y-auto border-l border-border pl-6" : "mt-5")}
+            >
               <Tabs defaultValue="comments" className="grid gap-3">
                 <TabsList>
                   <TabsTrigger value="comments"><MessageSquare className="h-3.5 w-3.5" />Comments ({ticket.comments.length})</TabsTrigger>
@@ -2024,6 +2086,8 @@ function TicketDetailSheet({
                   <ActivityPanel ticketId={ticket.id} />
                 </TabsContent>
               </Tabs>
+            </aside>
+            )}
             </div>
           </>
         )}

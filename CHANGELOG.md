@@ -24,6 +24,10 @@ number, on purpose — an installation must never render history for a version t
   colours, or "Auto" for the derived one; the mark changes everywhere at once — sidebar tree,
   tickets table, cards, group headings. Stored as a palette id, so only measured, legible colours
   can be saved. Additive migration; existing projects keep their derived colour.
+- **Two-column ticket panel.** Drag the ticket sheet to 960px or wider, or maximize it, and the
+  fields and description sit in the main column with Comments, Files, Checklist and Activity in a
+  right column that scrolls on its own. **Hide activity** closes that column to keep the details
+  in focus; the choice is remembered per browser. Narrower sheets and phones are unchanged.
 - **Change a status from the list.** The status pill on every row and phone card is now a menu of
   the other statuses. The server decides what is legal, exactly as it does from the ticket sheet;
   a refusal shows its reason and points to the sheet, and a workspace that verifies identity on
