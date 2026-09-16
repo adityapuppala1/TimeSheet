@@ -32,11 +32,39 @@ import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { toast } from "./ui/toaster";
 
-export type TimelineZoom = "day" | "week" | "month";
+export type TimelineZoom = "day" | "week" | "month" | "quarter";
+
+type AxisTick = { x: number; label: string; major: boolean };
+
+/** The axis tick a day contributes at a zoom, or null when that day draws no tick. Day: every day,
+ *  Mondays major. Week: Mondays, the first of the month major. Month: the 1st. Quarter: the 1st,
+ *  with the quarter's first month carrying the quarter label as the major line. */
+function tickFor(zoom: TimelineZoom, day: Date, x: number): AxisTick | null {
+  const dow = day.getUTCDay();
+  const dom = day.getUTCDate();
+  const m = day.getUTCMonth();
+  const yy = String(day.getUTCFullYear()).slice(2);
+  if (zoom === "day") return { x, label: `${dom}`, major: dow === 1 };
+  if (zoom === "week") return dow === 1 ? { x, label: `${dom} ${MONTHS[m]}`, major: dom <= 7 } : null;
+  if (dom !== 1) return null;
+  if (zoom === "quarter") {
+    const quarterStart = m % 3 === 0;
+    return { x, label: quarterStart ? `Q${m / 3 + 1} ${yy}` : MONTHS[m], major: quarterStart };
+  }
+  return { x, label: `${MONTHS[m]} ${yy}`, major: true };
+}
 
 /** Pixels per day at each zoom. Chosen so a bar's minimum readable width (~18px) survives: at
  *  month zoom a 1-day task is still a visible tick rather than a sub-pixel sliver. */
-const DAY_WIDTH: Record<TimelineZoom, number> = { day: 34, week: 14, month: 5 };
+/* V12 3.21 (source: the reference's Gantt has Day/Week/Month/Quarter/Year periods): `quarter` at
+   1.8px/day puts a 13-week quarter in ~165px and a year in ~660px — the view for a long plan's
+   shape, not its days. Year is deliberately absent: at ~0.5px/day nothing is readable at the 14px
+   root, and portfolio-scale questions are the Portfolio page's. */
+const DAY_WIDTH: Record<TimelineZoom, number> = { day: 34, week: 14, month: 5, quarter: 1.8 };
+/** No bar draws thinner than this, whatever the zoom — a one-day task at quarter zoom is still a mark. */
+const MIN_BAR_PX = 4;
+/** Breathing room either side of the plan, in days. */
+const PAD_DAYS: Record<TimelineZoom, number> = { day: 3, week: 7, month: 14, quarter: 30 };
 const ROW_HEIGHT = 34;
 const BAR_HEIGHT = 18;
 const HEADER_HEIGHT = 44;
@@ -168,7 +196,7 @@ export function PlanTimeline({
       if (item.baselineStart && toDay(item.baselineStart) < min) min = toDay(item.baselineStart);
       if (item.baselineEnd && toDay(item.baselineEnd) > max) max = toDay(item.baselineEnd);
     }
-    const pad = zoom === "day" ? 3 : zoom === "week" ? 7 : 14;
+    const pad = PAD_DAYS[zoom];
     const start = addDays(min, -pad);
     return { axisStart: start, totalDays: Math.max(30, daysBetween(start, max) + pad * 2) };
   }, [data.items, zoom]);
@@ -249,7 +277,7 @@ export function PlanTimeline({
     const shiftEnd = active && (active.mode === "move" || active.mode === "end") ? active.dxDays : 0;
     const x = xFor(item.resolvedStart) + shiftStart * dayWidth;
     const right = xFor(item.resolvedEnd) + dayWidth + shiftEnd * dayWidth;
-    return { x, width: Math.max(dayWidth * 0.6, right - x) };
+    return { x, width: Math.max(MIN_BAR_PX, dayWidth * 0.6, right - x) };
   };
 
   /* --- Axis ticks ------------------------------------------------------------------------ */
@@ -257,23 +285,15 @@ export function PlanTimeline({
   const ticks = useMemo(() => {
     const out: Array<{ x: number; label: string; major: boolean }> = [];
     for (let i = 0; i <= totalDays; i++) {
-      const day = addDays(axisStart, i);
-      const dow = day.getUTCDay();
-      const dom = day.getUTCDate();
-      if (zoom === "day") {
-        out.push({ x: i * dayWidth, label: `${dom}`, major: dow === 1 });
-      } else if (zoom === "week") {
-        if (dow === 1) out.push({ x: i * dayWidth, label: `${dom} ${MONTHS[day.getUTCMonth()]}`, major: dom <= 7 });
-      } else if (dom === 1) {
-        out.push({ x: i * dayWidth, label: `${MONTHS[day.getUTCMonth()]} ${String(day.getUTCFullYear()).slice(2)}`, major: true });
-      }
+      const tick = tickFor(zoom, addDays(axisStart, i), i * dayWidth);
+      if (tick) out.push(tick);
     }
     return out;
   }, [axisStart, totalDays, dayWidth, zoom]);
 
   /** Non-working-day bands, so a weekend reads as a weekend and not as a suspiciously idle gap. */
   const offDays = useMemo(() => {
-    if (zoom === "month") return []; // sub-pixel at this scale; drawing them would just be noise
+    if (zoom === "month" || zoom === "quarter") return []; // sub-pixel at these scales; drawing them would just be noise
     const working = new Set(data.workingDays);
     const bands: number[] = [];
     for (let i = 0; i <= totalDays; i++) {
@@ -645,7 +665,7 @@ export function TimelineLegend({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <div className="inline-flex overflow-hidden rounded-lg border border-border">
-        {(["day", "week", "month"] as TimelineZoom[]).map((z) => (
+        {(["day", "week", "month", "quarter"] as TimelineZoom[]).map((z) => (
           <button
             key={z}
             type="button"

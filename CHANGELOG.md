@@ -24,6 +24,9 @@ number, on purpose — an installation must never render history for a version t
   colours, or "Auto" for the derived one; the mark changes everywhere at once — sidebar tree,
   tickets table, cards, group headings. Stored as a palette id, so only measured, legible colours
   can be saved. Additive migration; existing projects keep their derived colour.
+- **Timeline: a Quarter zoom.** The Timeline's Day · Week · Month control gains Quarter, for a
+  long plan's shape: month ticks, quarter labels on the major lines, and no bar thinner than a
+  visible mark. Weekend bands are dropped at this scale as they are at Month.
 - **Workload: measure by tickets or story points.** The Workload board gains a Measure control
   (Hours booked · Tickets · Story points). Tickets and points count each person's open assigned
   tickets in the weeks their scheduled span covers, or the week of their SLA date when unscheduled,

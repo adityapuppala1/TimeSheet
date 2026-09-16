@@ -179,7 +179,13 @@ Engineering:
 
 ---
 
-## 10. Workload measures
+## 10. Timeline zoom
+
+The Timeline (Plan → Timeline) zooms Day, Week, Month and **Quarter**. Quarter shows month ticks
+with the quarter named on its first month ("Q4 26"); a one-day task still draws as a mark.
+Dragging, dependencies, baselines and the critical path work at every zoom.
+
+## 11. Workload measures
 
 The Workload board (Plan → Workload, needs the resource permission) has a **Measure** control:
 **Hours booked** (the original: bookings against capacity, with logged hours for comparison),
