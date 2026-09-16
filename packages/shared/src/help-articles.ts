@@ -87,7 +87,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Open the profile menu (your avatar, top right) and choose Profile.",
       "Upload a profile photo — images are re-encoded, and scanned first when your admin has malware scanning on.",
       "Add your phone number so approvers can reach you about urgent items.",
-      "Toggle light/dark with the sun/moon button in the top bar — the new theme sweeps out from the button."
+      "Until you choose a theme, the app follows your device's light/dark setting, including changes while the app is open. Toggle light/dark with the sun/moon button in the top bar or Toggle theme in the command palette to save an explicit choice for this browser. The top-bar button uses a sweep animation unless reduced motion is enabled."
     ],
     keywords: ["profile", "avatar", "photo", "phone", "theme", "dark mode", "light mode", "appearance"]
   },

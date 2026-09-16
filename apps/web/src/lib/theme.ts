@@ -26,25 +26,68 @@
  */
 
 const THEME_KEY = "timesheet:theme";
+const THEME_CHANGED = "timesheet:theme-changed";
 
 export type Theme = "light" | "dark";
+let explicitChoice: Theme | undefined;
+
+function storedTheme(): Theme | undefined {
+  try {
+    const stored = window.localStorage.getItem(THEME_KEY);
+    return stored === "dark" || stored === "light" ? stored : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function renderTheme(theme: Theme): void {
+  document.documentElement.classList.toggle("dark", theme === "dark");
+  window.dispatchEvent(new Event(THEME_CHANGED));
+}
 
 /** What the theme should be on a cold load: an explicit choice if there is one, the OS otherwise. */
 export function resolveInitialTheme(): Theme {
   if (typeof window === "undefined") return "light";
-  const stored = localStorage.getItem(THEME_KEY);
-  if (stored === "dark" || stored === "light") return stored;
+  const stored = storedTheme();
+  if (stored) return stored;
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 export function currentTheme(): Theme {
+  if (typeof document === "undefined") return "light";
   return document.documentElement.classList.contains("dark") ? "dark" : "light";
+}
+
+/** Subscribe controls to the rendered theme, including changes made from another control or tab. */
+export function subscribeTheme(listener: () => void): () => void {
+  window.addEventListener(THEME_CHANGED, listener);
+  return () => window.removeEventListener(THEME_CHANGED, listener);
+}
+
+/** Follow the OS until a person makes a choice. Boot must never persist an inferred preference. */
+export function initializeTheme(): () => void {
+  const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+  explicitChoice = storedTheme();
+  const sync = () => renderTheme(explicitChoice ?? (media?.matches ? "dark" : "light"));
+  const onStorage = (event: StorageEvent) => {
+    if (event.storageArea !== window.localStorage || (event.key !== THEME_KEY && event.key !== null)) return;
+    explicitChoice = storedTheme();
+    sync();
+  };
+  sync();
+  media?.addEventListener("change", sync);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    media?.removeEventListener("change", sync);
+    window.removeEventListener("storage", onStorage);
+  };
 }
 
 /** The actual change, with no animation attached. Everything else in this file is decoration
  *  around this function, and it is called directly on every fallback path. */
 export function applyTheme(theme: Theme): void {
-  document.documentElement.classList.toggle("dark", theme === "dark");
+  explicitChoice = theme;
+  renderTheme(theme);
   try {
     localStorage.setItem(THEME_KEY, theme);
   } catch {

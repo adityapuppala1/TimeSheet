@@ -12,15 +12,15 @@
  * interaction is the full-screen wipe, and that runs once per press on a browser-composited
  * snapshot rather than continuously against the live DOM.
  */
-import { useRef, useState } from "react";
+import { useRef, useSyncExternalStore } from "react";
 import { Moon, Sun } from "lucide-react";
 import { Button } from "./button";
-import { centreOf, currentTheme, toggleTheme, type Theme } from "../../lib/theme";
+import { centreOf, currentTheme, subscribeTheme, toggleTheme } from "../../lib/theme";
 import { cn } from "../../lib/utils";
 
 export function AnimatedThemeToggler({ className }: { className?: string }) {
   const ref = useRef<HTMLButtonElement | null>(null);
-  const [theme, setTheme] = useState<Theme>(() => (typeof document === "undefined" ? "light" : currentTheme()));
+  const theme = useSyncExternalStore(subscribeTheme, currentTheme, () => "light");
   const dark = theme === "dark";
 
   return (
@@ -29,7 +29,7 @@ export function AnimatedThemeToggler({ className }: { className?: string }) {
       variant="ghost"
       size="icon"
       className={cn("relative overflow-hidden", className)}
-      onClick={() => setTheme(toggleTheme(centreOf(ref.current)))}
+      onClick={() => toggleTheme(centreOf(ref.current))}
       aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
       title={dark ? "Switch to light mode" : "Switch to dark mode"}
     >

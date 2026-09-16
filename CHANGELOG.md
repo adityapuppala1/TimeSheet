@@ -10,6 +10,13 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🐛 Fixed
+
+- Theme startup no longer saves the device's current appearance as an explicit choice. Browsers
+  without a saved choice follow device changes while open; explicit light/dark choices remain
+  respected. Theme controls now stay synchronized after command-palette and cross-tab changes,
+  and blocked browser storage no longer prevents theme initialization.
+
 ## 5.2.1 — the release history stops forgetting its first entry — 2026-09-09
 
 ### 🐛 A count cap that saved one kilobyte by deleting v1.0.0
