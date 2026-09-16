@@ -68,8 +68,9 @@ the palette's hints and the Help article all render from it.
 - **Breadcrumb.** Every in-app page shows *Section › Page* under the top bar, derived from the
   sidebar's own navigation table — never typed per page, so it cannot drift from the sidebar.
 - **Projects tree** in the sidebar (under *Work*): the projects you can see, each with a colour
-  mark (derived from the project, so it is the same on every device and wherever the project is
-  named), folding open to its modules. A row opens Tickets filtered to that project or module; which projects you left
+  mark, folding open to its modules. The mark's colour is chosen per project under Administration
+  → Projects → Edit (eight measured colours, or "Auto" for one derived from the project) and is
+  the same wherever the project is named. A row opens Tickets filtered to that project or module; which projects you left
   open is remembered per browser. There is no submodule tier because a ticket carries a project
   and optionally a module, never a submodule. Not shown in the slim 68px rail.
 - **Phone and tablet:** the sidebar becomes a drawer (menu button, top left) and the five
