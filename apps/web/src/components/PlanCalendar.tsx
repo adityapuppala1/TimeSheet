@@ -18,11 +18,21 @@
  * reports about which week a Friday belongs to would be a worse fidelity failure than diverging
  * from a screenshot.
  *
+ * V12 3.19 (source: the reference's Calendar view has Day / Week / Month periods and "drag and
+ * drop existing tasks on the calendar to change their dates"): a WEEK period — one row of seven
+ * taller cells, so a busy week is readable chip by chip — and drag-to-reschedule when the page
+ * passes `onReschedule` (it does so only for people with plan:write). The arithmetic of a drop
+ * lives in lib/calendar-drag.ts. Drag is pointer-only (HTML5 DnD, like the Timeline's bars);
+ * keyboard users change dates in the ticket sheet's Plan tab, which is where the dates are shown.
+ *
  * WHO renders this: the Calendar tab of `pages/Tickets.tsx`.
  */
+
+export type CalendarPeriod = "month" | "week";
 import { ChevronLeft, ChevronRight, Diamond } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { cn } from "../lib/utils";
+import { addDaysKey, shiftSchedule, weekDays, type SchedulePatch } from "../lib/calendar-drag";
 import type { CalendarItemRow, WorkStatusCategoryValue } from "../services/api";
 import { Badge } from "./ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -51,8 +61,9 @@ const CATEGORY_CHIP: Record<WorkStatusCategoryValue, string> = {
 };
 
 /** How many chips a cell shows before folding the rest into "N more…". Three keeps the tallest
- *  realistic cell within the fixed row height; the count line carries the truth about the rest. */
+ *  realistic month cell within the fixed row height; a week cell has the whole height to itself. */
 const MAX_CHIPS_PER_DAY = 3;
+const MAX_CHIPS_PER_WEEK_DAY = 12;
 
 /** Month grid always starts on a Monday and always renders 6 rows, so the grid never reflows
  *  between months — a calendar that changes height as you page through it is disorienting. */
@@ -67,17 +78,66 @@ export function PlanCalendar({
   year,
   month,
   onMonthChange,
-  onOpenItem
+  onOpenItem,
+  period = "month",
+  onPeriodChange,
+  weekAnchor,
+  onWeekAnchorChange,
+  onReschedule
 }: {
   items: CalendarItemRow[];
   year: number;
   month: number;
   onMonthChange: (year: number, month: number) => void;
   onOpenItem?: (id: string) => void;
+  /** Month (default) or one week. The control is shown only when `onPeriodChange` is passed. */
+  period?: CalendarPeriod;
+  onPeriodChange?: (period: CalendarPeriod) => void;
+  /** YYYY-MM-DD inside the week to show; required for the week period. */
+  weekAnchor?: string;
+  onWeekAnchorChange?: (day: string) => void;
+  /** Passed only when the viewer may plan: chips become draggable and days accept drops. */
+  onReschedule?: (id: string, patch: SchedulePatch) => void;
 }) {
   const start = useMemo(() => gridStart(year, month), [year, month]);
   const now = new Date();
   const today = dayKey(now);
+  const isWeek = period === "week" && Boolean(weekAnchor);
+  const [dragOverDay, setDragOverDay] = useState<string | null>(null);
+  const itemsById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
+  const maxChips = isWeek ? MAX_CHIPS_PER_WEEK_DAY : MAX_CHIPS_PER_DAY;
+
+  const dropOn = (day: string, e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOverDay(null);
+    if (!onReschedule) return;
+    const item = itemsById.get(e.dataTransfer.getData("text/plain"));
+    if (!item) return;
+    const patch = shiftSchedule(item, day);
+    if (patch) onReschedule(item.id, patch);
+  };
+  /** Drop-target handlers for one day; nothing at all when the viewer cannot plan. */
+  const dropTargetProps = (key: string) =>
+    onReschedule
+      ? {
+          onDragOver: (e: React.DragEvent) => {
+            e.preventDefault();
+            if (dragOverDay !== key) setDragOverDay(key);
+          },
+          onDragLeave: () => setDragOverDay((d) => (d === key ? null : d)),
+          onDrop: (e: React.DragEvent) => dropOn(key, e)
+        }
+      : {};
+  const dragSourceProps = (id: string) =>
+    onReschedule
+      ? {
+          draggable: true,
+          onDragStart: (e: React.DragEvent) => {
+            e.dataTransfer.setData("text/plain", id);
+            e.dataTransfer.effectAllowed = "move";
+          }
+        }
+      : {};
 
   /**
    * An item occupies every day it SPANS, not just its start — a two-week task must be visible in
@@ -106,12 +166,26 @@ export function PlanCalendar({
     return map;
   }, [items]);
 
-  const cells = useMemo(() => Array.from({ length: 42 }, (_, i) => addDays(start, i)), [start]);
+  const cells = useMemo(
+    () => (isWeek ? weekDays(weekAnchor!).map(toDay) : Array.from({ length: 42 }, (_, i) => addDays(start, i))),
+    [isWeek, weekAnchor, start]
+  );
 
   const step = (delta: number) => {
+    if (isWeek) {
+      onWeekAnchorChange?.(addDaysKey(weekAnchor!, 7 * delta));
+      return;
+    }
     const next = new Date(Date.UTC(year, month + delta, 1));
     onMonthChange(next.getUTCFullYear(), next.getUTCMonth());
   };
+  const goToday = () => {
+    onMonthChange(now.getUTCFullYear(), now.getUTCMonth());
+    if (isWeek) onWeekAnchorChange?.(today);
+  };
+  const weekRange = isWeek
+    ? `${cells[0].getUTCDate()} ${MONTHS[cells[0].getUTCMonth()].slice(0, 3)} – ${cells[6].getUTCDate()} ${MONTHS[cells[6].getUTCMonth()].slice(0, 3)} ${cells[6].getUTCFullYear()}`
+    : null;
 
   const lastOfMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
   const viewingCurrentMonth = now.getUTCFullYear() === year && now.getUTCMonth() === month;
@@ -140,26 +214,40 @@ export function PlanCalendar({
               {MONTHS[month]} {year}
             </h2>
             <p className="truncate text-xs text-muted-foreground">
-              1 {MONTHS[month].slice(0, 3)} {year} – {lastOfMonth} {MONTHS[month].slice(0, 3)} {year}
+              {weekRange ?? `1 ${MONTHS[month].slice(0, 3)} ${year} – ${lastOfMonth} ${MONTHS[month].slice(0, 3)} ${year}`}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center rounded-lg border border-border shadow-sm">
-          <Button size="sm" variant="ghost" className="rounded-r-none" onClick={() => step(-1)} aria-label="Previous month">
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="rounded-none border-x border-border font-semibold"
-            onClick={() => onMonthChange(now.getUTCFullYear(), now.getUTCMonth())}
-          >
-            Today
-          </Button>
-          <Button size="sm" variant="ghost" className="rounded-l-none" onClick={() => step(1)} aria-label="Next month">
-            <ChevronRight className="h-4 w-4" />
-          </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {onPeriodChange && (
+            <div role="radiogroup" aria-label="Calendar period" className="flex items-center rounded-lg border border-border shadow-sm">
+              {(["month", "week"] as const).map((p) => (
+                <Button
+                  key={p}
+                  size="sm"
+                  variant="ghost"
+                  role="radio"
+                  aria-checked={period === p}
+                  className={cn("h-[44px] rounded-none first:rounded-l-lg last:rounded-r-lg", period === p && "bg-muted font-semibold")}
+                  onClick={() => onPeriodChange(p)}
+                >
+                  {p === "month" ? "Month" : "Week"}
+                </Button>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center rounded-lg border border-border shadow-sm">
+            <Button size="sm" variant="ghost" className="h-[44px] rounded-r-none" onClick={() => step(-1)} aria-label={isWeek ? "Previous week" : "Previous month"}>
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <Button size="sm" variant="ghost" className="h-[44px] rounded-none border-x border-border font-semibold" onClick={goToday}>
+              Today
+            </Button>
+            <Button size="sm" variant="ghost" className="h-[44px] rounded-l-none" onClick={() => step(1)} aria-label={isWeek ? "Next week" : "Next month"}>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -174,20 +262,24 @@ export function PlanCalendar({
               </div>
             ))}
           </div>
-          <div className="grid grid-cols-7">
+          <div className="grid grid-cols-7" data-calendar-period={isWeek ? "week" : "month"}>
             {cells.map((cell, index) => {
               const key = dayKey(cell);
-              const inMonth = cell.getUTCMonth() === month;
+              const inMonth = isWeek || cell.getUTCMonth() === month;
               const dayItems = byDay.get(key) ?? [];
               const isToday = key === today;
-              const overflow = dayItems.length - MAX_CHIPS_PER_DAY;
+              const overflow = dayItems.length - maxChips;
               return (
                 <div
                   key={key}
+                  data-calendar-day={key}
+                  {...dropTargetProps(key)}
                   className={cn(
-                    "min-h-[104px] border-b border-r border-border p-1.5 [&:nth-child(7n)]:border-r-0",
-                    index >= 35 && "border-b-0",
-                    !inMonth && "bg-muted/20"
+                    isWeek ? "min-h-[360px]" : "min-h-[104px]",
+                    "border-b border-r border-border p-1.5 transition-shadow [&:nth-child(7n)]:border-r-0",
+                    (isWeek || index >= 35) && "border-b-0",
+                    !inMonth && "bg-muted/20",
+                    dragOverDay === key && "ring-2 ring-inset ring-primary"
                   )}
                 >
                   <div className="mb-1 flex justify-center">
@@ -202,13 +294,16 @@ export function PlanCalendar({
                     </span>
                   </div>
                   <div className="grid gap-1">
-                    {dayItems.slice(0, MAX_CHIPS_PER_DAY).map((item) => (
+                    {dayItems.slice(0, maxChips).map((item) => (
                       <Tooltip key={`${key}-${item.id}`}>
                         <TooltipTrigger asChild>
                           <button
                             type="button"
                             onClick={() => onOpenItem?.(item.id)}
+                            {...dragSourceProps(item.id)}
+                            data-calendar-chip={item.id}
                             className={cn(
+                              onReschedule && "cursor-grab active:cursor-grabbing",
                               "flex w-full items-center gap-1 truncate rounded-md px-1.5 py-0.5 text-left text-[11px] font-medium transition",
                               // Coloured chip = a real scheduled date, tinted by delivery state.
                               // Dashed outline = only an SLA date; nobody has planned this yet,

@@ -69,7 +69,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
 import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRefine";
-import { PlanCalendar } from "../components/PlanCalendar";
+import { PlanCalendar, type CalendarPeriod } from "../components/PlanCalendar";
 import { TicketApprovalsPanel } from "../components/TicketApprovalsPanel";
 import { ProofingPanel } from "../components/ProofingPanel";
 import { SavedViewsBar, type TicketFilters } from "../components/SavedViewsBar";
@@ -540,6 +540,35 @@ function buildTicketCardItems(rows: readonly TicketRow[], grouping: (typeof TICK
   ]);
 }
 
+/** V12 3.19: the calendar's period, the day a shown week is anchored on, and the drop → PATCH.
+ *  Returns the props `PlanCalendar` takes for all three, so the page just spreads them. */
+function useCalendarView(canEditPlan: boolean, setCalendarMonth: (m: { year: number; month: number }) => void) {
+  const queryClient = useQueryClient();
+  const [period, setPeriod] = useState<CalendarPeriod>("month");
+  const [weekAnchor, setWeekAnchor] = useState(() => new Date().toISOString().slice(0, 10));
+  const reschedule = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: { startDate: string; endDate: string } }) => planApi.updateItem(id, patch),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["plan"] });
+      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      toast.success("Rescheduled");
+    },
+    onError: (error) => toast.error(serverMessage(error, "Could not reschedule"))
+  });
+  return {
+    period,
+    onPeriodChange: setPeriod,
+    weekAnchor,
+    onWeekAnchorChange: (day: string) => {
+      // The month query window covers a week either side of the month, so keeping the month in
+      // step with the anchor keeps the week's data loaded.
+      setWeekAnchor(day);
+      setCalendarMonth({ year: Number(day.slice(0, 4)), month: Number(day.slice(5, 7)) - 1 });
+    },
+    onReschedule: canEditPlan ? (id: string, patch: { startDate: string; endDate: string }) => reschedule.mutate({ id, patch }) : undefined
+  };
+}
+
 export function Tickets() {
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
@@ -609,6 +638,7 @@ export function Tickets() {
     queryFn: () => planApi.dependencies(planProjectIds),
     enabled: viewMode === "timeline" && planFeatures.timeline
   });
+  const calendarView = useCalendarView(canEditPlan, setCalendarMonth);
   const calendarQuery = useQuery({
     queryKey: ["plan", "calendar", filters.projectId, calendarMonth.year, calendarMonth.month],
     queryFn: () => {
@@ -954,6 +984,7 @@ export function Tickets() {
                 month={calendarMonth.month}
                 onMonthChange={(year, month) => setCalendarMonth({ year, month })}
                 onOpenItem={openTicket}
+                {...calendarView}
               />
             )}
           </CardContent>
