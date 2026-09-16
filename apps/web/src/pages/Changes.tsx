@@ -13,6 +13,7 @@
  * second copies is how two surfaces start disagreeing about the same conversation.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { PageHeader } from "../components/PageHeader";
 import {
   changeBands,
   changeKinds,
@@ -190,18 +191,12 @@ export function Changes() {
 
   return (
     <div className="grid gap-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary/10 text-primary">
-            <ClipboardList className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-black tracking-tight">Change Management</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Request, assess, approve and review changes before they ship.
-            </p>
-          </div>
-        </div>
+      <PageHeader
+        title="Change Management"
+        icon={ClipboardList}
+        description="Request, assess, approve and review changes before they ship."
+        actions={
+          <>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => navigate("/app/changes/calendar")}>
             <CalendarDays className="h-3.5 w-3.5" />
@@ -220,7 +215,9 @@ export function Changes() {
             </Button>
           )}
         </div>
-      </div>
+          </>
+        }
+      />
 
       {m && (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">

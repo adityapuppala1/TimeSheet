@@ -21,6 +21,7 @@
  * WHO calls the backing API: `controllers/timesheet.controller.ts`'s list + detail routes.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { PageHeader } from "../components/PageHeader";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Clock, Eye, FileText, Filter, Layers, Paperclip, PencilLine, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -452,18 +453,13 @@ export function History() {
 
   return (
     <div className="grid gap-5">
-      <div>
-        <h1 className="text-2xl font-black tracking-tight">Timesheet history</h1>
-        {/* The list route returns everybody's entries to a `reports:view` holder and only your own
+      {/* The list route returns everybody's entries to a `reports:view` holder and only your own
             to everyone else, so a fixed "every entry you've logged" was simply wrong for an admin
             — who was also the person most likely to wonder whose rows these were. */}
-        <p className="mt-1 text-sm text-muted-foreground">
-          {spansMultiplePeople
+      <PageHeader title="Timesheet history" description={<>{spansMultiplePeople
             ? "Filter and review logged entries across the team. Open any row for the full entry, its attachments and who last changed it."
             : "Filter and review every entry you've logged. Open any row to read it in full, or to correct it before it's approved."}{" "}
-          Hours roll up live as you adjust filters.
-        </p>
-      </div>
+          Hours roll up live as you adjust filters.</>} />
 
       <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-4">
         <StatCard label="Entries" value={summary.count} trend={weekTrends.count} trendLabel="this week vs last week" />

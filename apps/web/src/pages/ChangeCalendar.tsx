@@ -10,6 +10,7 @@
  * freeze is exactly what somebody needs to see, and hiding either one would hide the conflict.
  */
 import { useQuery } from "@tanstack/react-query";
+import { PageHeader } from "../components/PageHeader";
 import { AlertTriangle, ArrowLeft, CalendarDays, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
@@ -89,18 +90,12 @@ export function ChangeCalendarPage() {
 
   return (
     <div className="grid gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary/10 text-primary">
-            <CalendarDays className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-black tracking-tight">Change calendar</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Scheduled windows and the freeze periods they have to dodge. All times UTC.
-            </p>
-          </div>
-        </div>
+      <PageHeader
+        title="Change calendar"
+        icon={CalendarDays}
+        description="Scheduled windows and the freeze periods they have to dodge. All times UTC."
+        actions={
+          <>
         <div className="flex flex-wrap items-center gap-2">
           {/* The way out. The calendar is reached from the changes list but had no route back to
               it, so the only exit was the browser's own back button or the sidebar — which is not
@@ -127,7 +122,9 @@ export function ChangeCalendarPage() {
             </Button>
           )}
         </div>
-      </div>
+          </>
+        }
+      />
 
       <Card>
         <CardContent className="p-3 sm:p-4">

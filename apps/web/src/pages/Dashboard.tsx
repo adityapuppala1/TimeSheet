@@ -18,6 +18,7 @@
  * WHO renders this: `App.tsx`'s `/app` (index) route.
  */
 import { useQuery } from "@tanstack/react-query";
+import { PageHeader } from "../components/PageHeader";
 import { motion } from "framer-motion";
 import {
   AlertTriangle,
@@ -522,15 +523,19 @@ export function Dashboard() {
 
   return (
     <div className="grid gap-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-black tracking-tight">{isAdmin ? "Admin command center" : `Good day, ${firstName}`}</h1>
-          <p className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
+      {/* The dashboard is the app's landmark — the place every crumb would lead back to — so it
+          carries no breadcrumb of its own. */}
+      <PageHeader
+        breadcrumb={false}
+        title={isAdmin ? "Admin command center" : `Good day, ${firstName}`}
+        description={
+          <span className="flex items-center gap-1.5">
             <CalendarClock className="h-3.5 w-3.5" />
             {todayLabel} — role-aware productivity, submissions, and operational signals.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+          </span>
+        }
+        actions={
+          <>
           {/* Governs EVERY card below, which is why it sits in the page header rather than on one
               of them. The same calendar the day timeline uses, so between-dates selection behaves
               identically in both places. */}
@@ -549,8 +554,9 @@ export function Dashboard() {
           <Button asChild>
             <Link to="/app/timesheet"><CalendarPlus2 className="h-4 w-4" />Log new entry</Link>
           </Button>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {/* First-run checklist — self-hides once complete (or dismissed, unless a REQUIRED face
           enrollment is pending, which blocks real submissions and so stays visible). */}

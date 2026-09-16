@@ -26,6 +26,16 @@ number, on purpose — an installation must never render history for a version t
   so each can be looked at, not swept.
 - Date picker triggers join the 44px rule (three `h-10` → `44px`). The range picker's `h-9` is left:
   it is a dashboard/report filter control, the same compact-toolbar category as `size="sm"`.
+- **Slice 1 migrated: the six Work-section pages** — Timesheet entry, Timesheet history, Change
+  Management, Change calendar, Team, and the Dashboard. Every kept element moved verbatim: the
+  Dashboard's date-range picker and action buttons, Change Management's Calendar/CSV/XLSX/PDF row,
+  Team's role-conditional title. The Dashboard is the landmark every crumb leads back to, so it
+  carries `breadcrumb={false}` rather than a crumb pointing at itself.
+- **What the migration list is NOT**: the grep for the old title class also matched the public and
+  sign-in pages (Login, Forgot/Reset password, Reactivate, Trial feedback, Landing, the
+  platform-admin login), the platform console shell, and the change *detail* page whose title is a
+  record key. None has a sidebar or a nav entry to derive from, so none gets `PageHeader`. Nine
+  in-app pages remain; they are listed in the V12 state file.
 
 ### 🎨 Every button, input and select now clears the 44px touch minimum
 

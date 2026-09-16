@@ -7,6 +7,7 @@
  * WHO calls the backing API: `controllers/timesheet.controller.ts`'s draft/submit routes.
  */
 import { zodResolver } from "@hookform/resolvers/zod";
+import { PageHeader } from "../components/PageHeader";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { calculateHours } from "@timesheet/shared";
 import { AlertTriangle, CalendarClock, Check, ChevronsUpDown, Eraser, Save, Send, Sparkles, Ticket } from "lucide-react";
@@ -378,12 +379,7 @@ export function Timesheet() {
 
   return (
     <div className="grid gap-5">
-      <div>
-        <h1 className="text-2xl font-black tracking-tight">Timesheet entry</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Capture daily work with hierarchy-aware selects, automatic hour calculation, and rich task notes.
-        </p>
-      </div>
+      <PageHeader title="Timesheet entry" description="Capture daily work with hierarchy-aware selects, automatic hour calculation, and rich task notes." />
 
       <Card data-tour="timesheet-form">
         <CardContent className="pt-6">

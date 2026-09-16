@@ -7,6 +7,7 @@
  * WHO calls the backing API: `controllers/team.controller.ts`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { PageHeader } from "../components/PageHeader";
 import type { ColumnDef } from "@tanstack/react-table";
 import { AlertTriangle, CheckCircle2, Clock, Mail, Network, ShieldCheck, ShieldX, TrendingUp, Users2 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -249,23 +250,17 @@ export function Team() {
 
   return (
     <div className="grid gap-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary/10 text-primary">
-            <Users2 className="h-5 w-5" />
-          </div>
-          <div>
-            {/* The page is honestly named for what this viewer actually gets: an approver sees
-                their team's queue, everybody else sees the reporting lines. */}
-            <h1 className="text-2xl font-black tracking-tight">{canApprove ? "My team" : "Org chart"}</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {canApprove
-                ? "Direct reports, approval queue, and SLA health — all in one view."
-                : "Reporting lines, built from each person's assigned manager."}
-            </p>
-          </div>
-        </div>
-      </div>
+      {/* The page is honestly named for what this viewer actually gets: an approver sees their
+          team's queue, everybody else sees the reporting lines. */}
+      <PageHeader
+        title={canApprove ? "My team" : "Org chart"}
+        icon={Users2}
+        description={
+          canApprove
+            ? "Direct reports, approval queue, and SLA health — all in one view."
+            : "Reporting lines, built from each person's assigned manager."
+        }
+      />
 
       {/* Top stats — approver only: every figure here is about approving other people's work. */}
       {canApprove && (
