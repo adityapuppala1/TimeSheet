@@ -23,7 +23,8 @@ const ALL_OFF: PlanningEffective = {
   proofing: false,
   requestForms: false,
   customWorkflows: false,
-  goals: false
+  goals: false,
+  sprints: false
 };
 
 export function usePlanningFeatures(): { features: PlanningEffective; isLoading: boolean } {

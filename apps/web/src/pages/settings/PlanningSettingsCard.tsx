@@ -226,6 +226,14 @@ function PlanningTogglesCard({ readOnly, config }: { readOnly: boolean; config: 
           disabled={readOnly || update.isPending}
           onChange={(v) => set("enableGoals", v)}
         />
+        <ToggleRow
+          label="Sprints"
+          description="Time-boxed iterations per project: plan tickets into a sprint with story points, start and complete it, and read a burndown. Needs the planning layer above; off by default, and turning it off hides the pages without touching any data."
+          checked={draft.enableSprints}
+          entitled={true}
+          disabled={readOnly || update.isPending || !draft.enablePlanning}
+          onChange={(v) => set("enableSprints", v)}
+        />
       </CardContent>
     </Card>
   );

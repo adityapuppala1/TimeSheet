@@ -10,6 +10,14 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🏃 Sprints — foundation, behind a default-off toggle
+
+- **Schema and switch only in this step; no sprint UI yet.** A `Sprint` table (per project: name,
+  goal, start and end dates, planned/active/completed), `sprintId` and `storyPoints` on tickets,
+  and a **Sprints** toggle under Workspace Settings → Planning that is off by default and needs
+  the planning layer on. Nothing changes for any workspace until a super admin turns it on. The
+  migration is additive and idempotent on MySQL and MariaDB.
+
 ### 📊 Two more dashboard widgets
 
 - **Priority mix** (open work by priority, always in severity order) and **Open work by project**

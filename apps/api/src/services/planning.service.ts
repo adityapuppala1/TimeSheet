@@ -27,6 +27,7 @@ export interface PlanningSettingsRow {
   enableRequestForms: boolean;
   enableCustomWorkflows: boolean;
   enableGoals: boolean;
+  enableSprints: boolean;
   workingDays: number[];
   defaultWeeklyCapacityHours: number;
 }
@@ -39,6 +40,7 @@ const ALL_OFF: PlanningSettingsRow = {
   enableRequestForms: false,
   enableCustomWorkflows: false,
   enableGoals: false,
+  enableSprints: false,
   workingDays: [1, 2, 3, 4, 5],
   defaultWeeklyCapacityHours: 40
 };
@@ -59,6 +61,7 @@ export async function getPlanningSettings(): Promise<PlanningSettingsRow> {
     enableRequestForms: row.enableRequestForms,
     enableCustomWorkflows: row.enableCustomWorkflows,
     enableGoals: row.enableGoals,
+    enableSprints: row.enableSprints,
     workingDays: Array.isArray(row.workingDays) && (row.workingDays as number[]).length > 0 ? (row.workingDays as number[]) : [1, 2, 3, 4, 5],
     defaultWeeklyCapacityHours: Number(row.defaultWeeklyCapacityHours ?? 40)
   };
@@ -81,9 +84,25 @@ export async function getEffectivePlanning() {
       proofing: settings.enableProofing && entitlements.proofingEnabled,
       requestForms: settings.enableRequestForms,
       customWorkflows: settings.enableCustomWorkflows && entitlements.customWorkflowsEnabled,
-      goals: settings.enableGoals && entitlements.goalsEnabled
+      goals: settings.enableGoals && entitlements.goalsEnabled,
+      // Sprints ride on planning (they schedule planned work) and carry no tier entitlement yet.
+      sprints: settings.enableSprints && settings.enablePlanning
     }
   };
+}
+
+/**
+ * The sprints gate, in the same two-message shape as goals: a workspace switch points at an admin,
+ * the planning prerequisite points at the toggle it depends on.
+ */
+export async function assertSprintsEnabled(): Promise<void> {
+  const settings = await getPlanningSettings();
+  if (!settings.enablePlanning) {
+    throw new AppError(403, "Sprints need the planning layer. A super admin can enable it in Workspace Settings → Planning.");
+  }
+  if (!settings.enableSprints) {
+    throw new AppError(403, "Sprints are off for this workspace. A super admin can enable them in Workspace Settings → Planning.");
+  }
 }
 
 /**

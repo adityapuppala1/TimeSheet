@@ -482,6 +482,7 @@ model Project {
   plannedEndDate   DateTime? @db.Date
 
   modules                   ProjectModule[]
+  sprints                   Sprint[]
   assignments               UserProjectAssignment[]
   timesheets                Timesheet[]
   tickets                   Ticket[]
@@ -890,6 +891,12 @@ model Ticket {
   project   Project        @relation(fields: [projectId], references: [id])
   moduleId  String?
   module    ProjectModule? @relation(fields: [moduleId], references: [id])
+  /// V12 sprints (default-off workspace toggle `enableSprints`). Nullable, SET NULL when the sprint
+  /// is deleted: a ticket outlives the iteration it was planned into. Points are a Decimal(5,1) so
+  /// half-points are representable without inviting fractions of fractions.
+  sprintId    String?
+  sprint      Sprint?  @relation(fields: [sprintId], references: [id], onDelete: SetNull)
+  storyPoints Decimal? @db.Decimal(5, 1)
 
   /// Free string validated at the API layer against active TicketType.name rows —
   /// mirrors how Timesheet.activityType relates to ActivityType (no hard FK), so
@@ -4677,6 +4684,10 @@ model GlobalPlanningSettings {
   /// Goals/OKRs (V8 phase 1). Same two-condition gate as every toggle above: this workspace
   /// switch AND the tier's `goalsEnabled` entitlement, ANDed server-side in planning.service.ts.
   enableGoals              Boolean @default(false)
+  /// Sprints (V12). A sub-feature of planning: the effective gate is this switch AND
+  /// `enablePlanning`. There is deliberately no tier entitlement yet (Open Questions in the V12
+  /// state file) — off by default, so nothing changes for a workspace that never turns it on.
+  enableSprints            Boolean @default(false)
 
   /// JSON array of weekday numbers, 0 = Sunday. The timeline solver and the workload denominator
   /// both read this — a 5-day week and a 6-day week produce genuinely different schedules, and
@@ -4687,6 +4698,37 @@ model GlobalPlanningSettings {
 
   updatedAt   DateTime @updatedAt
   updatedById String?
+}
+
+/// --- Sprints (V12) ---------------------------------------------------------------------------
+/// A time-boxed iteration a project's tickets are planned into. Project-scoped because every
+/// visibility rule in this app is: a sprint is visible to exactly the people who can see its
+/// project, and reads go through `ticketProjectScope` like tickets do. Dates are calendar days,
+/// not instants — a sprint "ends Friday" in every timezone. Status is a small explicit machine
+/// (PLANNED → ACTIVE → COMPLETED) rather than derived from dates, because a team starts a sprint
+/// when it starts it, not when the calendar says so.
+enum SprintStatus {
+  PLANNED
+  ACTIVE
+  COMPLETED
+}
+
+model Sprint {
+  id        String       @id @default(uuid())
+  projectId String
+  project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String       @db.VarChar(120)
+  goal      String?      @db.VarChar(600)
+  startDate DateTime     @db.Date
+  endDate   DateTime     @db.Date
+  status    SprintStatus @default(PLANNED)
+  tickets   Ticket[]
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId, startDate])
 }
 
 /// --- Goals / OKRs (V8 phase 1) ---------------------------------------------------------------

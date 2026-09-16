@@ -4017,6 +4017,7 @@ export interface PlanningSettings {
   enableRequestForms: boolean;
   enableCustomWorkflows: boolean;
   enableGoals: boolean;
+  enableSprints: boolean;
   workingDays: number[];
   defaultWeeklyCapacityHours: number | string;
   updatedAt: string;
@@ -4049,6 +4050,8 @@ export interface PlanningEffective {
   requestForms: boolean;
   customWorkflows: boolean;
   goals: boolean;
+  /** Sprints need planning on as well; the server ANDs the two. */
+  sprints: boolean;
 }
 
 export interface PlanningConfig {
