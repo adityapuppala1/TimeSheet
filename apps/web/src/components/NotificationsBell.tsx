@@ -11,6 +11,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, CheckCheck, MailOpen } from "lucide-react";
 import { useNavigate } from "react-router";
 import { Button } from "./ui/button";
+import { EmptyState } from "./ui/empty-state";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { ScrollArea } from "./ui/scroll-area";
 import { Separator } from "./ui/separator";
@@ -84,10 +85,7 @@ export function NotificationsBell() {
         <Separator />
         <ScrollArea className="max-h-96">
           {items.length === 0 && (
-            <div className="grid place-items-center gap-2 px-4 py-10 text-center text-sm text-muted-foreground">
-              <MailOpen className="h-6 w-6" />
-              You're all caught up.
-            </div>
+            <EmptyState compact icon={MailOpen} title="You're all caught up" className="m-2" />
           )}
           {items.map((item) => (
             <button

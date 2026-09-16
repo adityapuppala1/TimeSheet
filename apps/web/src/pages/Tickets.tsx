@@ -1948,7 +1948,7 @@ function CommentsPanel({
       )}
       <ScrollArea className="max-h-72 rounded-md border border-border">
         <div className="grid gap-3 p-3">
-          {comments.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">No comments yet.</p>}
+          {comments.length === 0 && <EmptyState compact title="No comments yet" description="Start the thread below." />}
           {comments.map((c) => (
             <div key={c.id} className="grid gap-1 rounded-md bg-muted/30 p-3">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -2050,7 +2050,7 @@ function ChecklistPanel({
             </div>
           </div>
         ))}
-        {items.length === 0 && <p className="py-4 text-center text-sm text-muted-foreground">No checklist items yet.</p>}
+        {items.length === 0 && <EmptyState compact title="No checklist items yet" />}
       </div>
       <div className="flex gap-2">
         <Input
@@ -2119,7 +2119,7 @@ function LinksPanel({
             </Button>
           </div>
         ))}
-        {links.length === 0 && <p className="py-4 text-center text-sm text-muted-foreground">No linked tickets yet.</p>}
+        {links.length === 0 && <EmptyState compact title="No linked tickets yet" />}
       </div>
       <div className="flex gap-2">
         <Select value={draft.type} onValueChange={(v) => setDraft((d) => ({ ...d, type: v as TicketLinkType }))}>
@@ -2253,7 +2253,7 @@ function BranchesPanel({
             </Button>
           </div>
         ))}
-        {branches.length === 0 && <p className="py-4 text-center text-sm text-muted-foreground">No branches or PRs linked yet.</p>}
+        {branches.length === 0 && <EmptyState compact title="No branches or PRs linked yet" />}
       </div>
       {gitStatus.data?.connected && (
         <div className="grid gap-2 rounded-md border border-dashed border-border p-3">
@@ -2667,10 +2667,11 @@ function LineagePanel({ ticketId }: { ticketId: string }) {
   const events = lineage.data?.events ?? [];
   if (events.length === 0) {
     return (
-      <p className="py-6 text-center text-sm text-muted-foreground">
-        Nothing to show yet — link a branch/PR (Dev tab) or connect CI/security ingestion (Workspace Settings → Security &amp; DevOps)
-        referencing this ticket's key to build a timeline here.
-      </p>
+      <EmptyState
+        compact
+        title="Nothing to show yet"
+        description={<>Link a branch or PR in the Dev tab, or connect CI/security ingestion (Workspace Settings → Security &amp; DevOps) referencing this ticket's key, and the timeline builds itself.</>}
+      />
     );
   }
 

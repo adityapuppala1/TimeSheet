@@ -18,6 +18,10 @@ number, on purpose — an installation must never render history for a version t
 - **Tickets now tells you why it is empty.** With filters narrowing the list it says so and offers
   "Clear filters"; with no filters applied it says there are no tickets yet and offers nothing
   it cannot deliver.
+- **Slice 2, the everyday pages:** Change Management (with its own Clear filters), the
+  dashboard's two panels (keeping "Log your first entry" as the action), Team's hours charts, the
+  ticket sheet's comments, checklist, links, branches and dev timeline, the notification bell and
+  the inbox detail pane.
 
 ### 🧮 Choose the ticket table's columns, custom fields included
 

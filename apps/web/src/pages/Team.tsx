@@ -8,6 +8,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "../components/PageHeader";
+import { EmptyState } from "../components/ui/empty-state";
 import type { ColumnDef } from "@tanstack/react-table";
 import { AlertTriangle, CheckCircle2, Clock, Mail, Network, ShieldCheck, ShieldX, TrendingUp, Users2 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -501,7 +502,7 @@ function HoursTrendDialog({ person, onClose }: { person: TeamReport | null; onCl
                 {new Date(trend.data.currentMonth.monthStart).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" })}, week by week
               </p>
               {monthTotal === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">No hours logged this month yet.</p>
+                <EmptyState compact title="No hours logged this month yet" />
               ) : (
                 <div className="h-56">
                   <ResponsiveContainer width="100%" height="100%">
@@ -520,7 +521,7 @@ function HoursTrendDialog({ person, onClose }: { person: TeamReport | null; onCl
             <div className="grid gap-1.5">
               <p className="text-sm font-semibold">Month by month, last 12 months</p>
               {yearTotal === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">Nothing logged in the last 12 months.</p>
+                <EmptyState compact title="Nothing logged in the last 12 months" />
               ) : (
                 // Twelve labelled buckets need room a phone doesn't have — scroll this chart
                 // inside its own box rather than letting the dialog scroll sideways.

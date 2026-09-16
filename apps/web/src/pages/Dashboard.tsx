@@ -58,6 +58,7 @@ import { GoalsGlanceCard } from "../components/GoalsGlanceCard";
 import { SetupChecklistCard } from "../components/SetupChecklistCard";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { EmptyState } from "../components/ui/empty-state";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
@@ -1426,14 +1427,17 @@ function DayTimeline({
                 ))}
 
                 {entries.length === 0 && (
-                  <div className="flex h-16 items-center justify-center gap-2 rounded-lg border border-border bg-muted/20 px-4 text-center text-sm text-muted-foreground">
-                    {isToday ? "Nothing logged yet today." : `Nothing logged on ${selectedLabel}.`}
-                    {isToday && (
-                      <Link to="/app/timesheet" className="font-semibold text-primary hover:underline">
-                        Log your first entry →
-                      </Link>
-                    )}
-                  </div>
+                  <EmptyState
+                    compact
+                    title={isToday ? "Nothing logged yet today" : `Nothing logged on ${selectedLabel}`}
+                    action={
+                      isToday ? (
+                        <Button asChild variant="outline" size="sm" className="h-[44px]">
+                          <Link to="/app/timesheet">Log your first entry</Link>
+                        </Button>
+                      ) : undefined
+                    }
+                  />
                 )}
               </div>
 
@@ -1590,12 +1594,16 @@ function ProjectRollup({ rollup, loading, periodLabel }: { rollup: MyMonthRollup
         {loading ? (
           <Skeleton className="h-32 w-full" />
         ) : rows.length === 0 ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">
-            No projects assigned, and nothing logged this month.{" "}
-            <Link to="/app/timesheet" className="font-semibold text-primary hover:underline">
-              Log your first entry →
-            </Link>
-          </div>
+          <EmptyState
+            compact
+            title="Nothing logged this month"
+            description="No projects assigned yet, and no hours logged."
+            action={
+              <Button asChild variant="outline" size="sm" className="h-[44px]">
+                <Link to="/app/timesheet">Log your first entry</Link>
+              </Button>
+            }
+          />
         ) : (
           <>
             {/* Desktop table / mobile cards — same dual rendering the Tickets page uses. */}

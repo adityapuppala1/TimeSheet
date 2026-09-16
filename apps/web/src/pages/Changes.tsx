@@ -14,6 +14,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "../components/PageHeader";
+import { EmptyState } from "../components/ui/empty-state";
 import {
   changeBands,
   changeKinds,
@@ -111,13 +112,18 @@ function MetricTile({
  * Page
  * ------------------------------------------------------------------ */
 
+/** Every filter axis at rest. Spelled out once so the empty state can tell "none exist" from
+ *  "your filters hid them" and offer Clear filters only in the second case. */
+const DEFAULT_CHANGE_FILTERS = { state: "all", changeKind: "all", riskLevel: "all", mine: false };
+
 export function Changes() {
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [filters, setFilters] = useState({ state: "all", changeKind: "all", riskLevel: "all", mine: false });
+  const [filters, setFilters] = useState({ ...DEFAULT_CHANGE_FILTERS });
+  const filtersAtRest = Object.entries(DEFAULT_CHANGE_FILTERS).every(([k, v]) => filters[k as keyof typeof DEFAULT_CHANGE_FILTERS] === v);
   const [createOpen, setCreateOpen] = useState(false);
   /** The day the calendar asked us to schedule for, as `YYYY-MM-DD`. Null for the plain button. */
   const [createPlannedDate, setCreatePlannedDate] = useState<string | null>(null);
@@ -287,9 +293,18 @@ export function Changes() {
         <CardContent className="p-0">
           {changes.isLoading && <Skeleton className="m-4 h-48" />}
           {!changes.isLoading && rows.length === 0 && (
-            <div className="py-14 text-center text-sm text-muted-foreground">
-              No changes match these filters.
-            </div>
+            <EmptyState
+              className="m-4"
+              title={filtersAtRest ? "No changes yet" : "No changes match these filters"}
+              description={filtersAtRest ? "Raise the first change from the button above." : "Widen a filter, or clear them all."}
+              action={
+                filtersAtRest ? undefined : (
+                  <Button variant="outline" size="sm" className="h-[44px]" onClick={() => setFilters({ ...DEFAULT_CHANGE_FILTERS })}>
+                    Clear filters
+                  </Button>
+                )
+              }
+            />
           )}
           {!changes.isLoading && rows.length > 0 && (
             <>

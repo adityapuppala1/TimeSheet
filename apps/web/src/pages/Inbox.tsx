@@ -36,6 +36,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { EmptyState as EmptyPanel } from "../components/ui/empty-state";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "../components/ui/toaster";
@@ -281,7 +282,7 @@ export function InboxPage() {
           {/* The detail pane, desktop only — below lg the row itself carries everything. */}
           <div className="hidden lg:block">
             <div className="sticky top-4">
-              {selected && selectedVisible ? <DetailPane item={selected} /> : <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">Select an item.</CardContent></Card>}
+              {selected && selectedVisible ? <DetailPane item={selected} /> : <EmptyPanel title="Select an item" description="Its details open here." />}
             </div>
           </div>
         </div>
