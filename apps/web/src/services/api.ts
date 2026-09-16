@@ -4585,6 +4585,9 @@ export interface CapacityPersonRow {
 }
 
 export interface WorkloadCellRow {
+  /** V12 3.20: open assigned tickets in this bucket and their story points. */
+  ticketCount: number;
+  storyPoints: number;
   bucketStart: string;
   /** Capacity MINUS time off — what is actually available to book. */
   capacityHours: number;
@@ -4606,6 +4609,8 @@ export interface WorkloadRowData {
     timeOffHours: number;
     allocationPct: number | null;
     overAllocatedBuckets: number;
+    ticketCount: number;
+    storyPoints: number;
   };
 }
 

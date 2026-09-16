@@ -24,6 +24,11 @@ number, on purpose — an installation must never render history for a version t
   colours, or "Auto" for the derived one; the mark changes everywhere at once — sidebar tree,
   tickets table, cards, group headings. Stored as a palette id, so only measured, legible colours
   can be saved. Additive migration; existing projects keep their derived colour.
+- **Workload: measure by tickets or story points.** The Workload board gains a Measure control
+  (Hours booked · Tickets · Story points). Tickets and points count each person's open assigned
+  tickets in the weeks their scheduled span covers, or the week of their SLA date when unscheduled,
+  the same rule the calendar uses. Colour still shows hours against capacity, and the tooltip says
+  so. The API's workload rows carry the new counts alongside the existing hours.
 - **Calendar: a week period and drag to reschedule.** The Tickets calendar gains a Month | Week
   switch; the week shows seven tall days with room for every chip. People who can plan drag a chip
   onto another day: a scheduled item keeps its length, an item that only had an SLA date becomes

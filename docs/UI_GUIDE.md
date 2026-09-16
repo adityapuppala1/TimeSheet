@@ -179,6 +179,18 @@ Engineering:
 
 ---
 
+## 10. Workload measures
+
+The Workload board (Plan → Workload, needs the resource permission) has a **Measure** control:
+**Hours booked** (the original: bookings against capacity, with logged hours for comparison),
+**Tickets** and **Story points**. The two new measures count each person's open assigned tickets
+in the weeks their scheduled span covers, or the week of the SLA date when nobody has scheduled
+them, exactly as the Calendar places them. Row totals count each ticket once. The cell colour
+always shows hours against capacity, because only hours have a capacity to compare against; the
+tooltip carries the tickets and points under every measure.
+
+Engineering: `apps/api/src/services/workload.service.ts` (`ticketLoadForBucket`), `apps/web/src/pages/Workload.tsx`.
+
 ## Verifying a change to any of this
 
 The V12 branch's state file, `docs/V12_UiUx_ClickUp_PLAN.md`, records for each unit how it was

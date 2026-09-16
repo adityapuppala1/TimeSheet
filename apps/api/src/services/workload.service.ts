@@ -113,10 +113,57 @@ export function capacityForBucket(
   return Math.round(raw * (utilisation / 100) * 100) / 100;
 }
 
+/**
+ * V12 3.20 — a ticket as a unit of load. The reference measures a workload board by sprint
+ * points or task count as well as time; here a ticket counts in a bucket when its scheduled span
+ * overlaps it, or — when nobody has scheduled it — when its SLA date falls in it. The same
+ * "scheduled vs SLA date" rule the calendar uses, so the two surfaces agree about where a ticket is.
+ */
+export interface TicketLoad {
+  userId: string;
+  startDate: Date | null;
+  endDate: Date | null;
+  dueAt: Date | null;
+  storyPoints: number | null;
+}
+
+/** Statuses that no longer count as load. Reopened does. */
+export const CLOSED_FOR_LOAD = ["RESOLVED", "CLOSED"] as const;
+
+/** One bucket spanning the whole board, for window totals. */
+function windowOf(buckets: Bucket[]): Bucket {
+  return { start: buckets[0]?.start ?? "1970-01-01", end: buckets.at(-1)?.end ?? "1970-01-01", label: "", workingDays: 0 };
+}
+
+export function ticketLoadForBucket(tickets: TicketLoad[], bucket: Bucket): { ticketCount: number; storyPoints: number } {
+  const from = toDay(bucket.start);
+  const to = toDay(bucket.end);
+  let ticketCount = 0;
+  let storyPoints = 0;
+  for (const t of tickets) {
+    let inBucket = false;
+    if (t.startDate && t.endDate) {
+      const s = toDay(t.startDate);
+      const e = toDay(t.endDate);
+      inBucket = s <= to && e >= from;
+    } else if (t.dueAt) {
+      const d = toDay(t.dueAt);
+      inBucket = d >= from && d <= to;
+    }
+    if (!inBucket) continue;
+    ticketCount += 1;
+    storyPoints += t.storyPoints ?? 0;
+  }
+  return { ticketCount, storyPoints: Math.round(storyPoints * 10) / 10 };
+}
+
 export interface WorkloadCell {
   bucketStart: string;
   capacityHours: number;
   bookedHours: number;
+  /** V12 3.20: open tickets assigned to the person that sit in this bucket, and their points. */
+  ticketCount: number;
+  storyPoints: number;
   /** Bookings flagged `isTimeOff` — subtracted from what is available rather than counted as
    *  delivery, so leave reads as "unavailable", not "busy". */
   timeOffHours: number;
@@ -137,6 +184,8 @@ export interface WorkloadRow {
     timeOffHours: number;
     allocationPct: number | null;
     overAllocatedBuckets: number;
+    ticketCount: number;
+    storyPoints: number;
   };
 }
 
@@ -204,32 +253,38 @@ export function buildBuckets(
 }
 
 /** Assembles the grid. Pure — every input is passed in, which is what makes it testable. */
+function groupByUser<T extends { userId: string }>(rows: T[]): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const row of rows) {
+    const list = map.get(row.userId);
+    if (list) list.push(row);
+    else map.set(row.userId, [row]);
+  }
+  return map;
+}
+
 export function buildWorkload(params: {
   people: CapacityPerson[];
   bookings: BookingSpan[];
   logged: LoggedSpan[];
+  /** Optional so every existing caller and test stands; absent = zero tickets everywhere. */
+  tickets?: TicketLoad[];
   buckets: Bucket[];
   workingDays: WorkingDays;
   defaultWeeklyCapacityHours: number;
 }): WorkloadRow[] {
   const { people, bookings, logged, buckets, workingDays, defaultWeeklyCapacityHours } = params;
+  const ticketsByUser = groupByUser(params.tickets ?? []);
   const workingDaysPerWeek = workingDays.length || 5;
   const defaults = { weeklyCapacityHours: defaultWeeklyCapacityHours, workingDaysPerWeek };
 
-  const bookingsByUser = new Map<string, BookingSpan[]>();
-  for (const b of bookings) {
-    if (!bookingsByUser.has(b.userId)) bookingsByUser.set(b.userId, []);
-    bookingsByUser.get(b.userId)!.push(b);
-  }
-  const loggedByUser = new Map<string, LoggedSpan[]>();
-  for (const l of logged) {
-    if (!loggedByUser.has(l.userId)) loggedByUser.set(l.userId, []);
-    loggedByUser.get(l.userId)!.push(l);
-  }
+  const bookingsByUser = groupByUser(bookings);
+  const loggedByUser = groupByUser(logged);
 
   return people.map((person) => {
     const theirBookings = bookingsByUser.get(person.id) ?? [];
     const theirLogged = loggedByUser.get(person.id) ?? [];
+    const theirTickets = ticketsByUser.get(person.id) ?? [];
 
     const cells: WorkloadCell[] = buckets.map((bucket) => {
       const from = toDay(bucket.start);
@@ -255,10 +310,13 @@ export function buildWorkload(params: {
       const available = Math.max(0, Math.round((gross - timeOff) * 100) / 100);
       const allocationPct = available > 0 ? Math.round((booked / available) * 100) : null;
 
+      const load = ticketLoadForBucket(theirTickets, bucket);
       return {
         bucketStart: bucket.start,
         capacityHours: available,
         bookedHours: Math.round(booked * 100) / 100,
+        ticketCount: load.ticketCount,
+        storyPoints: load.storyPoints,
         timeOffHours: Math.round(timeOff * 100) / 100,
         loggedHours: Math.round(loggedHours * 100) / 100,
         allocationPct,
@@ -281,7 +339,9 @@ export function buildWorkload(params: {
         loggedHours: sum((c) => c.loggedHours),
         timeOffHours: sum((c) => c.timeOffHours),
         allocationPct: capacityHours > 0 ? Math.round((bookedHours / capacityHours) * 100) : null,
-        overAllocatedBuckets: cells.filter((c) => c.isOverAllocated).length
+        overAllocatedBuckets: cells.filter((c) => c.isOverAllocated).length,
+        // Distinct tickets, not the sum of per-bucket counts: a two-week ticket is one ticket.
+        ...ticketLoadForBucket(theirTickets, windowOf(buckets))
       }
     };
   });
@@ -372,7 +432,7 @@ export async function loadWorkload(params: {
   const ids = people.map((p) => p.id);
   // Two grouped queries, never per-person loops — the workload board over 60 people and 12 weeks
   // would otherwise fire 720 round trips and time out on exactly the workspace that needs it.
-  const [bookingRows, loggedRows] = await Promise.all([
+  const [bookingRows, loggedRows, ticketRows] = await Promise.all([
     prisma.resourceBooking.findMany({
       where: {
         userId: { in: ids },
@@ -398,6 +458,21 @@ export async function loadWorkload(params: {
         ...(params.projectId ? { projectId: params.projectId } : {})
       },
       select: { userId: true, workDate: true, totalHours: true }
+    }),
+    // V12 3.20: open tickets assigned to these people that touch the window — scheduled span
+    // overlapping it, or SLA date inside it when unscheduled.
+    prisma.ticket.findMany({
+      where: {
+        assigneeId: { in: ids },
+        deletedAt: null,
+        status: { notIn: [...CLOSED_FOR_LOAD] },
+        ...(params.projectId ? { projectId: params.projectId } : {}),
+        OR: [
+          { startDate: { lte: params.to }, endDate: { gte: params.from } },
+          { startDate: null, dueAt: { gte: params.from, lte: params.to } }
+        ]
+      },
+      select: { assigneeId: true, startDate: true, endDate: true, dueAt: true, storyPoints: true }
     })
   ]);
 
@@ -422,6 +497,13 @@ export async function loadWorkload(params: {
       note: b.note
     })),
     logged: loggedRows.map((l) => ({ userId: l.userId, workDate: l.workDate, hours: Number(l.totalHours) })),
+    tickets: ticketRows.map((t) => ({
+      userId: t.assigneeId!,
+      startDate: t.startDate,
+      endDate: t.endDate,
+      dueAt: t.dueAt,
+      storyPoints: t.storyPoints === null ? null : Number(t.storyPoints)
+    })),
     buckets,
     workingDays,
     defaultWeeklyCapacityHours: settings.defaultWeeklyCapacityHours

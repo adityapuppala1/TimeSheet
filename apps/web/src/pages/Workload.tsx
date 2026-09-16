@@ -46,7 +46,8 @@ import {
   resourceApi,
   userApi,
   type ResourceBookingRow,
-  type WorkloadCellRow
+  type WorkloadCellRow,
+  type WorkloadRowData
 } from "../services/api";
 import { DateRangePicker } from "../components/ui/date-range-picker";
 
@@ -76,6 +77,22 @@ function ramp(cell: WorkloadCellRow): 0 | 1 | 2 | 3 | 4 {
   return 3;
 }
 
+type WorkloadMeasure = "hours" | "tickets" | "points";
+
+/** The figure a cell shows under each measure. "off" and "—" keep their meaning under hours. */
+function cellFigure(cell: WorkloadCellRow, measure: WorkloadMeasure): string {
+  if (measure === "tickets") return cell.ticketCount === 0 ? "—" : String(cell.ticketCount);
+  if (measure === "points") return cell.storyPoints === 0 ? "—" : String(cell.storyPoints);
+  if (cell.timeOffHours > 0 && cell.capacityHours === 0) return "off";
+  return cell.allocationPct === null ? "—" : `${cell.allocationPct}%`;
+}
+
+function totalsFigure(totals: WorkloadRowData["totals"], measure: WorkloadMeasure): string {
+  if (measure === "tickets") return `${totals.ticketCount} ticket${totals.ticketCount === 1 ? "" : "s"}`;
+  if (measure === "points") return `${totals.storyPoints} pts`;
+  return `${totals.bookedHours}h / ${totals.loggedHours}h`;
+}
+
 const RAMP_CLASS = ["bg-capacity-0", "bg-capacity-1", "bg-capacity-2", "bg-capacity-3", "bg-capacity-4"] as const;
 /** Steps 3 and 4 are dark enough that dark-on-them fails contrast; the rest keep body colour. */
 const RAMP_TEXT = ["text-muted-foreground", "text-foreground", "text-foreground", "text-white", "text-white"] as const;
@@ -90,6 +107,9 @@ export function WorkloadPage() {
 
   const [projectId, setProjectId] = useState("__all__");
   const [weeks, setWeeks] = useState(8);
+  /* V12 3.20: what a cell's figure measures. The colour ramp stays allocation-based whatever the
+     measure — only hours have a capacity to compare against — and the tooltip says so. */
+  const [measure, setMeasure] = useState<WorkloadMeasure>("hours");
   const [bookingOpen, setBookingOpen] = useState(false);
   const [editing, setEditing] = useState<ResourceBookingRow | null>(null);
 
@@ -207,6 +227,16 @@ export function WorkloadPage() {
               <SelectItem value="8">8 weeks</SelectItem>
               <SelectItem value="12">12 weeks</SelectItem>
               <SelectItem value="26">26 weeks</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={measure} onValueChange={(v) => setMeasure(v as WorkloadMeasure)}>
+            <SelectTrigger className="w-[150px]" aria-label="Measure" data-workload-measure>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="hours">Hours booked</SelectItem>
+              <SelectItem value="tickets">Tickets</SelectItem>
+              <SelectItem value="points">Story points</SelectItem>
             </SelectContent>
           </Select>
           <Button
@@ -355,11 +385,7 @@ export function WorkloadPage() {
                                     RAMP_TEXT[step]
                                   )}
                                 >
-                                  {cell.timeOffHours > 0 && cell.capacityHours === 0
-                                    ? "off"
-                                    : cell.allocationPct === null
-                                      ? "—"
-                                      : `${cell.allocationPct}%`}
+                                  {cellFigure(cell, measure)}
                                 </div>
                               </TooltipTrigger>
                               <TooltipContent>
@@ -371,6 +397,11 @@ export function WorkloadPage() {
                                   </p>
                                   {/* The comparison a pure PM tool cannot make. */}
                                   <p className="text-muted-foreground">Actually logged {cell.loggedHours}h</p>
+                                  <p className="text-muted-foreground">
+                                    {cell.ticketCount} open ticket{cell.ticketCount === 1 ? "" : "s"}
+                                    {cell.storyPoints > 0 ? ` · ${cell.storyPoints} pts` : ""}
+                                  </p>
+                                  {measure !== "hours" && <p className="text-muted-foreground">Colour still shows hours against capacity.</p>}
                                   {cell.timeOffHours > 0 && <p className="text-muted-foreground">{cell.timeOffHours}h time off</p>}
                                   {cell.isOverAllocated && <p className="text-destructive">Over capacity</p>}
                                 </div>
@@ -385,7 +416,7 @@ export function WorkloadPage() {
                             {row.totals.allocationPct === null ? "—" : `${row.totals.allocationPct}%`}
                           </span>
                           <span className="text-[10px] text-muted-foreground tabular-nums">
-                            {row.totals.bookedHours}h / {row.totals.loggedHours}h
+                            {totalsFigure(row.totals, measure)}
                           </span>
                         </div>
                       </td>
