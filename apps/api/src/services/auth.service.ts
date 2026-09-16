@@ -10,7 +10,7 @@
  * WHO calls this: `controllers/auth.controller.ts` (password + LDAP), `controllers/sso.controller.ts`
  * (Google/Microsoft/SAML).
  */
-import { resolveHeldRoles, type RoleName, isAccentId, isThemeMode, type AppearancePreference } from "@timesheet/shared";
+import { resolveHeldRoles, type RoleName, isAccentId, isDensity, isThemeMode, type AppearancePreference } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
@@ -59,10 +59,11 @@ export type ProfilePayload = {
 /** Only the two known keys, only if valid; anything else reads as absent. */
 function readAppearance(raw: unknown): AppearancePreference | null {
   if (!raw || typeof raw !== "object") return null;
-  const { mode, accent } = raw as Record<string, unknown>;
+  const { mode, accent, density } = raw as Record<string, unknown>;
   const out: AppearancePreference = {};
   if (isThemeMode(mode)) out.mode = mode;
   if (isAccentId(accent)) out.accent = accent;
+  if (isDensity(density)) out.density = density;
   return Object.keys(out).length ? out : null;
 }
 

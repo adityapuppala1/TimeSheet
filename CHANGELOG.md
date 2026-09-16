@@ -10,6 +10,18 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🎨 Density joins theme and accent in Profile → Appearance
+
+- **Comfortable or Compact, saved to your profile.** Comfortable is exactly today's rendering.
+  Compact moves the one lever this app has always used for density — the 14px root font that
+  every rem-based size follows — one step to 13px, so text and spacing tighten across the whole
+  app without a component changing. Buttons, inputs and selects are absolute 44px since the V12
+  touch-target unit and stay that size in both. Follows you to every device, like mode and
+  accent; a browser's leftover choice loses to the profile on sign-in.
+- **Validated against the shared definition.** The API accepts only the two densities the web
+  can render, rejects anything else with a 422, and reads an unknown stored value back as "never
+  chose". No new column: it lives in the existing `User.appearance` JSON.
+
 ### 🧭 The sidebar navigates the project hierarchy you already have
 
 - **Project → Module tree under Work.** The sidebar (and the phone drawer) now list the projects

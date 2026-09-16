@@ -240,6 +240,17 @@
     font-size: 14px;
   }
 
+  /*
+   * The saved density preference (Profile → Appearance; lib/theme.ts paints the attribute).
+   * "compact" moves the SAME lever one step further, for the same reason it was moved once
+   * already: this is how the app gets denser without touching a component. `comfortable` is the
+   * absence of this rule, so a person who never opened the card renders exactly as before. Touch
+   * targets are absolute 44px since the V12 shell unit and are unaffected.
+   */
+  html[data-density="compact"] {
+    font-size: 13px;
+  }
+
   body {
     @apply bg-background text-foreground;
     margin: 0;

@@ -25,10 +25,11 @@
  * absent. That ordering matters — the setting must never depend on the animation succeeding.
  */
 
-import { ACCENT_PALETTES, DEFAULT_ACCENT, isAccentId, type AccentId } from "@timesheet/shared";
+import { ACCENT_PALETTES, DEFAULT_ACCENT, DEFAULT_DENSITY, isAccentId, isDensity, type AccentId, type Density } from "@timesheet/shared";
 
 const THEME_KEY = "timesheet:theme";
 const ACCENT_KEY = "timesheet:accent";
+const DENSITY_KEY = "timesheet:density";
 const THEME_CHANGED = "timesheet:theme-changed";
 
 export type Theme = "light" | "dark";
@@ -42,6 +43,7 @@ export type ThemeMode = "system" | "light" | "dark";
 
 let explicitChoice: Theme | undefined;
 let accent: AccentId = DEFAULT_ACCENT;
+let density: Density = DEFAULT_DENSITY;
 
 function storedTheme(): Theme | undefined {
   try {
@@ -77,9 +79,20 @@ function paintAccent(theme: Theme): void {
   document.documentElement.dataset.accent = accent;
 }
 
+/**
+ * Density is ONE attribute on `<html>`; index.css turns it into the root font-size. It is applied
+ * inside renderTheme for the same reason the accent is: every path that repaints (boot, a toggle,
+ * another tab's change, a saved profile) then carries it, and there is no way to render a theme
+ * without also rendering the density that goes with it.
+ */
+function paintDensity(): void {
+  document.documentElement.dataset.density = density;
+}
+
 function renderTheme(theme: Theme): void {
   document.documentElement.classList.toggle("dark", theme === "dark");
   paintAccent(theme);
+  paintDensity();
   window.dispatchEvent(new Event(THEME_CHANGED));
 }
 
@@ -92,9 +105,23 @@ function storedAccent(): AccentId | undefined {
   }
 }
 
+function storedDensity(): Density | undefined {
+  try {
+    const stored = window.localStorage.getItem(DENSITY_KEY);
+    return isDensity(stored) ? stored : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The accent currently painted. */
 export function currentAccent(): AccentId {
   return accent;
+}
+
+/** The density currently applied. */
+export function currentDensity(): Density {
+  return density;
 }
 
 /**
@@ -129,12 +156,14 @@ export function initializeTheme(): () => void {
   const media = window.matchMedia?.("(prefers-color-scheme: dark)");
   explicitChoice = storedTheme();
   accent = storedAccent() ?? DEFAULT_ACCENT;
+  density = storedDensity() ?? DEFAULT_DENSITY;
   const sync = () => renderTheme(explicitChoice ?? (media?.matches ? "dark" : "light"));
   const onStorage = (event: StorageEvent) => {
     if (event.storageArea !== window.localStorage) return;
-    if (event.key !== THEME_KEY && event.key !== ACCENT_KEY && event.key !== null) return;
+    if (event.key !== THEME_KEY && event.key !== ACCENT_KEY && event.key !== DENSITY_KEY && event.key !== null) return;
     explicitChoice = storedTheme();
     accent = storedAccent() ?? DEFAULT_ACCENT;
+    density = storedDensity() ?? DEFAULT_DENSITY;
     sync();
   };
   sync();
@@ -189,6 +218,17 @@ export function applyAccent(next: AccentId): void {
   renderTheme(currentTheme());
 }
 
+/** Set the density. Repaints under the CURRENT theme; nothing else changes. */
+export function applyDensity(next: Density): void {
+  density = next;
+  try {
+    localStorage.setItem(DENSITY_KEY, next);
+  } catch {
+    // Storage blocked — applied for this session, forgotten on reload, never thrown.
+  }
+  renderTheme(currentTheme());
+}
+
 /**
  * Adopt a SAVED preference from the profile, on sign-in.
  *
@@ -197,9 +237,12 @@ export function applyAccent(next: AccentId): void {
  * possibly somebody else's. A profile with nothing saved leaves the browser's state untouched, so
  * an existing person's screen does not move on the deploy that introduces this.
  */
-export function adoptSavedAppearance(saved: { mode?: ThemeMode | null; accent?: AccentId | null } | null | undefined): void {
+export function adoptSavedAppearance(
+  saved: { mode?: ThemeMode | null; accent?: AccentId | null; density?: Density | null } | null | undefined
+): void {
   if (!saved) return;
   if (saved.accent && isAccentId(saved.accent) && saved.accent !== accent) applyAccent(saved.accent);
+  if (saved.density && isDensity(saved.density) && saved.density !== density) applyDensity(saved.density);
   if (saved.mode && saved.mode !== currentMode()) applyMode(saved.mode);
 }
 

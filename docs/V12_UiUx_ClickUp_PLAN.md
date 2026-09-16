@@ -3,7 +3,7 @@
 > Branch: V12_UiUx_ClickUp — NEVER merge to main.
 
 ## Current Status
-- Phase: 2 — theme lifecycle (done) → mode + accents (done) → shell: touch targets (done) → PageHeader + derived breadcrumb: ALL 17 in-app pages (done) → sidebar Project → Module tree (done this session) → density, responsive containment next.
+- Phase: 2 — theme lifecycle (done) → mode + accents (done) → shell: touch targets (done) → PageHeader + derived breadcrumb: ALL 17 in-app pages (done) → sidebar Project → Module tree (done) → density comfortable/compact (done this session) → responsive containment audit next.
 - Last updated: 2026-09-16 by Claude Code (Fable 5.1), resumed from Codex per §3.
 - Resumed baseline: lint PASS (701 warnings, zero errors, ratchet passes); API 3140/3140; web 191/191. Matched the previous handoff exactly.
 - Post-change checks: per unit in the Session Log; slice 2's gates are appended there on completion.
@@ -22,14 +22,14 @@
 - [x] Phase 2 shell (part 2b, slice 1): Timesheet, History, Changes, ChangeCalendar, Team, Dashboard (`breadcrumb={false}` — the landmark) on PageHeader; actions cells moved verbatim; verified live 390/1366 + dark.
 - [x] Phase 2 shell (part 2b, slice 2): AIActivityLog, AuditLog, EmailTemplates (+BulkTestButton action), Help, Insights, SecurityInsights, WhatsNew, WorkspaceSettings, and AdminPages via its `Workspace` wrapper (Users/Projects/Approvals/Reports). PageHeader.icon accepts component OR node. Help/WhatsNew: no nav entry → no crumb, by design. Header rollout COMPLETE.
 - [x] Phase 2 shell (part 3a): sidebar Project → Module tree (`ProjectTree` in Sidebar.tsx, under Work; drawer too; not in slim). Rows deep-link to Tickets via `lib/project-tree.ts` (`?project=&module=`); Tickets reads them, gains a Module select, and both `/tickets` + `/tickets/metrics` accept `moduleId`. NO submodule tier: `Ticket` has no submodule column (only `Timesheet`) — the earlier "Project → Module → Submodule" wording was an assumption, corrected here.
-- [ ] Phase 2 shell (part 3b): density preference — `comfortable` (today's 14px root) / `compact`; add to `AppearancePreference` + PATCH schema + `readAppearance` + theme.ts + Profile → Appearance; `data-density` on `<html>`. Touch targets stay absolute 44px.
+- [x] Phase 2 shell (part 3b): density `comfortable` (today's 14px root, the absence of the rule) / `compact` (13px) via `html[data-density]`; `DENSITIES`/`isDensity` in shared; PATCH schema + `readAppearance`; theme.ts `applyDensity`/`currentDensity` painted inside `renderTheme`; Profile → Appearance third radiogroup. Measured live: root 14→13px, Button/Input stay 44px, overflow −10, saved + restored in a fresh session.
 - [ ] Phase 2 shell (part 3c): responsive containment audit — run `tests/e2e/responsive.spec.ts` (phone + tablet projects) over the app routes and fix any measured overflow; each fix its own commit.
 - [ ] Phase 3: implement verified gaps by priority, with tests and shipping surfaces updated.
 - [ ] Phase 4: responsive/accessibility/workflow checks and continuous hardening.
 - [ ] Phase 5: branch-only release preparation and clean install/update validation.
 
 ## In Progress / Half-done
-- Nothing half-finished. Six units complete and verified. `v12-slice2-*.png` at repo root are artefacts — deleted before commit. The only remaining `text-2xl font-black tracking-tight` matches are non-candidates (public/auth pages, platform console shell, ChangeDetail's record-key title, EmailTemplates' stat tile) — do not migrate them.
+- Nothing half-finished. Seven units complete and verified. `v12-slice2-*.png` at repo root are artefacts — deleted before commit. The only remaining `text-2xl font-black tracking-tight` matches are non-candidates (public/auth pages, platform console shell, ChangeDetail's record-key title, EmailTemplates' stat tile) — do not migrate them.
 - Final verification commands: `npm run lint`, `npm run test -w apps/api`, `npm run test -w apps/web`, `git diff --check` — run SEQUENTIALLY (parallel runs starve the workers) and AFTER the last edit, including any version bump (the 5.2.0 lesson in CONTRIBUTING).
 - Local ignored artefacts: `test-results/run-shots/v12-appearance-*.png` (five frames: before, indigo light, indigo dark, phone dark, tablet dark). Do not commit them.
 
@@ -92,7 +92,7 @@
 | Integrations | [Connected applications][cu-search] | app.ts mounts GitHub, chat webhooks, SSO, public API, SCIM; no connected-search index found | Partial | Enhance supported connectors; do not claim unsupported ones | P3 | Audit complete |
 | Templates | [Reusable item templates][cu-templates] | services/blueprint.service.ts offsets/dependencies/custom fields; requirements templates; SavedView | Partial | Enhance Blueprints/saved views | P2 | Audit complete |
 | Permissions/guests | [Shared-item access][cu-guests] | Role/permission/project guards; token guest approvals; no generic guest RoleName | Partial | Keep narrow guest links; design scoped membership before adding | P3 | Audit complete |
-| Themes/color/icons/density | [Personal colors/light/dark/auto][cu-settings] | lib/theme.ts + shared/appearance.ts; Profile → Appearance card; `User.appearance` JSON | Near-identical core (mode + 7 accents, per user); density not yet | Density remains; then shell | P0 | Mode + accents shipped |
+| Themes/color/icons/density | [Personal colors/light/dark/auto][cu-settings] | lib/theme.ts + shared/appearance.ts; Profile → Appearance card; `User.appearance` JSON (`mode`, `accent`, `density`) | Near-identical core (mode + 7 accents + 2 densities, per user) | Done for this phase | P0 | Shipped |
 | Keyboard shortcuts | [Palette/contextual shortcuts][cu-shortcuts] | Ctrl/Cmd+K in command-palette.tsx; broader inventory unverified | Partial | Discoverable shortcuts that respect editable fields | P1 | Audit complete |
 | Mobile/responsive | [Mobile task/inbox access][cu-mobile] | AppLayout/Sidebar drawer/bottom nav; Tickets mobile cards; no native app | Partial | Verify current responsive views; native app out of scope | P1 | Audit complete |
 | Onboarding/empty states | [Individual workspace setup][cu-onboarding] | OnboardingGate/ProductTour/setup checklist; empty-state coverage not fully audited | Partial | Enhance existing tour/empty states; preserve required gate | P1 | Audit complete |
@@ -131,7 +131,7 @@ The matrix covers every requested area. Remaining Unverified details are explici
 - Tokens: extend existing CSS variables/Tailwind mapping.
 - Themes: three-way mode. `system` is stored as the ABSENCE of a choice (localStorage key removed; a saved profile `mode: "system"` is adopted by clearing) — following the OS is never a persisted value. Explicit light/dark persist per browser AND per profile; a saved profile choice wins over browser leftovers on sign-in.
 - Accents: seven original palettes, each a per-theme pair (`primary` + `foreground`). MEASURED FACT that shaped the design: no hue passes WCAG AA as white-on-fill in dark mode — not one of eight candidates, not the brand teal (2.41:1) — so dark-theme fills carry dark text. Default `teal` writes the EXACT existing primary values, so "never chose" is pixel-identical to before. Ratios recorded beside each palette in appearance.ts. Planning/chart tokens deliberately do NOT follow the accent (a chart's palette is not the chrome's).
-- Density: not shipped; the JSON column was chosen so it needs no migration.
+- Density: `comfortable` = no rule (pixel-identical to before); `compact` = `html[data-density="compact"] { font-size: 13px }` — the same lever index.css already documents as the app's density mechanism. Two steps, not three: nothing was measured for a roomier one. Touch targets are absolute px and do not move (measured 44 → 44).
 - Shipping review: current unit fixes existing behavior, adds no data capability/env/migration/dependency, so landing/pitch/install/version remain unchanged. Help/Ask AI's shared article and Unreleased changelog updated. Read `.agents/skills/ship-feature/SKILL.md`; its main/V10 release push instruction is superseded by the V12 branch-only rule.
 - Icon set: reuse Lucide.
 - Breakpoints: target specification mobile ≤640, tablet 641–1024, laptop 1025–1440, wide >1440; actual component behavior still needs browser checks.
@@ -174,6 +174,12 @@ The matrix covers every requested area. Remaining Unverified details are explici
 - The graphify pre-grep hook fires on every Grep. Query first; it is faster than the refusal.
 
 ## Session Log (newest first)
+### 2026-09-16 — Claude Code (Fable 5.1), shell part 3b — density preference
+- Did: `DENSITIES`, `Density`, `DEFAULT_DENSITY`, `isDensity`, `AppearancePreference.density` in shared; PATCH `/auth/profile` validates `density` against the shared enum and writes only known keys; `readAppearance` keeps a valid density; theme.ts stores `timesheet:density`, paints `data-density` inside `renderTheme` (so boot, toggle, other-tab and saved-profile paths all carry it), `adoptSavedAppearance` adopts it; index.css compact rule; Profile card third radiogroup (44px buttons). Tests: +5 web (default, persist/restore/survive theme flip, unknown → default, storage blocked, adopt), API contract cases extended (both densities accepted, `cosy` refused, unknown-key example moved off `density`). No dependency, env var, flag or migration.
+- Verified with: live API — PATCH compact 200, `/auth/me` echoes it, `cosy` 422, reset 200. Live Playwright at 390 + 1366 — click Compact: PATCH 200, root 14→13px, Button 44→44, Input 44→44, overflow −10, radio checked; cleared cookies + localStorage, fresh login → 13px restored from the profile alone; click Comfortable → 14px, server shows `comfortable`.
+- Gates AFTER the last edit, sequential: lint 701 warnings / 0 errors (ratchet passes); API 3150/3150; web 219/219 (+5); `git diff --check` clean.
+- Left off at: part 3c — responsive containment audit.
+
 ### 2026-09-16 — Claude Code (Fable 5.1), shell part 3a — sidebar Project → Module tree
 - Did: `ProjectTree` under Work in Sidebar.tsx (desktop + drawer, not slim), collapsed by default, fold state per browser (`ts.sidebar.projects.open`), rows highlight from the URL; `lib/project-tree.ts` (URL keys, pure); Tickets reads `?project=&module=`, grows a Module select, clears the params on a manual change; API `/tickets` + `/tickets/metrics` accept `moduleId`; `TicketFilters.moduleId`. Tests: 6 web (helper), 3 API (both endpoints send `moduleId` to Prisma; absent = no clause). No dependency, env var, flag or migration.
 - Verified with: live Playwright at 1366 + 390 — heading visible with every static link still visible; collapsed by default; expand → module link → URL, h1, Project AND Module selects, `aria-current`, list request carries `moduleId`; manual "All projects" clears the URL and hides the Module select; fold survives reload; drawer closes on navigate; overflow −10; employee sees exactly the 3 API-scoped projects.

@@ -34,6 +34,19 @@
 export const THEME_MODES = ["system", "light", "dark"] as const;
 export type ThemeMode = (typeof THEME_MODES)[number];
 
+/**
+ * DENSITY. Two, not three. "comfortable" is exactly today's rendering — index.css sets a 14px
+ * root and every rem-based size follows it — so choosing it changes nothing for anyone.
+ * "compact" moves that one lever to 13px, which is how this app has ALWAYS done density (the
+ * comment on `html { font-size }` in index.css records that 16 → 14 was the fix behind "it only
+ * looks right at 80% zoom"). Touch targets are absolute pixels since the V12 44px unit and do not
+ * move. A third, roomier step was left out: nothing here was measured for it, and a setting nobody
+ * asked for is a setting nobody tests.
+ */
+export const DENSITIES = ["comfortable", "compact"] as const;
+export type Density = (typeof DENSITIES)[number];
+export const DEFAULT_DENSITY: Density = "comfortable";
+
 export interface AccentTheme {
   /** HSL triplet for `--primary` and `--ring`. */
   primary: string;
@@ -107,10 +120,11 @@ export type AccentId = keyof typeof ACCENT_PALETTES;
 export const ACCENT_IDS = Object.keys(ACCENT_PALETTES) as AccentId[];
 export const DEFAULT_ACCENT: AccentId = "teal";
 
-/** What a User row stores. Both optional: a row that predates the column has neither. */
+/** What a User row stores. All optional: a row that predates the column has none of them. */
 export interface AppearancePreference {
   mode?: ThemeMode | null;
   accent?: AccentId | null;
+  density?: Density | null;
 }
 
 export function isThemeMode(value: unknown): value is ThemeMode {
@@ -119,4 +133,8 @@ export function isThemeMode(value: unknown): value is ThemeMode {
 
 export function isAccentId(value: unknown): value is AccentId {
   return typeof value === "string" && value in ACCENT_PALETTES;
+}
+
+export function isDensity(value: unknown): value is Density {
+  return typeof value === "string" && (DENSITIES as readonly string[]).includes(value);
 }

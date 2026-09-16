@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Router } from "express";
 import { z } from "zod";
-import { roles, ACCENT_IDS, THEME_MODES, type AccentId } from "@timesheet/shared";
+import { roles, ACCENT_IDS, DENSITIES, THEME_MODES, type AccentId } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { avatarsDir, resolveWithin } from "../config/storage-paths.js";
 import { prisma } from "../config/prisma.js";
@@ -368,7 +368,8 @@ const profilePatchSchema = z.object({
     appearance: z
       .object({
         mode: z.enum(THEME_MODES).optional().nullable(),
-        accent: z.enum(ACCENT_IDS as [AccentId, ...AccentId[]]).optional().nullable()
+        accent: z.enum(ACCENT_IDS as [AccentId, ...AccentId[]]).optional().nullable(),
+        density: z.enum(DENSITIES).optional().nullable()
       })
       .strict()
       .optional()
@@ -408,7 +409,10 @@ authRouter.patch("/profile", requireAuth, validate(profilePatchSchema), async (r
     // Stored as exactly the validated shape and nothing else — a JSON column is a place where
     // extra keys accumulate unless the write is explicit about what it keeps.
     const a = req.body.appearance;
-    data.appearance = a === null ? null : { ...(a.mode ? { mode: a.mode } : {}), ...(a.accent ? { accent: a.accent } : {}) };
+    data.appearance =
+      a === null
+        ? null
+        : { ...(a.mode ? { mode: a.mode } : {}), ...(a.accent ? { accent: a.accent } : {}), ...(a.density ? { density: a.density } : {}) };
   }
 
   if (Object.keys(data).length === 0) throw new AppError(422, "No profile fields provided");

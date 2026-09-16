@@ -10,10 +10,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { getCountries, getCountryCallingCode, parsePhoneNumberFromString, type CountryCode } from "libphonenumber-js/min";
-import { Camera, Check, ImageOff, KeyRound, Laptop, Loader2, LogOut, Monitor, Moon, Palette, Save, Shield, ShieldCheck, Smartphone, Sun, Tablet, Trash2, UserRound } from "lucide-react";
+import { Camera, Check, ImageOff, KeyRound, Laptop, Loader2, LogOut, Monitor, Moon, Palette, Rows3, Rows4, Save, Shield, ShieldCheck, Smartphone, Sun, Tablet, Trash2, UserRound } from "lucide-react";
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ACCENT_IDS, ACCENT_PALETTES, DEFAULT_ACCENT, type AccentId, type AppearancePreference } from "@timesheet/shared";
-import { applyAccent, applyMode, currentAccent, currentMode, subscribeTheme, type ThemeMode } from "../lib/theme";
+import { ACCENT_IDS, ACCENT_PALETTES, DEFAULT_ACCENT, DEFAULT_DENSITY, type AccentId, type AppearancePreference, type Density } from "@timesheet/shared";
+import { applyAccent, applyDensity, applyMode, currentAccent, currentDensity, currentMode, subscribeTheme, type ThemeMode } from "../lib/theme";
 import { cn } from "../lib/utils";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import {
@@ -687,6 +687,7 @@ function AppearanceCard() {
   const setUser = useAuthStore((s) => s.setUser);
   const mode = useSyncExternalStore(subscribeTheme, currentMode, () => "system" as ThemeMode);
   const accent = useSyncExternalStore(subscribeTheme, currentAccent, () => DEFAULT_ACCENT);
+  const density = useSyncExternalStore(subscribeTheme, currentDensity, () => DEFAULT_DENSITY);
   const previewTheme = typeof document !== "undefined" && document.documentElement.classList.contains("dark") ? "dark" : "light";
 
   const save = useMutation({
@@ -700,12 +701,21 @@ function AppearanceCard() {
 
   const chooseMode = (next: ThemeMode) => {
     applyMode(next);
-    save.mutate({ mode: next, accent });
+    save.mutate({ mode: next, accent, density });
   };
   const chooseAccent = (next: AccentId) => {
     applyAccent(next);
-    save.mutate({ mode, accent: next });
+    save.mutate({ mode, accent: next, density });
   };
+  const chooseDensity = (next: Density) => {
+    applyDensity(next);
+    save.mutate({ mode, accent, density: next });
+  };
+
+  const densities: Array<{ value: Density; label: string; hint: string; Icon: typeof Rows3 }> = [
+    { value: "comfortable", label: "Comfortable", hint: "Today's spacing", Icon: Rows3 },
+    { value: "compact", label: "Compact", hint: "More on screen", Icon: Rows4 }
+  ];
 
   const modes: Array<{ value: ThemeMode; label: string; hint: string; Icon: typeof Sun }> = [
     { value: "system", label: "System", hint: "Follows your device", Icon: Monitor },
@@ -722,7 +732,7 @@ function AppearanceCard() {
           </div>
           <div>
             <CardTitle>Appearance</CardTitle>
-            <CardDescription>Theme and accent colour. Saved to your profile, so every device you sign in on matches.</CardDescription>
+            <CardDescription>Theme, accent colour and density. Saved to your profile, so every device you sign in on matches.</CardDescription>
           </div>
         </div>
       </CardHeader>
@@ -788,6 +798,33 @@ function AppearanceCard() {
           <p className="text-xs text-muted-foreground">
             {ACCENT_PALETTES[accent].label} is selected. Every accent meets WCAG AA contrast in both themes.
           </p>
+        </div>
+
+        <div className="grid gap-2">
+          <p id="appearance-density-label" className="text-sm font-medium">Density</p>
+          <div role="radiogroup" aria-labelledby="appearance-density-label" className="grid grid-cols-2 gap-2">
+            {densities.map(({ value, label, hint, Icon }) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={density === value}
+                onClick={() => chooseDensity(value)}
+                className={cn(
+                  "flex min-h-[44px] flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                  density === value ? "border-primary bg-primary/10" : "border-border hover:bg-muted/60"
+                )}
+              >
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                  {label}
+                </span>
+                <span className="text-[11px] text-muted-foreground">{hint}</span>
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">Compact tightens text and spacing across the app. Buttons and controls keep their full touch size.</p>
         </div>
       </CardContent>
     </Card>

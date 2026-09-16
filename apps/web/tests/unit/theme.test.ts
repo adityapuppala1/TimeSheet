@@ -4,9 +4,11 @@ import { createRoot, type Root } from "react-dom/client";
 import {
   adoptSavedAppearance,
   applyAccent,
+  applyDensity,
   applyMode,
   applyTheme,
   currentAccent,
+  currentDensity,
   currentMode,
   currentTheme,
   initializeTheme,
@@ -234,6 +236,52 @@ describe("accents", () => {
     unsubscribe();
     applyAccent("emerald");
     expect(seen).toEqual(["amber"]);
+  });
+});
+
+describe("density", () => {
+  it("defaults to comfortable and paints the attribute index.css keys on", () => {
+    cleanup = initializeTheme();
+    expect(currentDensity()).toBe("comfortable");
+    expect(document.documentElement.dataset.density).toBe("comfortable");
+    expect(localStorage.getItem("timesheet:density")).toBeNull();
+  });
+
+  it("applies compact, persists it, restores it on boot, and survives a theme flip", () => {
+    cleanup = initializeTheme();
+    applyDensity("compact");
+    expect(document.documentElement.dataset.density).toBe("compact");
+    // Density rides inside renderTheme, so a theme change must not drop it.
+    applyTheme("dark");
+    expect(document.documentElement.dataset.density).toBe("compact");
+    cleanup();
+
+    cleanup = initializeTheme();
+    expect(currentDensity()).toBe("compact");
+    expect(document.documentElement.dataset.density).toBe("compact");
+  });
+
+  it("falls back to comfortable for a stored value it does not know", () => {
+    localStorage.setItem("timesheet:density", "cosy");
+    cleanup = initializeTheme();
+    expect(currentDensity()).toBe("comfortable");
+  });
+
+  it("still applies when storage is blocked", () => {
+    cleanup = initializeTheme();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    expect(() => applyDensity("compact")).not.toThrow();
+    expect(document.documentElement.dataset.density).toBe("compact");
+  });
+
+  it("is adopted from a saved profile, and left alone when the profile says nothing", () => {
+    cleanup = initializeTheme();
+    adoptSavedAppearance({ density: "compact" });
+    expect(currentDensity()).toBe("compact");
+    adoptSavedAppearance({ mode: "light" });
+    expect(currentDensity()).toBe("compact");
   });
 });
 

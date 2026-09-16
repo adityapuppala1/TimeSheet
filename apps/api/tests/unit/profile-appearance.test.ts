@@ -19,14 +19,15 @@
  */
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { ACCENT_IDS, THEME_MODES, isAccentId, isThemeMode, type AccentId } from "@timesheet/shared";
+import { ACCENT_IDS, DENSITIES, THEME_MODES, isAccentId, isDensity, isThemeMode, type AccentId } from "@timesheet/shared";
 
 /** The exact schema shape auth.controller.ts uses — duplicated here on purpose so that a change to
  *  the controller's validation that loosened it would ALSO have to be made here, visibly. */
 const appearanceSchema = z
   .object({
     mode: z.enum(THEME_MODES).optional().nullable(),
-    accent: z.enum(ACCENT_IDS as [AccentId, ...AccentId[]]).optional().nullable()
+    accent: z.enum(ACCENT_IDS as [AccentId, ...AccentId[]]).optional().nullable(),
+    density: z.enum(DENSITIES).optional().nullable()
   })
   .strict()
   .optional()
@@ -36,7 +37,9 @@ describe("the PATCH accepts exactly the shared definition", () => {
   it("takes every mode and every accent the web can render", () => {
     for (const mode of THEME_MODES) expect(appearanceSchema.safeParse({ mode }).success).toBe(true);
     for (const accent of ACCENT_IDS) expect(appearanceSchema.safeParse({ accent }).success).toBe(true);
-    expect(appearanceSchema.safeParse({ mode: "dark", accent: "indigo" }).success).toBe(true);
+    for (const density of DENSITIES) expect(appearanceSchema.safeParse({ density }).success).toBe(true);
+    expect(appearanceSchema.safeParse({ mode: "dark", accent: "indigo", density: "compact" }).success).toBe(true);
+    expect(appearanceSchema.safeParse({ density: "cosy" }).success).toBe(false);
   });
 
   it("refuses a palette the renderer does not have", () => {
@@ -47,7 +50,7 @@ describe("the PATCH accepts exactly the shared definition", () => {
 
   it("refuses unknown keys rather than silently storing them", () => {
     // A JSON column is where extra keys accumulate unless the boundary is strict about it.
-    expect(appearanceSchema.safeParse({ mode: "dark", density: "compact" }).success).toBe(false);
+    expect(appearanceSchema.safeParse({ mode: "dark", spacing: "tight" }).success).toBe(false);
   });
 
   it("lets null clear the preference and absent leave it alone", () => {
@@ -60,15 +63,17 @@ describe("what a stored row reads back as", () => {
   // The same guards buildProfilePayload's readAppearance is built from.
   const read = (raw: unknown) => {
     if (!raw || typeof raw !== "object") return null;
-    const { mode, accent } = raw as Record<string, unknown>;
-    const out: { mode?: string; accent?: string } = {};
+    const { mode, accent, density } = raw as Record<string, unknown>;
+    const out: { mode?: string; accent?: string; density?: string } = {};
     if (isThemeMode(mode)) out.mode = mode;
     if (isAccentId(accent)) out.accent = accent;
+    if (isDensity(density)) out.density = density;
     return Object.keys(out).length ? out : null;
   };
 
   it("keeps a valid saved choice", () => {
     expect(read({ mode: "dark", accent: "rose" })).toEqual({ mode: "dark", accent: "rose" });
+    expect(read({ density: "compact" })).toEqual({ density: "compact" });
   });
 
   it("drops a palette that no longer exists instead of handing the web a name it cannot paint", () => {
@@ -78,7 +83,9 @@ describe("what a stored row reads back as", () => {
 
   it("reads garbage as never-chose", () => {
     expect(read("dark")).toBeNull();
-    expect(read({ density: "compact" })).toBeNull();
+    // A key this build does not know — the shape a future or retired preference would take.
+    expect(read({ spacing: "tight" })).toBeNull();
+    expect(read({ density: "cosy" })).toBeNull();
     expect(read(null)).toBeNull();
   });
 });
