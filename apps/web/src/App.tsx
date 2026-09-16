@@ -49,6 +49,7 @@ const TimelinePage = lazy(() => import("./pages/Timeline").then((m) => ({ defaul
 const MyWorkPage = lazy(() => import("./pages/MyWork").then((m) => ({ default: m.MyWorkPage })));
 const PortfolioPage = lazy(() => import("./pages/Portfolio").then((m) => ({ default: m.PortfolioPage })));
 const GoalsPage = lazy(() => import("./pages/Goals").then((m) => ({ default: m.GoalsPage })));
+const SprintsPage = lazy(() => import("./pages/Sprints").then((m) => ({ default: m.SprintsPage })));
 const ChangesPage = lazy(() => import("./pages/Changes").then((m) => ({ default: m.Changes })));
 const ChangeDetailPage = lazy(() => import("./pages/ChangeDetail").then((m) => ({ default: m.ChangeDetailPage })));
 const ChangeCalendarPage = lazy(() => import("./pages/ChangeCalendar").then((m) => ({ default: m.ChangeCalendarPage })));
@@ -168,6 +169,9 @@ const router = createBrowserRouter([
       // checked inside the page for the write affordances, and the page renders its own
       // "goals are off" state for the same reason the planning pages do.
       { path: "goals", element: <PageShell><GoalsPage /></PageShell> },
+      // Sprints (V12): reading needs tickets:view like the Tickets page; the page renders its own
+      // "sprints are off" state, so the nav gate and the route agree.
+      { path: "sprints", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><SprintsPage /></PageShell></RequirePermission> },
       // No RequirePermission: READING changes needs no key — a change about to take a service down
       // is not a secret from the people who depend on it. The page renders its own "off" or
       // "not in your plan" state, the same way the planning pages do, so somebody who lands here

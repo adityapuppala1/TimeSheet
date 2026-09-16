@@ -307,6 +307,22 @@ export const HELP_ARTICLES: HelpArticle[] = [
     ]
   },
   {
+    id: "sprints",
+    category: "Getting started",
+    title: "Sprints and story points",
+    where: "Sprints in the sidebar (under Plan), and the Sprint and Story points fields in a ticket's detail sheet. A super admin turns sprints on under Workspace Settings → Planning; they need the planning layer on too.",
+    when: "Your team works in fixed iterations and wants to know, day by day, whether the iteration is on track.",
+    steps: [
+      "Pick a project and press New sprint: a name, an optional goal, and start and end dates (two weeks is usual). One sprint can be active per project at a time.",
+      "Open a ticket and choose its sprint in the Sprint field; give it story points (whole or half numbers). Filter or group the Tickets list by sprint.",
+      "Press Start sprint when work begins and Complete sprint when it ends. Deleting a sprint un-plans its tickets — nothing is deleted.",
+      "Read the burndown: remaining points per day against the ideal line. It is replayed from the ticket status history, so it is exact for the days that have happened and blank for the days that have not."
+    ],
+    notes:
+      "If nobody has estimated, the chart reads open tickets instead of points and says so. A ticket can only join a sprint of its own project.",
+    keywords: ["sprint", "sprints", "iteration", "story points", "points", "burndown", "velocity", "scrum", "agile"]
+  },
+  {
     id: "goals",
     category: "Dashboards & reports",
     title: "Goals that measure themselves",

@@ -51,6 +51,8 @@ export type TicketFilters = {
   onlyMine: boolean;
   /** List-view grouping: "none" or a ticket column id. Presentational; never sent to the API. */
   groupBy: string;
+  /** "all" or a sprint of `projectId` (V12, only while the sprints feature is on). */
+  sprintId: string;
 };
 
 const VIEW_TYPE: Record<string, SavedViewRow["viewType"]> = {

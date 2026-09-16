@@ -110,7 +110,24 @@ applies to shows a **Fields** section in its detail sheet, above the tabs:
 
 Engineering: `GET`/`PUT /api/tickets/:id/custom-fields`, `apps/web/src/components/TicketCustomFields.tsx`.
 
-## 7. Custom dashboards
+## 7. Sprints
+
+**Where:** `/app/sprints` (under *Plan* in the sidebar) once a super admin turns on **Workspace
+Settings → Planning → Sprints**; sprints need the planning layer on as well. Off by default, and
+turning it off hides the pages without touching data.
+
+- **Per project:** pick a project, create iterations (name, optional goal, start and end dates),
+  start one, complete it. One sprint is active per project at a time; the API refuses a second.
+- **Tickets join from their detail sheet** (Sprint and Story points fields; whole or half points)
+  and can only join a sprint of their own project. The Tickets list filters and groups by sprint.
+- **Burndown:** remaining points per day against the ideal line, replayed from the audited status
+  changes — exact for days that have happened, blank for days that have not. With no estimates it
+  reads open tickets instead and says so. Deleting a sprint un-plans its tickets, never deletes.
+
+Engineering: `apps/api/src/controllers/sprint.controller.ts`, `apps/api/src/services/sprint.service.ts`
+(pure `burndown`), `apps/web/src/pages/Sprints.tsx`, `apps/web/src/components/TicketSprintFields.tsx`.
+
+## 8. Custom dashboards
 
 **Where:** `/app/dashboards` (planning feature on). Build a grid from a **closed catalogue** of
 widgets — every tile is one server-defined query, so two dashboards showing "Open work" can never
@@ -121,7 +138,7 @@ The two in bold arrived with V12 and use exactly the definition of "open" the st
 
 Engineering: `apps/api/src/services/dashboard.service.ts` (`WIDGET_CATALOGUE`, `resolveWidget`).
 
-## 8. Empty states everywhere
+## 9. Empty states everywhere
 
 Lists and panels that have nothing to show use one design: an icon, a title, a line of explanation
 and, where one honestly exists, a next action. Where the input sits right beside the list (ticket

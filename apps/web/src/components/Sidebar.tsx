@@ -37,6 +37,7 @@ import {
   Sparkles,
   Target,
   Ticket,
+  Timer,
   TrendingUp,
   Users,
   Users2,
@@ -128,6 +129,8 @@ export const nav: NavItem[] = [
   // Goals carry their own `goals` feature rather than "planning": they are gated on their own
   // toggle and entitlement, so a workspace can align on outcomes without turning the Gantt on.
   { to: "/app/goals", label: "Goals", icon: Target, section: "Plan", feature: "goals" },
+  // Sprints (V12): appears only when the workspace toggle AND planning are on (`effective.sprints`).
+  { to: "/app/sprints", label: "Sprints", icon: Timer, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "sprints" },
   { to: "/app/timeline", label: "Timeline", icon: GanttChartSquare, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "timeline" },
   { to: "/app/portfolio", label: "Portfolio", icon: Briefcase, permission: permissions.REPORTS_VIEW, section: "Plan", feature: "planning" },
   { to: "/app/workload", label: "Workload", icon: Gauge, permission: permissions.RESOURCES_MANAGE, section: "Plan", feature: "resourceManagement" },

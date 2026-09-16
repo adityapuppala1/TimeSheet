@@ -10,14 +10,19 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
-### 🏃 Sprints — foundation, behind a default-off toggle
+### 🏃 Sprints, behind a default-off toggle
 
 - **Schema and switch only in this step; no sprint UI yet.** A `Sprint` table (per project: name,
   goal, start and end dates, planned/active/completed), `sprintId` and `storyPoints` on tickets,
   and a **Sprints** toggle under Workspace Settings → Planning that is off by default and needs
   the planning layer on. Nothing changes for any workspace until a super admin turns it on. The
   migration is additive and idempotent on MySQL and MariaDB.
-- **The API (still no UI).** `GET/POST /api/sprints`, `PATCH/DELETE /api/sprints/:id`,
+- **The pages.** A **Sprints** page under Plan (per project: create, edit, start, complete, delete;
+  a burndown chart that reads points, or open tickets when nobody estimated), **Sprint** and
+  **Story points** fields in the ticket sheet, and a sprint filter and grouping on the Tickets list.
+  The sidebar item appears only when the toggle and the planning layer are both on. New Help
+  article "Sprints and story points".
+- **The API.** `GET/POST /api/sprints`, `PATCH/DELETE /api/sprints/:id`,
   `GET /api/sprints/:id/burndown`; `sprintId` and `storyPoints` on `PATCH /api/tickets/:id`;
   `?sprintId=` on the ticket list. Every route answers 403 with the toggle's name while sprints
   are off, then applies the same project scope as tickets. One active sprint per project; a

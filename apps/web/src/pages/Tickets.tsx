@@ -73,6 +73,7 @@ import { ProofingPanel } from "../components/ProofingPanel";
 import { SavedViewsBar, type TicketFilters } from "../components/SavedViewsBar";
 import { PageHeader } from "../components/PageHeader";
 import { TicketCustomFields } from "../components/TicketCustomFields";
+import { TicketSprintFields } from "../components/TicketSprintFields";
 import { readProjectSelection, withoutProjectSelection } from "../lib/project-tree";
 import { formatGroupLabel, groupRuns } from "../lib/group-rows";
 import { displayValue, fieldsForTicket } from "../lib/custom-fields";
@@ -112,7 +113,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { plainTextLength, safeHtml } from "../lib/safe-html";
-import { aiApi, fileUrl, labelApi, planApi, projectApi, settingsApi, ticketApi, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLineageEvent, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow , planningApi, type CustomFieldRow } from "../services/api";
+import { aiApi, fileUrl, labelApi, planApi, projectApi, settingsApi, ticketApi, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLineageEvent, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow , planningApi, type CustomFieldRow, sprintApi } from "../services/api";
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
 import { usePlanningFeatures } from "../lib/use-planning";
@@ -346,7 +347,8 @@ export const DEFAULT_TICKET_FILTERS: TicketFilters = {
   type: "all",
   reporterId: "all",
   onlyMine: false,
-  groupBy: "none"
+  groupBy: "none",
+  sprintId: "all"
 };
 
 /** The List view's grouping axes, keyed by the DataTable column id they group on. */
@@ -355,7 +357,8 @@ export const TICKET_GROUPINGS: ReadonlyArray<{ id: string; label: string; keyOf:
   { id: "priority", label: "Priority", keyOf: (r) => r.priority },
   { id: "type", label: "Type", keyOf: (r) => r.type },
   { id: "project", label: "Project", keyOf: (r) => r.project.name },
-  { id: "assignee", label: "Assignee", keyOf: (r) => r.assignee?.name ?? null }
+  { id: "assignee", label: "Assignee", keyOf: (r) => r.assignee?.name ?? null },
+  { id: "sprint", label: "Sprint", keyOf: (r) => r.sprint?.name ?? null }
 ];
 
 /** The page's filter state as the query string both the list and the metrics endpoint take. */
@@ -365,6 +368,7 @@ function ticketQueryParams(filters: TicketFilters, userId: string | undefined) {
   return {
     projectId: set(filters.projectId),
     moduleId: set(filters.moduleId),
+    sprintId: set(filters.sprintId),
     status: set(filters.status),
     priority: set(filters.priority),
     type: set(filters.type),
@@ -422,6 +426,27 @@ function emptyTicketsCopy(filters: TicketFilters): { title: string; description:
   return { title: "No tickets match these filters", description: "Widen a filter, or clear them all." };
 }
 
+/** The Sprint filter, with its own query so the page component carries neither. Renders nothing
+ *  while the feature is off, without a project, or when the project has no sprints. */
+function SprintFilter({ enabled, projectId, value, onChange }: Readonly<{ enabled: boolean; projectId: string; value: string; onChange: (v: string) => void }>) {
+  const sprints = useQuery({ queryKey: ["sprints", projectId], queryFn: () => sprintApi.list(projectId), enabled: enabled && projectId !== "all" });
+  if (!enabled || projectId === "all" || (sprints.data?.length ?? 0) === 0) return null;
+  return (
+    <div className="grid w-full gap-1.5 sm:w-auto">
+      <Label htmlFor="ticket-filter-sprint">Sprint</Label>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger id="ticket-filter-sprint" className="w-full sm:w-[180px]">
+          <SelectValue placeholder="All sprints" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All sprints</SelectItem>
+          {(sprints.data ?? []).map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 /** Grouping applies to the List view only — Board groups by status itself, Timeline and Calendar
  *  answer a scheduling question. */
 function groupingFor(viewMode: string, groupBy: string) {
@@ -473,7 +498,7 @@ export function Tickets() {
   /** A hand-made change to the project or module filter also drops the tree's parameters from the
    *  URL — otherwise the address bar would keep naming a project the page is no longer showing. */
   const chooseProject = (projectId: string, moduleId = "all") => {
-    setFilters((f) => ({ ...f, projectId, moduleId }));
+    setFilters((f) => ({ ...f, projectId, moduleId, sprintId: "all" }));
     if (linked.projectId) setSearchParams(withoutProjectSelection(searchParams), { replace: true });
   };
   // Timeline and Calendar join List and Board here rather than becoming their own pages, so the
@@ -658,6 +683,8 @@ export function Tickets() {
               </SelectContent>
             </Select>
           </div>
+          {/* Sprint filter (V12): only with the feature on and a project chosen — sprints are per project. */}
+          <SprintFilter enabled={planFeatures.sprints} projectId={filters.projectId} value={filters.sprintId} onChange={(v) => setFilters((f) => ({ ...f, sprintId: v }))} />
           {/* Second tier of the same hierarchy the sidebar tree navigates. Only offered once a project
               is chosen — a module list across every project would be a list of duplicate names. */}
           {filters.projectId !== "all" && (projects.data?.find((p: any) => p.id === filters.projectId)?.modules?.length ?? 0) > 0 && (
@@ -1794,6 +1821,9 @@ function TicketDetailSheet({
                   )}
                 </Button>
               </div>
+
+              {/* Sprint membership and points (V12). Renders nothing while the feature is off. */}
+              <TicketSprintFields ticketId={ticket.id} projectId={ticket.project.id} sprintId={ticket.sprintId} storyPoints={ticket.storyPoints} canEdit={canWork} />
 
               {/* Admin-defined fields for this ticket type. Renders nothing when none apply. */}
               <TicketCustomFields ticketId={ticket.id} ticketType={ticket.type} canEdit={canWork} />
