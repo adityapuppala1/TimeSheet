@@ -10,6 +10,12 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 📊 Two more dashboard widgets
+
+- **Priority mix** (open work by priority, always in severity order) and **Open work by project**
+  join the closed widget catalogue. Both use the same definition of "open" as Status mix, so the
+  three tiles can never disagree, and both respect the viewer's project scope.
+
 ### 📘 A user guide for the V12 line
 
 - New `docs/UI_GUIDE.md` covers appearance, the palette and record search, every keyboard
