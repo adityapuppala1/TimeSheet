@@ -36,6 +36,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { InactivePeopleNote } from "../components/InactivePeopleNote";
 import { reportApi, settingsApi } from "../services/api";
 import { PageHeader } from "../components/PageHeader";
+import { EmptyState } from "../components/ui/empty-state";
 
 const estimateVsActualColumns: ColumnDef<any, any>[] = [
   {
@@ -387,7 +388,7 @@ export function Insights() {
             </CardHeader>
             <CardContent>
               {data.hotspotByModule.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">No tickets have a module assigned yet.</p>
+                <EmptyState compact title="No module data yet" description="Hotspots appear once tickets carry a module." />
               ) : (
                 <div className="h-80">
                   <ResponsiveContainer width="100%" height="100%">
@@ -423,7 +424,7 @@ export function Insights() {
             </CardHeader>
             <CardContent className="overflow-x-auto p-0">
               {data.workloadHeatmap.rows.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">No assigned tickets yet.</p>
+                <EmptyState compact title="No assigned tickets yet" description="The heatmap fills in as tickets are assigned." className="m-3" />
               ) : (
                 <Table>
                   <TableHeader>
@@ -533,7 +534,7 @@ export function Insights() {
               />
             )}
             {leaderboard.data && leaderboard.data.rows.length === 0 && (
-              <p className="py-6 text-center text-sm text-muted-foreground">No resolved tickets yet.</p>
+              <EmptyState compact title="No resolved tickets yet" description="The leaderboard counts tickets resolved in this window." />
             )}
             <InactivePeopleNote count={leaderboard.data?.hiddenInactive} className="px-0" />
           </CardContent>

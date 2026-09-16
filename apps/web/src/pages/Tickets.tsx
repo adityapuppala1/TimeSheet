@@ -86,6 +86,7 @@ import { Badge, type BadgeProps } from "../components/ui/badge";
 import { AiStrands } from "../components/ui/ai-strands";
 import { BorderGlow } from "../components/ui/border-glow";
 import { Button } from "../components/ui/button";
+import { EmptyState } from "../components/ui/empty-state";
 import { Card, CardContent } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
 import { DataTable } from "../components/ui/data-table";
@@ -398,6 +399,29 @@ function columnSpecs(all: ColumnDef<TicketRow, any>[]): ColumnSpec[] {
   });
 }
 
+/** True when every filter axis is at rest — the empty state then means "there are none" rather
+ *  than "your filters hid them", and offers no Clear filters button. */
+function filtersAtRest(filters: TicketFilters): boolean {
+  return (Object.keys(DEFAULT_TICKET_FILTERS) as Array<keyof TicketFilters>).every((k) => k === "groupBy" || filters[k] === DEFAULT_TICKET_FILTERS[k]);
+}
+
+/** The empty state's one honest action — rendered only while a filter is actually narrowing the
+ *  list. Grouping is not a filter and survives the clear. */
+function ClearFiltersButton({ filters, onClear }: Readonly<{ filters: TicketFilters; onClear: () => void }>) {
+  if (filtersAtRest(filters)) return null;
+  return (
+    <Button variant="outline" size="sm" className="h-[44px]" onClick={onClear}>
+      Clear filters
+    </Button>
+  );
+}
+
+/** What the empty list says. Two states, two truths: nothing exists, or the filters hid it. */
+function emptyTicketsCopy(filters: TicketFilters): { title: string; description: string } {
+  if (filtersAtRest(filters)) return { title: "No tickets yet", description: "Raise the first one from the button above." };
+  return { title: "No tickets match these filters", description: "Widen a filter, or clear them all." };
+}
+
 /** Grouping applies to the List view only — Board groups by status itself, Timeline and Calendar
  *  answer a scheduling question. */
 function groupingFor(viewMode: string, groupBy: string) {
@@ -515,6 +539,10 @@ export function Tickets() {
   // sorted by group label first so every run is contiguous, then headers interleaved.
   const grouping = groupingFor(viewMode, filters.groupBy);
   const cardItems = buildTicketCardItems(tickets.data ?? [], grouping);
+
+  // The empty state's copy and its one honest action (null while every filter is at rest).
+  const emptyCopy = emptyTicketsCopy(filters);
+  const clearFiltersAction = <ClearFiltersButton filters={filters} onClear={() => setFilters((f) => ({ ...DEFAULT_TICKET_FILTERS, groupBy: f.groupBy }))} />;
 
   // Columns. Built-ins plus one per custom field; the VISIBLE set is page state (null = defaults)
   // so a saved view can carry it, and so views saved before columns existed (null) keep today's
@@ -906,7 +934,7 @@ export function Tickets() {
                 );
               })}
             {!tickets.isLoading && (tickets.data ?? []).length === 0 && (
-              <p className="py-12 text-center text-sm text-muted-foreground">No tickets match these filters yet.</p>
+              <EmptyState title={emptyCopy.title} description={emptyCopy.description} action={clearFiltersAction} />
             )}
           </div>
 
@@ -919,7 +947,8 @@ export function Tickets() {
               isLoading={tickets.isLoading}
               onRowClick={(row) => openTicket(row.id)}
               searchPlaceholder="Search these results..."
-              emptyMessage="No tickets match these filters yet."
+              emptyMessage={emptyCopy.title}
+              emptyAction={clearFiltersAction}
               pageSize={20}
               groupBy={grouping?.id}
             />

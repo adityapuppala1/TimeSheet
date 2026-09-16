@@ -10,6 +10,15 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🫙 Empty states that say what to do next
+
+- **One empty-state design across the app**, promoted from the platform console: an icon, a
+  title, a line of explanation and, where one honestly exists, a next action. First slice:
+  the tickets table and phone cards, Requests, Insights and the Change calendar.
+- **Tickets now tells you why it is empty.** With filters narrowing the list it says so and offers
+  "Clear filters"; with no filters applied it says there are no tickets yet and offers nothing
+  it cannot deliver.
+
 ### 🧮 Choose the ticket table's columns, custom fields included
 
 - **A "Columns" control on the tickets table** lets you hide built-in columns and show a column

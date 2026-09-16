@@ -42,6 +42,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
+import { EmptyState } from "../components/ui/empty-state";
 import { Switch } from "../components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { Textarea } from "../components/ui/textarea";
@@ -211,7 +212,7 @@ export function RequestsPage() {
               {submissions.isLoading ? (
                 <Skeleton className="h-32 w-full" />
               ) : rows.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">Nothing here.</p>
+                <EmptyState compact title="No submissions yet" description="Submissions arrive here when someone sends a published form." />
               ) : (
                 rows.map((row) => (
                   <div key={row.id} className="grid gap-2 rounded-lg border border-border p-3">
@@ -288,7 +289,7 @@ export function RequestsPage() {
                 {forms.isLoading ? (
                   <Skeleton className="h-32 w-full" />
                 ) : (forms.data ?? []).length === 0 ? (
-                  <p className="py-6 text-center text-sm text-muted-foreground">No forms yet.</p>
+                  <EmptyState compact title="No forms yet" description="Create a form to let people outside the workspace raise requests." />
                 ) : (
                   forms.data!.map((form) => {
                     // `form.publicToken` is only ever set for forms published before the server

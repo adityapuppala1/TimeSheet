@@ -26,7 +26,6 @@
  */
 import { motion, useReducedMotion } from "framer-motion";
 import type { LucideIcon } from "lucide-react";
-import { Inbox } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Label } from "../../components/ui/label";
@@ -497,18 +496,10 @@ export function MarkerTimeline({ markers, sent, next, due }: { markers: string[]
 /* Empty state                                                                                */
 /* ----------------------------------------------------------------------------------------- */
 
-export function EmptyState({ title, description, icon: Icon = Inbox, action }: { title: string; description?: ReactNode; icon?: LucideIcon; action?: ReactNode }) {
-  return (
-    <div className="grid place-items-center gap-2 rounded-lg border border-dashed border-border px-6 py-10 text-center">
-      <span className="grid h-10 w-10 place-items-center rounded-full bg-muted text-muted-foreground">
-        <Icon className="h-5 w-5" />
-      </span>
-      <p className="text-sm font-semibold text-foreground">{title}</p>
-      {description && <p className="max-w-md text-sm text-muted-foreground">{description}</p>}
-      {action}
-    </div>
-  );
-}
+// Promoted to the shared kit (components/ui/empty-state.tsx) so the tenant app's 33 hand-rolled
+// empty paragraphs could adopt the console's finished design. Same props, same look; the console's
+// callers keep importing it from here.
+export { EmptyState } from "../../components/ui/empty-state";
 
 /**
  * Bytes as a person reads them.

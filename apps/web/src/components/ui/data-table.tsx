@@ -31,6 +31,7 @@ import { formatGroupLabel, groupCounts, groupRuns, type GroupRun } from "../../l
 import { cn } from "../../lib/utils";
 import { Button } from "./button";
 import { Checkbox } from "./checkbox";
+import { EmptyState } from "./empty-state";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 import { Input } from "./input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
@@ -59,6 +60,8 @@ interface DataTableProps<TData> {
   pageSize?: number;
   isLoading?: boolean;
   emptyMessage?: string;
+  /** The honest next step when the table is empty — e.g. a "Clear filters" button. */
+  emptyAction?: ReactNode;
   /** Overrides for pages with a different visual theme (platform-admin's dark/amber chrome). */
   className?: string;
   rowClassName?: string;
@@ -92,6 +95,7 @@ export function DataTable<TData>({
   pageSize = 10,
   isLoading = false,
   emptyMessage = "No results.",
+  emptyAction,
   className,
   rowClassName,
   groupBy,
@@ -233,7 +237,7 @@ export function DataTable<TData>({
           this app already used for Tickets/Team before DataTable existed. */}
       <div className="grid gap-2 sm:hidden">
         {isLoading && Array.from({ length: 3 }).map((_, i) => <div key={`skel-${i}`} className="h-24 w-full animate-pulse rounded-lg bg-muted" />)}
-        {!isLoading && rows.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">{emptyMessage}</p>}
+        {!isLoading && rows.length === 0 && <EmptyState compact title={emptyMessage} action={emptyAction} />}
         {!isLoading &&
           entriesFor("card").map((entry) => {
             if (!("original" in (entry as object))) return entry as ReactNode;
@@ -321,9 +325,9 @@ export function DataTable<TData>({
                 </TableCell>
               </TableRow>
             ) : rows.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={columns.length} className="py-10 text-center text-sm text-muted-foreground">
-                  {emptyMessage}
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={columns.length} className="p-3">
+                  <EmptyState compact title={emptyMessage} action={emptyAction} />
                 </TableCell>
               </TableRow>
             ) : (

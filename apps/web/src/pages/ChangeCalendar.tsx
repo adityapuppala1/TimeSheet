@@ -11,6 +11,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "../components/PageHeader";
+import { EmptyState } from "../components/ui/empty-state";
 import { AlertTriangle, ArrowLeft, CalendarDays, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
@@ -238,7 +239,7 @@ export function ChangeCalendarPage() {
           )}
 
           {!calendar.isLoading && changes.length === 0 && (
-            <p className="py-8 text-center text-sm text-muted-foreground">Nothing is scheduled in this window.</p>
+            <EmptyState title="Nothing is scheduled in this window" description="Changes appear here once they have a planned start." />
           )}
         </CardContent>
       </Card>
