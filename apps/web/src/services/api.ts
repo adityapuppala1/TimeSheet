@@ -3311,6 +3311,12 @@ export const ticketApi = {
     aiOnly?: boolean;
   }) => (await api.get<TicketRow[]>("/tickets", { params })).data,
   get: async (id: string) => (await api.get<TicketDetail>(`/tickets/${id}`)).data,
+  /** Custom-field values on one ticket, as `{ fieldKey: value }`. `set` returns the read-back,
+   *  which is what the normaliser kept rather than what was sent. */
+  customFields: {
+    get: async (id: string) => (await api.get<Record<string, unknown>>(`/tickets/${id}/custom-fields`)).data,
+    set: async (id: string, values: Record<string, unknown>) => (await api.put<Record<string, unknown>>(`/tickets/${id}/custom-fields`, { values })).data
+  },
   create: async (payload: unknown) => (await api.post<TicketDetail>("/tickets", payload)).data,
   update: async (id: string, payload: unknown) => (await api.patch<TicketDetail>(`/tickets/${id}`, payload)).data,
   updateStatus: async (id: string, status: TicketStatus, faceVerificationId?: string) =>

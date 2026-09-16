@@ -10,6 +10,20 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🧩 Custom fields, on the ticket
+
+- **A "Fields" section in the ticket sheet** shows every custom field that applies to the ticket's
+  type, with the editor each type deserves: text, number and currency, date, URL, single select,
+  multi-select chips, checkbox, and a people picker. Each field saves on its own and shows what the
+  server kept; a rejected value shows the reason beside the field. People who can see but not work
+  on a ticket get the values as text. Tickets in a workspace with no fields look exactly as before.
+- **Two new endpoints**, `GET` and `PUT /api/tickets/:id/custom-fields`, guarded exactly like
+  editing the ticket itself. Until now fields could be defined and filled by request forms and
+  blueprints, but never read or changed on a ticket.
+- **Fixed: clearing a custom-field value did nothing.** Every write path (request forms,
+  blueprints, now the ticket screen) sent a cleared value as "leave unchanged", so a field could
+  never be emptied. A cleared value now removes the stored row; required fields still refuse.
+
 ### 🗂️ Group the tickets list
 
 - **Group by Status, Priority, Type, Project or Assignee** from the List view's filter row. Each

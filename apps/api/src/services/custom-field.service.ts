@@ -258,20 +258,26 @@ export async function setCustomFieldValues(
     });
   }
 
+  // "Not answered" is the ABSENCE of a row, so a cleared value deletes its row. It used to be
+  // written as `value: n.value ?? undefined`, and `undefined` is Prisma for "leave this column
+  // alone" — so clearing a field silently kept the old value, and a field could never be emptied
+  // through this function. Found the day a ticket screen first let someone clear one.
+  const ownerWhere = target.ticketId ? { ticketId: target.ticketId } : { projectId: target.projectId! };
   await prisma.$transaction(
-    normalised.map((n) =>
-      target.ticketId
+    normalised.map((n) => {
+      if (n.value === null) return prisma.customFieldValue.deleteMany({ where: { fieldId: n.fieldId, ...ownerWhere } });
+      return target.ticketId
         ? prisma.customFieldValue.upsert({
             where: { fieldId_ticketId: { fieldId: n.fieldId, ticketId: target.ticketId } },
-            update: { value: n.value ?? undefined },
-            create: { fieldId: n.fieldId, ticketId: target.ticketId, value: n.value ?? undefined }
+            update: { value: n.value },
+            create: { fieldId: n.fieldId, ticketId: target.ticketId, value: n.value }
           })
         : prisma.customFieldValue.upsert({
             where: { fieldId_projectId: { fieldId: n.fieldId, projectId: target.projectId! } },
-            update: { value: n.value ?? undefined },
-            create: { fieldId: n.fieldId, projectId: target.projectId!, value: n.value ?? undefined }
-          })
-    )
+            update: { value: n.value },
+            create: { fieldId: n.fieldId, projectId: target.projectId!, value: n.value }
+          });
+    })
   );
 }
 

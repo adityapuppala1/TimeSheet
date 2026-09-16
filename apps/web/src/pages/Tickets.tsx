@@ -72,6 +72,7 @@ import { TicketApprovalsPanel } from "../components/TicketApprovalsPanel";
 import { ProofingPanel } from "../components/ProofingPanel";
 import { SavedViewsBar, type TicketFilters } from "../components/SavedViewsBar";
 import { PageHeader } from "../components/PageHeader";
+import { TicketCustomFields } from "../components/TicketCustomFields";
 import { readProjectSelection, withoutProjectSelection } from "../lib/project-tree";
 import { formatGroupLabel, groupRuns } from "../lib/group-rows";
 import { TicketMetricsPanel } from "../components/TicketMetricsPanel";
@@ -1719,6 +1720,9 @@ function TicketDetailSheet({
                   )}
                 </Button>
               </div>
+
+              {/* Admin-defined fields for this ticket type. Renders nothing when none apply. */}
+              <TicketCustomFields ticketId={ticket.id} ticketType={ticket.type} canEdit={canWork} />
 
               <Tabs defaultValue="comments" className="grid gap-3">
                 <TabsList>

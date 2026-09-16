@@ -33,6 +33,7 @@ import { processUpload } from "../services/attachment-storage.service.js";
 import { audit } from "../services/audit.service.js";
 import { resolveVisiblePeopleNames } from "../services/people-visibility.service.js";
 import { buildTicketMetricSeriesFor } from "../services/ticket-metrics.service.js";
+import { getCustomFieldValues, setCustomFieldValues } from "../services/custom-field.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { buildTicketSecurityReport, markFindingsAwaitingVerification, sendTicketClosedDigest } from "../services/security-report.service.js";
@@ -1716,4 +1717,39 @@ ticketRouter.delete("/:id/attachments/:attachmentId", requirePermission(permissi
   await prisma.ticketAttachment.delete({ where: { id: attachment.id } });
   await audit(req.user!.id, "ticket.attachment_removed", "Ticket", String(req.params.id), { attachmentId: attachment.id });
   res.status(204).send();
+});
+
+/* ------------------------------------------------------------------ *
+ * Custom-field values on a ticket
+ *
+ * Admins define fields (planning.controller); blueprints and public request forms WRITE values;
+ * until these two routes, no ticket screen could READ or EDIT them. The service owns the per-type
+ * validation and the "empty = not answered" rule (custom-field.service.ts); these routes own WHO —
+ * the same two questions PATCH /:id asks, in the same order.
+ * ------------------------------------------------------------------ */
+
+ticketRouter.get("/:id/custom-fields", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+  const existing = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null }, select: { id: true, projectId: true } });
+  if (!existing) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, existing.projectId);
+  res.json(await getCustomFieldValues({ ticketId: existing.id }));
+});
+
+const customFieldValuesSchema = z.object({
+  body: z.object({
+    /** `{ fieldKey: rawValue }` — the service normalises each value by its field's type. */
+    values: z.record(z.unknown())
+  })
+});
+
+ticketRouter.put("/:id/custom-fields", requirePermission(permissions.TICKETS_WRITE), validate(customFieldValuesSchema), async (req, res) => {
+  const existing = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
+  if (!existing) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, existing.projectId);
+  if (!(await canWorkOnTicket(req, existing))) throw new AppError(403, WORK_FORBIDDEN_MESSAGE);
+  // The ticket's type decides which type-scoped fields apply; the service skips the others.
+  await setCustomFieldValues({ ticketId: existing.id }, req.body.values as Record<string, unknown>, { ticketType: existing.type });
+  await audit(req.user!.id, "ticket.custom_fields_updated", "Ticket", existing.id, { keys: Object.keys(req.body.values ?? {}) });
+  // Read back rather than echo: what was stored is what the normaliser kept, not what was sent.
+  res.json(await getCustomFieldValues({ ticketId: existing.id }));
 });
