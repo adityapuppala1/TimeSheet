@@ -24,6 +24,11 @@ number, on purpose — an installation must never render history for a version t
   colours, or "Auto" for the derived one; the mark changes everywhere at once — sidebar tree,
   tickets table, cards, group headings. Stored as a palette id, so only measured, legible colours
   can be saved. Additive migration; existing projects keep their derived colour.
+- **Phones: Ask AI no longer scrolls sideways.** The glow ring around AI surfaces reached past a
+  390px screen and stretched the page; below the small breakpoint it now fits the page gutter.
+  Found by the responsive sweep, which now covers fourteen more routes and the V12 states
+  (grouped lists, Board/Timeline/Calendar views, the Week period, the Workload measure menu, the
+  project colour picker).
 - **Timeline: a Quarter zoom.** The Timeline's Day · Week · Month control gains Quarter, for a
   long plan's shape: month ticks, quarter labels on the major lines, and no bar thinner than a
   visible mark. Weekend bands are dropped at this scale as they are at Month.

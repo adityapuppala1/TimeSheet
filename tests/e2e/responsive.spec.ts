@@ -70,7 +70,24 @@ const PAGES = [
   "/app/inbox",
   "/app/agents",
   "/app/studio",
-  "/app/ai"
+  "/app/ai",
+  // V12 (2026-09-16): every in-app route that was still missing, diffed against App.tsx. The
+  // sprints page is new in V12; the rest predate it and were simply never swept. A page whose
+  // feature is off, or which the seeded data leaves empty, still renders a state that must fit.
+  "/app/sprints",
+  "/app/dashboards",
+  "/app/blueprints",
+  "/app/changes",
+  "/app/approvals",
+  "/app/reports",
+  "/app/requirements",
+  "/app/ask-ai",
+  "/app/audit",
+  "/app/ai-activity",
+  "/app/security-insights",
+  "/app/help",
+  "/app/whats-new",
+  "/app/practice-update"
 ];
 const OVERFLOW_TOLERANCE_PX = 4;
 
@@ -463,4 +480,72 @@ test("the timesheet entry dialog fits, and its actions stay reachable", async ({
   const box = (await dialog.boundingBox())!;
   expect(box.y, "the dialog must not start above the viewport").toBeGreaterThanOrEqual(-1);
   expect(box.y + box.height, "the dialog must not end below the viewport").toBeLessThanOrEqual(viewport.height + 1);
+});
+
+/* ------------------------------------------------------------------------------------------ *
+ * V12 surfaces (2026-09-16). Each of these is a STATE of a page the route sweep above already
+ * visits in its default state — a grouped list, a Views Bar tab, a period, an open menu, an open
+ * dialog — and each was added after the sweep was written, so none had been checked for width.
+ * ------------------------------------------------------------------------------------------ */
+test.describe("V12 surfaces", () => {
+  // Radix Select through the keyboard: focus the trigger, open, then pick by role. Hovering a long
+  // listbox at 390px is a known probe hazard; clicking the option by role is not.
+  async function pick(page: import("@playwright/test").Page, triggerId: string, optionName: string) {
+    const trigger = page.locator(`#${triggerId}`);
+    await trigger.scrollIntoViewIfNeeded();
+    await trigger.click();
+    await page.getByRole("option", { name: optionName, exact: true }).click();
+    await expect(trigger).toHaveText(new RegExp(optionName));
+  }
+
+  test("Tickets grouped by status, then by project, stays within the viewport", async ({ page }) => {
+    await page.goto("/app/tickets");
+    await page.waitForLoadState("networkidle");
+    await pick(page, "ticket-group-by", "Status");
+    await assertNoOverflow(page);
+    await pick(page, "ticket-group-by", "Project");
+    await assertNoOverflow(page);
+  });
+
+  for (const view of ["Board", "Timeline", "Calendar"] as const) {
+    test(`Tickets → ${view} view stays within the viewport`, async ({ page }) => {
+      await page.goto("/app/tickets");
+      await page.waitForLoadState("networkidle");
+      const tab = page.getByRole("tab", { name: view });
+      // Timeline and Calendar exist only with planning on; the sweep must not invent a failure.
+      if ((await tab.count()) === 0) test.skip(true, `${view} view is off for this workspace`);
+      await tab.click();
+      await page.waitForLoadState("networkidle");
+      await assertNoOverflow(page);
+      if (view === "Calendar") {
+        await page.getByRole("radio", { name: "Week" }).click();
+        await assertNoOverflow(page);
+      }
+    });
+  }
+
+  test("Workload with the Measure menu open stays within the viewport", async ({ page }) => {
+    await page.goto("/app/workload");
+    await page.waitForLoadState("networkidle");
+    const trigger = page.locator("[data-workload-measure]");
+    if ((await trigger.count()) === 0) test.skip(true, "resource management is off for this workspace");
+    await trigger.click();
+    await expect(page.getByRole("option", { name: "Story points" })).toBeVisible();
+    await assertNoOverflow(page);
+  });
+
+  test("Edit project dialog with its colour swatches fits, and Save stays reachable", async ({ page }) => {
+    await page.goto("/app/projects");
+    await page.waitForLoadState("networkidle");
+    const edit = page.getByRole("button", { name: /^Edit/ }).first();
+    if ((await edit.count()) === 0) test.skip(true, "no project row to edit");
+    await edit.click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("radiogroup")).toBeVisible();
+    await assertNoOverflow(page);
+    const save = dialog.getByRole("button", { name: /save|update/i }).first();
+    const box = await save.boundingBox();
+    const vw = page.viewportSize()!;
+    expect(box && box.x >= 0 && box.x + box.width <= vw.width && box.y + box.height <= vw.height).toBeTruthy();
+  });
 });

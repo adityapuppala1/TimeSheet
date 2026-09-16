@@ -162,3 +162,15 @@
     transition: none;
   }
 }
+
+/*
+ * V12 4.1 (responsive sweep): the outer glow ring sits `--glow-padding` OUTSIDE the card, and an
+ * absolutely positioned box still counts towards the page's scrollable width. On a phone, where a
+ * card runs edge to edge inside a 16px gutter, a 32px ring reached 424px on a 390px screen and the
+ * whole page scrolled sideways (Ask AI's composer). Below `sm` the ring shrinks to fit the gutter.
+ */
+@media (max-width: 639px) {
+  .border-glow-card {
+    --glow-padding: 12px;
+  }
+}
