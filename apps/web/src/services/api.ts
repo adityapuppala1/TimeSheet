@@ -2980,6 +2980,10 @@ export interface TicketRow {
   id: string;
   /** `{ fieldKey: value }` from the list endpoint — the table's custom-field columns read it. */
   customFields?: Record<string, unknown>;
+  /** Sprint membership (V12, behind the sprints toggle). */
+  sprintId?: string | null;
+  sprint?: { id: string; name: string; status: SprintStatusValue } | null;
+  storyPoints?: number | string | null;
   key: string;
   type: TicketType;
   title: string;
@@ -3270,6 +3274,45 @@ export interface QuickSearchResult {
   tickets: Array<{ id: string; key: string; title: string; status: string; projectName: string }>;
   projects: Array<{ id: string; code: string; name: string }>;
 }
+
+export type SprintStatusValue = "PLANNED" | "ACTIVE" | "COMPLETED";
+export interface SprintRow {
+  id: string;
+  projectId: string;
+  name: string;
+  goal: string | null;
+  startDate: string;
+  endDate: string;
+  status: SprintStatusValue;
+  ticketCount: number;
+  totalPoints: number;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface BurndownPointRow {
+  date: string;
+  remainingPoints: number | null;
+  remainingCount: number | null;
+  idealPoints: number;
+}
+export interface BurndownRow {
+  sprint: { id: string; name: string; status: SprintStatusValue; startDate: string; endDate: string };
+  totalPoints: number;
+  ticketCount: number;
+  points: BurndownPointRow[];
+}
+
+/** Sprints — behind Workspace Settings → Planning → Sprints; every call 403s with the toggle's
+ *  name when it is off. */
+export const sprintApi = {
+  list: async (projectId: string) => (await api.get<SprintRow[]>("/sprints", { params: { projectId } })).data,
+  create: async (payload: { projectId: string; name: string; goal?: string | null; startDate: string; endDate: string }) =>
+    (await api.post<SprintRow>("/sprints", payload)).data,
+  update: async (id: string, payload: Partial<{ name: string; goal: string | null; startDate: string; endDate: string; status: SprintStatusValue }>) =>
+    (await api.patch<SprintRow>(`/sprints/${id}`, payload)).data,
+  remove: async (id: string) => api.delete(`/sprints/${id}`),
+  burndown: async (id: string) => (await api.get<BurndownRow>(`/sprints/${id}/burndown`)).data
+};
 
 /** The command palette's deterministic record search — tickets and projects the caller may see,
  *  by key/code/title/name. Distinct from `aiApi.ask`, which is the natural-language path. */

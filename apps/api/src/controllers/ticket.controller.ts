@@ -33,6 +33,7 @@ import { processUpload } from "../services/attachment-storage.service.js";
 import { audit } from "../services/audit.service.js";
 import { resolveVisiblePeopleNames } from "../services/people-visibility.service.js";
 import { buildTicketMetricSeriesFor } from "../services/ticket-metrics.service.js";
+import { assertSprintsEnabled } from "../services/planning.service.js";
 import { getCustomFieldValues, setCustomFieldValues } from "../services/custom-field.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
@@ -112,6 +113,7 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
   // one project, so the project scope above already decides whether its tickets may be seen at all;
   // this only narrows a set the caller can already read.
   const moduleId = typeof req.query.moduleId === "string" && req.query.moduleId ? req.query.moduleId : undefined;
+  const sprintId = typeof req.query.sprintId === "string" && req.query.sprintId ? req.query.sprintId : undefined;
   const assigneeId = typeof req.query.assigneeId === "string" && req.query.assigneeId ? req.query.assigneeId : undefined;
   // "Raised by". No extra permission gate: the project scope above already decides which tickets
   // this caller may see at all, and filtering a set you can already read reveals nothing new.
@@ -128,6 +130,7 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
       ...(scope.unrestricted ? {} : { projectId: { in: scope.projectIds } }),
       ...(projectId ? { projectId } : {}),
       ...(moduleId ? { moduleId } : {}),
+      ...(sprintId ? { sprintId } : {}),
       ...(statuses && statuses.length ? { status: { in: statuses as TicketStatus[] } } : {}),
       ...(priority ? { priority: priority as any } : {}),
       ...(type ? { type: type as any } : {}),
@@ -158,6 +161,7 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
       // Custom-field values ride along as `{ key: value }` so the list can show them as columns.
       // Two small columns per value; a workspace with no fields pays one empty array per row.
       customFieldValues: { select: { value: true, field: { select: { key: true } } } },
+      sprint: { select: { id: true, name: true, status: true } },
       // Kanban's red "CI failing" badge (see docs/ROADMAP.md's "Auto testing on branch/PR
       // push" theme) needs only the single latest run's status, not the full history — `take: 1`
       // keeps this a cheap per-ticket lookup instead of loading every TestRun row.
@@ -735,10 +739,32 @@ const patchSchema = z.object({
       description: z.string().max(20000).optional().nullable(),
       type: z.string().min(1).max(60).optional(),
       priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).optional(),
-      moduleId: z.string().uuid().optional().nullable()
+      moduleId: z.string().uuid().optional().nullable(),
+      // Sprint membership and estimate (V12, behind the sprints toggle). Half-points allowed;
+      // nothing finer — a Decimal(5,1) column is the ceiling.
+      sprintId: z.string().uuid().optional().nullable(),
+      storyPoints: z.number().min(0).max(9999).multipleOf(0.5).optional().nullable()
     })
     .strict()
 });
+
+/**
+ * Sprint membership and estimate on a ticket PATCH (V12). Both need the sprints toggle, and a
+ * sprint must belong to the ticket's own project — a foreign sprint would silently widen that
+ * project's burndown. Kept out of the handler so the handler stays under the complexity ceiling.
+ */
+async function applySprintFields(body: { sprintId?: string | null; storyPoints?: number | null }, projectId: string, data: Record<string, unknown>): Promise<void> {
+  if (!("sprintId" in body) && !("storyPoints" in body)) return;
+  await assertSprintsEnabled();
+  if ("sprintId" in body) {
+    if (body.sprintId) {
+      const sprint = await prisma.sprint.findFirst({ where: { id: body.sprintId, projectId }, select: { id: true } });
+      if (!sprint) throw new AppError(422, "That sprint belongs to a different project.");
+    }
+    data.sprintId = body.sprintId || null;
+  }
+  if ("storyPoints" in body) data.storyPoints = body.storyPoints ?? null;
+}
 
 ticketRouter.patch("/:id", requirePermission(permissions.TICKETS_WRITE), validate(patchSchema), async (req, res) => {
   const existing = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
@@ -760,6 +786,7 @@ ticketRouter.patch("/:id", requirePermission(permissions.TICKETS_WRITE), validat
     data.dueAt = computeTicketDueDate(existing.createdAt, req.body.priority as any, slaSettings);
   }
   if ("moduleId" in req.body) data.moduleId = req.body.moduleId || null;
+  await applySprintFields(req.body, existing.projectId, data);
 
   const ticket = await prisma.ticket.update({
     where: { id: existing.id },
