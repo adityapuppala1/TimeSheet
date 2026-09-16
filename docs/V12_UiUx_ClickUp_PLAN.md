@@ -3,7 +3,7 @@
 > Branch: V12_UiUx_ClickUp — NEVER merge to main.
 
 ## Current Status
-- Phase: 2 — theme lifecycle (done) → mode + accents (done) → shell: touch targets (done) → PageHeader + derived breadcrumb: ALL 17 in-app pages migrated (slice 2 done this session) → sidebar hierarchy nav, density, responsive containment next.
+- Phase: 2 — theme lifecycle (done) → mode + accents (done) → shell: touch targets (done) → PageHeader + derived breadcrumb: ALL 17 in-app pages (done) → sidebar Project → Module tree (done this session) → density, responsive containment next.
 - Last updated: 2026-09-16 by Claude Code (Fable 5.1), resumed from Codex per §3.
 - Resumed baseline: lint PASS (701 warnings, zero errors, ratchet passes); API 3140/3140; web 191/191. Matched the previous handoff exactly.
 - Post-change checks: per unit in the Session Log; slice 2's gates are appended there on completion.
@@ -21,13 +21,15 @@
 - [x] Phase 2 shell (part 2a): `components/PageHeader.tsx` — title block + breadcrumb DERIVED from `nav` via the sidebar's `matchPath`/`end` rule; migrated Tickets (icon + actions slot) and Profile (plain). Date-picker triggers → 44px; range picker `h-9` kept (filter control).
 - [x] Phase 2 shell (part 2b, slice 1): Timesheet, History, Changes, ChangeCalendar, Team, Dashboard (`breadcrumb={false}` — the landmark) on PageHeader; actions cells moved verbatim; verified live 390/1366 + dark.
 - [x] Phase 2 shell (part 2b, slice 2): AIActivityLog, AuditLog, EmailTemplates (+BulkTestButton action), Help, Insights, SecurityInsights, WhatsNew, WorkspaceSettings, and AdminPages via its `Workspace` wrapper (Users/Projects/Approvals/Reports). PageHeader.icon accepts component OR node. Help/WhatsNew: no nav entry → no crumb, by design. Header rollout COMPLETE.
-- [ ] Phase 2 shell (part 3): sidebar hierarchy navigation (Project → Module → Submodule, from the existing Prisma hierarchy), density preference (the JSON column already anticipates it), responsive containment audit on the remaining tables/boards.
+- [x] Phase 2 shell (part 3a): sidebar Project → Module tree (`ProjectTree` in Sidebar.tsx, under Work; drawer too; not in slim). Rows deep-link to Tickets via `lib/project-tree.ts` (`?project=&module=`); Tickets reads them, gains a Module select, and both `/tickets` + `/tickets/metrics` accept `moduleId`. NO submodule tier: `Ticket` has no submodule column (only `Timesheet`) — the earlier "Project → Module → Submodule" wording was an assumption, corrected here.
+- [ ] Phase 2 shell (part 3b): density preference — `comfortable` (today's 14px root) / `compact`; add to `AppearancePreference` + PATCH schema + `readAppearance` + theme.ts + Profile → Appearance; `data-density` on `<html>`. Touch targets stay absolute 44px.
+- [ ] Phase 2 shell (part 3c): responsive containment audit — run `tests/e2e/responsive.spec.ts` (phone + tablet projects) over the app routes and fix any measured overflow; each fix its own commit.
 - [ ] Phase 3: implement verified gaps by priority, with tests and shipping surfaces updated.
 - [ ] Phase 4: responsive/accessibility/workflow checks and continuous hardening.
 - [ ] Phase 5: branch-only release preparation and clean install/update validation.
 
 ## In Progress / Half-done
-- Nothing half-finished. Five units complete and verified. `v12-slice2-*.png` at repo root are artefacts — deleted before commit. The only remaining `text-2xl font-black tracking-tight` matches are non-candidates (public/auth pages, platform console shell, ChangeDetail's record-key title, EmailTemplates' stat tile) — do not migrate them.
+- Nothing half-finished. Six units complete and verified. `v12-slice2-*.png` at repo root are artefacts — deleted before commit. The only remaining `text-2xl font-black tracking-tight` matches are non-candidates (public/auth pages, platform console shell, ChangeDetail's record-key title, EmailTemplates' stat tile) — do not migrate them.
 - Final verification commands: `npm run lint`, `npm run test -w apps/api`, `npm run test -w apps/web`, `git diff --check` — run SEQUENTIALLY (parallel runs starve the workers) and AFTER the last edit, including any version bump (the 5.2.0 lesson in CONTRIBUTING).
 - Local ignored artefacts: `test-results/run-shots/v12-appearance-*.png` (five frames: before, indigo light, indigo dark, phone dark, tablet dark). Do not commit them.
 
@@ -62,7 +64,7 @@
 ## ClickUp Feature Matrix
 | Area | ClickUp capability (source URL) | Our app (paths) | Status | Action | Priority | Done |
 |------|------|------|------|------|------|------|
-| Projects/Spaces/Folders/Lists | [Nested hierarchy][cu-hierarchy] | Prisma Project/ProjectModule/ProjectSubmodule; Sidebar.tsx flat sections | Partial | Enhance navigation over existing project hierarchy | P1 | Audit complete |
+| Projects/Spaces/Folders/Lists | [Nested hierarchy][cu-hierarchy] | Prisma Project/ProjectModule/ProjectSubmodule; `ProjectTree` in Sidebar.tsx (Project → Module, deep-links to Tickets) | Near-identical core (2 tiers; submodules are timesheet-only, no ticket carries one) | Done for tickets; a timesheet-history deep link is the only conceivable 3rd tier | P1 | Shipped |
 | Tasks/subtasks | [Nested tasks][cu-hierarchy] | Prisma Ticket.parentId/checklists; pages/Tickets.tsx | Near-identical core | Enhance existing child navigation; no second task table | P1 | Audit complete |
 | Custom fields/statuses | [Configurable fields and workflow][cu-fields] | services/custom-field.service.ts; Prisma Workflow/WorkflowStatus; PlanningSettingsCard.tsx | Partial | Enhance field columns and workflow visibility; also see [statuses][cu-statuses] | P1 | Audit complete |
 | Tickets/issues | [Task workflows][cu-statuses] | controllers/ticket.controller.ts: assignment, SLA, comments, labels, links, attachments | Near-identical core | Enhance existing tickets; preserve SLA and CI gates | P1 | Audit complete |
@@ -157,6 +159,8 @@ The matrix covers every requested area. Remaining Unverified details are explici
 | 2026-09-16 | Live frame showed a GREEN accent while the profile was NULL | The test browser's localStorage still held a previous session's `timesheet:accent` — exactly the 'browser leftover' the profile preference is designed to override, and a NULL profile correctly changes nothing | None. Design working as intended; noted so nobody chases it | — |
 | 2026-09-16 | `PageHeader` import in Timesheet.tsx typechecked as 'cannot find name' though the line was present | The migration script inserted after the first line beginning `import ` — which in that file was INSIDE the leading `/** … */` doc comment, so the statement was a comment | Moved the import below the comment; the other five pages had landed as real statements and were checked by grep, not assumed | Slice 1 commit |
 | 2026-09-16 | Live probe reported every slice-2 page as 'h1 not found', then later runs died mid-flight with 'browser closed' after 5+ min | Three separate probe faults, zero page faults: (a) `isVisible()` does not auto-wait — use `toBeVisible`; (b) I hand-typed a crumb section ('Analytics') the nav table files under Administration — derive expectations from `nav`, read as text since importing Sidebar.tsx drags in `import.meta`; (c) the shared auth snapshot's refresh secret rotates and a long run is revoked mid-flight (auth.setup.ts documents this) — log in fresh via the API per test, as responsive.spec.ts does | Probe rewritten three times; pages unchanged. 19 route×width checks green with crumbs matching nav exactly before the session-rotation kill | — (probe only) |
+| 2026-09-16 | State file promised a "Project → Module → Submodule" sidebar; probe of the schema showed `Ticket` has `moduleId` but no submodule column | The plan line was written from the Prisma model list, not from the Ticket relation. A submodule row would have linked to an empty Tickets page | Tree built with two tiers; reason recorded in `lib/project-tree.ts`, the Sidebar comment and the Feature Matrix row | — |
+| 2026-09-16 | Tree probe: strict-mode collision — the tree's "Projects" heading and the Administration "Projects" link both match `getByText("Projects")`; employee check read `undefined` projects | (a) A heading that shares a word with a nav label is legitimate UI; the probe selector was the fault — scoped to `[data-tour=project-tree] > p`. (b) `page.request` after a cookie login is unauthenticated for bearer routes — pass the login's `accessToken` | Probe fixed twice; product unchanged. Desktop, phone drawer, and employee scope (3 of 5 projects, matching the API exactly) all green | — (probe only) |
 
 ## Open Questions / Blockers
 - `RTK.md` referenced by user AGENTS instructions is absent; no matching repository file found.
@@ -170,6 +174,12 @@ The matrix covers every requested area. Remaining Unverified details are explici
 - The graphify pre-grep hook fires on every Grep. Query first; it is faster than the refusal.
 
 ## Session Log (newest first)
+### 2026-09-16 — Claude Code (Fable 5.1), shell part 3a — sidebar Project → Module tree
+- Did: `ProjectTree` under Work in Sidebar.tsx (desktop + drawer, not slim), collapsed by default, fold state per browser (`ts.sidebar.projects.open`), rows highlight from the URL; `lib/project-tree.ts` (URL keys, pure); Tickets reads `?project=&module=`, grows a Module select, clears the params on a manual change; API `/tickets` + `/tickets/metrics` accept `moduleId`; `TicketFilters.moduleId`. Tests: 6 web (helper), 3 API (both endpoints send `moduleId` to Prisma; absent = no clause). No dependency, env var, flag or migration.
+- Verified with: live Playwright at 1366 + 390 — heading visible with every static link still visible; collapsed by default; expand → module link → URL, h1, Project AND Module selects, `aria-current`, list request carries `moduleId`; manual "All projects" clears the URL and hides the Module select; fold survives reload; drawer closes on navigate; overflow −10; employee sees exactly the 3 API-scoped projects.
+- Gates AFTER the last edit, sequential: lint 701 warnings / 0 errors (ratchet passes); API 3150/3150 (+3); web 214/214 (+6); `git diff --check` clean.
+- Left off at: part 3b density, then 3c containment audit.
+
 ### 2026-09-16 — Claude Code (Fable 5.1), shell part 2b slice 2 — header rollout complete
 - Did: resumed per §3 (git matched; baseline 701/0, 3147, 208). Extended PageHeader.icon to accept a rendered node; migrated the nine remaining in-app pages (AdminPages via its `Workspace` wrapper = 4 routes in one edit); confirmed the leftover grep matches are non-candidates. Changelog updated. No dependency, env var, flag or migration.
 - Verified with: typecheck clean; live Playwright with nav-DERIVED crumb expectations — 19 route×width checks green (every crumb exactly [section, label]; Help/WhatsNew correctly crumb-less; zero overflow) before the shared snapshot's rotation killed the session. Final fresh-login probe: all 10 routes × 2 widths green (the 11-minute run reached 9; What's new confirmed in a separate 24 s run — h1 present, no crumb, overflow −10). Gates AFTER the last edit, sequential: lint 701 warnings / 0 errors (ratchet passes); API 3147/3147; web 208/208; `git diff --check` clean.

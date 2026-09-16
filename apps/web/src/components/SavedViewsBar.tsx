@@ -42,6 +42,8 @@ const serverMessage = (err: any, fallback: string) => err?.response?.data?.messa
  */
 export type TicketFilters = {
   projectId: string;
+  /** "all" or a module of `projectId`. Older saved views lack it and merge over the default. */
+  moduleId: string;
   status: string;
   priority: string;
   type: string;

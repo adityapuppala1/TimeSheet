@@ -13,6 +13,7 @@ import {
   Bot,
   Briefcase,
   CalendarDays,
+  ChevronRight,
   ClipboardList,
   FileClock,
   FileStack,
@@ -43,8 +44,9 @@ import {
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { NavLink } from "react-router";
+import { Link, NavLink, useLocation } from "react-router";
 import { permissions, type Permission } from "@timesheet/shared";
+import { readProjectSelection, ticketsHref } from "../lib/project-tree";
 import { cn } from "../lib/utils";
 import { usePlanningFeatures } from "../lib/use-planning";
 import type { PlanningEffective } from "../services/api";
@@ -54,7 +56,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { DropdownMenu, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { brandingApi, brandingLogoUrl, fileUrl } from "../services/api";
+import { brandingApi, brandingLogoUrl, fileUrl, projectApi } from "../services/api";
 
 /**
  * Section headings group the nav so 15 items don't read as one undifferentiated list.
@@ -242,6 +244,132 @@ function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavig
   );
 }
 
+/** Which projects a person has expanded, per browser — like the collapse control, a remembered
+ *  preference rather than a nag. */
+const PROJECT_TREE_OPEN_KEY = "ts.sidebar.projects.open";
+
+function readOpenProjects(): Set<string> {
+  try {
+    const raw = localStorage.getItem(PROJECT_TREE_OPEN_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+interface TreeProject {
+  id: string;
+  name: string;
+  modules?: Array<{ id: string; name: string }>;
+}
+
+/**
+ * Project → Module, under the Work section. The V12 shell asks for a hierarchy in the sidebar,
+ * and this app already HAS one — `Project` → `ProjectModule` in Prisma, read by every ticket and
+ * timesheet — so the tree navigates that rather than inventing Spaces or Folders over it.
+ *
+ * WHAT A ROW LEADS TO: the Tickets page, filtered (`lib/project-tree.ts` owns the URL keys).
+ * There is no third tier: `Ticket` has no submodule column (only `Timesheet` does), so a
+ * submodule row would lead nowhere and is deliberately not drawn.
+ *
+ * WHO SEES IT: the same projects the API already scopes for this person (own assignments, plus
+ * reports' for a manager, everything for an admin) — the tree adds no visibility of its own —
+ * and only people who can open Tickets at all. It shares the `["projects"]` cache key with the
+ * Timesheet dialog and the Tickets filter, so it costs no extra request on most sessions.
+ *
+ * COLLAPSED BY DEFAULT, and the expanded set is remembered per browser. Static headings stay
+ * static (see the comment on `NavSection`); only the tree's own nodes fold, and every top-level
+ * page link remains visible with no interaction, which is what the responsive suite asserts.
+ *
+ * NOT DRAWN IN SLIM MODE: a 68px rail has room for an icon per page, not for names of projects.
+ */
+function ProjectTree({ onNavigate }: { onNavigate?: () => void }) {
+  const user = useAuthStore((s) => s.user);
+  const canSeeTickets = Boolean(user?.permissions.includes(permissions.TICKETS_VIEW));
+  const projects = useQuery({
+    queryKey: ["projects"],
+    queryFn: () => projectApi.list() as Promise<TreeProject[]>,
+    enabled: canSeeTickets,
+    staleTime: 5 * 60_000
+  });
+  const location = useLocation();
+  const selection = location.pathname === "/app/tickets" ? readProjectSelection(location.search) : {};
+  const [open, setOpen] = useState<Set<string>>(readOpenProjects);
+  const toggle = (id: string) =>
+    setOpen((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      try {
+        localStorage.setItem(PROJECT_TREE_OPEN_KEY, JSON.stringify([...next]));
+      } catch {
+        /* private mode — the fold state just does not persist */
+      }
+      return next;
+    });
+
+  if (!canSeeTickets || !projects.data?.length) return null;
+
+  const rowClass = (active: boolean) =>
+    cn(
+      "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground",
+      active && "bg-primary/10 text-primary hover:bg-primary/15"
+    );
+
+  return (
+    <div className="grid gap-0.5" data-tour="project-tree">
+      <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Projects</p>
+      <ul className="grid gap-0.5">
+        {projects.data.map((project) => {
+          const modules = [...(project.modules ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+          const expanded = open.has(project.id);
+          const projectActive = selection.projectId === project.id && !selection.moduleId;
+          return (
+            <li key={project.id} className="grid gap-0.5">
+              <div className="flex items-center">
+                {modules.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => toggle(project.id)}
+                    aria-expanded={expanded}
+                    aria-label={`${expanded ? "Collapse" : "Expand"} ${project.name}`}
+                    className="focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                  >
+                    <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")} aria-hidden="true" />
+                  </button>
+                ) : (
+                  // Same width as the chevron so project names align whether or not they fold.
+                  <span aria-hidden className="h-7 w-7 shrink-0" />
+                )}
+                <Link to={ticketsHref(project.id)} onClick={onNavigate} className={rowClass(projectActive)} aria-current={projectActive ? "page" : undefined}>
+                  <FolderKanban className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{project.name}</span>
+                </Link>
+              </div>
+              {expanded && modules.length > 0 && (
+                <ul className="grid gap-0.5 pl-7">
+                  {modules.map((module) => {
+                    const active = selection.projectId === project.id && selection.moduleId === module.id;
+                    return (
+                      <li key={module.id} className="flex">
+                        <Link to={ticketsHref(project.id, module.id)} onClick={onNavigate} className={rowClass(active)} aria-current={active ? "page" : undefined}>
+                          <span className="ml-2 h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" aria-hidden="true" />
+                          <span className="truncate">{module.name}</span>
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 /**
  * Shared between the desktop sidebar and the mobile drawer so the two never drift apart — that
  * sharing is also what makes "auto-close the drawer on navigate" work: the drawer passes
@@ -273,6 +401,8 @@ function NavList({ items, onNavigate, slim = false }: { items: NavItem[]; onNavi
             {sectionItems.map((item) => (
               <NavLinkRow key={item.to} item={item} onNavigate={onNavigate} slim={slim} />
             ))}
+            {/* The hierarchy sits directly under the Work pages it filters. */}
+            {section === "Work" && !slim && <ProjectTree onNavigate={onNavigate} />}
           </div>
         );
       })}

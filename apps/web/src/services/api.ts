@@ -3273,6 +3273,7 @@ export const ticketApi = {
    *  the table below them can never describe different sets of tickets. */
   metrics: async (params?: {
     projectId?: string;
+    moduleId?: string;
     status?: string;
     priority?: string;
     type?: string;
@@ -3289,6 +3290,8 @@ export const ticketApi = {
     priority?: string;
     type?: string;
     projectId?: string;
+    /** One tier below the project — the sidebar's Project → Module tree links here. */
+    moduleId?: string;
     assigneeId?: string;
     /** "Raised by" — the ticket's reporter. */
     reporterId?: string;

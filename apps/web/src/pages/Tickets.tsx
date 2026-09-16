@@ -64,7 +64,7 @@ import {
   Waypoints,
   X
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRefine";
 import { PlanCalendar } from "../components/PlanCalendar";
@@ -72,6 +72,7 @@ import { TicketApprovalsPanel } from "../components/TicketApprovalsPanel";
 import { ProofingPanel } from "../components/ProofingPanel";
 import { SavedViewsBar, type TicketFilters } from "../components/SavedViewsBar";
 import { PageHeader } from "../components/PageHeader";
+import { readProjectSelection, withoutProjectSelection } from "../lib/project-tree";
 import { TicketMetricsPanel } from "../components/TicketMetricsPanel";
 import { TicketPlanningPanel } from "../components/TicketPlanningPanel";
 import { PlanTimeline, TimelineLegend, scheduledItemIds, type TimelineZoom } from "../components/PlanTimeline";
@@ -332,6 +333,7 @@ const ticketColumns: ColumnDef<TicketRow, any>[] = [
  *  before an axis existed cannot leave that axis `undefined`. */
 export const DEFAULT_TICKET_FILTERS: TicketFilters = {
   projectId: "all",
+  moduleId: "all",
   status: "all",
   priority: "all",
   type: "all",
@@ -345,6 +347,7 @@ function ticketQueryParams(filters: TicketFilters, userId: string | undefined) {
   const set = (value: string) => (value !== "all" ? value : undefined);
   return {
     projectId: set(filters.projectId),
+    moduleId: set(filters.moduleId),
     status: set(filters.status),
     priority: set(filters.priority),
     type: set(filters.type),
@@ -361,6 +364,20 @@ export function Tickets() {
 
   const [filters, setFilters] = useState<TicketFilters>({ ...DEFAULT_TICKET_FILTERS });
   const [createOpen, setCreateOpen] = useState(false);
+  // The sidebar's Project → Module tree deep-links here with `?project=` / `?module=` (lib/project-tree.ts
+  // owns the two keys). Applied whenever the URL changes, so clicking a second module in the tree
+  // while already on this page re-filters rather than being ignored.
+  const linked = readProjectSelection(searchParams);
+  useEffect(() => {
+    if (!linked.projectId) return;
+    setFilters((f) => ({ ...f, projectId: linked.projectId!, moduleId: linked.moduleId ?? "all" }));
+  }, [linked.projectId, linked.moduleId]);
+  /** A hand-made change to the project or module filter also drops the tree's parameters from the
+   *  URL — otherwise the address bar would keep naming a project the page is no longer showing. */
+  const chooseProject = (projectId: string, moduleId = "all") => {
+    setFilters((f) => ({ ...f, projectId, moduleId }));
+    if (linked.projectId) setSearchParams(withoutProjectSelection(searchParams), { replace: true });
+  };
   // Timeline and Calendar join List and Board here rather than becoming their own pages, so the
   // filters someone has already set carry across every way of looking at the same work. A
   // separate "planning" page would have meant two places to filter and two mental models.
@@ -512,7 +529,9 @@ export function Tickets() {
         <CardContent className="flex flex-wrap items-end gap-3 pt-6">
           <div className="grid w-full gap-1.5 sm:w-auto">
             <Label htmlFor="ticket-filter-project">Project</Label>
-            <Select value={filters.projectId} onValueChange={(v) => setFilters((f) => ({ ...f, projectId: v }))}>
+            {/* Changing the project resets the module: a module belongs to exactly one project, so
+                the old one could not be shown selected in the list that follows. */}
+            <Select value={filters.projectId} onValueChange={(v) => chooseProject(v)}>
               <SelectTrigger id="ticket-filter-project" className="w-full sm:w-[180px]">
                 <SelectValue placeholder="All projects" />
               </SelectTrigger>
@@ -522,6 +541,24 @@ export function Tickets() {
               </SelectContent>
             </Select>
           </div>
+          {/* Second tier of the same hierarchy the sidebar tree navigates. Only offered once a project
+              is chosen — a module list across every project would be a list of duplicate names. */}
+          {filters.projectId !== "all" && (projects.data?.find((p: any) => p.id === filters.projectId)?.modules?.length ?? 0) > 0 && (
+            <div className="grid w-full gap-1.5 sm:w-auto">
+              <Label htmlFor="ticket-filter-module">Module</Label>
+              <Select value={filters.moduleId} onValueChange={(v) => chooseProject(filters.projectId, v)}>
+                <SelectTrigger id="ticket-filter-module" className="w-full sm:w-[180px]">
+                  <SelectValue placeholder="All modules" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All modules</SelectItem>
+                  {projects.data
+                    ?.find((p: any) => p.id === filters.projectId)
+                    ?.modules?.map((m: any) => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div className="grid w-full gap-1.5 sm:w-auto">
             <Label htmlFor="ticket-filter-status">Status</Label>
             <Select value={filters.status} onValueChange={(v) => setFilters((f) => ({ ...f, status: v }))}>

@@ -107,6 +107,10 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
   const priority = typeof req.query.priority === "string" && req.query.priority ? req.query.priority : undefined;
   const type = typeof req.query.type === "string" && req.query.type ? req.query.type : undefined;
   const projectId = typeof req.query.projectId === "string" && req.query.projectId ? req.query.projectId : undefined;
+  // One tier below the project, for the sidebar's Project → Module tree. A module belongs to exactly
+  // one project, so the project scope above already decides whether its tickets may be seen at all;
+  // this only narrows a set the caller can already read.
+  const moduleId = typeof req.query.moduleId === "string" && req.query.moduleId ? req.query.moduleId : undefined;
   const assigneeId = typeof req.query.assigneeId === "string" && req.query.assigneeId ? req.query.assigneeId : undefined;
   // "Raised by". No extra permission gate: the project scope above already decides which tickets
   // this caller may see at all, and filtering a set you can already read reveals nothing new.
@@ -122,6 +126,7 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
       deletedAt: null,
       ...(scope.unrestricted ? {} : { projectId: { in: scope.projectIds } }),
       ...(projectId ? { projectId } : {}),
+      ...(moduleId ? { moduleId } : {}),
       ...(statuses && statuses.length ? { status: { in: statuses as TicketStatus[] } } : {}),
       ...(priority ? { priority: priority as any } : {}),
       ...(type ? { type: type as any } : {}),
@@ -180,6 +185,7 @@ function readMetricFilters(req: any) {
   const status = str("status");
   return {
     projectId: str("projectId"),
+    moduleId: str("moduleId"),
     labelId: str("labelId"),
     assigneeId: str("assigneeId"),
     reporterId: str("reporterId"),
@@ -265,7 +271,7 @@ ticketRouter.get("/metrics", requirePermission(permissions.TICKETS_VIEW), async 
   const empty = { total: 0, byStatus: {}, byPriority: {}, byProject: [] as unknown[], byReporter: [] as unknown[], series: null };
   if (!scope.unrestricted && scope.projectIds.length === 0) return res.json(empty);
 
-  const { projectId, labelId, assigneeId, reporterId, type, priority, statusList } = readMetricFilters(req);
+  const { projectId, moduleId, labelId, assigneeId, reporterId, type, priority, statusList } = readMetricFilters(req);
   if (projectId) await assertTicketVisible(req, projectId);
   // `assigneeId` here is the page's own "Assigned to me" toggle, so it may only ever be the caller —
   // otherwise this route would report any colleague's workload to anybody holding tickets:view.
@@ -278,6 +284,7 @@ ticketRouter.get("/metrics", requirePermission(permissions.TICKETS_VIEW), async 
     deletedAt: null,
     ...(scope.unrestricted ? {} : { projectId: { in: scope.projectIds } }),
     ...(projectId ? { projectId } : {}),
+    ...(moduleId ? { moduleId } : {}),
     ...(labelId ? { labels: { some: { labelId } } } : {}),
     ...(assigneeId ? { assigneeId } : {}),
     ...(type ? { type } : {})

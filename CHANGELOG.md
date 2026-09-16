@@ -10,6 +10,23 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🧭 The sidebar navigates the project hierarchy you already have
+
+- **Project → Module tree under Work.** The sidebar (and the phone drawer) now list the projects
+  you can see — the SAME set the API already scopes per role, so the tree adds no visibility of
+  its own — each folding open to its modules. A row opens Tickets filtered to that project or
+  module; the row you are on is highlighted; which projects you left open is remembered per
+  browser. Collapsed by default, so every page link stays visible with no interaction. Not drawn
+  in the slim 68px rail. Hidden entirely for anyone who cannot open Tickets.
+- **No third tier, on purpose.** A ticket carries a project and optionally a module; it has no
+  submodule (only timesheets do). A submodule row that led nowhere would be worse than none.
+- **Tickets gains a Module filter** beside Project, shown once a project with modules is chosen,
+  and both the list and the metric tiles now take `moduleId` — so the tiles can never describe a
+  different set than the table under them. Saved views made before this merge over the default.
+- **Deep links.** `/app/tickets?project=…&module=…` is what the tree writes and the page reads
+  (`lib/project-tree.ts` owns the two keys). Changing the filter by hand clears them from the
+  address bar, so the URL never names a project the page is no longer showing.
+
 ### 🎨 A page header with a breadcrumb that is derived, never typed
 
 - **`PageHeader` replaces the title block 26 of 50 pages hand-rolled**, and adds the breadcrumb the
