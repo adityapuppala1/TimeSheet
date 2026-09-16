@@ -88,6 +88,7 @@ import { computeTrend } from "../lib/trend";
 import { useAuthStore } from "../store/auth";
 import { copyText } from "../lib/clipboard";
 import { PageHeader } from "../components/PageHeader";
+import { EmptyState } from "../components/ui/empty-state";
 
 const FALLBACK_DEFAULT = `<h2>Title</h2>
 <p>Hi {{name}}, your action is required.</p>
@@ -477,7 +478,7 @@ function AnalyticsTab({ data, loading }: { data?: EmailAnalytics; loading: boole
         </CardHeader>
         <CardContent>
           {topTemplates.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">No emails have been sent yet.</p>
+            <EmptyState compact title="No emails have been sent yet" />
           ) : (
             <div className="overflow-x-auto">
               <div className="h-[420px] min-w-[560px]">
@@ -617,7 +618,7 @@ function TemplateBreakdownCard({ rows }: { rows: EmailTemplateVolumeRow[] }) {
       </CardHeader>
       <CardContent className="overflow-x-auto p-0">
         {filtered.length === 0 ? (
-          <p className="px-4 py-6 text-center text-sm text-muted-foreground">Nothing matches the current search and filters.</p>
+          <EmptyState compact title="Nothing matches the current search and filters" action={<Button variant="outline" size="sm" className="h-[44px]" onClick={() => { setSearch(""); setScope("all"); }}>Clear search and filters</Button>} />
         ) : (
           <Table>
             <TableHeader>
@@ -789,7 +790,7 @@ function FailureBreakdownCard() {
               </p>
             )}
             {filtered.length === 0 && (
-              <p className="py-6 text-center text-sm text-muted-foreground">Nothing matches the current search and filters.</p>
+              <EmptyState compact title="Nothing matches the current search and filters" action={<Button variant="outline" size="sm" className="h-[44px]" onClick={() => { setSearch(""); setCategory("all"); }}>Clear search and filters</Button>} />
             )}
 
             {/* Desktop: a scannable table. */}
@@ -1096,7 +1097,7 @@ function DomainDeliveryCard() {
             </div>
 
             {data.totals.total === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">No mail was sent in this period.</p>
+              <EmptyState compact title="No mail was sent in this period" />
             ) : (
               <>
                 {attention.length > 0 && (

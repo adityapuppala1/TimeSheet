@@ -81,6 +81,7 @@ import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import { Badge } from "../../components/ui/badge";
 import { useDebouncedValue } from "../../hooks/use-debounced-value";
+import { EmptyState } from "../../components/ui/empty-state";
 
 /** Typed against FaceOutcome (not `string`) so a value added to the union fails the build here
  *  instead of silently rendering an untinted badge — LOW_QUALITY was missing for exactly that
@@ -685,7 +686,7 @@ function formatBucket(iso: string) {
  *  value keep their legend entry (absence is information) but contribute no bar. */
 function StackedShareBar({ segments, empty }: { segments: Array<{ key: string; label: string; value: number; color: string; hint?: string }>; empty: string }) {
   const total = segments.reduce((sum, s) => sum + s.value, 0);
-  if (total === 0) return <p className="py-4 text-center text-sm text-muted-foreground">{empty}</p>;
+  if (total === 0) return <EmptyState compact title={empty} />;
 
   const row = segments.reduce<Record<string, number | string>>((acc, s) => ({ ...acc, [s.key]: s.value }), { name: "total" });
   const drawn = segments.filter((s) => s.value > 0);
@@ -801,7 +802,7 @@ function FaceOutcomeAnalyticsCard({ readOnly }: { readOnly: boolean }) {
             judged (the person was asked to retake), blue a policy gap rather than a failure.
           </p>
           {breakdown.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">No verification attempts in this window.</p>
+            <EmptyState compact title="No verification attempts in this window" />
           ) : (
             /* Its own scroll container so a long outcome label can never make the settings page
                scroll sideways. */
@@ -832,7 +833,7 @@ function FaceOutcomeAnalyticsCard({ readOnly }: { readOnly: boolean }) {
             experience is degrading, which is a very different problem with a very different fix.
           </p>
           {trendSeries.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">Nothing to trend yet.</p>
+            <EmptyState compact title="Nothing to trend yet" />
           ) : (
             <div className="overflow-x-auto">
               <div className="h-72 min-w-[520px]">
@@ -1404,9 +1405,11 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
         {attempts.isLoading ? (
           <Skeleton className="h-32 w-full" />
         ) : rows.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            {flaggedOnly ? "Nothing flagged for review." : "No verification attempts recorded yet."}
-          </p>
+          <EmptyState
+            compact
+            title={flaggedOnly ? "Nothing flagged for review" : "No verification attempts recorded yet"}
+            action={flaggedOnly ? <Button variant="outline" size="sm" className="h-[44px]" onClick={() => setFlaggedOnly(false)}>Show all attempts</Button> : undefined}
+          />
         ) : (
           <>
             {/* Desktop table / mobile cards — same dual-rendering fallback the Tickets and Team

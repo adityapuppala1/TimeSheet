@@ -41,6 +41,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Skeleton } from "./ui/skeleton";
 import { settingsApi, type AIFeatureUsageRow } from "../services/api";
 import { cn } from "../lib/utils";
+import { EmptyState } from "./ui/empty-state";
 
 /** Matches the palette the rest of the settings charts use. */
 const SERIES_COLORS = [
@@ -177,9 +178,7 @@ export function AiFeatureUsagePanel() {
         {usage.isLoading && <Skeleton className="h-64 w-full" />}
 
         {noData && (
-          <p className="py-8 text-center text-sm text-muted-foreground">
-            No AI calls in this window — nothing has consumed any tokens yet.
-          </p>
+          <EmptyState compact title="No AI calls in this window" description="Nothing has consumed any tokens yet." />
         )}
 
         {!usage.isLoading && !noData && usage.data && (

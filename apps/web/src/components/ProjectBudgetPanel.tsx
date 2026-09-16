@@ -25,6 +25,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { cn } from "../lib/utils";
 import { resourceApi } from "../services/api";
+import { EmptyState } from "./ui/empty-state";
 
 const money = (value: number | null, currency: string) =>
   value === null
@@ -197,9 +198,7 @@ export function ProjectBudgetPanel({ projectId }: { projectId: string }) {
         </CardHeader>
         <CardContent className="p-0 sm:p-0">
           {variance.rows.length === 0 ? (
-            <p className="p-6 text-center text-sm text-muted-foreground">
-              Nothing to compare yet — this needs finished items that had an estimate and logged hours.
-            </p>
+            <EmptyState compact title="Nothing to compare yet" description="This needs finished items that had an estimate and logged hours." />
           ) : (
             <div className="overflow-x-auto">
               <Table>

@@ -22,6 +22,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { toast } from "../../components/ui/toaster";
 import { SERVER_ORIGIN, settingsApi, type WebhookDeliveryRow } from "../../services/api";
 import { copyText } from "../../lib/clipboard";
+import { EmptyState } from "../../components/ui/empty-state";
 
 const EVENT_LABEL: Record<OutboundWebhookEvent, string> = {
   "ticket.created": "Ticket created",
@@ -297,7 +298,7 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
                   </div>
                 ))}
                 {(keys.data ?? []).filter((k) => !k.revokedAt).length === 0 && (
-                  <p className="py-2 text-center text-sm text-muted-foreground">No active API keys yet.</p>
+                  <EmptyState compact title="No active API keys yet" />
                 )}
               </div>
               {/* `flex-wrap`, and the name field allowed to shrink, because this row grew a third
@@ -398,7 +399,7 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
                   </div>
                 ))}
                 {(webhooks.data ?? []).length === 0 && (
-                  <p className="py-2 text-center text-sm text-muted-foreground">No webhooks configured yet.</p>
+                  <EmptyState compact title="No webhooks configured yet" />
                 )}
               </div>
               {!readOnly && (

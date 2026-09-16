@@ -32,6 +32,8 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { toast } from "../../components/ui/toaster";
 import { Link } from "react-router";
 import { cn } from "../../lib/utils";
+import { EmptyState } from "../../components/ui/empty-state";
+import { Button } from "../../components/ui/button";
 
 const LADDER: Array<{ level: AutonomyLevel; label: string; blurb: string }> = [
   { level: "SUGGEST", label: "Suggest", blurb: "A person applies each change." },
@@ -235,7 +237,7 @@ export function AIAutonomyCard({
         ))}
 
         {!catalogue.isLoading && grouped.length === 0 && (
-          <p className="py-4 text-center text-sm text-muted-foreground">Nothing matches that.</p>
+          <EmptyState compact title="Nothing matches that" action={<Button variant="outline" size="sm" className="h-[44px]" onClick={() => setFilter("")}>Clear search</Button>} />
         )}
       </CardContent>
     </Card>

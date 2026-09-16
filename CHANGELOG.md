@@ -24,6 +24,11 @@ number, on purpose — an installation must never render history for a version t
   colours, or "Auto" for the derived one; the mark changes everywhere at once — sidebar tree,
   tickets table, cards, group headings. Stored as a palette id, so only measured, legible colours
   can be saved. Additive migration; existing projects keep their derived colour.
+- **Empty states, third pass.** Twenty-four more panels use the shared empty state instead of a
+  lone grey sentence: Email templates analytics, Face verification, API performance, Public API
+  keys and webhooks, MCP credentials, Maintenance, AI capabilities and usage, change catalogue and
+  analytics, timesheet analytics, project budget, practice-update history. Search and filter
+  misses now offer a Clear button; the Face review queue offers "Show all attempts".
 - **New tickets land in the sprint you are looking at.** With the list filtered or grouped by
   sprint, "Add ticket" under a group and the header's **New ticket** pre-select that sprint; the
   dialog gains a Sprint field (only with sprints on and a project chosen). Ticket creation accepts

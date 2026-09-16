@@ -27,6 +27,7 @@ import { toast } from "../../components/ui/toaster";
 import { SERVER_ORIGIN, settingsApi, userApi, type McpToolRow } from "../../services/api";
 import { copyText } from "../../lib/clipboard";
 import { cn } from "../../lib/utils";
+import { EmptyState } from "../../components/ui/empty-state";
 
 function CopyableSecret({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
@@ -345,7 +346,7 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
                 </div>
               ))}
               {(settings?.credentials ?? []).length === 0 && (
-                <p className="py-2 text-center text-sm text-muted-foreground">No MCP credentials yet.</p>
+                <EmptyState compact title="No MCP credentials yet" />
               )}
             </div>
 

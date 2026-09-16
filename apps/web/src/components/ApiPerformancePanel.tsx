@@ -50,6 +50,7 @@ import { Skeleton } from "./ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { apiPerformanceApi, type ApiRequestQuery } from "../services/api";
+import { EmptyState } from "./ui/empty-state";
 
 /* Shared chart styling — identical objects to pages/Insights.tsx so every chart in the product
    reads as one system rather than one-per-author. */
@@ -301,11 +302,11 @@ export function ApiPerformancePanel() {
         )}
 
         {!overview.isLoading && data && data.totals.total === 0 && (
-          <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-            {collection?.enabled
-              ? "No requests recorded in this window yet."
-              : "No requests were ever recorded — nothing to show until recording is switched on."}
-          </p>
+          <EmptyState
+            compact
+            title={collection?.enabled ? "No requests recorded in this window yet" : "No requests were ever recorded"}
+            description={collection?.enabled ? undefined : "Nothing to show until recording is switched on."}
+          />
         )}
 
         {!overview.isLoading && data && data.totals.total > 0 && (
@@ -469,9 +470,7 @@ export function ApiPerformancePanel() {
                   )}
                 </div>
                 {endpointRows.length === 0 ? (
-                  <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-                    No endpoint matches that filter in this window.
-                  </p>
+                  <EmptyState compact title="No endpoint matches that filter in this window" action={<Button variant="outline" size="sm" className="h-[44px]" onClick={() => setEndpointFilter("")}>Clear filter</Button>} />
                 ) : (
                 <div className="min-w-0 overflow-x-auto rounded-lg border border-border">
                   <Table>
@@ -629,9 +628,7 @@ export function ApiPerformancePanel() {
 
                 {requests.isLoading && <Skeleton className="h-40 w-full" />}
                 {requests.data && requests.data.rows.length === 0 && (
-                  <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-                    No requests match these filters in this window.
-                  </p>
+                  <EmptyState compact title="No requests match these filters in this window" />
                 )}
 
                 {/*

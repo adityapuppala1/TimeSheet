@@ -25,6 +25,7 @@ import { DateRangePicker } from "./ui/date-range-picker";
 import { Skeleton } from "./ui/skeleton";
 import { reportApi } from "../services/api";
 import { cn } from "../lib/utils";
+import { EmptyState } from "./ui/empty-state";
 
 const SERIES_COLORS = [
   "hsl(var(--primary))",
@@ -248,7 +249,7 @@ export function TimesheetAnalyticsPanel() {
                 Where the hours went
               </p>
               {mix.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">No entries in this range.</p>
+                <EmptyState compact title="No entries in this range" />
               ) : (
                 <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
                   <div className="h-56">

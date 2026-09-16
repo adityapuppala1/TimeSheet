@@ -23,6 +23,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip as ChartTi
 import type { ChangeMetrics } from "../../services/api";
 import { cn } from "../../lib/utils";
 import { Card, CardContent } from "../ui/card";
+import { EmptyState } from "../ui/empty-state";
 
 /** Honours the OS setting, and keeps honouring it if it changes mid-session. */
 function usePrefersReducedMotion(): boolean {
@@ -241,7 +242,7 @@ export function ChangeAnalytics({ metrics }: { metrics: ChangeMetrics }) {
             </header>
 
             {byProject.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">No changes raised yet.</p>
+              <EmptyState compact title="No changes raised yet" />
             ) : (
               <ul className="grid gap-2.5">
                 {byProject.map((p) => (

@@ -27,6 +27,7 @@ import { Label } from "../ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { toast } from "../ui/toaster";
+import { EmptyState } from "../ui/empty-state";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -198,7 +199,7 @@ export function ChangeCatalogueEditor({
       {rows.isLoading ? (
         <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>
       ) : list.length === 0 ? (
-        <p className="py-4 text-center text-sm text-muted-foreground">Nothing here yet.</p>
+        <EmptyState compact title="Nothing here yet" />
       ) : (
         <ul className="grid gap-1.5">
           {list.map((row) => (

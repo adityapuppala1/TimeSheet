@@ -23,6 +23,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Skeleton } from "./ui/skeleton";
 import { practiceUpdateApi } from "../services/api";
+import { EmptyState } from "./ui/empty-state";
 
 function PreviewDialog({ id, onClose }: { id: string | null; onClose: () => void }) {
   const detail = useQuery({
@@ -95,10 +96,7 @@ export function PracticeUpdateHistory() {
         {history.isLoading && <Skeleton className="h-24 w-full" />}
 
         {!history.isLoading && records.length === 0 && (
-          <p className="rounded-lg border border-dashed border-border p-5 text-center text-sm text-muted-foreground">
-            Nothing sent yet. Once an update is mailed it is archived here — the figures, the recipients, and the email
-            itself.
-          </p>
+          <EmptyState compact title="Nothing sent yet" description="Once an update is mailed it is archived here — the figures, the recipients, and the email itself." />
         )}
 
         {records.map((row) => (

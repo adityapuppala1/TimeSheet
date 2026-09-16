@@ -31,6 +31,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "../ui/sheet";
 import { Skeleton } from "../ui/skeleton";
+import { EmptyState } from "../ui/empty-state";
 
 /** One question per capability, phrased the way somebody would actually type it. */
 const QUESTION_FOR: Record<string, string> = {
@@ -153,7 +154,7 @@ function CapabilitiesPanel() {
         {isLoading ? (
           <Skeleton className="h-64 w-full" />
         ) : groups.length === 0 ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">Nothing matches “{filter}”.</p>
+          <EmptyState compact title={`Nothing matches “${filter}”`} action={<Button variant="outline" size="sm" className="h-[44px]" onClick={() => setFilter("")}>Clear filter</Button>} />
         ) : (
           groups.map((group) => (
             <section key={group.group} className="grid gap-1.5">

@@ -165,7 +165,10 @@ Engineering: `apps/api/src/services/dashboard.service.ts` (`WIDGET_CATALOGUE`, `
 
 Lists and panels that have nothing to show use one design: an icon, a title, a line of explanation
 and, where one honestly exists, a next action. Where the input sits right beside the list (ticket
-comments, checklist, links) there is deliberately no button. Engineering:
+comments, checklist, links) there is deliberately no button. A search or filter that matches
+nothing offers **Clear** (Email templates analytics, API performance, AI capabilities), and the
+Face verification review queue offers **Show all attempts** when only flagged ones are shown.
+Engineering:
 `apps/web/src/components/ui/empty-state.tsx`, promoted from the platform console's kit.
 
 ---

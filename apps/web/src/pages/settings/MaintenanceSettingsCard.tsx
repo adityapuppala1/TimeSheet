@@ -60,6 +60,7 @@ import { DateTimePicker, buildTimeSlots } from "../../components/ui/date-picker"
 import { ServerHealthCard } from "./ServerHealthCard";
 import { ServiceStatusPage } from "../../components/ServiceStatusPage";
 import { ApiPerformancePanel } from "../../components/ApiPerformancePanel";
+import { EmptyState } from "../../components/ui/empty-state";
 
 /** ISO from the API → the local "YYYY-MM-DDTHH:mm" the draft holds. Manual formatting because
  *  toISOString() would shift the wall-clock time to UTC — the admin picks times in THEIR clock.
@@ -519,9 +520,7 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
         </CardHeader>
         <CardContent className="grid gap-4">
           {online.users.length === 0 ? (
-            <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-              Nobody is online right now — a good moment for maintenance.
-            </p>
+            <EmptyState compact title="Nobody is online right now" description="A good moment for maintenance." />
           ) : (
             <ul className="min-w-0 divide-y rounded-lg border">
               {online.users.map((user) => (
