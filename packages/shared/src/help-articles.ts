@@ -87,9 +87,11 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Open the profile menu (your avatar, top right) and choose Profile.",
       "Upload a profile photo — images are re-encoded, and scanned first when your admin has malware scanning on.",
       "Add your phone number so approvers can reach you about urgent items.",
-      "Until you choose a theme, the app follows your device's light/dark setting, including changes while the app is open. Toggle light/dark with the sun/moon button in the top bar or Toggle theme in the command palette to save an explicit choice for this browser. The top-bar button uses a sweep animation unless reduced motion is enabled."
+      "Until you choose a theme, the app follows your device's light/dark setting, including changes while the app is open. Toggle light/dark with the sun/moon button in the top bar or Toggle theme in the command palette to save an explicit choice for this browser. The top-bar button uses a sweep animation unless reduced motion is enabled.",
+      "Under Profile → Appearance, pick System, Light or Dark, and one of seven accent colours. The choice saves to your profile the moment you click it — no Save button — so every device you sign in on matches, and a saved profile choice wins over whatever this browser remembered from before.",
+      "Every accent meets WCAG AA contrast in both themes; that was measured, not assumed, and the default Teal is exactly the colour the app always had."
     ],
-    keywords: ["profile", "avatar", "photo", "phone", "theme", "dark mode", "light mode", "appearance"]
+    keywords: ["profile", "avatar", "photo", "phone", "theme", "dark mode", "light mode", "appearance", "accent", "colour", "color", "system theme", "palette"]
   },
   {
     id: "notifications",

@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Router } from "express";
 import { z } from "zod";
-import { roles } from "@timesheet/shared";
+import { roles, ACCENT_IDS, THEME_MODES, type AccentId } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { avatarsDir, resolveWithin } from "../config/storage-paths.js";
 import { prisma } from "../config/prisma.js";
@@ -361,7 +361,18 @@ const profilePatchSchema = z.object({
     name: z.string().min(2).max(80).optional(),
     bio: z.string().max(600).optional().nullable(),
     phoneNumber: z.string().max(40).optional().nullable(),
-    timezone: z.string().max(80).optional().nullable()
+    timezone: z.string().max(80).optional().nullable(),
+    // Validated against the SHARED definition, not a local enum: a palette id the API accepted but
+    // the web did not know would save cleanly and then paint nothing. `null` clears the preference
+    // (back to "follow the OS, default accent"); an absent key leaves it untouched.
+    appearance: z
+      .object({
+        mode: z.enum(THEME_MODES).optional().nullable(),
+        accent: z.enum(ACCENT_IDS as [AccentId, ...AccentId[]]).optional().nullable()
+      })
+      .strict()
+      .optional()
+      .nullable()
   })
 });
 
@@ -391,6 +402,13 @@ authRouter.patch("/profile", requireAuth, validate(profilePatchSchema), async (r
       if (!isValidTimezone(tz)) throw new AppError(422, `"${tz}" is not a valid IANA timezone (e.g. Asia/Kolkata, America/New_York).`);
       data.timezone = tz;
     }
+  }
+
+  if ("appearance" in req.body) {
+    // Stored as exactly the validated shape and nothing else — a JSON column is a place where
+    // extra keys accumulate unless the write is explicit about what it keeps.
+    const a = req.body.appearance;
+    data.appearance = a === null ? null : { ...(a.mode ? { mode: a.mode } : {}), ...(a.accent ? { accent: a.accent } : {}) };
   }
 
   if (Object.keys(data).length === 0) throw new AppError(422, "No profile fields provided");

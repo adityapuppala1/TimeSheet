@@ -165,6 +165,13 @@ model User {
   bio                      String?    @db.Text
   phoneNumber              String?    @db.VarChar(40)
   timezone                 String?    @db.VarChar(80)
+  /// The person's saved appearance — `{ mode?: "system"|"light"|"dark", accent?: <palette id> }`,
+  /// validated against `packages/shared/src/appearance.ts` on write. JSON rather than two columns
+  /// because the two are one preference edited from one card, and because a third knob (density is
+  /// next on the V12 plan) must not cost a migration. NULL on every row that predates the column
+  /// and on anyone who never chose: the web renders that as "follow the OS, brand teal", which is
+  /// exactly what those people were already seeing. Display-only; nothing reads it for behaviour.
+  appearance               Json?
   /// When this person finished first-run setup (profile details, plus face enrollment when the
   /// workspace policy covers them). NULL means they have not, and the app is gated for them.
   ///

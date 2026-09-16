@@ -10,7 +10,7 @@
  * WHO calls this: `controllers/auth.controller.ts` (password + LDAP), `controllers/sso.controller.ts`
  * (Google/Microsoft/SAML).
  */
-import { resolveHeldRoles, type RoleName } from "@timesheet/shared";
+import { resolveHeldRoles, type RoleName, isAccentId, isThemeMode, type AppearancePreference } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
@@ -53,7 +53,18 @@ export type ProfilePayload = {
   timezone: string | null;
   managerId: string | null;
   manager: { id: string; name: string; email: string } | null;
+  appearance: AppearancePreference | null;
 };
+
+/** Only the two known keys, only if valid; anything else reads as absent. */
+function readAppearance(raw: unknown): AppearancePreference | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { mode, accent } = raw as Record<string, unknown>;
+  const out: AppearancePreference = {};
+  if (isThemeMode(mode)) out.mode = mode;
+  if (isAccentId(accent)) out.accent = accent;
+  return Object.keys(out).length ? out : null;
+}
 
 export async function buildProfilePayload(userId: string): Promise<ProfilePayload> {
   const user = await prisma.user.findUniqueOrThrow({
@@ -75,7 +86,10 @@ export async function buildProfilePayload(userId: string): Promise<ProfilePayloa
     phoneNumber: user.phoneNumber,
     timezone: user.timezone,
     managerId: user.managerId,
-    manager: user.manager ?? null
+    manager: user.manager ?? null,
+    // Read back through the shared guards rather than cast: a row written by an older build, or
+    // edited by hand, must degrade to "never chose" and not to a palette id the web cannot render.
+    appearance: readAppearance(user.appearance)
   };
 }
 
@@ -438,7 +452,8 @@ export async function login(
       phoneNumber: user.phoneNumber,
       timezone: user.timezone,
       managerId: user.managerId,
-      manager: user.manager ?? null
+      manager: user.manager ?? null,
+      appearance: readAppearance(user.appearance)
     } satisfies ProfilePayload
   };
 }
@@ -513,7 +528,8 @@ export async function completeSsoLogin(
       phoneNumber: user.phoneNumber,
       timezone: user.timezone,
       managerId: user.managerId,
-      manager: user.manager ?? null
+      manager: user.manager ?? null,
+      appearance: readAppearance(user.appearance)
     } satisfies ProfilePayload
   };
 }

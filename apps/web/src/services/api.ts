@@ -36,8 +36,7 @@ import type {
   TicketBranchPrStatus,
   TicketPriority,
   TicketStatus,
-  TicketType
-} from "@timesheet/shared";
+  TicketType, AppearancePreference } from "@timesheet/shared";
 
 /**
  * Defaults to a relative `/api` path. In dev, Vite proxies `/api` and `/uploads`
@@ -516,7 +515,14 @@ export const authApi = {
   changePassword: async (currentPassword: string, nextPassword: string) =>
     api.post("/auth/change-password", { currentPassword, nextPassword }),
   updateProfile: async (
-    payload: { name?: string; bio?: string | null; phoneNumber?: string | null; timezone?: string | null }
+    payload: {
+      name?: string;
+      bio?: string | null;
+      phoneNumber?: string | null;
+      timezone?: string | null;
+      /** `null` clears the saved appearance; absent leaves it alone. */
+      appearance?: AppearancePreference | null;
+    }
   ) => (await api.patch<AuthUser>("/auth/profile", payload)).data,
   uploadAvatar: async (file: File) => {
     const form = new FormData();

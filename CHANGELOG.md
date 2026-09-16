@@ -10,6 +10,28 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🎨 Appearance is yours now: three theme modes and seven accents, saved to your profile
+
+- **Profile → Appearance: System, Light or Dark, plus an accent colour.** Until now the app had one
+  brand colour and a browser-only light/dark toggle. The choice now saves to your profile the moment
+  you click a swatch — no Save button, because the screen has already changed — and it follows you
+  to every device you sign in on. A saved profile choice wins over whatever a browser remembered from
+  an earlier session, which may have been somebody else's.
+- **Every accent was measured for WCAG 2.1 AA before it was allowed in.** The measurement decided the
+  design: *no* hue passes AA as white text on a dark-theme fill — not one of eight candidates, and not
+  the existing brand teal either (2.41:1). So each accent carries a separate dark-theme pairing with
+  dark text on the fill, exactly the pattern the dark palette already used for the brand colour. With
+  that, all seven clear 4.5:1 on both surfaces in both roles. The values are in
+  `packages/shared/src/appearance.ts` with the measured ratios beside them.
+- **Nothing changes for anyone who never opens the card.** The default accent writes the app's
+  *existing* primary values byte for byte, so "Teal" is pixel-identical to "never chose"; a profile
+  with nothing saved leaves the browser's state untouched; and "System" is stored as the *absence* of
+  a choice, not as a string — following the OS must never be a persisted value.
+- One additive, nullable JSON column on `User` (`appearance`), idempotent on MySQL and MariaDB alike.
+  Validated on write against the shared definition, and read back through guards rather than a cast,
+  so a palette retired in a future release degrades to "never chose" instead of crashing sign-in for
+  everyone who picked it.
+
 ### 🐛 Fixed
 
 - Theme startup no longer saves the device's current appearance as an explicit choice. Browsers

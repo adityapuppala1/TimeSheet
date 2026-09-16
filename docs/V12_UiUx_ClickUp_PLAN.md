@@ -3,12 +3,12 @@
 > Branch: V12_UiUx_ClickUp — NEVER merge to main.
 
 ## Current Status
-- Phase: 1 source-based gap analysis complete; Phase 2 theme lifecycle foundation implemented.
-- Last updated: 2026-09-16 by Codex.
-- Resumed baseline: build PASS (existing large-chunk warning); lint/types PASS (701 warnings, zero errors, ratchet passes); API 3140/3140 and web 183/183 PASS.
-- Post-change checks: build PASS; lint/types PASS (701 warnings, zero errors, ratchet passes); API 3140/3140 and web 191/191 PASS; diff check PASS. Browser: actual app shell with mocked API passed at 390/820/1440 pixels in light/dark, no horizontal overflow/page errors; OS changes, palette/toggle synchronization and explicit reload verified.
-- Starting commit: `0be01b8` (5.2.1). Branch created from `origin/main`, which matched the original V11 checkout. No main changes or remote push.
-- Prior checkpoint: `ff683c1` baseline test isolation. Resolve current checkpoint with `git log -1`.
+- Phase: 2 — theme lifecycle (done) → explicit mode + per-user accents (done this session) → shell next.
+- Last updated: 2026-09-16 by Claude Code (Fable 5.1), resumed from Codex per §3.
+- Resumed baseline: lint PASS (701 warnings, zero errors, ratchet passes); API 3140/3140; web 191/191. Matched the previous handoff exactly.
+- Post-change checks (run AFTER the last edit, sequentially): lint PASS (701 warnings, zero errors, ratchet passes); API 3147/3147 (+7); web 202/202 (+11); `git diff --check` clean.
+- Starting commit this session: `ca22309`. Branch otherwise untouched; no push, no main change.
+- Prior checkpoint: resolve current with `git log -1`.
 
 ## Next Actions (ordered; first unchecked = resume point)
 - [x] Phase 0: inventory architecture, commands, existing modules and design foundation.
@@ -16,26 +16,22 @@
 - [x] Phase 1: research official ClickUp sources and fill every required Feature Matrix area; inspect existing implementations before assigning parity status.
 - [x] Phase 2 plan: repair theme lifecycle first; next extend existing tokens/preferences, then shell navigation. Preserve current defaults and existing styling system.
 - [x] Phase 2 first unit: preserve implicit OS preference and synchronize existing theme controls, with regression tests.
-- [ ] Phase 2 next unit: add explicit light/dark/system selection and original accent palettes in Profile; design per-user persistence using existing profile API with an additive migration if needed. Verify contrast before enabling palettes, plus phone/tablet/desktop and keyboard use.
+- [x] Phase 2 next unit: explicit light/dark/system selection and seven original accent palettes in Profile → Appearance; per-user persistence via the existing profile PATCH and one additive nullable JSON column (`User.appearance`). Contrast measured (WCAG 2.1 AA, both surfaces, both roles) before any palette shipped; verified live at 390/768/1366 in light+dark, keyboard, reload, ≥44px targets.
 - [ ] Phase 2 shell: audit hierarchy navigation, breadcrumb/view tabs, density, focus/touch-target sizing and responsive containment on existing components.
 - [ ] Phase 3: implement verified gaps by priority, with tests and shipping surfaces updated.
 - [ ] Phase 4: responsive/accessibility/workflow checks and continuous hardening.
 - [ ] Phase 5: branch-only release preparation and clean install/update validation.
 
 ## In Progress / Half-done
-- Phase 2 first unit plan: separate implicit OS theme from an explicit saved choice in `lib/theme.ts`.
-- Subscribe to OS/storage changes with cleanup; preserve explicit choices even when storage is blocked.
-- Make the existing theme toggle subscribe to the shared rendered theme so palette changes cannot leave its label stale.
-- Add regression coverage for reloads, OS changes, storage failure, subscription cleanup and the actual toggle; verify in browser. New palettes and per-user persistence remain subsequent units.
-- Theme lifecycle code/test/help/changelog edits complete and verified. No half-finished code. Full Phase 2 remains open.
-- Final verification commands: `npm run build`, `npm run lint`, `npm test`.
-- Local ignored logs: `baseline-v12-*.log`; do not commit them.
+- Nothing half-finished. The appearance unit is complete and verified; all temp specs/scripts removed; the dev account restored to `appearance = NULL` as found.
+- Final verification commands: `npm run lint`, `npm run test -w apps/api`, `npm run test -w apps/web`, `git diff --check` — run SEQUENTIALLY (parallel runs starve the workers) and AFTER the last edit, including any version bump (the 5.2.0 lesson in CONTRIBUTING).
+- Local ignored artefacts: `test-results/run-shots/v12-appearance-*.png` (five frames: before, indigo light, indigo dark, phone dark, tablet dark). Do not commit them.
 
 ## Codebase Map (verified facts only, with file paths)
 - Stack: npm workspace TypeScript monorepo (`package.json`, `apps/*`, `packages/*`). Manifest ranges: React ^19.2.8, React Router ^8.3.0, Vite ^8.1.5, Express ^5.1.0, Prisma ^6.7.0, TypeScript ^5.8.3. These are declared ranges, not a claim about every installed version.
 - Package manager: npm, root `package-lock.json`; do not mix managers.
 - Commands: `npm run dev`, `npm run build`, `npm run lint`, `npm test`; lint includes API/web TypeScript checks, SonarJS ESLint and warning ratchet. Shared TypeScript is checked by its build. No root standalone typecheck script.
-- Styling & theming: `apps/web/src/index.css` CSS variables, `apps/web/tailwind.config.ts` Tailwind 3/class dark mode, Radix UI wrappers in `apps/web/src/components/ui/`. Existing primary/accent/status/planning tokens and radius. `apps/web/src/lib/theme.ts` resolves OS theme initially and persists explicit light/dark choice in localStorage; shared transition helper handles reduced motion. Per-user accents/system subscription still need detailed audit.
+- Styling & theming: `apps/web/src/index.css` CSS variables, `apps/web/tailwind.config.ts` Tailwind 3/class dark mode, Radix UI wrappers in `apps/web/src/components/ui/`. Existing primary/accent/status/planning tokens and radius. `apps/web/src/lib/theme.ts` renders a three-way mode (`system` = absence of a stored choice, never a persisted string) plus an accent from `packages/shared/src/appearance.ts`, painting `--primary`/`--primary-foreground`/`--ring` per theme on every render; boot reads both keys; `adoptSavedAppearance` is called from the auth store's two setters (the single choke point for cold-load, password login and SSO). IMPORTANT for every future touch target: `index.css:240` sets root font-size to 14px at ALL widths, so `h-11` is 38.5px, not 44 — use absolute `[44px]` for anything the touch rule covers.
 - Icons: existing `lucide-react` dependency; reuse it.
 - Routing: `apps/web/src/App.tsx`, lazy pages, `/app` and `/platform-admin` layouts, permission/role guards, separate public request/approval/attestation routes.
 - State: TanStack React Query client in App.tsx; Zustand session store `apps/web/src/store/auth.ts`; Axios API service `apps/web/src/services/api.ts`. Access token is in memory; refresh token is an httpOnly cookie (store contract).
@@ -90,7 +86,7 @@
 | Integrations | [Connected applications][cu-search] | app.ts mounts GitHub, chat webhooks, SSO, public API, SCIM; no connected-search index found | Partial | Enhance supported connectors; do not claim unsupported ones | P3 | Audit complete |
 | Templates | [Reusable item templates][cu-templates] | services/blueprint.service.ts offsets/dependencies/custom fields; requirements templates; SavedView | Partial | Enhance Blueprints/saved views | P2 | Audit complete |
 | Permissions/guests | [Shared-item access][cu-guests] | Role/permission/project guards; token guest approvals; no generic guest RoleName | Partial | Keep narrow guest links; design scoped membership before adding | P3 | Audit complete |
-| Themes/color/icons/density | [Personal colors/light/dark/auto][cu-settings] | lib/theme.ts, CSS tokens, Lucide; browser-wide light/dark only, no user accent/density fields found | Partial | Extend existing foundation/per-user preferences; original palettes | P0 | Audit complete |
+| Themes/color/icons/density | [Personal colors/light/dark/auto][cu-settings] | lib/theme.ts + shared/appearance.ts; Profile → Appearance card; `User.appearance` JSON | Near-identical core (mode + 7 accents, per user); density not yet | Density remains; then shell | P0 | Mode + accents shipped |
 | Keyboard shortcuts | [Palette/contextual shortcuts][cu-shortcuts] | Ctrl/Cmd+K in command-palette.tsx; broader inventory unverified | Partial | Discoverable shortcuts that respect editable fields | P1 | Audit complete |
 | Mobile/responsive | [Mobile task/inbox access][cu-mobile] | AppLayout/Sidebar drawer/bottom nav; Tickets mobile cards; no native app | Partial | Verify current responsive views; native app out of scope | P1 | Audit complete |
 | Onboarding/empty states | [Individual workspace setup][cu-onboarding] | OnboardingGate/ProductTour/setup checklist; empty-state coverage not fully audited | Partial | Enhance existing tour/empty states; preserve required gate | P1 | Audit complete |
@@ -127,7 +123,9 @@ The matrix covers every requested area. Remaining Unverified details are explici
 
 ## Design System Decisions
 - Tokens: extend existing CSS variables/Tailwind mapping.
-- Themes: absence of a saved choice follows device changes; explicit browser choice persists. All controls subscribe to the same rendered theme. Explicit system selection/per-user palettes remain next; no additional palettes or density options shipped yet.
+- Themes: three-way mode. `system` is stored as the ABSENCE of a choice (localStorage key removed; a saved profile `mode: "system"` is adopted by clearing) — following the OS is never a persisted value. Explicit light/dark persist per browser AND per profile; a saved profile choice wins over browser leftovers on sign-in.
+- Accents: seven original palettes, each a per-theme pair (`primary` + `foreground`). MEASURED FACT that shaped the design: no hue passes WCAG AA as white-on-fill in dark mode — not one of eight candidates, not the brand teal (2.41:1) — so dark-theme fills carry dark text. Default `teal` writes the EXACT existing primary values, so "never chose" is pixel-identical to before. Ratios recorded beside each palette in appearance.ts. Planning/chart tokens deliberately do NOT follow the accent (a chart's palette is not the chrome's).
+- Density: not shipped; the JSON column was chosen so it needs no migration.
 - Shipping review: current unit fixes existing behavior, adds no data capability/env/migration/dependency, so landing/pitch/install/version remain unchanged. Help/Ask AI's shared article and Unreleased changelog updated. Read `.agents/skills/ship-feature/SKILL.md`; its main/V10 release push instruction is superseded by the V12 branch-only rule.
 - Icon set: reuse Lucide.
 - Breakpoints: target specification mobile ≤640, tablet 641–1024, laptop 1025–1440, wide >1440; actual component behavior still needs browser checks.
@@ -147,6 +145,9 @@ The matrix covers every requested area. Remaining Unverified details are explici
 |---|---|---|---|---|
 | 2026-09-16 | Agent mixed-recipient mail unit test timed out at 10s, including isolated run | Real nodemailer transport plus fallback to developer SMTP env; mocked EmailLog returned only id | Mock transport and explicit fake mail settings; return created data from log mock; assert SENT and exact recipient list | Same commit as this handoff |
 | 2026-09-16 | Device theme stopped being automatic after first load; theme button label stale after palette changes | Bootstrap persisted inferred theme; toggle kept isolated React state; storage read unguarded | Non-persisting initialization with OS/storage subscriptions; shared external-store toggle; safe reads and session fallback; eight regression tests | Theme foundation checkpoint |
+| 2026-09-16 | Accent swatches measured 38.5px at every width — under the 44px touch rule — while mode buttons beside them passed | Root font-size is 14px globally (`index.css:240`), so rem-based `h-11` = 38.5px; `min-h-[44px]` on the mode buttons is absolute and passed. First guess (phones only) was wrong; measured at 390/768/1366 | Swatches sized `h-[44px] w-[44px]`. App-wide implication logged in Codebase Map: every `h-11` touch target has this property — audit in the shell unit | Appearance unit commit |
+| 2026-09-16 | `prisma generate` EPERM on the query-engine DLL after the schema edit | The running API dev server maps the DLL; the repo's `prisma-generate.mjs` documents exactly this and tolerates it (types are written first) | Stopped the listener, regenerated; `tsx watch` respawned the child onto the fresh client — proven by a live PATCH writing the new column, not assumed | — (process, not code) |
+| 2026-09-16 | Falsification harness reported 7/7 breaks GREEN on first pass | Detector parsed vitest text, and a cp1252 encode crash truncated the read; the tests were RED the whole time | Detect red by process exit code, never by text. Re-run: 7/7 RED, then restored | — (harness only) |
 
 ## Open Questions / Blockers
 - `RTK.md` referenced by user AGENTS instructions is absent; no matching repository file found.
@@ -156,8 +157,15 @@ The matrix covers every requested area. Remaining Unverified details are explici
 - `docs/AGENTIC_UX_PLAN.md` says FORM_SUBMISSION was not wired; inspected current public controller and dispatcher prove it now is. Treat current source as authoritative.
 - Branch was created from locally available origin/main. No network fetch was performed; upstream freshness is unverified. Removed inherited origin/main tracking to avoid accidental pushes to main; no remote branch published.
 - User-owned pre-existing untracked `.claude/settings.local.json`, `.codex/`, `AGENTS.md`, `SYSTEM_PROMPT_V12_UiUx_ClickUp.md` were preserved and excluded from commits.
+- `.agents/skills/dataviz` does NOT exist in this repo (the `.agents` tree is an unrelated infra skill pack). No contrast tooling exists anywhere in the repo; this session wrote and ran its own WCAG 2.1 validator (throwaway, removed). If AA gating recurs, promote that validator to `scripts/` rather than re-deriving it.
+- The graphify pre-grep hook fires on every Grep. Query first; it is faster than the refusal.
 
 ## Session Log (newest first)
+### 2026-09-16 — Claude Code (Fable 5.1), explicit mode + per-user accents
+- Did: resumed per §3 (branch/log/status agreed with this file; baseline matched). Shipped the Phase 2 accent unit: `packages/shared/src/appearance.ts` (3 modes, 7 measured accents, guards); additive `User.appearance` JSON column + idempotent migration (MySQL/MariaDB); profile PATCH validates against the SHARED enum and reads back through guards; `theme.ts` gains `applyMode`/`applyAccent`/`adoptSavedAppearance`/`currentMode`/`currentAccent`; auth store adopts a saved preference at its two setters; Profile → Appearance card (saves on click, radio semantics, ≥44px); Help article + Unreleased changelog. No dependency added, no env var, no flag (the column is nullable and NULL renders as today's screens).
+- Verified with: 11 new web unit regressions + 7 API contract tests; 7/7 deliberate breaks RED (after fixing the harness detector); live Playwright at 390/768/1366 in light+dark: paint-before-network, PATCH 200 with the saved shape, dark re-paint with dark foreground, reload restores from profile, no horizontal overflow, all targets ≥44px, keyboard Enter selects. Migration applied and recorded on the dev DB; column confirmed; dev account restored to NULL. Sequential gates after the last edit: lint 701/0 + ratchet, API 3147/3147, web 202/202, diff-check clean.
+- Left off at: Phase 2 shell unit (hierarchy nav, breadcrumb/view tabs, density, focus/touch sizing). FIRST TASK THERE: audit every `h-11`/`min-h-11` touch target — root font-size is 14px, so they are all 38.5px.
+
 ### 2026-09-16 — Codex, ClickUp research and theme foundation
 - Did: resumed branch/checks; compared 32 capability areas with official ClickUp sources; prioritized existing-surface improvements; fixed theme lifecycle/label synchronization; updated shared Help and Unreleased notes.
 - Verified with: eight new unit regressions plus full suites (3140 API, 191 web), build, lint/types (unchanged warning count), diff check and AST graph update; browser fixture uses real app shell with mocked API, six viewport/mode combinations, OS/palette/reload checks. Screenshots and fixture in ignored `test-results/run-shots/v12-theme-*.png` and `test-results/v12-theme-browser.mjs`.

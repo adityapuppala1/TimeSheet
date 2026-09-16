@@ -14,6 +14,7 @@ export * from "./native-runtime.js";
    an archive may come from, which archive entries may be written to disk, and the refusals (musl
    above all) that must read identically on the settings screen and in the installer. */
 export * from "./native-engine.js";
+export * from "./appearance.js";
 /**
  * WHAT: the single `@timesheet/shared` package — every type/constant that both `apps/api` and
  * `apps/web` need to agree on: roles/permission keys, activity types, ticket status/priority
@@ -26,6 +27,8 @@ export * from "./native-engine.js";
  * WHO imports this: nearly every file in both `apps/api/src` and `apps/web/src` that touches a
  * role, permission, ticket, or settings type.
  */
+import type { AppearancePreference } from "./appearance.js";
+
 export const roles = ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEAM_LEAD", "EMPLOYEE"] as const;
 export type RoleName = (typeof roles)[number];
 
@@ -118,6 +121,8 @@ export interface AuthUser {
   timezone?: string | null;
   managerId?: string | null;
   manager?: { id: string; name: string; email: string } | null;
+  /** Saved theme mode and accent — see appearance.ts. Absent or null means "never chose". */
+  appearance?: AppearancePreference | null;
 }
 
 /**

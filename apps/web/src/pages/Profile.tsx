@@ -10,8 +10,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { getCountries, getCountryCallingCode, parsePhoneNumberFromString, type CountryCode } from "libphonenumber-js/min";
-import { Camera, ImageOff, KeyRound, Laptop, Loader2, LogOut, Save, Shield, ShieldCheck, Smartphone, Tablet, Trash2, UserRound } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { Camera, Check, ImageOff, KeyRound, Laptop, Loader2, LogOut, Monitor, Moon, Palette, Save, Shield, ShieldCheck, Smartphone, Sun, Tablet, Trash2, UserRound } from "lucide-react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ACCENT_IDS, ACCENT_PALETTES, DEFAULT_ACCENT, type AccentId, type AppearancePreference } from "@timesheet/shared";
+import { applyAccent, applyMode, currentAccent, currentMode, subscribeTheme, type ThemeMode } from "../lib/theme";
+import { cn } from "../lib/utils";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import {
   AlertDialog,
@@ -527,6 +530,8 @@ export function Profile() {
           </CardContent>
         </Card>
 
+        <AppearanceCard />
+
         <Card>
           <CardHeader>
             <div className="flex items-center gap-3">
@@ -661,5 +666,134 @@ export function Profile() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+/**
+ * Theme mode and accent, per person.
+ *
+ * WHY IT SAVES ON CLICK AND NOT ON SUBMIT: the screen changes the instant a swatch is pressed, so a
+ * Save button underneath would be asking somebody to confirm what they are already looking at. The
+ * paint happens first, synchronously, through the same `applyMode`/`applyAccent` the Topbar toggle
+ * uses — then the profile PATCH runs. If the save fails the colours stay (they are right for this
+ * session) and the toast says the choice will not follow them to another device.
+ *
+ * WHY SWATCHES ARE BUTTONS WITH NAMES, NOT COLOURED DIVS: a colour alone is not a label. Each swatch
+ * carries its palette's name for a screen reader and radio semantics for the selected one. The
+ * focus ring is drawn in `--ring`, which the accent itself sets, so the indicator is always the
+ * colour that was just chosen. Every target is ≥44px, per the V12 plan's touch rule.
+ *
+ * `document.documentElement` is read for the swatch preview colour — the mode subscription above
+ * re-renders this component on every theme flip, so the preview follows the theme without its own
+ * listener.
+ */
+function AppearanceCard() {
+  const setUser = useAuthStore((s) => s.setUser);
+  const mode = useSyncExternalStore(subscribeTheme, currentMode, () => "system" as ThemeMode);
+  const accent = useSyncExternalStore(subscribeTheme, currentAccent, () => DEFAULT_ACCENT);
+  const previewTheme = typeof document !== "undefined" && document.documentElement.classList.contains("dark") ? "dark" : "light";
+
+  const save = useMutation({
+    mutationFn: (appearance: AppearancePreference) => authApi.updateProfile({ appearance }),
+    onSuccess: (updated) => setUser(updated),
+    onError: (err: any) =>
+      toast.error("Applied here, but not saved to your profile", {
+        description: err?.response?.data?.message ?? "It will not follow you to another device until it saves."
+      })
+  });
+
+  const chooseMode = (next: ThemeMode) => {
+    applyMode(next);
+    save.mutate({ mode: next, accent });
+  };
+  const chooseAccent = (next: AccentId) => {
+    applyAccent(next);
+    save.mutate({ mode, accent: next });
+  };
+
+  const modes: Array<{ value: ThemeMode; label: string; hint: string; Icon: typeof Sun }> = [
+    { value: "system", label: "System", hint: "Follows your device", Icon: Monitor },
+    { value: "light", label: "Light", hint: "Always light", Icon: Sun },
+    { value: "dark", label: "Dark", hint: "Always dark", Icon: Moon }
+  ];
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-3">
+          <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary/10 text-primary">
+            <Palette className="h-5 w-5" />
+          </div>
+          <div>
+            <CardTitle>Appearance</CardTitle>
+            <CardDescription>Theme and accent colour. Saved to your profile, so every device you sign in on matches.</CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-5">
+        <div className="grid gap-2">
+          <p id="appearance-theme-label" className="text-sm font-medium">Theme</p>
+          <div role="radiogroup" aria-labelledby="appearance-theme-label" className="grid grid-cols-3 gap-2">
+            {modes.map(({ value, label, hint, Icon }) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={mode === value}
+                onClick={() => chooseMode(value)}
+                className={cn(
+                  "flex min-h-[44px] flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                  mode === value ? "border-primary bg-primary/10" : "border-border hover:bg-muted/60"
+                )}
+              >
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                  {label}
+                </span>
+                <span className="text-[11px] text-muted-foreground">{hint}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid gap-2">
+          <p id="appearance-accent-label" className="text-sm font-medium">Accent</p>
+          <div role="radiogroup" aria-labelledby="appearance-accent-label" className="flex flex-wrap gap-2">
+            {ACCENT_IDS.map((id) => {
+              const palette = ACCENT_PALETTES[id][previewTheme];
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="radio"
+                  aria-checked={accent === id}
+                  aria-label={ACCENT_PALETTES[id].label}
+                  title={ACCENT_PALETTES[id].label}
+                  onClick={() => chooseAccent(id)}
+                  // Absolute pixels, not `h-11`: this app's root font-size is 14px at EVERY width
+                  // (index.css sets it globally), so a rem-based 2.75rem swatch renders at 38.5px on
+                  // desktop and phone alike — under the 44px touch rule the V12 plan requires. The mode
+                  // buttons above pass only because `min-h-[44px]` is absolute. Measured in the live app
+                  // at 390, 768 and 1366px; the first guess ("phones only") was wrong and is recorded in
+                  // the V12 Auto-Heal Log, because every `h-11` target in the app has the same property.
+                  className={cn(
+                    "grid h-[44px] w-[44px] place-items-center rounded-full border-2 transition-transform",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                    accent === id ? "border-foreground" : "border-transparent hover:scale-105"
+                  )}
+                  style={{ backgroundColor: `hsl(${palette.primary})` }}
+                >
+                  {accent === id && <Check className="h-4 w-4" aria-hidden="true" style={{ color: `hsl(${palette.foreground})` }} />}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {ACCENT_PALETTES[accent].label} is selected. Every accent meets WCAG AA contrast in both themes.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

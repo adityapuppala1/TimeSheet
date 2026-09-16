@@ -25,11 +25,23 @@
  * absent. That ordering matters — the setting must never depend on the animation succeeding.
  */
 
+import { ACCENT_PALETTES, DEFAULT_ACCENT, isAccentId, type AccentId } from "@timesheet/shared";
+
 const THEME_KEY = "timesheet:theme";
+const ACCENT_KEY = "timesheet:accent";
 const THEME_CHANGED = "timesheet:theme-changed";
 
 export type Theme = "light" | "dark";
+/**
+ * The three things a person can SAVE. "system" is a real, explicit choice — distinct from having
+ * never chosen — even though both render by following the OS. Keeping them apart is what lets
+ * "reset to default" be a state change, and what lets the per-user preference (below) say "this
+ * person deliberately follows the OS" rather than "we know nothing about this person".
+ */
+export type ThemeMode = "system" | "light" | "dark";
+
 let explicitChoice: Theme | undefined;
+let accent: AccentId = DEFAULT_ACCENT;
 
 function storedTheme(): Theme | undefined {
   try {
@@ -40,9 +52,57 @@ function storedTheme(): Theme | undefined {
   }
 }
 
+/**
+ * Paints the accent for the theme being rendered.
+ *
+ * WHY THIS RUNS INSIDE renderTheme AND NOT ON ITS OWN: an accent is two colours, one per theme —
+ * measured that way, because no hue passes WCAG AA as white-on-fill in dark mode (see
+ * packages/shared/src/appearance.ts). So the accent has to be re-applied every time the theme
+ * flips, or a dark-mode page keeps its light-mode primary for the rest of the session.
+ *
+ * WHY THREE VARIABLES AND NOT A CLASS: index.css derives `--ring`, `--plan-bar` and the capacity
+ * ramp from the primary hue by VALUE, not by reference, so a class that only swapped `--primary`
+ * would leave the focus ring and the Gantt bars in brand teal under an indigo button. Overriding
+ * `--ring` alongside keeps focus honest; the planning tokens are deliberately left brand-coloured —
+ * the timeline is a chart, and the dataviz rule is that a chart's palette does not follow the
+ * chrome's. The default accent writes the EXACT existing values, so "teal" is pixel-identical to
+ * "never chose", and nothing about today's screens changes for anyone who has not opened the card.
+ */
+function paintAccent(theme: Theme): void {
+  const palette = ACCENT_PALETTES[accent][theme];
+  const root = document.documentElement.style;
+  root.setProperty("--primary", palette.primary);
+  root.setProperty("--primary-foreground", palette.foreground);
+  root.setProperty("--ring", palette.primary);
+  document.documentElement.dataset.accent = accent;
+}
+
 function renderTheme(theme: Theme): void {
   document.documentElement.classList.toggle("dark", theme === "dark");
+  paintAccent(theme);
   window.dispatchEvent(new Event(THEME_CHANGED));
+}
+
+function storedAccent(): AccentId | undefined {
+  try {
+    const stored = window.localStorage.getItem(ACCENT_KEY);
+    return isAccentId(stored) ? stored : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The accent currently painted. */
+export function currentAccent(): AccentId {
+  return accent;
+}
+
+/**
+ * The saved mode, as the three-way value a control shows. "system" both when the person chose
+ * it and when they never chose — the control cannot tell those apart, and does not need to.
+ */
+export function currentMode(): ThemeMode {
+  return explicitChoice ?? "system";
 }
 
 /** What the theme should be on a cold load: an explicit choice if there is one, the OS otherwise. */
@@ -68,10 +128,13 @@ export function subscribeTheme(listener: () => void): () => void {
 export function initializeTheme(): () => void {
   const media = window.matchMedia?.("(prefers-color-scheme: dark)");
   explicitChoice = storedTheme();
+  accent = storedAccent() ?? DEFAULT_ACCENT;
   const sync = () => renderTheme(explicitChoice ?? (media?.matches ? "dark" : "light"));
   const onStorage = (event: StorageEvent) => {
-    if (event.storageArea !== window.localStorage || (event.key !== THEME_KEY && event.key !== null)) return;
+    if (event.storageArea !== window.localStorage) return;
+    if (event.key !== THEME_KEY && event.key !== ACCENT_KEY && event.key !== null) return;
     explicitChoice = storedTheme();
+    accent = storedAccent() ?? DEFAULT_ACCENT;
     sync();
   };
   sync();
@@ -94,6 +157,50 @@ export function applyTheme(theme: Theme): void {
     // A private window with storage blocked still gets the theme it asked for; it just will not
     // remember it. Losing the preference is a far better outcome than the toggle throwing.
   }
+}
+
+/**
+ * Set the three-way mode. "system" CLEARS the stored choice — it is not stored as the string
+ * "system", because the previous unit's whole point was that following the OS must never be a
+ * persisted value: a persisted "system" would be one more thing for a reload to get wrong.
+ */
+export function applyMode(mode: ThemeMode): void {
+  if (mode === "system") {
+    explicitChoice = undefined;
+    try {
+      localStorage.removeItem(THEME_KEY);
+    } catch {
+      // Same posture as applyTheme: the screen still follows the OS; it just cannot remember to.
+    }
+    renderTheme(window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    return;
+  }
+  applyTheme(mode);
+}
+
+/** Set the accent. Repaints under the CURRENT theme; the theme itself does not change. */
+export function applyAccent(next: AccentId): void {
+  accent = next;
+  try {
+    localStorage.setItem(ACCENT_KEY, next);
+  } catch {
+    // Storage blocked — painted for this session, forgotten on reload, never thrown.
+  }
+  renderTheme(currentTheme());
+}
+
+/**
+ * Adopt a SAVED preference from the profile, on sign-in.
+ *
+ * The saved value wins over this browser's localStorage, because the profile is the thing a person
+ * set on purpose and localStorage is where a previous session on this machine left its footprint —
+ * possibly somebody else's. A profile with nothing saved leaves the browser's state untouched, so
+ * an existing person's screen does not move on the deploy that introduces this.
+ */
+export function adoptSavedAppearance(saved: { mode?: ThemeMode | null; accent?: AccentId | null } | null | undefined): void {
+  if (!saved) return;
+  if (saved.accent && isAccentId(saved.accent) && saved.accent !== accent) applyAccent(saved.accent);
+  if (saved.mode && saved.mode !== currentMode()) applyMode(saved.mode);
 }
 
 type ViewTransitionDocument = Document & {
