@@ -37,6 +37,7 @@ import { Link } from "react-router";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { EmptyState as EmptyPanel } from "../components/ui/empty-state";
+import { useScopedShortcuts } from "../components/ShortcutsDialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "../components/ui/toaster";
@@ -160,6 +161,29 @@ export function InboxPage() {
   const selectedVisible = shown.some((i) => i.id === selectedId);
 
   const selected = useMemo(() => items.find((i) => i.id === selectedId) ?? null, [items, selectedId]);
+
+  // Keyboard triage — J/K move, E marks done (or undoes), S snoozes until later today. The rows
+  // live in lib/shortcuts.ts scoped to this route, so the "?" dialog lists them here and nowhere
+  // else, and the global listener never sees them. Moving marks the item read, as a click does.
+  const moveSelection = (delta: 1 | -1) => {
+    if (shown.length === 0) return;
+    const at = shown.findIndex((i) => i.id === selectedId);
+    const next = shown[Math.min(shown.length - 1, Math.max(0, at + delta))];
+    if (!next || next.id === selectedId) return;
+    setSelectedId(next.id);
+    if (!next.readAt) update.mutate({ id: next.id, patch: { read: true } });
+    document.getElementById(`inbox-row-${next.id}`)?.scrollIntoView({ block: "nearest" });
+  };
+  useScopedShortcuts("/app/inbox", {
+    "inbox-next": () => moveSelection(1),
+    "inbox-prev": () => moveSelection(-1),
+    "inbox-done": () => {
+      if (selected && selectedVisible) update.mutate({ id: selected.id, patch: { handled: !selected.handledAt } });
+    },
+    "inbox-snooze": () => {
+      if (selected && selectedVisible) update.mutate({ id: selected.id, patch: { snoozeUntil: SNOOZES[0].at().toISOString() } });
+    }
+  });
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ["inbox"] });
@@ -379,6 +403,7 @@ function InboxRow({
   return (
     <div
       data-inbox-row
+      id={`inbox-row-${item.id}`}
       className={cn(
         "animate-fade-in rounded-lg border bg-card transition-all duration-200",
         selected ? "border-primary/60 shadow-sm" : "hover:border-primary/30",

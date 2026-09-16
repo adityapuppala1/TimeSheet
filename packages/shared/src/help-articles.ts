@@ -103,11 +103,12 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Press Ctrl K (⌘ K on a Mac) to open the command palette from anywhere, even while typing in a field.",
       "Press ? to open the shortcuts dialog. It lists only the shortcuts your role can use.",
       "Press N to go and log time, or C to create a ticket (the dialog opens on arrival).",
-      "Press G then another letter to jump: G H home, G L log timesheet, G T tickets, G W my work, G I inbox, G P your profile."
+      "Press G then another letter to jump: G H home, G L log timesheet, G T tickets, G W my work, G I inbox, G P your profile.",
+      "In the Inbox: J and K move between items, E marks the selected item done (or undoes it), S snoozes it until later today. These four work only on the Inbox page."
     ],
     notes:
       "Single keys and sequences are ignored while you are typing in a field, an editor or an open dialog, so a letter is always just a letter there. The browser keeps Ctrl N, Ctrl T and Ctrl W for itself, which is why none of the app's shortcuts use them.",
-    keywords: ["keyboard", "shortcut", "shortcuts", "hotkey", "palette", "command", "ctrl k", "cmd k", "g t", "?"]
+    keywords: ["keyboard", "shortcut", "shortcuts", "hotkey", "palette", "command", "ctrl k", "cmd k", "g t", "?", "inbox", "triage", "j k"]
   },
   {
     id: "notifications",

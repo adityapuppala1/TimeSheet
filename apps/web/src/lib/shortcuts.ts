@@ -28,9 +28,13 @@ export interface ShortcutDef {
   /** Shown in the "?" dialog and the palette. For a `to` shortcut, left undefined here and read
    *  from the sidebar's nav table at render time so the page name has one source. */
   label?: string;
-  group: "General" | "Create" | "Go to";
+  group: "General" | "Create" | "Go to" | "Inbox";
   /** Navigate here when pressed. */
   to?: string;
+  /** A route prefix. Scoped rows fire only on that route (the page subscribes with
+   *  `useScopedShortcuts`), never from the global listener, and the "?" dialog lists them only
+   *  while the person is there — a shortcut for a page you are not on is noise. */
+  scope?: string;
   /** A permission the person must hold, mirroring the route's own gate. */
   permission?: string;
 }
@@ -46,8 +50,24 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
   { id: "go-tickets", combo: "g t", group: "Go to", to: "/app/tickets", permission: permissions.TICKETS_VIEW },
   { id: "go-my-work", combo: "g w", group: "Go to", to: "/app/my-work" },
   { id: "go-inbox", combo: "g i", group: "Go to", to: "/app/inbox" },
-  { id: "go-profile", combo: "g p", label: "My profile", group: "Go to", to: "/app/profile" }
+  { id: "go-profile", combo: "g p", label: "My profile", group: "Go to", to: "/app/profile" },
+  // Inbox triage: "read one, decide, next" without leaving the keyboard. Single letters are safe
+  // here because the editable-field guard applies, and they never fire on another page.
+  { id: "inbox-next", combo: "j", label: "Next item", group: "Inbox", scope: "/app/inbox" },
+  { id: "inbox-prev", combo: "k", label: "Previous item", group: "Inbox", scope: "/app/inbox" },
+  { id: "inbox-done", combo: "e", label: "Mark done / undo", group: "Inbox", scope: "/app/inbox" },
+  { id: "inbox-snooze", combo: "s", label: "Snooze until later today", group: "Inbox", scope: "/app/inbox" }
 ];
+
+/** The rows the GLOBAL listener owns — everything without a scope. */
+export function globalShortcuts(defs: readonly ShortcutDef[]): ShortcutDef[] {
+  return defs.filter((d) => !d.scope);
+}
+
+/** The rows that apply on this route: every global row plus the scoped rows whose prefix matches. */
+export function shortcutsForRoute(pathname: string, defs: readonly ShortcutDef[]): ShortcutDef[] {
+  return defs.filter((d) => !d.scope || pathname === d.scope || pathname.startsWith(d.scope + "/"));
+}
 
 /** The shortcuts this person may use — the same gate the routes apply, so "g t" cannot take an
  *  EMPLOYEE without tickets:view to a page that would 403. */

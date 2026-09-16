@@ -10,9 +10,11 @@ import {
   comboForRoute,
   createSequenceMatcher,
   formatCombo,
+  globalShortcuts,
   isEditableTarget,
   matchesCombo,
   SHORTCUTS,
+  shortcutsForRoute,
   visibleShortcuts
 } from "../../src/lib/shortcuts";
 
@@ -119,6 +121,20 @@ describe("visibility and display", () => {
   it("knows which sequence opens a route, so the palette prints the same key the dialog does", () => {
     expect(comboForRoute("/app/tickets")).toBe("g t");
     expect(comboForRoute("/app/settings")).toBeUndefined();
+  });
+
+  it("keeps scoped rows out of the global listener and shows them only on their route", () => {
+    expect(globalShortcuts(SHORTCUTS).some((d) => d.scope)).toBe(false);
+    expect(shortcutsForRoute("/app/tickets", SHORTCUTS).map((d) => d.id)).not.toContain("inbox-next");
+    expect(shortcutsForRoute("/app/inbox", SHORTCUTS).map((d) => d.id)).toContain("inbox-next");
+    expect(shortcutsForRoute("/app/inbox/anything", SHORTCUTS).map((d) => d.id)).toContain("inbox-next");
+    // "/app/inboxes" is not "/app/inbox" — a prefix match must respect the path boundary.
+    expect(shortcutsForRoute("/app/inboxes", SHORTCUTS).map((d) => d.id)).not.toContain("inbox-next");
+  });
+
+  it("gives no two rows on one route the same chord", () => {
+    const onInbox = shortcutsForRoute("/app/inbox", SHORTCUTS).filter((d) => !d.combo.includes(" ")).map((d) => d.combo);
+    expect(new Set(onInbox).size).toBe(onInbox.length);
   });
 
   it("advertises nothing the browser reserves", () => {

@@ -8,9 +8,19 @@
  * of them drifts.
  */
 import { useEffect, useMemo, useRef } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { Keyboard } from "lucide-react";
-import { createSequenceMatcher, formatCombo, isEditableTarget, matchesCombo, SHORTCUTS, visibleShortcuts, type ShortcutDef } from "../lib/shortcuts";
+import {
+  createSequenceMatcher,
+  formatCombo,
+  globalShortcuts,
+  isEditableTarget,
+  matchesCombo,
+  SHORTCUTS,
+  shortcutsForRoute,
+  visibleShortcuts,
+  type ShortcutDef
+} from "../lib/shortcuts";
 import { nav } from "./Sidebar";
 import { useAuthStore } from "../store/auth";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
@@ -27,7 +37,8 @@ export function useGlobalShortcuts(handlers: { onPalette: () => void; onHelp: ()
   const user = useAuthStore((s) => s.user);
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
-  const defs = useMemo(() => visibleShortcuts(user), [user]);
+  // Scoped rows belong to their page's own listener, never to this one.
+  const defs = useMemo(() => globalShortcuts(visibleShortcuts(user)), [user]);
 
   useEffect(() => {
     const sequences = createSequenceMatcher(defs);
@@ -63,11 +74,35 @@ export function useGlobalShortcuts(handlers: { onPalette: () => void; onHelp: ()
   }, [defs, navigate]);
 }
 
-const GROUP_ORDER: ShortcutDef["group"][] = ["General", "Create", "Go to"];
+/**
+ * A page's OWN shortcuts — the rows in the table whose `scope` is this route. Same matchers, same
+ * editable-field guard as the global listener; the page supplies a handler per row id. Rows the
+ * page does not handle are simply inert, so the table can grow ahead of the pages.
+ */
+export function useScopedShortcuts(scope: string, handlers: Record<string, () => void>) {
+  const handlersRef = useRef(handlers);
+  handlersRef.current = handlers;
+  useEffect(() => {
+    const defs = SHORTCUTS.filter((d) => d.scope === scope && !d.combo.includes(" "));
+    const handler = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || isEditableTarget(event.target)) return;
+      const hit = defs.find((d) => matchesCombo(event, d.combo));
+      const run = hit && handlersRef.current[hit.id];
+      if (!run) return;
+      event.preventDefault();
+      run();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [scope]);
+}
+
+const GROUP_ORDER: ShortcutDef["group"][] = ["General", "Create", "Go to", "Inbox"];
 
 export function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const user = useAuthStore((s) => s.user);
-  const defs = visibleShortcuts(user);
+  const { pathname } = useLocation();
+  const defs = shortcutsForRoute(pathname, visibleShortcuts(user));
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">

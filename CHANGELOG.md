@@ -10,6 +10,13 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 📥 Triage the Inbox from the keyboard
+
+- **J and K move between items, E marks the selected one done (or undoes it), S snoozes it until
+  later today.** Moving marks an item read, as clicking does, and keeps the row in view. The keys
+  work only on the Inbox and only while you are not typing in a field; the `?` dialog lists them
+  there and nowhere else.
+
 ### 🫙 Empty states that say what to do next
 
 - **One empty-state design across the app**, promoted from the platform console: an icon, a
