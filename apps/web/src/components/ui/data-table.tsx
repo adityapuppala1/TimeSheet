@@ -20,10 +20,12 @@ import {
   getSortedRowModel,
   useReactTable,
   type ColumnDef,
+  type Row,
   type SortingState
 } from "@tanstack/react-table";
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Search } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { formatGroupLabel, groupCounts, groupRuns, type GroupRun } from "../../lib/group-rows";
 import { cn } from "../../lib/utils";
 import { Button } from "./button";
 import { Input } from "./input";
@@ -56,6 +58,15 @@ interface DataTableProps<TData> {
   /** Overrides for pages with a different visual theme (platform-admin's dark/amber chrome). */
   className?: string;
   rowClassName?: string;
+  /**
+   * A column id to GROUP BY. The column becomes the primary sort (a person's own sort stays as the
+   * secondary), and a header row — label and the group's size across the WHOLE filtered set — is
+   * inserted wherever the value changes within the page. Groups collapse on click. Works in the
+   * table and in the card list, from the same runs, so the two cannot disagree.
+   */
+  groupBy?: string;
+  /** Renders a group's heading; default is `formatGroupLabel` ("IN_PROGRESS" → "In progress"). */
+  groupLabel?: (value: unknown) => ReactNode;
 }
 
 export function DataTable<TData>({
@@ -70,9 +81,23 @@ export function DataTable<TData>({
   isLoading = false,
   emptyMessage = "No results.",
   className,
-  rowClassName
+  rowClassName,
+  groupBy,
+  groupLabel
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = useState<SortingState>([]);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  // The group column sorts first; whatever the person sorted by stays as the tie-breaker within
+  // each group. Their own sorting state is kept untouched so removing the grouping restores it.
+  //
+  // MEMOISED, AND THIS IS LOAD-BEARING: react-table resets the page index whenever the sorting
+  // state it is handed changes identity. A fresh array on every render therefore meant reset →
+  // re-render → fresh array → reset, and the tab's main thread never came back (measured: a
+  // keyboard press timed out at 150 s). The array must only change when its inputs do.
+  const effectiveSorting = useMemo<SortingState>(
+    () => (groupBy ? [{ id: groupBy, desc: false }, ...sorting.filter((s) => s.id !== groupBy)] : sorting),
+    [groupBy, sorting]
+  );
   const [globalFilter, setGlobalFilter] = useState("");
   // With pagination off, every row the parent hands over renders — the parent's server-side
   // pager owns the real page boundaries.
@@ -81,7 +106,7 @@ export function DataTable<TData>({
   const table = useReactTable({
     data,
     columns,
-    state: { sorting, globalFilter, pagination },
+    state: { sorting: effectiveSorting, globalFilter, pagination },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
     onPaginationChange: setPagination,
@@ -93,6 +118,46 @@ export function DataTable<TData>({
 
   const rows = table.getRowModel().rows;
   const totalRows = table.getFilteredRowModel().rows.length;
+  // Runs over the PAGE (what is on screen); counts over the FILTERED SET (what the heading claims).
+  const keyOf = (row: Row<TData>) => (groupBy ? row.getValue(groupBy) : undefined);
+  const runs = groupBy ? groupRuns(rows, keyOf) : null;
+  const counts = groupBy ? groupCounts(table.getFilteredRowModel().rows, keyOf) : null;
+  const toggleGroup = (key: string) =>
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const renderGroupLabel = (raw: unknown) => (groupLabel ? groupLabel(raw) : formatGroupLabel(raw));
+  /** What to render, in order: plain rows, or each group's header followed by its rows unless
+   *  that group is collapsed. One function for both the card list and the table body. */
+  const entriesFor = (as: "card" | "row"): Array<Row<TData> | ReactNode> => {
+    if (!runs) return rows;
+    return runs.flatMap((run) => (collapsed.has(run.key) ? [groupHeader(run, as)] : [groupHeader(run, as), ...run.rows]));
+  };
+  const groupHeader = (run: GroupRun<Row<TData>>, as: "card" | "row") => {
+    const open = !collapsed.has(run.key);
+    const total = counts?.get(run.key) ?? run.count;
+    const button = (
+      <button
+        type="button"
+        onClick={() => toggleGroup(run.key)}
+        aria-expanded={open}
+        className="focus-ring flex min-h-[44px] w-full items-center gap-2 rounded-md px-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+      >
+        <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} aria-hidden="true" />
+        <span className="truncate normal-case text-sm font-semibold text-foreground">{renderGroupLabel(run.rows[0]?.getValue(groupBy!))}</span>
+        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums">{total}</span>
+      </button>
+    );
+    if (as === "card") return <div key={`group-${run.key}`} className="mt-1">{button}</div>;
+    return (
+      <TableRow key={`group-${run.key}`} className="bg-muted/40 hover:bg-muted/40" data-group-row>
+        <TableCell colSpan={columns.length} className="p-1">{button}</TableCell>
+      </TableRow>
+    );
+  };
   const { pageIndex, pageSize: currentPageSize } = table.getState().pagination;
   const firstRowShown = totalRows === 0 ? 0 : pageIndex * currentPageSize + 1;
   const lastRowShown = Math.min((pageIndex + 1) * currentPageSize, totalRows);
@@ -135,7 +200,9 @@ export function DataTable<TData>({
         {isLoading && Array.from({ length: 3 }).map((_, i) => <div key={`skel-${i}`} className="h-24 w-full animate-pulse rounded-lg bg-muted" />)}
         {!isLoading && rows.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">{emptyMessage}</p>}
         {!isLoading &&
-          rows.map((row) => {
+          entriesFor("card").map((entry) => {
+            if (!("original" in (entry as object))) return entry as ReactNode;
+            const row = entry as Row<TData>;
             const Wrapper = onRowClick ? "button" : "div";
             return (
               <Wrapper
@@ -225,17 +292,21 @@ export function DataTable<TData>({
                 </TableCell>
               </TableRow>
             ) : (
-              rows.map((row) => (
-                <TableRow
-                  key={row.id}
-                  className={cn(onRowClick && "cursor-pointer", rowClassName)}
-                  onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                  ))}
-                </TableRow>
-              ))
+              entriesFor("row").map((entry) => {
+                if (!("original" in (entry as object))) return entry as ReactNode;
+                const row = entry as Row<TData>;
+                return (
+                  <TableRow
+                    key={row.id}
+                    className={cn(onRowClick && "cursor-pointer", rowClassName)}
+                    onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    ))}
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>

@@ -73,6 +73,7 @@ import { ProofingPanel } from "../components/ProofingPanel";
 import { SavedViewsBar, type TicketFilters } from "../components/SavedViewsBar";
 import { PageHeader } from "../components/PageHeader";
 import { readProjectSelection, withoutProjectSelection } from "../lib/project-tree";
+import { formatGroupLabel, groupRuns } from "../lib/group-rows";
 import { TicketMetricsPanel } from "../components/TicketMetricsPanel";
 import { TicketPlanningPanel } from "../components/TicketPlanningPanel";
 import { PlanTimeline, TimelineLegend, scheduledItemIds, type TimelineZoom } from "../components/PlanTimeline";
@@ -338,8 +339,18 @@ export const DEFAULT_TICKET_FILTERS: TicketFilters = {
   priority: "all",
   type: "all",
   reporterId: "all",
-  onlyMine: false
+  onlyMine: false,
+  groupBy: "none"
 };
+
+/** The List view's grouping axes, keyed by the DataTable column id they group on. */
+export const TICKET_GROUPINGS: ReadonlyArray<{ id: string; label: string; keyOf: (row: TicketRow) => unknown }> = [
+  { id: "status", label: "Status", keyOf: (r) => r.status },
+  { id: "priority", label: "Priority", keyOf: (r) => r.priority },
+  { id: "type", label: "Type", keyOf: (r) => r.type },
+  { id: "project", label: "Project", keyOf: (r) => r.project.name },
+  { id: "assignee", label: "Assignee", keyOf: (r) => r.assignee?.name ?? null }
+];
 
 /** The page's filter state as the query string both the list and the metrics endpoint take. */
 function ticketQueryParams(filters: TicketFilters, userId: string | undefined) {
@@ -354,6 +365,27 @@ function ticketQueryParams(filters: TicketFilters, userId: string | undefined) {
     reporterId: set(filters.reporterId),
     assigneeId: filters.onlyMine ? userId : undefined
   };
+}
+
+/** Grouping applies to the List view only — Board groups by status itself, Timeline and Calendar
+ *  answer a scheduling question. */
+function groupingFor(viewMode: string, groupBy: string) {
+  if (viewMode !== "list") return undefined;
+  return TICKET_GROUPINGS.find((g) => g.id === groupBy);
+}
+
+type TicketCardItem = { kind: "header"; key: string; label: string; count: number } | { kind: "row"; row: TicketRow };
+
+/** The phone card list, optionally grouped: rows sorted by group label so each run is contiguous,
+ *  then a header item before every run. Pure, and outside the component on purpose — the
+ *  component is already the page's busiest function. */
+function buildTicketCardItems(rows: readonly TicketRow[], grouping: (typeof TICKET_GROUPINGS)[number] | undefined): TicketCardItem[] {
+  if (!grouping) return rows.map((row) => ({ kind: "row" as const, row }));
+  const sorted = [...rows].sort((a, b) => formatGroupLabel(grouping.keyOf(a)).localeCompare(formatGroupLabel(grouping.keyOf(b))));
+  return groupRuns(sorted, grouping.keyOf).flatMap((run) => [
+    { kind: "header" as const, key: run.key, label: run.label, count: run.count },
+    ...run.rows.map((row) => ({ kind: "row" as const, row }))
+  ]);
 }
 
 export function Tickets() {
@@ -446,6 +478,12 @@ export function Tickets() {
   const showMetrics = viewMode === "list" || viewMode === "board";
 
   const tickets = useQuery({ queryKey: ["tickets", filters], queryFn: () => ticketApi.list(queryParams) });
+
+  // Grouping for the List view. The desktop DataTable takes the column id and groups itself; the
+  // phone card list below has no table to lean on, so it is grouped here with the same helper —
+  // sorted by group label first so every run is contiguous, then headers interleaved.
+  const grouping = groupingFor(viewMode, filters.groupBy);
+  const cardItems = buildTicketCardItems(tickets.data ?? [], grouping);
 
   /**
    * The tiles' counts. Keyed on the same `filters` object the list is keyed on, so the two refetch
@@ -640,6 +678,22 @@ export function Tickets() {
               </SelectContent>
             </Select>
           </div>
+          {/* Grouping is a List-view property, so it lives with the filters a saved view carries and
+              is hidden in the views that already group in their own way (Board by status). */}
+          {viewMode === "list" && (
+            <div className="grid w-full gap-1.5 sm:w-auto">
+              <Label htmlFor="ticket-group-by">Group by</Label>
+              <Select value={filters.groupBy} onValueChange={(v) => setFilters((f) => ({ ...f, groupBy: v }))}>
+                <SelectTrigger id="ticket-group-by" className="w-full sm:w-[150px]">
+                  <SelectValue placeholder="No grouping" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No grouping</SelectItem>
+                  {TICKET_GROUPINGS.map((g) => <SelectItem key={g.id} value={g.id}>{g.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           {/* No label of its own — it is a toggle, not a field, and the button's own text already
               names it. `h-10` matches SelectTrigger so the row keeps one baseline. */}
           <Button
@@ -740,7 +794,16 @@ export function Tickets() {
             {tickets.isLoading &&
               Array.from({ length: 4 }).map((_, i) => <Skeleton key={`skel-card-${i}`} className="h-24 w-full" />)}
             {!tickets.isLoading &&
-              (tickets.data ?? []).map((row: TicketRow) => {
+              cardItems.map((item) => {
+                if (item.kind === "header") {
+                  return (
+                    <div key={`group-${item.key}`} className="mt-1 flex items-center gap-2 px-1 text-sm font-semibold">
+                      <span className="truncate">{item.label}</span>
+                      <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">{item.count}</span>
+                    </div>
+                  );
+                }
+                const row = item.row;
                 const TypeIcon = iconForType(row.type);
                 const overdue = Boolean(row.slaBreachAt);
                 const avatarSrc = fileUrl(row.assignee?.avatarUrl);
@@ -812,6 +875,7 @@ export function Tickets() {
               searchPlaceholder="Search these results..."
               emptyMessage="No tickets match these filters yet."
               pageSize={20}
+              groupBy={grouping?.id}
             />
           </div>
         </CardContent>

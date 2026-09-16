@@ -10,6 +10,17 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🗂️ Group the tickets list
+
+- **Group by Status, Priority, Type, Project or Assignee** from the List view's filter row. Each
+  group gets a heading with its size across everything the filters match, not just the page on
+  screen, and collapses on click. Your own column sort still applies within each group, and
+  clearing the grouping restores exactly the sort you had.
+- **Saved views remember it.** Grouping is stored with the view's filters; views saved before
+  today stay ungrouped. Phone cards group the same way, with the same headings.
+- Tables elsewhere gain the capability through the shared table component; nothing else changes
+  until a page opts in.
+
 ### ⌨️ Keyboard shortcuts you can discover, from one table
 
 - **Press `?` anywhere** for the shortcuts dialog, listing only what your role can use: Ctrl/⌘ K
