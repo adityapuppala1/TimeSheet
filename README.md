@@ -144,18 +144,18 @@ CAB tool holds none of that.
 
 ## By the numbers
 
-Counted from the tree at v5.2.1, not estimated — regenerate any of these with the one-liners in
+Counted from the tree at v5.3.0, not estimated — regenerate any of these with the one-liners in
 [CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
 that looks stale.
 
 | | |
 |---|---|
-| REST routes | **544** across 57 controllers |
-| Prisma models / enums | **133** / 46, plus **117** tenant migrations and 22 control-plane migrations |
-| Services / cron workers | **145** / 32 |
-| Web pages | **98** |
-| Unit tests | **3,140** across 202 files (`npm test -w apps/api`), plus **183** in `apps/web` |
-| End-to-end specs | **29** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
+| REST routes | **551** across 59 controllers |
+| Prisma models / enums | **134** / 47, plus **120** tenant migrations and 22 control-plane migrations |
+| Services / cron workers | **147** / 32 |
+| Web pages | **99** |
+| Unit tests | **3,204** across 214 files (`npm test -w apps/api`), plus **280** in `apps/web` |
+| End-to-end specs | **31** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
 | Editable email templates | **41**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **20**, over 5 roles — plus **5** platform-console capabilities over 5 operator roles |
 | Lint | **0 errors**, **701** warnings held under a per-rule ceiling that can only fall — see below |

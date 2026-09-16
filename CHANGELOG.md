@@ -10,6 +10,8 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 5.3.0 — the tickets workspace grows up — 2026-09-17
+
 ### 🎨 The tickets workspace looks like a work-management tool
 
 - **A Views Bar.** List, Board, Timeline and Calendar are tabs directly under the page title,
@@ -320,6 +322,25 @@ number, on purpose — an installation must never render history for a version t
   without a saved choice follow device changes while open; explicit light/dark choices remain
   respected. Theme controls now stay synchronized after command-palette and cross-tab changes,
   and blocked browser storage no longer prevents theme initialization.
+
+### ⬆ Upgrading from 5.2.x
+
+- **Two additive tenant migrations, nothing destructive.** `20260916120000_sprints` (the `Sprint`
+  table, `Ticket.sprintId`, `Ticket.storyPoints`, `GlobalPlanningSettings.enableSprints`) and
+  `20260916140000_project_color` (`Project.color`). Both are idempotent on MySQL and MariaDB and
+  run through the usual `migrate deploy` in `update.sh` / `update.ps1`; every additional
+  organization needs the fan-out as before: `docker compose exec api npm run migrate:tenants -w apps/api`.
+  Earlier in the line: `User.appearance` (nullable JSON) for theme, accent and density.
+- **Sprints are off until a super admin turns them on** under Workspace settings → Planning
+  (`enableSprints`, and planning itself must be on). Nothing else switches itself on.
+- **No new environment variable, dependency or service.** Compose, Helm and CI are unchanged.
+- **Two visible defaults moved, both measured.** The brand teal is two steps darker so white button
+  text reads 4.76:1 (`npm run check:contrast` pins it); the project marks in the sidebar and lists
+  are new, derived from each project's id until someone chooses a colour under Administration →
+  Projects. A person's own theme, accent and density are stored on their profile; a browser's older
+  local theme choice is honoured until a profile choice exists.
+- **Keyboard and phone behaviour changed only additively.** Rows in the tickets table are tab
+  stops now; nothing that worked before works differently.
 
 ## 5.2.1 — the release history stops forgetting its first entry — 2026-09-09
 
