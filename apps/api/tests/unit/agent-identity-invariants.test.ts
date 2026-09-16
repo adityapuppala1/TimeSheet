@@ -168,12 +168,17 @@ describe("an agent has no mailbox", () => {
   });
 
   it("still sends when a real person is among the recipients", async () => {
-    const emailLogCreate = vi.fn().mockResolvedValue({ id: "log-1" });
+    const emailLogCreate = vi.fn().mockImplementation(async ({ data }) => ({ id: "log-1", ...data }));
+    const transportSend = vi.fn().mockResolvedValue({ messageId: "test-message" });
     vi.resetModules();
+    // Exercise delivery without inheriting a developer's SMTP server from .env.
+    vi.doMock("nodemailer", () => ({
+      default: { createTransport: () => ({ verify: vi.fn().mockResolvedValue(true), sendMail: transportSend }) }
+    }));
     vi.doMock("../../src/config/prisma.js", () => ({
       prisma: {
         emailLog: { create: emailLogCreate, update: vi.fn().mockResolvedValue({}) },
-        globalMailSettings: { findUnique: vi.fn().mockResolvedValue(null) },
+        globalMailSettings: { findUnique: vi.fn().mockResolvedValue({ host: "smtp.invalid", port: 587, secure: false, fromAddress: "test@example.invalid" }) },
         globalNotificationSettings: { findUnique: vi.fn().mockResolvedValue(null) },
         user: { findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn().mockResolvedValue(null) }
       }
@@ -184,7 +189,7 @@ describe("an agent has no mailbox", () => {
     const { sendMail } = await import("../../src/services/mail.service.js");
 
     // A mixed digest must not be dropped because one recipient happens to be an agent.
-    await sendMail({
+    const result = await sendMail({
       to: "real@person.io,triage@agents.invalid",
       subject: "Weekly digest",
       html: "<p>hi</p>",
@@ -192,6 +197,9 @@ describe("an agent has no mailbox", () => {
     } as never);
 
     expect(emailLogCreate).toHaveBeenCalled();
+    expect(result.status).toBe("SENT");
+    expect(transportSend).toHaveBeenCalledWith(expect.objectContaining({ to: "real@person.io,triage@agents.invalid" }));
     vi.doUnmock("../../src/config/prisma.js");
+    vi.doUnmock("nodemailer");
   });
 });
