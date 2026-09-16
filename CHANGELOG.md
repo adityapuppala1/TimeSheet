@@ -24,6 +24,10 @@ number, on purpose — an installation must never render history for a version t
   colours, or "Auto" for the derived one; the mark changes everywhere at once — sidebar tree,
   tickets table, cards, group headings. Stored as a palette id, so only measured, legible colours
   can be saved. Additive migration; existing projects keep their derived colour.
+- **Keyboard: open a ticket from the table, jump views with Home/End.** Rows in the tickets table
+  are now reachable by Tab and open on Enter or Space (a keyboard user previously had no way to
+  open a ticket from the desktop table); the Views Bar honours Home and End as the tabs pattern
+  asks. A permanent keyboard-only spec walks every V12 control.
 - **Contrast, measured and kept.** `npm run check:contrast` measures 78 colour pairs the app
   draws (identity marks, accents, status dots, plan marks, the capacity ramp, buttons) against
   WCAG 2.1 AA from the token files, both themes, and fails when one slips. Fixed on the way: the

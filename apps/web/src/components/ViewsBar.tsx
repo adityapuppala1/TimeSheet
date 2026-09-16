@@ -28,10 +28,14 @@ export function ViewsBar<Id extends string>({
   trailing,
   className
 }: Readonly<{ views: ReadonlyArray<ViewTab<Id>>; active: Id; onChange: (id: Id) => void; trailing?: ReactNode; className?: string }>) {
+  // The WAI-ARIA tabs pattern: arrows move between tabs, Home/End jump to the ends (V12 4.3).
   const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
     const i = views.findIndex((v) => v.id === active);
-    const next = views[(i + (e.key === "ArrowRight" ? 1 : views.length - 1)) % views.length];
+    let next: ViewTab<Id> | undefined;
+    if (e.key === "ArrowRight") next = views[(i + 1) % views.length];
+    else if (e.key === "ArrowLeft") next = views[(i + views.length - 1) % views.length];
+    else if (e.key === "Home") next = views[0];
+    else if (e.key === "End") next = views.at(-1);
     if (next) {
       onChange(next.id);
       e.preventDefault();

@@ -367,8 +367,23 @@ export function DataTable<TData>({
                 return (
                   <TableRow
                     key={row.id}
-                    className={cn(onRowClick && "cursor-pointer", rowClassName)}
+                    className={cn(onRowClick && "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring", rowClassName)}
                     onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                    // V12 4.3 keyboard pass: a clickable row is reachable by Tab and opens on
+                    // Enter/Space — a keyboard user had no way to open a ticket from the table.
+                    // Keys from controls INSIDE the row (the status pill) are theirs, not the row's.
+                    tabIndex={onRowClick ? 0 : undefined}
+                    onKeyDown={
+                      onRowClick
+                        ? (e) => {
+                            if (e.target !== e.currentTarget) return;
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              onRowClick(row.original);
+                            }
+                          }
+                        : undefined
+                    }
                   >
                     {row.getVisibleCells().map((cell) => (
                       <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
