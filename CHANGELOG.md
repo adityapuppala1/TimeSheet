@@ -20,6 +20,9 @@ number, on purpose — an installation must never render history for a version t
 - **Status-coloured groups.** Grouping the list by status or priority gives each heading the same
   colour dot as the pills in its rows. The Group menu leads the toolbar and shows the current
   grouping.
+- **Add a ticket where you are looking.** Every group in a grouped list ends with an "Add ticket"
+  row; the new ticket opens pre-filled with that group's priority, type or project, and with the
+  project, module, type and priority filters you have applied.
 
 ### 🏃 Sprints, behind a default-off toggle
 

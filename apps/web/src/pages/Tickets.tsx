@@ -456,6 +456,49 @@ function SprintFilter({ enabled, projectId, value, onChange }: Readonly<{ enable
 }
 
 /**
+ * What "+ Add ticket" under a group pre-fills: the group's own field (priority, type, project) and
+ * the active project/module/type/priority filters — so what you create lands where you are
+ * looking. Status is not creatable (every ticket opens as OPEN) and a sprint is not yet accepted
+ * by the create endpoint (V12 state file, Open Questions), so those axes pre-fill only the filters.
+ */
+function draftFromFilters(filters: TicketFilters): TicketDraftInitial {
+  const initial: TicketDraftInitial = {};
+  if (filters.projectId !== "all") initial.projectId = filters.projectId;
+  if (filters.moduleId !== "all") initial.moduleId = filters.moduleId;
+  if (filters.type !== "all") initial.type = filters.type;
+  if (filters.priority !== "all") initial.priority = filters.priority as TicketPriority;
+  return initial;
+}
+
+function draftFor(axis: string | undefined, value: unknown, filters: TicketFilters, projects: ReadonlyArray<{ id: string; name: string }>): TicketDraftInitial {
+  const initial = draftFromFilters(filters);
+  if (axis === "priority" && typeof value === "string" && value in PRIORITY_VARIANT) initial.priority = value as TicketPriority;
+  if (axis === "type" && typeof value === "string" && value) initial.type = value;
+  if (axis === "project" && typeof value === "string") {
+    const project = projects.find((p) => p.name === value);
+    if (project) {
+      initial.projectId = project.id;
+      if (initial.moduleId && filters.projectId !== project.id) delete initial.moduleId;
+    }
+  }
+  return initial;
+}
+
+/** The row at the bottom of a group — the source's "Add task at the bottom of a group of tasks". */
+function AddToGroupRow({ onClick }: Readonly<{ onClick: () => void }>) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="focus-ring flex h-[44px] w-full items-center gap-2 rounded-md px-3 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground"
+    >
+      <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+      Add ticket
+    </button>
+  );
+}
+
+/**
  * How a group's heading is drawn, by axis. Status and priority carry their tone as a dot — the
  * SAME tone the badge in every row uses (lib/ticket-visuals.ts), so a heading and its rows can
  * never disagree about what colour "In progress" is. Project groups carry the project's mark.
@@ -485,7 +528,7 @@ function groupingFor(viewMode: string, groupBy: string) {
   return TICKET_GROUPINGS.find((g) => g.id === groupBy);
 }
 
-type TicketCardItem = { kind: "header"; key: string; label: string; count: number } | { kind: "row"; row: TicketRow };
+type TicketCardItem = { kind: "header"; key: string; label: string; count: number } | { kind: "row"; row: TicketRow } | { kind: "footer"; key: string; value: unknown };
 
 /** The phone card list, optionally grouped: rows sorted by group label so each run is contiguous,
  *  then a header item before every run. Pure, and outside the component on purpose — the
@@ -495,7 +538,8 @@ function buildTicketCardItems(rows: readonly TicketRow[], grouping: (typeof TICK
   const sorted = [...rows].sort((a, b) => formatGroupLabel(grouping.keyOf(a)).localeCompare(formatGroupLabel(grouping.keyOf(b))));
   return groupRuns(sorted, grouping.keyOf).flatMap((run) => [
     { kind: "header" as const, key: run.key, label: run.label, count: run.count },
-    ...run.rows.map((row) => ({ kind: "row" as const, row }))
+    ...run.rows.map((row) => ({ kind: "row" as const, row })),
+    { kind: "footer" as const, key: run.key, value: grouping.keyOf(run.rows[0]) }
   ]);
 }
 
@@ -507,6 +551,7 @@ export function Tickets() {
 
   const [filters, setFilters] = useState<TicketFilters>({ ...DEFAULT_TICKET_FILTERS });
   const [createOpen, setCreateOpen] = useState(false);
+  const [createInitial, setCreateInitial] = useState<TicketDraftInitial>({});
   // The sidebar's Project → Module tree deep-links here with `?project=` / `?module=` (lib/project-tree.ts
   // owns the two keys). Applied whenever the URL changes, so clicking a second module in the tree
   // while already on this page re-filters rather than being ignored.
@@ -916,6 +961,17 @@ export function Tickets() {
               Array.from({ length: 4 }).map((_, i) => <Skeleton key={`skel-card-${i}`} className="h-24 w-full" />)}
             {!tickets.isLoading &&
               cardItems.map((item) => {
+                if (item.kind === "footer") {
+                  return (
+                    <AddToGroupRow
+                      key={`footer-${item.key}`}
+                      onClick={() => {
+                        setCreateInitial(draftFor(grouping?.id, item.value, filters, projects.data ?? []));
+                        setCreateOpen(true);
+                      }}
+                    />
+                  );
+                }
                 if (item.kind === "header") {
                   return (
                     <div key={`group-${item.key}`} className="mt-1 flex items-center gap-2 px-1 text-sm font-semibold">
@@ -1002,6 +1058,14 @@ export function Tickets() {
               pageSize={20}
               groupBy={grouping?.id}
               groupLabel={groupHeading(grouping?.id, projects.data ?? [])}
+              groupFooter={(value) => (
+                <AddToGroupRow
+                  onClick={() => {
+                    setCreateInitial(draftFor(grouping?.id, value, filters, projects.data ?? []));
+                    setCreateOpen(true);
+                  }}
+                />
+              )}
             />
           </div>
         </CardContent>
@@ -1010,7 +1074,11 @@ export function Tickets() {
 
       <CreateTicketDialog
         open={createOpen}
-        onOpenChange={setCreateOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open);
+          if (!open) setCreateInitial({});
+        }}
+        initial={createInitial}
         projects={projects.data ?? []}
         onCreated={(ticket) => {
           queryClient.invalidateQueries({ queryKey: ["tickets"] });
@@ -1023,16 +1091,24 @@ export function Tickets() {
   );
 }
 
+/** What a grouped or filtered view pre-fills when a ticket is created from it. */
+export type TicketDraftInitial = Partial<{ projectId: string; moduleId: string; type: string; priority: TicketPriority }>;
+
 function CreateTicketDialog({
   open,
   onOpenChange,
   projects,
-  onCreated
+  onCreated,
+  initial
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projects: any[];
   onCreated: (ticket: TicketDetail) => void;
+  /** Merged over the blank draft each time the dialog opens — from a group's "+ Add ticket" row,
+   *  the fields of that group and of the active filters, so what you create lands where you are
+   *  looking. Never applied while the dialog is already open. */
+  initial?: TicketDraftInitial;
 }) {
   const [draft, setDraft] = useState({
     projectId: "",
@@ -1047,6 +1123,10 @@ function CreateTicketDialog({
   const [duplicates, setDuplicates] = useState<AIDuplicateMatch[]>([]);
   const [aiConfidence, setAiConfidence] = useState<number | null>(null);
   const [autoApplied, setAutoApplied] = useState(false);
+  useEffect(() => {
+    if (open && initial && Object.keys(initial).length > 0) setDraft((d) => ({ ...d, ...initial }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apply the seed on open only
+  }, [open]);
   // "Auto-apply triage suggestions" (Workspace Settings -> AI) -- when on, pre-fill the
   // suggestion directly instead of showing an accept/dismiss chip. Fields stay editable either
   // way; this only changes whether a click is required before they're filled in.

@@ -74,6 +74,9 @@ interface DataTableProps<TData> {
   groupBy?: string;
   /** Renders a group's heading; default is `formatGroupLabel` ("IN_PROGRESS" → "In progress"). */
   groupLabel?: (value: unknown) => ReactNode;
+  /** Rendered after a group's rows while it is expanded — e.g. an "add a row to this group"
+   *  affordance. Receives the group's raw value. */
+  groupFooter?: (value: unknown) => ReactNode;
   /**
    * CONTROLLED column visibility: the ids to show. Columns with `enableHiding: false` always show.
    * When provided, a "Columns" control appears in the toolbar and every change is reported through
@@ -100,6 +103,7 @@ export function DataTable<TData>({
   rowClassName,
   groupBy,
   groupLabel,
+  groupFooter,
   visibleColumns,
   onVisibleColumnsChange
 }: DataTableProps<TData>) {
@@ -162,9 +166,20 @@ export function DataTable<TData>({
   const renderGroupLabel = (raw: unknown) => (groupLabel ? groupLabel(raw) : formatGroupLabel(raw));
   /** What to render, in order: plain rows, or each group's header followed by its rows unless
    *  that group is collapsed. One function for both the card list and the table body. */
+  const footerNode = (run: GroupRun<Row<TData>>, as: "card" | "row"): ReactNode => {
+    if (!groupFooter) return null;
+    const inner = groupFooter(run.rows[0]?.getValue(groupBy!));
+    if (!inner) return null;
+    if (as === "card") return <div key={`footer-${run.key}`}>{inner}</div>;
+    return (
+      <TableRow key={`footer-${run.key}`} className="hover:bg-transparent" data-group-footer>
+        <TableCell colSpan={columns.length} className="p-1">{inner}</TableCell>
+      </TableRow>
+    );
+  };
   const entriesFor = (as: "card" | "row"): Array<Row<TData> | ReactNode> => {
     if (!runs) return rows;
-    return runs.flatMap((run) => (collapsed.has(run.key) ? [groupHeader(run, as)] : [groupHeader(run, as), ...run.rows]));
+    return runs.flatMap((run) => (collapsed.has(run.key) ? [groupHeader(run, as)] : [groupHeader(run, as), ...run.rows, footerNode(run, as)]));
   };
   const groupHeader = (run: GroupRun<Row<TData>>, as: "card" | "row") => {
     const open = !collapsed.has(run.key);
@@ -240,6 +255,7 @@ export function DataTable<TData>({
         {!isLoading && rows.length === 0 && <EmptyState compact title={emptyMessage} action={emptyAction} />}
         {!isLoading &&
           entriesFor("card").map((entry) => {
+            if (entry === null || entry === undefined) return null;
             if (!("original" in (entry as object))) return entry as ReactNode;
             const row = entry as Row<TData>;
             const Wrapper = onRowClick ? "button" : "div";
@@ -332,6 +348,7 @@ export function DataTable<TData>({
               </TableRow>
             ) : (
               entriesFor("row").map((entry) => {
+                if (entry === null || entry === undefined) return null;
                 if (!("original" in (entry as object))) return entry as ReactNode;
                 const row = entry as Row<TData>;
                 return (
