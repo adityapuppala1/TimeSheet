@@ -329,7 +329,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     id: "sprints",
     category: "Getting started",
     title: "Sprints and story points",
-    where: "Sprints in the sidebar (under Plan), and the Sprint and Story points fields in a ticket's detail sheet. A super admin turns sprints on under Workspace Settings → Planning; they need the planning layer on too.",
+    where: "Sprints in the sidebar (under Plan), and the Sprint and Story points fields in a ticket's detail sheet. A super admin turns sprints on under Workspace Settings → Planning; they need the planning layer on too, and a plan that includes timelines (Team or Enterprise).",
     when: "Your team works in fixed iterations and wants to know, day by day, whether the iteration is on track.",
     steps: [
       "Pick a project and press New sprint: a name, an optional goal, and start and end dates (two weeks is usual). One sprint can be active per project at a time.",

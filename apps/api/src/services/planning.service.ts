@@ -85,8 +85,11 @@ export async function getEffectivePlanning() {
       requestForms: settings.enableRequestForms,
       customWorkflows: settings.enableCustomWorkflows && entitlements.customWorkflowsEnabled,
       goals: settings.enableGoals && entitlements.goalsEnabled,
-      // Sprints ride on planning (they schedule planned work) and carry no tier entitlement yet.
-      sprints: settings.enableSprints && settings.enablePlanning
+      // Sprints ride on planning AND on the timeline's tier (decided 2026-09-17, V12 Open
+      // Questions): iterations, points and a burndown schedule planned work the way the Gantt
+      // does, so they belong to the plan that includes the Gantt — one line to change if the
+      // product owner places them elsewhere.
+      sprints: settings.enableSprints && settings.enablePlanning && entitlements.ganttEnabled
     }
   };
 }
@@ -102,6 +105,11 @@ export async function assertSprintsEnabled(): Promise<void> {
   }
   if (!settings.enableSprints) {
     throw new AppError(403, "Sprints are off for this workspace. A super admin can enable them in Workspace Settings → Planning.");
+  }
+  // Same tier as the timeline (see getEffectivePlanning); the entitlement points at a plan.
+  const entitlements = await getPlanningEntitlements(requireTenantContext().orgId);
+  if (!entitlements.ganttEnabled) {
+    throw new AppError(403, "Sprints are not included in this plan. Upgrade to Team or Enterprise to use sprints, alongside timelines.");
   }
 }
 

@@ -57,3 +57,15 @@ describe("assertSprintsEnabled", () => {
     await expect(assertSprintsEnabled()).resolves.toBeUndefined();
   });
 });
+
+/* Decided 2026-09-17 (V12 Open Questions): sprints ride with the timeline's tier. */
+describe("sprints and the plan tier", () => {
+  it("are not effective, and the route refuses naming the plan, without the timeline entitlement", async () => {
+    const { getPlanningEntitlements } = await import("../../src/services/plan-limits.service.js");
+    vi.mocked(getPlanningEntitlements).mockResolvedValueOnce({ ganttEnabled: false, resourceMgmtEnabled: true, approvalsEnabled: true, proofingEnabled: true, customWorkflowsEnabled: true, goalsEnabled: true } as never);
+    findUnique.mockResolvedValue(row({ enablePlanning: true, enableSprints: true }));
+    expect((await getEffectivePlanning()).effective.sprints).toBe(false);
+    vi.mocked(getPlanningEntitlements).mockResolvedValueOnce({ ganttEnabled: false, resourceMgmtEnabled: true, approvalsEnabled: true, proofingEnabled: true, customWorkflowsEnabled: true, goalsEnabled: true } as never);
+    await expect(assertSprintsEnabled()).rejects.toThrow(/Upgrade to Team or Enterprise to use sprints/);
+  });
+});

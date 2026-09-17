@@ -10,6 +10,14 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🏷️ Sprints belong to the plan that includes timelines
+
+- **Sprints now carry a tier entitlement**, the same one as the Gantt: iterations, points and a
+  burndown schedule planned work the way the timeline does. On a plan without timelines the
+  Sprints page and the sprint fields are off and the routes refuse with a message naming the
+  upgrade; the workspace toggle still governs them on plans that include it. Nothing changes for
+  a workspace already on such a plan.
+
 ### 🪐 Portfolio in 3D, on request
 
 - **Show 3D on the Portfolio page** turns the projects into a slowly turning field of spheres —
