@@ -42,6 +42,9 @@ Record search reads through the same project scope every ticket route enforces, 
 show you a ticket you could not open. Engineering: `GET /api/search?q=`,
 `apps/api/src/services/search.service.ts`, `apps/web/src/components/command-palette.tsx`.
 
+If you manage users, the palette also lists **People** by name or email; choosing one opens
+Administration → Users with the search box pre-filled (`/app/users?search=…`).
+
 ## 3. Keyboard shortcuts
 
 Press `?` anywhere for the full list **for your role and the page you are on**. Single keys and

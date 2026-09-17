@@ -3273,6 +3273,8 @@ export interface TicketCollaboratorRow {
 export interface QuickSearchResult {
   tickets: Array<{ id: string; key: string; title: string; status: string; projectName: string }>;
   projects: Array<{ id: string; code: string; name: string }>;
+  /** Only for callers who may manage users (the Users page is the deep-link target). */
+  people: Array<{ id: string; name: string; email: string }>;
 }
 
 export type SprintStatusValue = "PLANNED" | "ACTIVE" | "COMPLETED";

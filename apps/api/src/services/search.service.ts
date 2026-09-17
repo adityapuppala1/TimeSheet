@@ -13,9 +13,10 @@
  * the project list applies the same assignment-based rule. Search that reached past either would
  * be a data leak with an autocomplete, so both groups here read through that one helper.
  *
- * WHY NO PEOPLE GROUP YET: no page can be deep-linked to one person (Team has no `?user=`, Users
- * has no `?search=`). A result you cannot open is noise; the group is added the day a target
- * exists. Recorded in the V12 state file.
+ * THE PEOPLE GROUP (V12 6.2) exists only for callers who may manage users, because the only page
+ * that can be deep-linked to a person is Administration → Users (`?search=`), and that page is
+ * gated on the same permission. Everyone else gets an empty group — never a 403, never a result
+ * they could not open. Active people only, no AI agents; name or email prefix.
  */
 import { permissions } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
@@ -38,9 +39,15 @@ export interface ProjectHit {
   code: string;
   name: string;
 }
+export interface PersonHit {
+  id: string;
+  name: string;
+  email: string;
+}
 export interface QuickSearchResult {
   tickets: TicketHit[];
   projects: ProjectHit[];
+  people: PersonHit[];
 }
 
 /**
@@ -57,14 +64,15 @@ export function rankTickets<T extends { key: string; title: string }>(q: string,
 
 export async function quickSearch(req: any, rawQuery: string): Promise<QuickSearchResult> {
   const q = rawQuery.trim().slice(0, SEARCH_MAX_LENGTH);
-  if (q.length < SEARCH_MIN_LENGTH) return { tickets: [], projects: [] };
+  if (q.length < SEARCH_MIN_LENGTH) return { tickets: [], projects: [], people: [] };
 
   const scope = await ticketProjectScope(req);
   const projectWhere = scope.unrestricted ? {} : { id: { in: scope.projectIds } };
   const ticketProjectWhere = scope.unrestricted ? {} : { projectId: { in: scope.projectIds } };
   const canSeeTickets = Boolean(req.user?.permissions?.includes(permissions.TICKETS_VIEW));
+  const canManageUsers = Boolean(req.user?.permissions?.includes(permissions.USERS_MANAGE));
 
-  const [projects, tickets] = await Promise.all([
+  const [projects, tickets, people] = await Promise.all([
     // A restricted caller with no assignments must get nothing, not everything: `in: []` is what
     // Prisma turns into a false predicate, so the empty list is passed through on purpose.
     prisma.project.findMany({
@@ -90,11 +98,25 @@ export async function quickSearch(req: any, rawQuery: string): Promise<QuickSear
           // Over-fetch so a key-prefix hit further down still surfaces after ranking.
           take: SEARCH_LIMIT * 4
         })
+      : Promise.resolve([]),
+    canManageUsers
+      ? prisma.user.findMany({
+          where: {
+            deletedAt: null,
+            status: "ACTIVE",
+            isAgent: false,
+            OR: [{ name: { contains: q } }, { email: { contains: q } }]
+          },
+          select: { id: true, name: true, email: true },
+          orderBy: { name: "asc" },
+          take: SEARCH_LIMIT
+        })
       : Promise.resolve([])
   ]);
 
   return {
     projects,
+    people,
     tickets: rankTickets(q, tickets)
       .slice(0, SEARCH_LIMIT)
       .map((t) => ({ id: t.id, key: t.key, title: t.title, status: t.status, projectName: t.project.name }))

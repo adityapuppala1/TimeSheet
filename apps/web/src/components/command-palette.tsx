@@ -168,6 +168,7 @@ export function CommandPalette({ open, onOpenChange, onOpenShortcuts }: Props) {
   });
   const ticketHits = records.data?.tickets ?? [];
   const projectHits = records.data?.projects ?? [];
+  const peopleHits = records.data?.people ?? [];
 
   const visibleRoutes = useMemo(
     () =>
@@ -246,7 +247,18 @@ export function CommandPalette({ open, onOpenChange, onOpenShortcuts }: Props) {
             ))}
           </CommandGroup>
         )}
-        {(ticketHits.length > 0 || projectHits.length > 0) && <CommandSeparator />}
+        {peopleHits.length > 0 && (
+          <CommandGroup heading="People">
+            {peopleHits.map((p) => (
+              <CommandItem key={p.id} value={`person ${p.name} ${p.email}`} keywords={[debounced]} onSelect={() => jump(`/app/users?search=${encodeURIComponent(p.name)}`)}>
+                <UserRound className="text-muted-foreground" />
+                <span className="truncate">{p.name}</span>
+                <span className="ml-auto shrink-0 truncate text-xs text-muted-foreground">{p.email}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
+        {(ticketHits.length > 0 || projectHits.length > 0 || peopleHits.length > 0) && <CommandSeparator />}
         <CommandGroup heading="Navigate">
           {visibleRoutes.map((route) => (
             <CommandItem key={route.to} value={`${route.label} ${route.hint ?? ""}`} onSelect={() => jump(route.to)}>

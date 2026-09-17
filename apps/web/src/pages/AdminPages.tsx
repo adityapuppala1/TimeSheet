@@ -244,14 +244,19 @@ export function UsersPage() {
   // Server-side filtering, sorting and pagination. The old call fetched the first 50 users and
   // filtered them in the browser, which quietly meant that in an org with more than 50 people the
   // search box could not find most of them — it was searching a page, not the company.
-  const [filters, setFilters] = useState<UserFilters>(EMPTY_FILTERS);
+  // `?search=` seeds the box on load (V12 6.2): the command palette's People results land here,
+  // and a result you could not open would have been noise. Read once; the box owns it after.
+  const [filters, setFilters] = useState<UserFilters>(() => {
+    const seed = new URLSearchParams(globalThis.location?.search ?? "").get("search")?.trim();
+    return seed ? { ...EMPTY_FILTERS, search: seed } : EMPTY_FILTERS;
+  });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [allMatchingSelected, setAllMatchingSelected] = useState(false);
 
   // Typing shouldn't fire a request per keystroke.
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState(filters.search);
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(filters.search), 250);
     return () => clearTimeout(t);

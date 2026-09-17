@@ -10,6 +10,13 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🔎 People in the command palette
+
+- **Type a colleague's name, land on their row.** The palette's record search gains a People
+  group for people who manage users: active colleagues by name or email, each opening
+  Administration → Users with the search box pre-filled from the new `?search=` parameter. Others
+  see no group rather than a result they could not open.
+
 ### 🏃 The burndown remembers who was in the sprint
 
 - **Sprint membership is audited and replayed.** Every join and leave writes

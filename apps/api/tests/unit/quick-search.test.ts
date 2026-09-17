@@ -90,7 +90,7 @@ describe("scope", () => {
 describe("the two rules a person can feel", () => {
   it("asks nothing under two characters", async () => {
     const res = await request(buildApp()).get("/api/search?q=w");
-    expect(res.body).toEqual({ tickets: [], projects: [] });
+    expect(res.body).toEqual({ tickets: [], projects: [], people: [] });
     expect(client.ticket.findMany).not.toHaveBeenCalled();
     expect(client.project.findMany).not.toHaveBeenCalled();
   });
@@ -102,5 +102,25 @@ describe("the two rules a person can feel", () => {
       { key: "WEB-1", title: "Older" }
     ];
     expect(rankTickets("web-1", rows).map((r) => r.key)).toEqual(["WEB-10", "WEB-1", "API-3"]);
+  });
+});
+
+/* V12 6.2 — the people group exists only for callers who can open the page it links to. */
+describe("people", () => {
+  it("is empty — not queried — without users:manage, and never a 403", async () => {
+    const res = await request(buildApp()).get("/api/search?q=an");
+    expect(res.status).toBe(200);
+    expect(res.body.people).toEqual([]);
+    expect(client.user.findMany).not.toHaveBeenCalled();
+  });
+
+  it("returns active, non-agent people by name or email prefix for a user manager", async () => {
+    actor.permissions = [permissions.TICKETS_VIEW, permissions.USERS_MANAGE];
+    vi.mocked(client.user.findMany).mockResolvedValue([{ id: "u1", name: "Ana Reyes", email: "ana@x.io" }] as never);
+    const res = await request(buildApp()).get("/api/search?q=an");
+    expect(res.status).toBe(200);
+    expect(res.body.people).toEqual([{ id: "u1", name: "Ana Reyes", email: "ana@x.io" }]);
+    const where = (vi.mocked(client.user.findMany).mock.calls[0][0] as any).where;
+    expect(where).toMatchObject({ deletedAt: null, status: "ACTIVE", isAgent: false });
   });
 });
