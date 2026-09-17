@@ -141,3 +141,92 @@ describe("applyProposal validates the ids inside a change before writing them", 
     expect(client.ticket.update).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * V12 9.4 — a ticket created from a requirements document is related back to it, and the document
+ * id is the PROPOSAL's, never the change payload's.
+ *
+ * Same lesson as the block above, one field along: `after` is written by whatever produced the
+ * proposal. If the link were built from it, a produced change could relate a ticket to any document
+ * in the workspace — including one the person applying has never opened.
+ */
+describe("applyProposal relates a materialised ticket back to its document", () => {
+  function createTicketClient(proposalOverrides: Record<string, unknown> = {}, after: Record<string, unknown> = {}) {
+    const client = createFakeTenantClient() as unknown as Record<string, Record<string, ReturnType<typeof vi.fn>>>;
+    const row = {
+      id: "chg-1",
+      order: 0,
+      accepted: true,
+      applyError: null,
+      appliedAt: null,
+      op: "CREATE",
+      targetType: "TICKET",
+      targetId: null,
+      before: null,
+      after: { title: "Build the importer", ...after },
+      summary: "Create a ticket"
+    };
+    client.aiProposal = {
+      findUnique: vi.fn().mockResolvedValue({
+        id: "prop-1",
+        status: "PENDING_REVIEW",
+        expiresAt: new Date(Date.now() + 3_600_000),
+        scopeProjectId: "proj-1",
+        scopeTicketId: null,
+        sourceDocumentId: null,
+        kind: "REQUIREMENTS_DOC",
+        changes: [row],
+        ...proposalOverrides
+      }),
+      update: vi.fn().mockResolvedValue({})
+    };
+    client.aiProposalChange = { update: vi.fn().mockResolvedValue({}) };
+    client.project.findFirst = vi.fn().mockResolvedValue({ id: "proj-1" });
+    // issueTicketKey bumps the project's sequence inside the same transaction and reads its code.
+    client.project.update = vi.fn().mockResolvedValue({ code: "DOC", ticketSeq: 4 });
+    client.ticket.create = vi.fn().mockResolvedValue({ id: "tkt-new" });
+    client.globalTicketSettings.upsert = vi.fn().mockResolvedValue({
+      slaLowHours: 1,
+      slaMediumHours: 1,
+      slaHighHours: 1,
+      slaCriticalHours: 1
+    });
+    return client as unknown as ReturnType<typeof createFakeTenantClient>;
+  }
+
+  const apply = (client: ReturnType<typeof createFakeTenantClient>) =>
+    runInTenant(client, () => applyProposal({ proposalId: "prop-1", decisions: { "chg-1": true }, actorId: "actor-1" }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("writes one link when the proposal carries a document", async () => {
+    const client = createTicketClient({ sourceDocumentId: "doc-1" });
+    const result = await apply(client);
+
+    expect(result.applied).toBe(1);
+    expect(client.ticketDocumentLink.createMany).toHaveBeenCalledWith({
+      data: [{ ticketId: "tkt-new", documentId: "doc-1", createdById: "actor-1" }],
+      // Idempotent: a re-apply, or a link somebody already made by hand, must not fail the apply.
+      skipDuplicates: true
+    });
+  });
+
+  it("writes none when the proposal did not come from a document", async () => {
+    const client = createTicketClient({ sourceDocumentId: null });
+    const result = await apply(client);
+
+    expect(result.applied).toBe(1);
+    expect(client.ticketDocumentLink.createMany).not.toHaveBeenCalled();
+  });
+
+  it("ignores a document id smuggled into the change payload", async () => {
+    // The produced change asks for a link to a document the proposal was never about.
+    const client = createTicketClient({ sourceDocumentId: null }, { sourceDocumentId: "doc-somebody-elses", documentId: "doc-2" });
+    const result = await apply(client);
+
+    expect(result.applied).toBe(1);
+    expect(client.ticketDocumentLink.createMany).not.toHaveBeenCalled();
+  });
+});

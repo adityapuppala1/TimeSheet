@@ -10,6 +10,19 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🔗 A ticket built from a document remembers where it came from
+
+- **Accept the Studio's proposed tickets and the relationship is already there.** Each ticket the
+  proposal creates is related to the requirements document it was written from, so the document's
+  Related tickets card and the ticket's Linked tab are both populated without anybody typing a key
+  back in. 5.5.0 shipped the relationship; this stops it being manual work.
+- **The document id comes from the proposal, not from the proposed change.** A change's payload is
+  written by whatever produced it, so building the link from there would let a produced change
+  relate a ticket to any document in the workspace. Provenance sits beside the proposal's scope
+  fields, which are the ones both authorization checks already trust.
+- **Storage.** One nullable column on `AiProposal`, added by an idempotent migration. Proposals
+  that did not come from a document carry NULL and link nothing, which is every existing row.
+
 ### 🤖 Agent activity, filtered by status and date
 
 - **Find the failures.** The Agent runs list in Workspace settings → AI now filters by status and by

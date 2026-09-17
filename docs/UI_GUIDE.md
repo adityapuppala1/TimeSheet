@@ -123,6 +123,10 @@ beside the tick and the assigner hears. The Comments tab badge counts unresolved
 the Studio's list to relate it. A document page shows **Related tickets** (add by key, open, unlink),
 reading through the same project scope as the Tickets page.
 
+**From a document to tickets.** When you accept tickets proposed from a requirements document,
+each one comes back already related to that document — see it on the document's **Related tickets**
+card and on the ticket's **Linked** tab.
+
 **Agent runs.** Under **Workspace settings → AI**, the Agent runs list filters by status and by
 when a run happened, and groups what it finds under Today, Yesterday or the date. Clearing the
 filters restores the full list.

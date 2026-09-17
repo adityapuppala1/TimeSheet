@@ -4229,6 +4229,8 @@ model RequirementsDocument {
 
   /// V12 8.4: tickets related to this document (either side may add the link).
   ticketLinks TicketDocumentLink[]
+  /// V12 9.4: proposals materialised from this document.
+  proposals   AiProposal[] @relation("AiProposalSourceDocument")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4542,6 +4544,12 @@ model AiProposal {
   scopeProject   Project? @relation("AiProposalProjectScope", fields: [scopeProjectId], references: [id], onDelete: Cascade)
   scopeTicketId  String?
   scopeTicket    Ticket?  @relation("AiProposalTicketScope", fields: [scopeTicketId], references: [id], onDelete: Cascade)
+  /// V12 9.4: the requirements document this proposal was materialised from, when it was. Sits
+  /// beside the scope fields on purpose — like them it is set by the SERVER at construction and is
+  /// trusted at apply time, unlike a change's model-authored `after` payload. A ticket created from
+  /// this proposal is related back to the document automatically.
+  sourceDocumentId String?
+  sourceDocument   RequirementsDocument? @relation("AiProposalSourceDocument", fields: [sourceDocumentId], references: [id], onDelete: SetNull)
 
   title           String  @db.VarChar(200)
   /// The model's stated reasoning, shown verbatim to the reviewer. Never parsed or acted on.

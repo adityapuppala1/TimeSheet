@@ -207,6 +207,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "In a comment, type @ and pick a project member to mention them: they get an inbox item that opens the ticket. Only people on the project are offered.",
       "To make a comment an action item, pick a member under Assign to before posting. They get an inbox item and see it under Comments assigned to you on My work; anyone who can see the ticket can tick Resolve, and the person who assigned it hears.",
       "On the Linked tab, Related documents lets you attach a requirements document from the Studio; the document's page lists its related tickets, where you can also add one by key.",
+      "Tickets you accept from a requirements document are related to it automatically — you only relate one by hand when it was not created that way.",
       "In the Requirements Studio, search by title or use Show (All, Created by me, Archived), the type filter and the sort; your Show, type and sort choices are remembered in this browser."
     ],
     notes:

@@ -466,6 +466,9 @@ requirementsDocRouter.post(
       kind: "REQUIREMENTS_DOC",
       title: `Requirements: ${doc.title}`,
       scopeProjectId: project.id,
+      // V12 9.4: provenance, so every ticket this proposal creates comes back related to the
+      // document it was written from.
+      sourceDocumentId: doc.id,
       requestedById: req.user!.id,
       changes
     });

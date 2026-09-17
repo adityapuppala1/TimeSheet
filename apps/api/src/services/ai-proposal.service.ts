@@ -79,6 +79,9 @@ export async function createProposal(params: {
   sourceInteractionId?: string | null;
   scopeProjectId?: string | null;
   scopeTicketId?: string | null;
+  /** V12 9.4: the requirements document this came from, when it came from one. Set by the route,
+   *  never by a model — see the schema comment for why it lives beside the scope fields. */
+  sourceDocumentId?: string | null;
   requestedById: string;
   changes: DraftChange[];
 }) {
@@ -104,6 +107,7 @@ export async function createProposal(params: {
       sourceInteractionId: params.sourceInteractionId ?? null,
       scopeProjectId: params.scopeProjectId ?? null,
       scopeTicketId: params.scopeTicketId ?? null,
+      sourceDocumentId: params.sourceDocumentId ?? null,
       requestedById: params.requestedById,
       status: "PENDING_REVIEW",
       expiresAt: new Date(Date.now() + PROPOSAL_TTL_HOURS * 3_600_000),
@@ -441,6 +445,18 @@ export async function applyProposal(params: {
           });
         });
         createdByOrder.set(change.order, created.id);
+        // V12 9.4 — a ticket created from a requirements document is related back to it, so the
+        // relationship 8.4 made possible does not have to be retyped for every ticket the Studio
+        // just produced. The id comes from the PROPOSAL, never from `after`: that payload is
+        // model-authored, and a smuggled `sourceDocumentId` must not be able to relate a ticket to
+        // a document nobody chose. `createMany` + `skipDuplicates` so a re-apply, or a link somebody
+        // already made by hand, cannot fail the apply.
+        if (proposal.sourceDocumentId) {
+          await prisma.ticketDocumentLink.createMany({
+            data: [{ ticketId: created.id, documentId: proposal.sourceDocumentId, createdById: params.actorId }],
+            skipDuplicates: true
+          });
+        }
         await prisma.aiProposalChange.update({ where: { id: change.id }, data: { targetId: created.id } });
       } else if (change.op === "UPDATE" && change.targetType === "CHANGE" && change.targetId) {
         const current = await prisma.changeRequest.findFirst({ where: { id: change.targetId } });

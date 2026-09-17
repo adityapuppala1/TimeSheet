@@ -9,7 +9,8 @@ import type { PrismaClient } from "@prisma/client";
  * is active in tenant context, so nothing in config/prisma.ts itself needs mocking.
  */
 export function createFakeTenantClient(): PrismaClient {
-  return {
+  // Named, because `$transaction`'s callback form has to be handed this very object — see its stub.
+  const client: Record<string, unknown> = {
     globalAISettings: { upsert: vi.fn(), findUnique: vi.fn() },
     // Defaults to no rows so callChat's getEnabledProviderConfigs() falls through to its
     // synthesized-default single config (GlobalAISettings' provider/model) — exactly like
@@ -23,9 +24,15 @@ export function createFakeTenantClient(): PrismaClient {
       updateMany: vi.fn().mockResolvedValue({ count: 0 }),
       delete: vi.fn()
     },
-    // Only ever called with an ARRAY of already-invoked operation promises in this codebase
-    // (reorderProviderConfigs) — never the callback form — so resolving them is the whole stub.
-    $transaction: vi.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
+    // BOTH forms, because both are used: an ARRAY of already-invoked operation promises
+    // (reorderProviderConfigs) and the CALLBACK form (a ticket CREATE in ai-proposal.service.ts,
+    // which issues a key and creates the row together). The callback is handed this same client, so
+    // `tx.ticket.create` is the very mock a test asserts on — there is no second, invisible client.
+    $transaction: vi.fn((arg: unknown) =>
+      typeof arg === "function"
+        ? (arg as (tx: unknown) => Promise<unknown>)(client)
+        : Promise.all(arg as Promise<unknown>[])
+    ),
     // findMany/groupBy default to no rows so computeRecentStatusByLabel/computeRecentAvgCostByLabel
     // (ai-provider-config.service.ts, read by every callChat dispatch and by listProviderConfigs)
     // don't need every test that reaches them to know about the status/cost-routing features — a
@@ -134,9 +141,12 @@ export function createFakeTenantClient(): PrismaClient {
     blueprint: { findFirst: vi.fn() },
     aiProposalChange: { update: vi.fn(), findMany: vi.fn(), groupBy: vi.fn() },
     ticketLink: { deleteMany: vi.fn(), upsert: vi.fn(), findMany: vi.fn() },
+    // V12 9.4: a ticket created from a requirements document is related back to it on apply.
+    ticketDocumentLink: { createMany: vi.fn().mockResolvedValue({ count: 1 }), findMany: vi.fn(), deleteMany: vi.fn() },
     resourceBooking: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
     requirementsDocument: { create: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     goal: { create: vi.fn() },
     goalLink: { create: vi.fn() }
-  } as unknown as PrismaClient;
+  };
+  return client as unknown as PrismaClient;
 }
