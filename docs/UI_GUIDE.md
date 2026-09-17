@@ -103,8 +103,8 @@ next status without opening the ticket. The server decides what is legal, exactl
 the ticket sheet, and a refusal shows its reason and points you to the sheet. Board columns wear
 the same status colour as a top border.
 
-**Calendar.** The Calendar view has **Month** and **Week** periods (the segmented control beside
-prev | Today | next). If you can plan, drag a chip onto another day to reschedule it: a scheduled
+**Calendar.** The Calendar view has **Day**, **4 days**, **Week** and **Month** periods (the segmented
+control beside prev | Today | next; prev and next step by the period's length). If you can plan, drag a chip onto another day to reschedule it: a scheduled
 item keeps its length, an unscheduled one (dashed, shown on its SLA date) becomes scheduled on the
 day you drop it. The target day shows a ring while you hover. Drag is a pointer gesture; from the
 keyboard, change dates in the ticket sheet's **Plan** tab.

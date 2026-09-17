@@ -10,6 +10,12 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 📅 Calendar: Day and 4-day periods
+
+- **Four periods, like the reference's calendar.** Day · 4 days · Week · Month. Day and 4 days are
+  a strip of dated columns with every chip shown in full; prev and next step by the period's
+  length, Today returns to today, and drag-to-reschedule works in all four.
+
 ### 🔎 People in the command palette
 
 - **Type a colleague's name, land on their row.** The palette's record search gains a People

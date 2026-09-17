@@ -28,7 +28,11 @@
  * WHO renders this: the Calendar tab of `pages/Tickets.tsx`.
  */
 
-export type CalendarPeriod = "month" | "week";
+export type CalendarPeriod = "month" | "week" | "4days" | "day";
+/** Columns each linear period shows; month is the 6×7 grid and is handled apart. */
+const SPAN: Record<Exclude<CalendarPeriod, "month">, number> = { week: 7, "4days": 4, day: 1 };
+const PERIOD_LABEL: Record<CalendarPeriod, string> = { day: "Day", "4days": "4 days", week: "Week", month: "Month" };
+const SPAN_GRID: Record<number, string> = { 7: "grid-cols-7", 4: "grid-cols-4", 1: "grid-cols-1" };
 import { ChevronLeft, ChevronRight, Diamond } from "lucide-react";
 import { useMemo, useState } from "react";
 import { cn } from "../lib/utils";
@@ -73,6 +77,15 @@ function gridStart(year: number, month: number): Date {
   return addDays(first, -dow);
 }
 
+/** "Wed 16 Sep 2026" for a single day, "14 Sep – 20 Sep 2026" for a strip. */
+function stripRange(cells: Date[]): string {
+  const first = cells[0];
+  const last = cells[cells.length - 1];
+  const mon = (d: Date) => MONTHS[d.getUTCMonth()].slice(0, 3);
+  if (cells.length === 1) return `${WEEKDAYS[(first.getUTCDay() + 6) % 7]} ${first.getUTCDate()} ${mon(first)} ${first.getUTCFullYear()}`;
+  return `${first.getUTCDate()} ${mon(first)} – ${last.getUTCDate()} ${mon(last)} ${last.getUTCFullYear()}`;
+}
+
 export function PlanCalendar({
   items,
   year,
@@ -102,7 +115,10 @@ export function PlanCalendar({
   const start = useMemo(() => gridStart(year, month), [year, month]);
   const now = new Date();
   const today = dayKey(now);
-  const isWeek = period === "week" && Boolean(weekAnchor);
+  // 7.1: Day / 4 days / Week are one linear strip of `span` columns anchored on `weekAnchor`
+  // (Week snaps to Monday, the others start on the anchor); Month keeps its 6×7 grid.
+  const isWeek = period !== "month" && Boolean(weekAnchor);
+  const span = isWeek ? SPAN[period as Exclude<CalendarPeriod, "month">] : 7;
   const [dragOverDay, setDragOverDay] = useState<string | null>(null);
   const itemsById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
   const maxChips = isWeek ? MAX_CHIPS_PER_WEEK_DAY : MAX_CHIPS_PER_DAY;
@@ -166,14 +182,15 @@ export function PlanCalendar({
     return map;
   }, [items]);
 
-  const cells = useMemo(
-    () => (isWeek ? weekDays(weekAnchor!).map(toDay) : Array.from({ length: 42 }, (_, i) => addDays(start, i))),
-    [isWeek, weekAnchor, start]
-  );
+  const cells = useMemo(() => {
+    if (!isWeek) return Array.from({ length: 42 }, (_, i) => addDays(start, i));
+    if (span === 7) return weekDays(weekAnchor!).map(toDay);
+    return Array.from({ length: span }, (_, i) => toDay(addDaysKey(weekAnchor!, i)));
+  }, [isWeek, span, weekAnchor, start]);
 
   const step = (delta: number) => {
     if (isWeek) {
-      onWeekAnchorChange?.(addDaysKey(weekAnchor!, 7 * delta));
+      onWeekAnchorChange?.(addDaysKey(weekAnchor!, span * delta));
       return;
     }
     const next = new Date(Date.UTC(year, month + delta, 1));
@@ -183,9 +200,7 @@ export function PlanCalendar({
     onMonthChange(now.getUTCFullYear(), now.getUTCMonth());
     if (isWeek) onWeekAnchorChange?.(today);
   };
-  const weekRange = isWeek
-    ? `${cells[0].getUTCDate()} ${MONTHS[cells[0].getUTCMonth()].slice(0, 3)} – ${cells[6].getUTCDate()} ${MONTHS[cells[6].getUTCMonth()].slice(0, 3)} ${cells[6].getUTCFullYear()}`
-    : null;
+  const weekRange = isWeek ? stripRange(cells) : null;
 
   const lastOfMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
   const viewingCurrentMonth = now.getUTCFullYear() === year && now.getUTCMonth() === month;
@@ -222,7 +237,7 @@ export function PlanCalendar({
         <div className="flex flex-wrap items-center gap-2">
           {onPeriodChange && (
             <div role="radiogroup" aria-label="Calendar period" className="flex items-center rounded-lg border border-border shadow-sm">
-              {(["month", "week"] as const).map((p) => (
+              {(["day", "4days", "week", "month"] as const).map((p) => (
                 <Button
                   key={p}
                   size="sm"
@@ -232,19 +247,19 @@ export function PlanCalendar({
                   className={cn("h-[44px] rounded-none first:rounded-l-lg last:rounded-r-lg", period === p && "bg-muted font-semibold")}
                   onClick={() => onPeriodChange(p)}
                 >
-                  {p === "month" ? "Month" : "Week"}
+                  {PERIOD_LABEL[p]}
                 </Button>
               ))}
             </div>
           )}
           <div className="flex items-center rounded-lg border border-border shadow-sm">
-            <Button size="sm" variant="ghost" className="h-[44px] rounded-r-none" onClick={() => step(-1)} aria-label={isWeek ? "Previous week" : "Previous month"}>
+            <Button size="sm" variant="ghost" className="h-[44px] rounded-r-none" onClick={() => step(-1)} aria-label={isWeek ? `Previous ${PERIOD_LABEL[period].toLowerCase()}` : "Previous month"}>
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <Button size="sm" variant="ghost" className="h-[44px] rounded-none border-x border-border font-semibold" onClick={goToday}>
               Today
             </Button>
-            <Button size="sm" variant="ghost" className="h-[44px] rounded-l-none" onClick={() => step(1)} aria-label={isWeek ? "Next week" : "Next month"}>
+            <Button size="sm" variant="ghost" className="h-[44px] rounded-l-none" onClick={() => step(1)} aria-label={isWeek ? `Next ${PERIOD_LABEL[period].toLowerCase()}` : "Next month"}>
               <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
@@ -254,15 +269,22 @@ export function PlanCalendar({
       {/* The grid owns its own horizontal scroll below sm — seven columns cannot go narrower than
           legibility allows, and the page must never scroll sideways (see index.css). */}
       <div className="overflow-x-auto rounded-lg border border-border">
-        <div className="min-w-[640px]">
-          <div className="grid grid-cols-7 border-b border-border bg-muted/30">
-            {WEEKDAYS.map((d) => (
-              <div key={d} className="px-2 py-2 text-center text-xs font-medium text-muted-foreground">
-                {d}
+        <div className={cn(span === 7 ? "min-w-[640px]" : "min-w-0")}>
+          <div className={cn("grid border-b border-border bg-muted/30", SPAN_GRID[span])}>
+            {(isWeek && span < 7 ? cells : null)?.map((c) => (
+              // Day and 4-day strips label each column with its date; the week and month grids
+              // keep the plain weekday row since the date sits in the cell.
+              <div key={dayKey(c)} className="px-2 py-2 text-center text-xs font-medium text-muted-foreground">
+                {WEEKDAYS[(c.getUTCDay() + 6) % 7]} {c.getUTCDate()}
               </div>
-            ))}
+            )) ??
+              WEEKDAYS.map((d) => (
+                <div key={d} className="px-2 py-2 text-center text-xs font-medium text-muted-foreground">
+                  {d}
+                </div>
+              ))}
           </div>
-          <div className="grid grid-cols-7" data-calendar-period={isWeek ? "week" : "month"}>
+          <div className={cn("grid", SPAN_GRID[span])} data-calendar-period={isWeek ? period : "month"}>
             {cells.map((cell, index) => {
               const key = dayKey(cell);
               const inMonth = isWeek || cell.getUTCMonth() === month;
@@ -276,7 +298,8 @@ export function PlanCalendar({
                   {...dropTargetProps(key)}
                   className={cn(
                     isWeek ? "min-h-[360px]" : "min-h-[104px]",
-                    "border-b border-r border-border p-1.5 transition-shadow [&:nth-child(7n)]:border-r-0",
+                    "border-b border-r border-border p-1.5 transition-shadow last:border-r-0",
+                    span === 7 && "[&:nth-child(7n)]:border-r-0",
                     (isWeek || index >= 35) && "border-b-0",
                     !inMonth && "bg-muted/20",
                     dragOverDay === key && "ring-2 ring-inset ring-primary"
