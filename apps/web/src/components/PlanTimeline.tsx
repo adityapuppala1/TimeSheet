@@ -32,7 +32,7 @@ import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { toast } from "./ui/toaster";
 
-export type TimelineZoom = "day" | "week" | "month" | "quarter";
+export type TimelineZoom = "day" | "week" | "month" | "quarter" | "year";
 
 type AxisTick = { x: number; label: string; major: boolean };
 
@@ -47,10 +47,10 @@ function tickFor(zoom: TimelineZoom, day: Date, x: number): AxisTick | null {
   if (zoom === "day") return { x, label: `${dom}`, major: dow === 1 };
   if (zoom === "week") return dow === 1 ? { x, label: `${dom} ${MONTHS[m]}`, major: dom <= 7 } : null;
   if (dom !== 1) return null;
-  if (zoom === "quarter") {
-    const quarterStart = m % 3 === 0;
-    return { x, label: quarterStart ? `Q${m / 3 + 1} ${yy}` : MONTHS[m], major: quarterStart };
-  }
+  const quarterStart = m % 3 === 0;
+  if (zoom === "quarter") return { x, label: quarterStart ? `Q${m / 3 + 1} ${yy}` : MONTHS[m], major: quarterStart };
+  // Year (7.2): quarter ticks only; January carries the year and is the major line.
+  if (zoom === "year") return quarterStart ? { x, label: m === 0 ? `${day.getUTCFullYear()}` : `Q${m / 3 + 1}`, major: m === 0 } : null;
   return { x, label: `${MONTHS[m]} ${yy}`, major: true };
 }
 
@@ -58,13 +58,14 @@ function tickFor(zoom: TimelineZoom, day: Date, x: number): AxisTick | null {
  *  month zoom a 1-day task is still a visible tick rather than a sub-pixel sliver. */
 /* V12 3.21 (source: the reference's Gantt has Day/Week/Month/Quarter/Year periods): `quarter` at
    1.8px/day puts a 13-week quarter in ~165px and a year in ~660px — the view for a long plan's
-   shape, not its days. Year is deliberately absent: at ~0.5px/day nothing is readable at the 14px
-   root, and portfolio-scale questions are the Portfolio page's. */
-const DAY_WIDTH: Record<TimelineZoom, number> = { day: 34, week: 14, month: 5, quarter: 1.8 };
+   shape, not its days. `year` (7.2, on the user's ask) is an OVERVIEW at 0.6px/day — a year in
+   ~220px, bars at the floor width, quarter ticks only — for "where do the long pieces sit", not
+   for reading dates; the control says so. Portfolio-scale roll-ups remain the Portfolio page's. */
+const DAY_WIDTH: Record<TimelineZoom, number> = { day: 34, week: 14, month: 5, quarter: 1.8, year: 0.6 };
 /** No bar draws thinner than this, whatever the zoom — a one-day task at quarter zoom is still a mark. */
 const MIN_BAR_PX = 4;
 /** Breathing room either side of the plan, in days. */
-const PAD_DAYS: Record<TimelineZoom, number> = { day: 3, week: 7, month: 14, quarter: 30 };
+const PAD_DAYS: Record<TimelineZoom, number> = { day: 3, week: 7, month: 14, quarter: 30, year: 60 };
 const ROW_HEIGHT = 34;
 const BAR_HEIGHT = 18;
 const HEADER_HEIGHT = 44;
@@ -293,7 +294,7 @@ export function PlanTimeline({
 
   /** Non-working-day bands, so a weekend reads as a weekend and not as a suspiciously idle gap. */
   const offDays = useMemo(() => {
-    if (zoom === "month" || zoom === "quarter") return []; // sub-pixel at these scales; drawing them would just be noise
+    if (zoom === "month" || zoom === "quarter" || zoom === "year") return []; // sub-pixel at these scales; drawing them would just be noise
     const working = new Set(data.workingDays);
     const bands: number[] = [];
     for (let i = 0; i <= totalDays; i++) {
@@ -665,11 +666,12 @@ export function TimelineLegend({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <div className="inline-flex overflow-hidden rounded-lg border border-border">
-        {(["day", "week", "month", "quarter"] as TimelineZoom[]).map((z) => (
+        {(["day", "week", "month", "quarter", "year"] as TimelineZoom[]).map((z) => (
           <button
             key={z}
             type="button"
             onClick={() => onZoom(z)}
+            title={z === "year" ? "Year — an overview of where the long pieces sit; dates are not readable at this scale" : undefined}
             className={cn(
               "px-2.5 py-1 text-xs capitalize transition-colors",
               zoom === z ? "bg-primary text-primary-foreground" : "hover:bg-muted"

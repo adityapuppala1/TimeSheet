@@ -10,6 +10,12 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🗓️ Timeline: a Year overview
+
+- **Day · Week · Month · Quarter · Year.** Year is an overview of where the long pieces sit — quarter
+  ticks, the year on January, bars at the floor width — and its button says dates are not readable
+  at that scale. The other zooms are unchanged.
+
 ### 📅 Calendar: Day and 4-day periods
 
 - **Four periods, like the reference's calendar.** Day · 4 days · Week · Month. Day and 4 days are

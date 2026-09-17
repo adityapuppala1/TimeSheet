@@ -184,8 +184,9 @@ Engineering:
 
 ## 10. Timeline zoom
 
-The Timeline (Plan → Timeline) zooms Day, Week, Month and **Quarter**. Quarter shows month ticks
-with the quarter named on its first month ("Q4 26"); a one-day task still draws as a mark.
+The Timeline (Plan → Timeline) zooms Day, Week, Month, **Quarter** and **Year**. Quarter shows month
+ticks with the quarter named on its first month ("Q4 26"); Year shows quarter ticks only and is an
+overview, not a place to read dates; a one-day task still draws as a mark at every zoom.
 Dragging, dependencies, baselines and the critical path work at every zoom.
 
 ## 11. Workload measures
