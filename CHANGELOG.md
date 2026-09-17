@@ -10,6 +10,8 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 5.5.0 — records that know about each other — 2026-09-17
+
 ### 🗂️ The Requirements Studio list filters and sorts
 
 - **Find a document without scrolling.** Above the list: a title search, **Show** (All documents ·
@@ -54,6 +56,23 @@ number, on purpose — an installation must never render history for a version t
   a watcher unless they choose to be, and nobody hears twice: a mentioned reporter, assignee or
   watcher gets the mention, not the generic comment notice. An id pasted into the HTML by hand
   notifies nobody who could not see the ticket.
+
+### ⬆ Upgrading from 5.4.0
+
+- **Two additive migrations, nothing else.** `update.sh` / `update.ps1` as usual — they already run
+  `prisma migrate deploy`. One adds three nullable columns to `TicketComment` (assignee, resolved-at,
+  resolved-by); the other creates `TicketDocumentLink`. Existing comments and documents are untouched
+  and every screen reads exactly as before until somebody assigns or relates something.
+- **No new environment variable, no new service, no feature flag.** One new frontend dependency,
+  `@tiptap/extension-mention` (2.27.3), is already installed by `npm ci`.
+- **Three new notification categories** — `ticket.mentioned`, `ticket.comment_assigned` and
+  `ticket.comment_resolved` — ride the existing *comment* email preference rather than adding a
+  toggle: anybody who had muted comment mail has muted these too, and the per-role suppression
+  matrix applies unchanged.
+- **New audit rows** (`ticket.mentioned`, `ticket.comment_assigned`, `ticket.comment_resolved`,
+  `ticket.document_linked`, `ticket.document_unlinked`) appear from now on; nothing is backfilled.
+- **Nothing is removed and no default changes.** A workspace that upgrades and touches none of this
+  behaves precisely as it did on 5.4.0.
 
 ## 5.4.0 — colour, motion and the last calendar and workload gaps — 2026-09-17
 

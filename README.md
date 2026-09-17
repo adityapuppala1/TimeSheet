@@ -144,21 +144,21 @@ CAB tool holds none of that.
 
 ## By the numbers
 
-Counted from the tree at v5.4.0, not estimated — regenerate any of these with the one-liners in
+Counted from the tree at v5.5.0, not estimated — regenerate any of these with the one-liners in
 [CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
 that looks stale.
 
 | | |
 |---|---|
-| REST routes | **551** across 59 controllers |
-| Prisma models / enums | **134** / 47, plus **120** tenant migrations and 22 control-plane migrations |
-| Services / cron workers | **147** / 32 |
+| REST routes | **554** across 59 controllers |
+| Prisma models / enums | **135** / 47, plus **122** tenant migrations and 22 control-plane migrations |
+| Services / cron workers | **148** / 32 |
 | Web pages | **99** |
-| Unit tests | **3,217** across 215 files (`npm test -w apps/api`), plus **283** in `apps/web` |
+| Unit tests | **3,233** across 217 files (`npm test -w apps/api`), plus **290** in `apps/web` |
 | End-to-end specs | **31** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
 | Editable email templates | **41**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **20**, over 5 roles — plus **5** platform-console capabilities over 5 operator roles |
-| Lint | **0 errors**, **701** warnings held under a per-rule ceiling that can only fall — see below |
+| Lint | **0 errors**, **699** warnings held under a per-rule ceiling that can only fall — see below |
 
 **On the two permission counts.** They are two separate authority models and adding them together
 would describe a role nobody holds. The **20** are the tenant RBAC keys in `packages/shared`
