@@ -33,7 +33,8 @@ vi.mock("../../src/services/planning.service.js", async () => {
     }
   };
 });
-vi.mock("../../src/services/notify.service.js", () => ({ dispatchNotification: vi.fn().mockResolvedValue(undefined), dispatchTransactional: vi.fn().mockResolvedValue({ ok: true }) }));
+const notifySpy = vi.fn().mockResolvedValue(undefined);
+vi.mock("../../src/services/notify.service.js", () => ({ dispatchNotification: (...a: unknown[]) => notifySpy(...a), dispatchTransactional: vi.fn().mockResolvedValue({ ok: true }) }));
 const auditSpy = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../src/services/audit.service.js", () => ({ audit: (...a: unknown[]) => auditSpy(...a) }));
 vi.mock("../../src/services/face.service.js", () => ({ isFaceVerificationRequired: vi.fn().mockResolvedValue(false), consumeVerification: vi.fn(), bindVerificationToRecord: vi.fn() }));
@@ -73,12 +74,13 @@ beforeEach(() => {
     ticket: {
       groupBy: vi.fn().mockResolvedValue([{ sprintId: SPRINT.id, _sum: { storyPoints: 8 } }]),
       findMany: vi.fn().mockResolvedValue([]),
-      findFirst: vi.fn().mockResolvedValue(TICKET),
+      findFirst: vi.fn().mockResolvedValue({ ...TICKET, watchers: [] }),
       create: vi.fn().mockImplementation(async ({ data }: any) => ({ ...TICKET, ...data, id: "new", source: "MANUAL", externalReporterEmail: null, project: { id: data.projectId, code: "X", name: "P", color: null }, module: null, reporter: null, assignee: null })),
       update: vi.fn().mockImplementation(async ({ data }: any) => ({ ...TICKET, ...data, project: { id: "33333333-3333-4333-8333-333333333333", code: "X", name: "P" }, module: null, reporter: null, assignee: null, labels: [], _count: { comments: 0, attachments: 0 } }))
     },
     auditLog: { findMany: vi.fn().mockResolvedValue([]) },
     project: { update: vi.fn().mockResolvedValue({ code: "X", ticketSeq: 7 }) },
+    ticketComment: { create: vi.fn().mockImplementation(async ({ data }: any) => ({ id: "c1", ...data, author: { id: "user-1", name: "Lead" }, createdAt: new Date() })) },
     $transaction: (fn: (tx: unknown) => Promise<unknown>) => fn(client),
     // The lead is on project 3333… only.
     userProjectAssignment: { findMany: vi.fn().mockResolvedValue([{ projectId: "33333333-3333-4333-8333-333333333333" }]), findFirst: vi.fn().mockResolvedValue({ id: "a" }) },
@@ -204,5 +206,26 @@ describe("membership audit", () => {
     const res = await request(buildApp()).patch(`/api/tickets/${TICKET.id}`).send({ storyPoints: 1 });
     expect(res.status).toBe(200);
     expect(auditSpy.mock.calls.some((c) => c[1] === "ticket.sprint_changed")).toBe(false);
+  });
+});
+
+/* V12 8.1 — a mention notifies the mentioned member once, under its own category, and only members. */
+describe("@mentions in a comment", () => {
+  const MEMBER = "44444444-4444-4444-8444-444444444444";
+  const STRANGER = "55555555-5555-4555-8555-555555555555";
+  it("notifies a mentioned project member under ticket.mentioned and not again under ticket.commented", async () => {
+    notifySpy.mockClear();
+    const res = await request(buildApp()).post(`/api/tickets/${TICKET.id}/comments`).send({ body: `<p>hi <span data-mention-id="${MEMBER}" data-mention-label="Ana">@Ana</span></p>` });
+    expect(res.status).toBe(201);
+    const cats = notifySpy.mock.calls.map((c) => c[0]).filter((n) => n.userId === MEMBER).map((n) => n.category);
+    expect(cats).toEqual(["ticket.mentioned"]);
+    expect(notifySpy.mock.calls.find((c) => c[0].userId === MEMBER)?.[0].title).toMatch(/mentioned you on X-1/);
+  });
+  it("ignores an id that is neither a member nor an admin", async () => {
+    notifySpy.mockClear();
+    vi.mocked(client.userProjectAssignment.findFirst).mockResolvedValue(null as never);
+    const res = await request(buildApp()).post(`/api/tickets/${TICKET.id}/comments`).send({ body: `<p><span data-mention-id="${STRANGER}">@Nobody</span></p>` });
+    expect(res.status).toBe(201);
+    expect(notifySpy.mock.calls.some((c) => c[0].userId === STRANGER)).toBe(false);
   });
 });

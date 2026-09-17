@@ -109,6 +109,10 @@ item keeps its length, an unscheduled one (dashed, shown on its SLA date) become
 day you drop it. The target day shows a ring while you hover. Drag is a pointer gesture; from the
 keyboard, change dates in the ticket sheet's **Plan** tab.
 
+**Mentions.** In a ticket comment, type **@** and pick a project member; they get an inbox item that
+opens the ticket. Arrow keys move the list, Enter picks, Escape closes. Only people on the project
+are offered, so a mention cannot reach someone the ticket would not.
+
 **Colour.** The ticket sheet's header is tinted with the project's colour; phone cards carry a
 left rail in the status colour; views fade in as they change unless your system asks for reduced
 motion. All of it is measured by the contrast check, none of it is animation you cannot switch off.

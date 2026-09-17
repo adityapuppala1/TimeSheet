@@ -21,7 +21,9 @@ const ALLOWED_TAGS = [
 // `class` is allowed ONLY so the renderer's own wrapper markup (code-block chrome, callouts)
 // survives sanitisation. It cannot carry behaviour, and this app's CSS has no class that grants
 // any — the style allow-list below is what actually stops CSS-based UI redress.
-const ALLOWED_ATTR = ["href", "rel", "target", "style", "class"];
+// `data-mention-id` / `data-mention-label`: a mention's identity (V12 8.1) — mirrors the server's
+// allowlist in apps/api/src/utils/sanitize.ts; data attributes cannot run anything.
+const ALLOWED_ATTR = ["href", "rel", "target", "style", "class", "data-mention-id", "data-mention-label"];
 
 /**
  * The ONLY CSS this renderer will honour, mirroring `allowedStyles` in

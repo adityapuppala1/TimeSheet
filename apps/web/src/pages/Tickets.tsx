@@ -2117,7 +2117,7 @@ function TicketDetailSheet({
                   <TabsTrigger value="activity"><ScrollText className="h-3.5 w-3.5" />Activity</TabsTrigger>
                 </TabsList>
                 <TabsContent value="comments">
-                  <CommentsPanel ticketId={ticket.id} comments={ticket.comments} onPosted={invalidate} />
+                  <CommentsPanel ticketId={ticket.id} projectId={ticket.project.id} comments={ticket.comments} onPosted={invalidate} />
                 </TabsContent>
                 <TabsContent value="attachments">
                   <AttachmentsPanel ticketId={ticket.id} attachments={ticket.attachments} onChanged={invalidate} />
@@ -2180,14 +2180,23 @@ function TicketDetailSheet({
 
 function CommentsPanel({
   ticketId,
+  projectId,
   comments,
   onPosted
 }: {
   ticketId: string;
+  projectId: string;
   comments: TicketComment[];
   onPosted: () => void;
 }) {
   const [body, setBody] = useState("");
+  // V12 8.1: who can be @mentioned — the project's members, the same list the assignee picker
+  // shows, so the role model decides who is offered (cached under the same query key).
+  const members = useQuery({ queryKey: ["project-assignments", projectId], queryFn: () => projectApi.assignments(projectId) });
+  const mentionCandidates = useMemo(
+    () => (members.data ?? []).map((a: any) => ({ id: a.userId as string, label: a.user.name as string })),
+    [members.data]
+  );
   const [showSummary, setShowSummary] = useState(false);
   const post = useMutation({
     mutationFn: () => ticketApi.comments.add(ticketId, body),
@@ -2258,10 +2267,11 @@ function CommentsPanel({
       <RichTextEditor
         value={body}
         onChange={setBody}
-        placeholder="Add a comment... (paste a log or snippet — it formats itself as code)"
+        placeholder="Add a comment... (@ to mention a project member; paste a log or snippet — it formats itself as code)"
         minHeight="min-h-20"
         maxHeight="max-h-48"
         ariaLabel="New comment"
+        mentions={mentionCandidates}
       />
       <AiRefinePanel state={refineComment} />
       <Button size="sm" className="justify-self-end" disabled={plainLength === 0 || post.isPending} onClick={() => post.mutate()}>

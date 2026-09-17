@@ -4,6 +4,7 @@ import Underline from "@tiptap/extension-underline";
 import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
 import TextAlign from "@tiptap/extension-text-align";
+import { mentionExtension, type MentionCandidate } from "./mention-suggestion";
 import {
   Bold,
   Code,
@@ -54,6 +55,12 @@ interface RichTextEditorProps {
    * a broken document, and offering the button invites it.
    */
   toolbar?: "full" | "inline";
+  /**
+   * V12 8.1: people the writer may @mention — typing "@" opens a list of these; choosing one
+   * inserts a mention node serialised as `<span data-mention-id data-mention-label>@Name</span>`,
+   * which the server reads back to notify. Absent = no @ behaviour at all.
+   */
+  mentions?: MentionCandidate[];
 }
 
 export function RichTextEditor({
@@ -64,8 +71,12 @@ export function RichTextEditor({
   minHeight = "min-h-32",
   maxHeight = "max-h-96",
   ariaLabel,
-  toolbar = "full"
+  toolbar = "full",
+  mentions
 }: RichTextEditorProps) {
+  /** The candidate list is read through a ref so a refetch never rebuilds the editor. */
+  const mentionsRef = useRef<MentionCandidate[] | undefined>(mentions);
+  mentionsRef.current = mentions;
   /** `editorProps` is captured when the editor is constructed, at which point the `editor` const
    *  below is still being initialised — so the paste handler reaches the instance through a ref
    *  rather than closing over a binding that is `null` for the lifetime of the component. */
@@ -77,7 +88,8 @@ export function RichTextEditor({
       Underline,
       Link.configure({ openOnClick: false, HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" } }),
       Placeholder.configure({ placeholder }),
-      TextAlign.configure({ types: ["heading", "paragraph"] })
+      TextAlign.configure({ types: ["heading", "paragraph"] }),
+      ...(mentions ? [mentionExtension(() => mentionsRef.current ?? [])] : [])
     ],
     content: value,
     editorProps: {

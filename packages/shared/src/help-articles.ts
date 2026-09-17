@@ -203,7 +203,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Change a status from the list: the status pill on a row (or phone card) is a menu of the other statuses. The server decides what is legal; a refusal shows its reason.",
       "Tick Columns to show or hide columns, including one per custom field and Sprint; a saved view remembers the set.",
       "Open a ticket: drag its sheet wider than 960px or press Maximize, and the fields sit beside Comments and Activity in two columns. Hide activity keeps the details in focus; the choice is remembered in this browser.",
-      "In the Calendar view choose Month or Week. If you can plan, drag a chip onto another day: a scheduled item keeps its length, an unscheduled one becomes scheduled on that day."
+      "In the Calendar view choose Month or Week. If you can plan, drag a chip onto another day: a scheduled item keeps its length, an unscheduled one becomes scheduled on that day.",
+      "In a comment, type @ and pick a project member to mention them: they get an inbox item that opens the ticket. Only people on the project are offered."
     ],
     notes:
       "Every project has a colour mark — chosen under Administration → Projects (Edit project), or derived from its id until someone chooses. Keyboard: arrows move between views, Enter toggles a group, a row opens on Enter, and the shortcuts dialog (press ?) lists the rest.",

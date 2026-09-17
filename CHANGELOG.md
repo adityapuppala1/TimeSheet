@@ -10,6 +10,15 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 💬 @mentions in ticket comments
+
+- **Type @ in a comment to mention a project member.** The list offers the people the project
+  already shows you; the mention renders as a name tag, and the person gets an inbox item (and
+  email, under the comment-email preference) that opens the ticket. A mentioned person is not made
+  a watcher unless they choose to be, and nobody hears twice: a mentioned reporter, assignee or
+  watcher gets the mention, not the generic comment notice. An id pasted into the HTML by hand
+  notifies nobody who could not see the ticket.
+
 ## 5.4.0 — colour, motion and the last calendar and workload gaps — 2026-09-17
 
 ### 🏷️ Sprints belong to the plan that includes timelines

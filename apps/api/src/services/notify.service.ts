@@ -36,6 +36,9 @@ export type NotificationCategory =
   | "ticket.assigned"
   | "ticket.status_changed"
   | "ticket.commented"
+  /** V12 8.1: somebody @mentioned this person in a ticket comment. Shares the comment email
+   *  preference (see SETTINGS_FIELD) — a person who muted comment mail has muted this too. */
+  | "ticket.mentioned"
   | "ticket.sla_breach"
   | "ticket.escalation"
   | "ticket.needs_review"
@@ -144,6 +147,7 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "ticket.assigned": "emailTicketAssigned",
   "ticket.status_changed": "emailTicketStatusChanged",
   "ticket.commented": "emailTicketCommented",
+  "ticket.mentioned": "emailTicketCommented",
   "ticket.sla_breach": "emailTicketSlaBreach",
   "ticket.escalation": "emailTicketEscalation",
   "ticket.needs_review": "emailTicketNeedsReview",

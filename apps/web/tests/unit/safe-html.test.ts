@@ -153,3 +153,14 @@ describe("htmlToPlainText / plainTextLength", () => {
     expect(out).toContain("text");
   });
 });
+
+/* V12 8.1 — a mention is a span with two data attributes; they must survive the render, and
+   nothing else on that span may. A regression here would silently strip every mention. */
+describe("safeHtml — mentions", () => {
+  it("keeps data-mention-id and data-mention-label, drops handlers on the same span", () => {
+    const out = safeHtml('<p>Hi <span data-mention-id="11111111-1111-4111-8111-111111111111" data-mention-label="Ana" onmouseover="x()">@Ana</span></p>').__html;
+    expect(out).toContain('data-mention-id="11111111-1111-4111-8111-111111111111"');
+    expect(out).toContain('data-mention-label="Ana"');
+    expect(out).not.toContain("onmouseover");
+  });
+});

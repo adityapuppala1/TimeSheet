@@ -62,6 +62,7 @@ import {
 } from "../services/ticket.service.js";
 import { htmlToPlainText, sanitizeRichText } from "../utils/sanitize.js";
 import { bindVerificationToRecord, consumeVerification, isFaceVerificationRequired } from "../services/face.service.js";
+import { extractMentionIds } from "../services/mentions.service.js";
 
 const USER_SUMMARY = { id: true, name: true, email: true, avatarUrl: true } as const;
 const TICKET_LINK_SUMMARY = { id: true, key: true, title: true, status: true, priority: true } as const;
@@ -1660,6 +1661,21 @@ const commentSchema = z.object({
   body: z.object({ body: z.string().min(1).max(10000) })
 });
 
+/** The mentioned ids that may actually see the project — members, or admins — minus the author. */
+async function mentionRecipients(html: string, authorId: string, projectId: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const id of extractMentionIds(html)) {
+    if (id === authorId) continue;
+    if (await isProjectMember(id, projectId)) {
+      out.push(id);
+      continue;
+    }
+    const privileged = await prisma.user.findFirst({ where: { id, deletedAt: null, role: { name: { in: ["SUPER_ADMIN", "ADMIN"] } } }, select: { id: true } });
+    if (privileged) out.push(id);
+  }
+  return out;
+}
+
 ticketRouter.post("/:id/comments", requirePermission(permissions.TICKETS_WRITE), validate(commentSchema), async (req, res) => {
   const ticket = await prisma.ticket.findFirst({
     where: { id: String(req.params.id), deletedAt: null },
@@ -1675,10 +1691,35 @@ ticketRouter.post("/:id/comments", requirePermission(permissions.TICKETS_WRITE),
   });
   await audit(req.user!.id, "ticket.commented", "Ticket", ticket.id);
 
+  // V12 8.1: @mentions. Only people who may see the project count — an id pasted into the HTML by
+  // hand notifies nobody the role model would not show. Mentioned people get the stronger,
+  // personal message and are left out of the generic fan-out below so nobody hears twice; they
+  // are NOT made watchers (the reference: mentioned people follow only if they choose to).
+  const mentioned = await mentionRecipients(cleanBody, req.user!.id, ticket.projectId);
+  if (mentioned.length) await audit(req.user!.id, "ticket.mentioned", "Ticket", ticket.id, { userIds: mentioned });
+  for (const userId of mentioned) {
+    await dispatchNotification({
+      userId,
+      category: "ticket.mentioned",
+      title: `${req.user!.name} mentioned you on ${ticket.key}`,
+      body: `In a comment on "${ticket.title}": ${plainDescription(cleanBody).slice(0, 160)}`,
+      link: `/app/tickets?open=${ticket.id}`,
+      email: {
+        templateKey: "ticket.commented",
+        vars: { ticketKey: ticket.key, title: ticket.title, author: req.user!.name, type: ticket.type ?? "", comment: plainDescription(cleanBody) },
+        fallback: {
+          subject: `${req.user!.name} mentioned you on ${ticket.key}`,
+          html: templates.ticketCommented({ ticketKey: ticket.key, title: ticket.title, author: req.user!.name, type: ticket.type ?? null, comment: plainDescription(cleanBody) || null, ticketId: ticket.id })
+        }
+      }
+    });
+  }
+
   const recipients = new Set<string>();
   if (ticket.reporterId !== req.user!.id) recipients.add(ticket.reporterId);
   if (ticket.assigneeId && ticket.assigneeId !== req.user!.id) recipients.add(ticket.assigneeId);
   for (const watcher of ticket.watchers) if (watcher.userId !== req.user!.id) recipients.add(watcher.userId);
+  for (const id of mentioned) recipients.delete(id);
 
   for (const userId of recipients) {
     await dispatchNotification({

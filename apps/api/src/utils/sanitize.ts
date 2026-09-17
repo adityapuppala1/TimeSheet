@@ -32,6 +32,9 @@ const RICH_TEXT_OPTIONS: sanitizeHtml.IOptions = {
   ],
   allowedAttributes: {
     a: ["href", "rel", "target"],
+    // V12 8.1: a mention is a span carrying the chosen person's id and label — exactly these two
+    // attributes and nothing else on a span, so a mention can be read back but not scripted.
+    span: ["data-mention-id", "data-mention-label"],
     "*": ["style"]
   },
   allowedSchemes: ["http", "https", "mailto"],

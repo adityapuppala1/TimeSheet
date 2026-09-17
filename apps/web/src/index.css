@@ -868,3 +868,15 @@ html.theme-switching *::after {
     transition: none;
   }
 }
+
+/* ── @mentions in rich text (V12 8.1) ─────────────────────────────────────────────────────────────
+   A mention is a span the editor serialises with data-mention-id; it reads as a name-tag in the
+   brand colour, in the editor and in a rendered comment alike. Token-based, so both themes hold. */
+.tiptap span[data-mention-id],
+.prose-sm span[data-mention-id] {
+  color: hsl(var(--primary));
+  font-weight: 600;
+  border-radius: 0.25rem;
+  padding: 0 0.15em;
+  background: hsl(var(--primary) / 0.1);
+}
