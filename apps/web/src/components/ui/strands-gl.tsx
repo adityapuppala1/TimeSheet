@@ -18,9 +18,10 @@
  * fallback instead (see AiLoader below). A loader is pure motion; its reduced form is stillness.
  */
 import { Color, Mesh, Program, Renderer, Triangle } from "ogl";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { AiStrands } from "./ai-strands";
 import "./strands-gl.css";
+import { usePrefersReducedMotion } from "../../lib/use-motion";
 
 const MAX_STRANDS = 12;
 const MAX_COLORS = 8;
@@ -254,20 +255,6 @@ export function StrandsGL({ className }: { className?: string }) {
   return <div ref={containerRef} className={`strands-gl ${className ?? ""}`} aria-hidden />;
 }
 
-/** Honours the OS setting, and keeps honouring it if it changes mid-session. */
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() =>
-    typeof window !== "undefined" && window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)").matches : false
-  );
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return;
-    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onChange = () => setReduced(query.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, []);
-  return reduced;
-}
 
 /**
  * The loader surfaces actually mount: the GL strands where motion is welcome, the quiet SVG where

@@ -17,69 +17,15 @@
  * that drops straight to the final frame — an animated dashboard is unusable for somebody who gets
  * motion sick from it, and this one carries no information in the motion.
  */
-import { useEffect, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Minus, TrendingDown, TrendingUp } from "lucide-react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip as ChartTip, YAxis } from "recharts";
 import { computeTrend } from "../lib/trend";
 import { TONE_ACCENT_CLASS, TONE_ACTIVE_RING_CLASS, TONE_CHART_COLOR, TONE_TEXT_CLASS, type Tone } from "../lib/ticket-visuals";
 import { cn } from "../lib/utils";
+import { useCountUp, usePrefersReducedMotion } from "../lib/use-motion";
 
-/** Honours the OS setting and keeps honouring it if the user changes it mid-session. */
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() =>
-    typeof window !== "undefined" && window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)").matches : false
-  );
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return;
-    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onChange = () => setReduced(query.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, []);
-  return reduced;
-}
 
-/**
- * Rolls a number to its new value over ~450ms.
- *
- * Eased rather than linear so it decelerates into the final figure — a linear count reads as a
- * spinner. Always lands EXACTLY on `value`: the last frame assigns the target rather than the
- * interpolation, because a counter that settles on 153 when the answer is 154 is a bug that only
- * shows up on slow machines.
- */
-function useCountUp(value: number, disabled: boolean): number {
-  const [shown, setShown] = useState(value);
-  const fromRef = useRef(value);
-
-  useEffect(() => {
-    if (disabled) {
-      fromRef.current = value;
-      setShown(value);
-      return;
-    }
-    const from = fromRef.current;
-    if (from === value) return;
-    const start = performance.now();
-    const DURATION = 450;
-    let frame = 0;
-    const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / DURATION);
-      const eased = 1 - Math.pow(1 - t, 3);
-      if (t >= 1) {
-        fromRef.current = value;
-        setShown(value);
-        return;
-      }
-      setShown(Math.round(from + (value - from) * eased));
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [value, disabled]);
-
-  return shown;
-}
 
 /**
  * Everything the "vs yesterday" line needs, decided in one place.

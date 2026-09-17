@@ -17,28 +17,14 @@
  * are wrapped in a `prefers-reduced-motion` check that drops straight to the final frame — no
  * information is carried in the motion, so removing it costs the reader nothing.
  */
-import { useEffect, useState } from "react";
 import { Activity, AlarmClock, Flame, ShieldAlert, TrendingDown, TrendingUp } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip as ChartTip, XAxis, YAxis } from "recharts";
 import type { ChangeMetrics } from "../../services/api";
 import { cn } from "../../lib/utils";
 import { Card, CardContent } from "../ui/card";
 import { EmptyState } from "../ui/empty-state";
+import { usePrefersReducedMotion } from "../../lib/use-motion";
 
-/** Honours the OS setting, and keeps honouring it if it changes mid-session. */
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() =>
-    typeof window !== "undefined" && window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)").matches : false
-  );
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return;
-    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onChange = () => setReduced(query.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, []);
-  return reduced;
-}
 
 /** "2026-08-17" → "17 Aug". The axis is weekly, so the year would be noise on every tick. */
 const weekLabel = (iso: string) =>

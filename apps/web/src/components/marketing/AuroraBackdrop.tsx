@@ -26,7 +26,8 @@
  * FAQ nobody can see it through is a battery cost with no viewer.
  */
 import { Color, Mesh, Program, Renderer, Triangle } from "ogl";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
+import { usePrefersReducedMotion } from "../../lib/use-motion";
 
 const VERT = `#version 300 es
 in vec2 position;
@@ -150,19 +151,6 @@ function tokenColour(name: string, fallback: string): Color {
   return new Color(Number(match[1]) / 255, Number(match[2]) / 255, Number(match[3]) / 255);
 }
 
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() =>
-    typeof window !== "undefined" && window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)").matches : false
-  );
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return;
-    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onChange = () => setReduced(query.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, []);
-  return reduced;
-}
 
 export function AuroraBackdrop({ className, intensity = 1 }: { className?: string; intensity?: number }) {
   const containerRef = useRef<HTMLDivElement | null>(null);

@@ -127,6 +127,10 @@ reading through the same project scope as the Tickets page.
 each one comes back already related to that document — see it on the document's **Related tickets**
 card and on the ticket's **Linked** tab.
 
+**Motion.** Board columns arrive with a short staggered rise and controls give way under the
+pointer. If your system asks for reduced motion you get none of it — the effects are not defined at
+all in that case.
+
 **Instant feedback.** Dragging a card between board columns, ticking a checklist item and resolving
 an assigned comment all change immediately rather than after a round trip. If the server refuses,
 the change is undone and the error explains why.

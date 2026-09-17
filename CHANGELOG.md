@@ -23,6 +23,19 @@ number, on purpose — an installation must never render history for a version t
 - **Storage.** One nullable column on `AiProposal`, added by an idempotent migration. Proposals
   that did not come from a document carry NULL and link nothing, which is every existing row.
 
+### ✨ Motion you can feel, and none at all if you asked for none
+
+- **A board column arrives instead of blinking into place**, and every button and card gives way
+  slightly under the pointer. The entry delay is capped, so the last card in a long column is not
+  visibly late.
+- **Reduced motion is now the absence of the rule, not a second rule undoing the first.** Both new
+  effects are defined only for people who have not asked for less motion. While checking that, one
+  pre-existing miss turned up: buttons carried an unguarded transition, so a person on reduced
+  motion still got it. They no longer do.
+- **One reduced-motion hook instead of five.** It had been copied byte for byte into five
+  components and the counter that rolls the ticket figures four times. Copies like that are correct
+  the day they are written and drift afterwards; there is now one of each.
+
 ### ⚡ The things you do most now answer instantly
 
 - **A dragged card stays where you dropped it, a checklist item ticks under the pointer, and

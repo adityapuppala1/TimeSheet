@@ -420,7 +420,38 @@
   .rdp-root { --rdp-cell-size: 36px; --rdp-accent-color: hsl(var(--primary)); }
 }
 
+/* Its own keyframe rather than Tailwind's `fade-in`: that one is only emitted while some utility
+   still references it, so borrowing it would fail silently the day the last `animate-fade-in` in
+   the app is deleted. Declared at the TOP LEVEL because a keyframe nested inside a media query is
+   hoisted out of it by the processor — and the first attempt took `.stagger-in` with it, which is
+   how a rule meant only for people who want motion ended up applying to everybody. */
+@keyframes stagger-rise {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
+  /* V12 10.2 — press feedback and staggered entry.
+     DEFINED ONLY IN THIS BLOCK on purpose: for somebody who asked for less motion the rule simply
+     does not exist, rather than existing and being undone by a second rule further down that has
+     to be kept in step with this one forever. */
+  .pressable {
+    transition: transform 120ms ease, box-shadow 160ms ease;
+  }
+  .pressable:active {
+    transform: scale(0.985);
+  }
+  .stagger-in {
+    animation: stagger-rise 240ms ease-out both;
+    animation-delay: var(--stagger-delay, 0ms);
+  }
+
   a,
   button,
   input,

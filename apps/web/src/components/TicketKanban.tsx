@@ -19,6 +19,8 @@ import { iconForType, initialsFor, PRIORITY_VARIANT, serverMessage, STATUS_VARIA
 import { TONE_ACCENT_CLASS, TONE_BORDER_CLASS } from "../lib/ticket-visuals";
 import { fileUrl, ticketApi, type TicketRow } from "../services/api";
 import { applyOptimistic, replaceById, rollbackOptimistic, settleOptimistic } from "../lib/optimistic";
+import { staggerStyle } from "../lib/use-motion";
+import { cn } from "../lib/utils";
 import { useFaceStatus } from "../lib/use-face-status";
 import { FaceVerificationDialog } from "./FaceVerificationDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
@@ -39,7 +41,7 @@ function TicketCard({ ticket }: { ticket: TicketRow }) {
   const TypeIcon = iconForType(ticket.type);
   const avatarSrc = fileUrl(ticket.assignee?.avatarUrl);
   return (
-    <div data-kanban-card className="grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
+    <div data-kanban-card className="pressable grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <span className="font-mono">{ticket.key}</span>
         {ticket.source === "EMAIL" && <Mail className="h-3 w-3" />}
@@ -69,7 +71,7 @@ function TicketCard({ ticket }: { ticket: TicketRow }) {
   );
 }
 
-function DraggableCard({ ticket, onOpen }: { ticket: TicketRow; onOpen: (id: string) => void }) {
+function DraggableCard({ ticket, onOpen, index = 0 }: { ticket: TicketRow; onOpen: (id: string) => void; index?: number }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: ticket.id });
   return (
     <div
@@ -78,10 +80,15 @@ function DraggableCard({ ticket, onOpen }: { ticket: TicketRow; onOpen: (id: str
       {...listeners}
       {...attributes}
       onClick={() => !isDragging && onOpen(ticket.id)}
-      className="cursor-grab touch-none active:cursor-grabbing"
+      // V12 10.2: a column ARRIVES rather than blinking into place. The delay is capped so a long
+      // column's last card is not visibly late; under reduced motion `.stagger-in` has no rule at
+      // all. Dropped WHILE dragging: an entry animation on the card under the pointer would fight
+      // dnd-kit's own transform.
+      className={cn("cursor-grab touch-none active:cursor-grabbing", !isDragging && "stagger-in")}
       style={{
         opacity: isDragging ? 0.4 : 1,
-        transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined
+        transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
+        ...(isDragging ? {} : staggerStyle(index))
       }}
     >
       <TicketCard ticket={ticket} />
@@ -124,8 +131,8 @@ function KanbanColumn({
         <span className="text-xs text-muted-foreground">{tickets.length}</span>
       </div>
       <div className="grid gap-2 overflow-y-auto pb-2" style={{ maxHeight: maxHeight ?? "70vh" }}>
-        {tickets.map((t) => (
-          <DraggableCard key={t.id} ticket={t} onOpen={onOpen} />
+        {tickets.map((t, index) => (
+          <DraggableCard key={t.id} ticket={t} onOpen={onOpen} index={index} />
         ))}
         {tickets.length === 0 && <p className="px-2 py-6 text-center text-xs text-muted-foreground">No tickets</p>}
       </div>
