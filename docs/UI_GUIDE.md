@@ -187,7 +187,8 @@ Engineering:
 The Timeline (Plan → Timeline) zooms Day, Week, Month, **Quarter** and **Year**. Quarter shows month
 ticks with the quarter named on its first month ("Q4 26"); Year shows quarter ticks only and is an
 overview, not a place to read dates; a one-day task still draws as a mark at every zoom.
-Dragging, dependencies, baselines and the critical path work at every zoom.
+Dragging, dependencies, baselines and the critical path work at every zoom. If you can plan, **Add
+work item** at the foot of the tree opens the New ticket dialog for the project you are viewing.
 
 ## 11. Workload measures
 

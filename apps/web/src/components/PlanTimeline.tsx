@@ -23,7 +23,7 @@
  * WHO RENDERS THIS: `pages/Timeline.tsx` and the Timeline tab of `pages/Tickets.tsx`.
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ChevronDown, ChevronRight, Diamond, Flag, GripVertical, Link2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Diamond, Flag, GripVertical, Link2, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../lib/utils";
 import { planApi, type PlanDependencyRow, type PlanItemRow, type PlanTimeline as PlanTimelineData } from "../services/api";
@@ -118,6 +118,8 @@ interface Props {
   showBaseline?: boolean;
   /** When false (the default), items nobody has scheduled are hidden. See the note in `visible`. */
   showUnscheduled?: boolean;
+  /** 7.4: "create items from the Gantt sidebar" — an Add row at the foot of the tree; absent = no row. */
+  onAddItem?: () => void;
 }
 
 export function PlanTimeline({
@@ -128,7 +130,8 @@ export function PlanTimeline({
   onOpenItem,
   showCriticalOnly,
   showBaseline,
-  showUnscheduled
+  showUnscheduled,
+  onAddItem
 }: Props) {
   const queryClient = useQueryClient();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -394,6 +397,17 @@ export function PlanTimeline({
                   )}
                 </div>
               ))}
+              {onAddItem && (
+                <button
+                  type="button"
+                  onClick={onAddItem}
+                  className="focus-ring flex h-[44px] w-full items-center gap-2 px-3 text-left text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                  data-timeline-add
+                >
+                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                  Add work item
+                </button>
+              )}
             </div>
           </div>
 

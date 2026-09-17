@@ -591,6 +591,9 @@ export function Tickets() {
   const wantsNew = searchParams.get("new") === "1";
   useEffect(() => {
     if (!wantsNew) return;
+    // Seeded from the URL's own project/module (7.4: the Timeline's Add row lands here) — the
+    // filters that mirror them are applied by another effect, so they are read directly.
+    setCreateInitial(draftFromFilters({ ...filters, ...(linked.projectId ? { projectId: linked.projectId } : {}), ...(linked.moduleId ? { moduleId: linked.moduleId } : {}) }));
     setCreateOpen(true);
     const next = new URLSearchParams(searchParams);
     next.delete("new");

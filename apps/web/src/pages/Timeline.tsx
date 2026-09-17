@@ -195,6 +195,9 @@ export function TimelinePage() {
             showCriticalOnly={showCriticalOnly}
             showUnscheduled={showUnscheduled}
             onOpenItem={(id) => navigate(`/app/tickets?open=${id}`)}
+            // The ONE create dialog lives on the Tickets page; its deep link opens it pre-filled
+            // with this project (the page reads `?project=` before `?new=1` opens the dialog).
+            onAddItem={canEdit ? () => navigate(projectId === "__all__" ? "/app/tickets?new=1" : `/app/tickets?project=${projectId}&new=1`) : undefined}
           />
         </>
       ) : (

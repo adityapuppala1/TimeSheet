@@ -10,6 +10,12 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🧭 Timeline: add a work item from the sidebar
+
+- **Add work item** at the foot of the Timeline's tree opens the New ticket dialog pre-filled with
+  the project you are looking at — the one create dialog, reached by its deep link, rather than a
+  second one. Shown to people who can plan.
+
 ### 👥 Workload: group by project, people inside
 
 - **By person or By project.** Grouped by project, each project is a collapsible row totalling its
