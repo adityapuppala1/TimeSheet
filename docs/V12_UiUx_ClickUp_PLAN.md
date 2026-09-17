@@ -235,6 +235,10 @@ The matrix covers every requested area. Remaining Unverified details are explici
 - Sprints carry NO tier entitlement (every other planning toggle ANDs with one from `plan-limits.service.ts`). Decision deferred to the product owner: which tier includes sprints? Until decided, the effective gate is `enableSprints && enablePlanning` only. Adding an entitlement later is one line in `getEffectivePlanning` plus the tier matrix.
 
 ## Session Log (newest first)
+### 2026-09-17 — Claude Code (Fable 5.1), final regression pass on the finished head
+- Did: no code change. Ran the three permanent specs against `41ebb8b` because rows, tokens and the palette changed after 4.1 first ran: keyboard + workflow 17/17 (desktop); responsive sweep 126 passed, 1 skipped (its own guard) at responsive-phone and responsive-tablet. Knowledge graph refreshed for the markdown changes.
+- State: 39 units, every phase closed, 5.3.0 prepared on the branch and unpushed. Nothing further is buildable without a decision (sprints entitlement tier; P3 rows; the release itself).
+
 ### 2026-09-17 — Claude Code (Fable 5.1), Phase 6 item 6.2 — people in the command palette
 - Did: the target first — `UsersPage` seeds its search box from `?search=` on load (read once; the box owns it after; the debounced value starts equal so the first request is already filtered). `search.service.ts`: `people` group (≤5 active, non-agent users by name/email prefix) ONLY when the caller holds `users:manage` — the same gate as the Users page — else an empty array, never a 403; result type gains `people`. Palette: a "People" group whose rows jump to `/app/users?search=<name>`. Tests: 2 new (gate → not queried; manager → rows with the exact where), the short-query expectation updated for the third key; 8/8. Lint on the three files unchanged (0). No migration, flag or dependency.
 - Verified live: API — super admin `?q=dev` → Dev Patel; employee → `people: []` with 200. Browser — super admin types "Dev Pat" in the palette, a People group appears, picking Dev Patel lands on `/app/users?search=Dev%20Patel` with the box pre-filled and the row visible; employee sees no People group. Frames read by eye.
