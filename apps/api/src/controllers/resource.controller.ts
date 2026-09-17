@@ -65,8 +65,9 @@ resourceRouter.get("/workload", requirePermission(permissions.RESOURCES_MANAGE),
 
   const granularity = req.query.granularity === "day" ? "day" : "week";
   const projectId = typeof req.query.projectId === "string" && req.query.projectId ? req.query.projectId : undefined;
+  const groupBy = req.query.groupBy === "project" ? "project" : undefined;
 
-  const { buckets, rows, workingDays } = await loadWorkload({ from, to, granularity, projectId });
+  const { buckets, rows, workingDays, groups } = await loadWorkload({ from, to, granularity, projectId, groupBy });
   // The agent series, over the same buckets. A separate list rather than extra rows: an agent has no
   // capacity, so every column of a `WorkloadRow` would be meaningless for one — see the service.
   const agentRows = await loadAgentWorkload({ from, to, buckets, projectId });
@@ -78,6 +79,7 @@ resourceRouter.get("/workload", requirePermission(permissions.RESOURCES_MANAGE),
     workingDays,
     buckets,
     rows,
+    ...(groups ? { groups } : {}),
     agentRows,
     summary: {
       people: rows.length,

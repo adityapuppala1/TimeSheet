@@ -10,6 +10,14 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 👥 Workload: group by project, people inside
+
+- **By person or By project.** Grouped by project, each project is a collapsible row totalling its
+  people's hours, tickets and points per week, with the people beneath it measured against their
+  own capacity for that project's work alone. A project row shows no capacity, because capacity
+  belongs to a person. Someone booked on a project they are not assigned to still appears there.
+  The measure control applies to both levels; the API takes `groupBy=project`.
+
 ### 🗓️ Timeline: a Year overview
 
 - **Day · Week · Month · Quarter · Year.** Year is an overview of where the long pieces sit — quarter

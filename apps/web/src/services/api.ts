@@ -4601,6 +4601,13 @@ export interface WorkloadCellRow {
   isOverAllocated: boolean;
 }
 
+export interface WorkloadGroupData {
+  project: { id: string; code: string; name: string; color: string | null };
+  rows: WorkloadRowData[];
+  /** Hours, tickets and points over the project's people — no capacity: that belongs to a person. */
+  totals: { bookedHours: number; loggedHours: number; ticketCount: number; storyPoints: number };
+}
+
 export interface WorkloadRowData {
   person: CapacityPersonRow;
   cells: WorkloadCellRow[];
@@ -4630,6 +4637,8 @@ export interface WorkloadBoard {
   workingDays: number[];
   buckets: WorkloadBucket[];
   rows: WorkloadRowData[];
+  /** V12 7.3: present when asked for `groupBy=project` — the same people split per project. */
+  groups?: WorkloadGroupData[];
   /** The AI teammates over the same buckets, as their OWN list rather than extra rows: an agent has
    *  no capacity, so every column of a person's row would be meaningless for one. */
   agentRows: AgentWorkloadRowData[];
@@ -4739,7 +4748,7 @@ export interface ResourceBookingInput {
 }
 
 export const resourceApi = {
-  workload: async (params?: { from?: string; to?: string; granularity?: "day" | "week"; projectId?: string }) =>
+  workload: async (params?: { from?: string; to?: string; granularity?: "day" | "week"; projectId?: string; groupBy?: "project" }) =>
     (await api.get<WorkloadBoard>("/resources/workload", { params })).data,
   conflicts: async (params?: { from?: string; to?: string }) =>
     (await api.get<BookingConflict[]>("/resources/conflicts", { params })).data,

@@ -193,6 +193,8 @@ Dragging, dependencies, baselines and the critical path work at every zoom.
 
 The Workload board (Plan → Workload, needs the resource permission) has a **Measure** control:
 **Hours booked** (the original: bookings against capacity, with logged hours for comparison),
+**By person / By project** (a project row with its people inside; the project row totals hours,
+tickets and points and carries no capacity, because capacity belongs to a person),
 **Tickets** and **Story points**. The two new measures count each person's open assigned tickets
 in the weeks their scheduled span covers, or the week of the SLA date when nobody has scheduled
 them, exactly as the Calendar places them. Row totals count each ticket once. The cell colour

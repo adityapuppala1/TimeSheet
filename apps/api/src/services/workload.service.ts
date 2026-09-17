@@ -391,13 +391,73 @@ export function findConflicts(
  * DB shell
  * ================================================================== */
 
+/**
+ * V12 7.3 — the board grouped by project, people inside (the reference's "primary group List,
+ * also group by Assignee"). A project row totals its people's HOURS, tickets and points but has
+ * no capacity: capacity belongs to a person, not a project (the reference measures capacity only
+ * on assignee rows). A person's row inside a project counts only that project's bookings, logged
+ * hours and tickets against the person's whole capacity — "how much of Ana is on this project".
+ */
+export interface WorkloadGroup {
+  project: { id: string; code: string; name: string; color: string | null };
+  rows: WorkloadRow[];
+  totals: { bookedHours: number; loggedHours: number; ticketCount: number; storyPoints: number };
+}
+
+/** Split one board's inputs per project and build each project's own rows. Pure. */
+export function groupWorkloadByProject(params: {
+  projects: WorkloadGroup["project"][];
+  membership: Array<{ userId: string; projectId: string }>;
+  people: CapacityPerson[];
+  bookings: BookingSpan[];
+  logged: Array<LoggedSpan & { projectId: string | null }>;
+  tickets: Array<TicketLoad & { projectId: string }>;
+  buckets: Bucket[];
+  workingDays: WorkingDays;
+  defaultWeeklyCapacityHours: number;
+}): WorkloadGroup[] {
+  const peopleById = new Map(params.people.map((p) => [p.id, p]));
+  return params.projects
+    .map((project) => {
+      const memberIds = new Set(params.membership.filter((m) => m.projectId === project.id).map((m) => m.userId));
+      // Someone booked or ticketed on a project they are not assigned to still belongs on its row.
+      for (const b of params.bookings) if (b.projectId === project.id) memberIds.add(b.userId);
+      for (const t of params.tickets) if (t.projectId === project.id) memberIds.add(t.userId);
+      const people = [...memberIds].map((id) => peopleById.get(id)).filter((p): p is CapacityPerson => Boolean(p));
+      const rows = buildWorkload({
+        people,
+        bookings: params.bookings.filter((b) => b.projectId === project.id),
+        logged: params.logged.filter((l) => l.projectId === project.id),
+        tickets: params.tickets.filter((t) => t.projectId === project.id),
+        buckets: params.buckets,
+        workingDays: params.workingDays,
+        defaultWeeklyCapacityHours: params.defaultWeeklyCapacityHours
+      });
+      const sum = (pick: (r: WorkloadRow) => number) => Math.round(rows.reduce((s, r) => s + pick(r), 0) * 100) / 100;
+      return {
+        project,
+        rows,
+        totals: {
+          bookedHours: sum((r) => r.totals.bookedHours),
+          loggedHours: sum((r) => r.totals.loggedHours),
+          ticketCount: sum((r) => r.totals.ticketCount),
+          storyPoints: sum((r) => r.totals.storyPoints)
+        }
+      };
+    })
+    .filter((g) => g.rows.length > 0)
+    .sort((a, b) => a.project.name.localeCompare(b.project.name));
+}
+
 export async function loadWorkload(params: {
   from: Date;
   to: Date;
   granularity?: "day" | "week";
   userIds?: string[];
   projectId?: string;
-}): Promise<{ buckets: Bucket[]; rows: WorkloadRow[]; workingDays: number[] }> {
+  /** V12 7.3: also return the board grouped by project, people inside. */
+  groupBy?: "project";
+}): Promise<{ buckets: Bucket[]; rows: WorkloadRow[]; workingDays: number[]; groups?: WorkloadGroup[] }> {
   const settings = await getPlanningSettings();
   const workingDays = settings.workingDays;
   const buckets = buildBuckets(params.from, params.to, params.granularity ?? "week", workingDays);
@@ -457,7 +517,7 @@ export async function loadWorkload(params: {
         workDate: { gte: params.from, lte: params.to },
         ...(params.projectId ? { projectId: params.projectId } : {})
       },
-      select: { userId: true, workDate: true, totalHours: true }
+      select: { userId: true, workDate: true, totalHours: true, projectId: true }
     }),
     // V12 3.20: open tickets assigned to these people that touch the window — scheduled span
     // overlapping it, or SLA date inside it when unscheduled.
@@ -472,19 +532,29 @@ export async function loadWorkload(params: {
           { startDate: null, dueAt: { gte: params.from, lte: params.to } }
         ]
       },
-      select: { assigneeId: true, startDate: true, endDate: true, dueAt: true, storyPoints: true }
+      select: { assigneeId: true, startDate: true, endDate: true, dueAt: true, storyPoints: true, projectId: true }
     })
   ]);
 
+  const capacityPeople: CapacityPerson[] = people.map((p) => ({
+    id: p.id,
+    name: p.name,
+    email: p.email,
+    avatarUrl: p.avatarUrl,
+    weeklyCapacityHours: p.weeklyCapacityHours ? Number(p.weeklyCapacityHours) : null,
+    plannedUtilizationPct: p.plannedUtilizationPct
+  }));
+  const logged = loggedRows.map((l) => ({ userId: l.userId, workDate: l.workDate, hours: Number(l.totalHours), projectId: l.projectId ?? null }));
+  const tickets = ticketRows.map((t) => ({
+    userId: t.assigneeId!,
+    startDate: t.startDate,
+    endDate: t.endDate,
+    dueAt: t.dueAt,
+    storyPoints: t.storyPoints === null ? null : Number(t.storyPoints),
+    projectId: t.projectId
+  }));
   const rows = buildWorkload({
-    people: people.map((p) => ({
-      id: p.id,
-      name: p.name,
-      email: p.email,
-      avatarUrl: p.avatarUrl,
-      weeklyCapacityHours: p.weeklyCapacityHours ? Number(p.weeklyCapacityHours) : null,
-      plannedUtilizationPct: p.plannedUtilizationPct
-    })),
+    people: capacityPeople,
     bookings: bookingRows.map((b) => ({
       id: b.id,
       userId: b.userId,
@@ -496,20 +566,50 @@ export async function loadWorkload(params: {
       isTimeOff: b.isTimeOff,
       note: b.note
     })),
-    logged: loggedRows.map((l) => ({ userId: l.userId, workDate: l.workDate, hours: Number(l.totalHours) })),
-    tickets: ticketRows.map((t) => ({
-      userId: t.assigneeId!,
-      startDate: t.startDate,
-      endDate: t.endDate,
-      dueAt: t.dueAt,
-      storyPoints: t.storyPoints === null ? null : Number(t.storyPoints)
-    })),
+    logged,
+    tickets,
     buckets,
     workingDays,
     defaultWeeklyCapacityHours: settings.defaultWeeklyCapacityHours
   });
 
-  return { buckets, rows, workingDays };
+  if (params.groupBy !== "project") return { buckets, rows, workingDays };
+
+  // The projects on the board: every assignment of these people plus anything booked or
+  // ticketed — then the names, in one query.
+  const membership = await prisma.userProjectAssignment.findMany({
+    where: { userId: { in: ids }, ...(params.projectId ? { projectId: params.projectId } : {}) },
+    select: { userId: true, projectId: true }
+  });
+  const projectIds = new Set<string>(membership.map((m) => m.projectId));
+  for (const b of bookingRows) if (b.projectId) projectIds.add(b.projectId);
+  for (const t of tickets) projectIds.add(t.projectId);
+  const projects = await prisma.project.findMany({
+    where: { id: { in: [...projectIds] }, deletedAt: null },
+    select: { id: true, code: true, name: true, color: true }
+  });
+  const groups = groupWorkloadByProject({
+    projects,
+    membership,
+    people: capacityPeople,
+    bookings: bookingRows.map((b) => ({
+      id: b.id,
+      userId: b.userId,
+      projectId: b.projectId,
+      ticketId: b.ticketId,
+      startDate: b.startDate,
+      endDate: b.endDate,
+      hoursPerDay: Number(b.hoursPerDay),
+      isTimeOff: b.isTimeOff,
+      note: b.note
+    })),
+    logged,
+    tickets,
+    buckets,
+    workingDays,
+    defaultWeeklyCapacityHours: settings.defaultWeeklyCapacityHours
+  });
+  return { buckets, rows, workingDays, groups };
 }
 
 /* ================================================================== *

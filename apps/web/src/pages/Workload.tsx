@@ -21,7 +21,8 @@
  * WHO renders this: `App.tsx` at `/app/workload`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Bot, CalendarClock, Loader2, Lock, Plus, Trash2, Users2, Wallet } from "lucide-react";
+import { AlertTriangle, Bot, CalendarClock, ChevronRight, Loader2, Lock, Plus, Trash2, Users2, Wallet } from "lucide-react";
+import { ProjectMark } from "../components/ProjectMark";
 import { useMemo, useState } from "react";
 import { permissions } from "@timesheet/shared";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
@@ -46,7 +47,9 @@ import {
   resourceApi,
   userApi,
   type ResourceBookingRow,
+  type WorkloadBoard,
   type WorkloadCellRow,
+  type WorkloadGroupData,
   type WorkloadRowData
 } from "../services/api";
 import { DateRangePicker } from "../components/ui/date-range-picker";
@@ -87,6 +90,34 @@ function cellFigure(cell: WorkloadCellRow, measure: WorkloadMeasure): string {
   return cell.allocationPct === null ? "—" : `${cell.allocationPct}%`;
 }
 
+/** Which project rows are folded; a Set in state, toggled by id. */
+function useCollapsedGroups() {
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleGroup = (id: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  return { collapsed, toggleGroup };
+}
+
+/** The board as sections: one anonymous section of people, or one per project with its people. */
+function sectionsOf(board: WorkloadBoard, groupBy: "person" | "project"): Array<{ key: string; group?: WorkloadGroupData; rows: WorkloadRowData[] }> {
+  if (groupBy === "project" && board.groups) return board.groups.map((g) => ({ key: g.project.id, group: g, rows: g.rows }));
+  return [{ key: "all", rows: board.rows }];
+}
+
+/** A project row's figure for one bucket: the sum over its people of that bucket's measure. */
+function groupBucketFigure(group: WorkloadGroupData, bucketIndex: number, measure: WorkloadMeasure): string {
+  const field: Record<WorkloadMeasure, keyof Pick<WorkloadCellRow, "ticketCount" | "storyPoints" | "bookedHours">> = { tickets: "ticketCount", points: "storyPoints", hours: "bookedHours" };
+  const pick = (c: WorkloadCellRow) => c[field[measure]];
+  const total = Math.round(group.rows.reduce((s, r) => s + pick(r.cells[bucketIndex]), 0) * 10) / 10;
+  if (total === 0) return "—";
+  return measure === "hours" ? `${total}h` : String(total);
+}
+
 function totalsFigure(totals: WorkloadRowData["totals"], measure: WorkloadMeasure): string {
   if (measure === "tickets") return `${totals.ticketCount} ticket${totals.ticketCount === 1 ? "" : "s"}`;
   if (measure === "points") return `${totals.storyPoints} pts`;
@@ -111,6 +142,10 @@ export function WorkloadPage() {
   /* V12 3.20: what a cell's figure measures. The colour ramp stays allocation-based whatever the
      measure — only hours have a capacity to compare against — and the tooltip says so. */
   const [measure, setMeasure] = useState<WorkloadMeasure>("hours");
+  /* V12 7.3: People (one row each) or Project (a row per project with its people inside — the
+     reference's "group by List, also group by Assignee"). Capacity stays on the person rows. */
+  const [groupBy, setGroupBy] = useState<"person" | "project">("person");
+  const { collapsed, toggleGroup } = useCollapsedGroups();
   const [bookingOpen, setBookingOpen] = useState(false);
   const [editing, setEditing] = useState<ResourceBookingRow | null>(null);
 
@@ -121,8 +156,8 @@ export function WorkloadPage() {
   const enabled = Boolean(config.data?.effective.resourceManagement) && canManage;
 
   const board = useQuery({
-    queryKey: ["resources", "workload", projectId, weeks],
-    queryFn: () => resourceApi.workload({ from, to, projectId: projectId === "__all__" ? undefined : projectId }),
+    queryKey: ["resources", "workload", projectId, weeks, groupBy],
+    queryFn: () => resourceApi.workload({ from, to, projectId: projectId === "__all__" ? undefined : projectId, groupBy: groupBy === "project" ? "project" : undefined }),
     enabled
   });
   const conflicts = useQuery({
@@ -228,6 +263,15 @@ export function WorkloadPage() {
               <SelectItem value="8">8 weeks</SelectItem>
               <SelectItem value="12">12 weeks</SelectItem>
               <SelectItem value="26">26 weeks</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={groupBy} onValueChange={(v) => setGroupBy(v as "person" | "project")}>
+            <SelectTrigger className="w-[150px]" aria-label="Group by" data-workload-group>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="person">By person</SelectItem>
+              <SelectItem value="project">By project</SelectItem>
             </SelectContent>
           </Select>
           <Select value={measure} onValueChange={(v) => setMeasure(v as WorkloadMeasure)}>
@@ -344,8 +388,39 @@ export function WorkloadPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.rows.map((row) => (
-                    <tr key={row.person.id} className="border-b border-border/50">
+                  {sectionsOf(data, groupBy).flatMap((section) => [
+                    section.group && (
+                      <tr key={`group-${section.key}`} className="border-b border-border bg-muted/40" data-workload-project-row>
+                        <td className="sticky left-0 z-10 bg-muted/40 px-2 py-1">
+                          <button
+                            type="button"
+                            onClick={() => toggleGroup(section.key)}
+                            aria-expanded={!collapsed.has(section.key)}
+                            className="focus-ring flex min-h-[44px] w-full items-center gap-2 rounded-md px-1 text-left"
+                          >
+                            <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", !collapsed.has(section.key) && "rotate-90")} aria-hidden="true" />
+                            <ProjectMark id={section.group.project.id} name={section.group.project.name} color={section.group.project.color} size="xs" />
+                            <span className="truncate text-xs font-semibold">{section.group.project.name}</span>
+                            {/* The code disambiguates same-named projects (the seed has two "Archive Drill"s). */}
+                            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{section.group.project.code}</span>
+                            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums">{section.group.rows.length}</span>
+                          </button>
+                        </td>
+                        {data.buckets.map((b, i) => (
+                          <td key={b.start} className="px-1 py-1 text-center text-[11px] font-medium tabular-nums text-muted-foreground">
+                            {groupBucketFigure(section.group!, i, measure)}
+                          </td>
+                        ))}
+                        <td className="px-3 py-1 text-right text-[11px] font-semibold tabular-nums">
+                          {/* No capacity on a project: the reference measures capacity on people only. */}
+                          {measure === "hours"
+                            ? `${section.group.totals.bookedHours}h / ${section.group.totals.loggedHours}h`
+                            : totalsFigure({ ...section.group.totals, capacityHours: 0, timeOffHours: 0, allocationPct: null, overAllocatedBuckets: 0 }, measure)}
+                        </td>
+                      </tr>
+                    ),
+                    ...(collapsed.has(section.key) ? [] : section.rows).map((row) => (
+                    <tr key={`${section.key}-${row.person.id}`} className={cn("border-b border-border/50", section.group && "[&>td:first-child]:pl-8")}>
                       <td className="sticky left-0 z-10 bg-card px-3 py-1.5">
                         <div className="flex items-center gap-2">
                           <Avatar className="h-6 w-6">
@@ -419,7 +494,8 @@ export function WorkloadPage() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    ))
+                  ])}
                 </tbody>
               </table>
             </div>
