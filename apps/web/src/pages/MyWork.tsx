@@ -42,7 +42,10 @@ function ItemRow({ item, onOpen, tone }: { item: MyWorkItem; onOpen: (id: string
       type="button"
       onClick={() => onOpen(item.id)}
       className={cn(
-        "flex w-full items-center gap-3 rounded-lg border border-border bg-card p-3 text-left transition-colors hover:bg-muted/50",
+        // V12 10.3: `pressable` adds the give-under-the-pointer; the lift is motion-safe so a
+        // person on reduced motion keeps the colour change and loses only the movement.
+        "pressable flex w-full items-center gap-3 rounded-lg border border-border bg-card p-3 text-left transition-colors hover:bg-muted/50",
+        "motion-safe:hover:-translate-y-0.5 motion-safe:hover:shadow-soft",
         tone === "overdue" && "border-l-2 border-l-destructive",
         tone === "blocked" && "border-l-2 border-l-warning"
       )}
@@ -180,7 +183,7 @@ export function MyWorkPage() {
                     key={c.id}
                     type="button"
                     onClick={() => open(c.ticketId)}
-                    className="focus-ring flex min-h-[44px] w-full items-start gap-3 rounded-md border border-border px-3 py-2 text-left hover:bg-muted"
+                    className="focus-ring pressable flex min-h-[44px] w-full items-start gap-3 rounded-md border border-border px-3 py-2 text-left hover:bg-muted"
                   >
                     <span className="shrink-0 font-mono text-xs text-muted-foreground">{c.ticketKey}</span>
                     <span className="grid min-w-0 gap-0.5">

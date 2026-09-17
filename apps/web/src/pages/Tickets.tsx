@@ -129,7 +129,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { plainTextLength, safeHtml } from "../lib/safe-html";
-import { aiApi, fileUrl, labelApi, planApi, projectApi, requirementsDocApi, settingsApi, ticketApi, type TicketDocumentLinkRow, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLineageEvent, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow , planningApi, type CustomFieldRow, sprintApi } from "../services/api";
+import { aiApi, fileUrl, labelApi, planApi, projectApi, requirementsDocApi, settingsApi, ticketApi, type TicketDocumentLinkRow, type TicketLabelRow, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLineageEvent, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow , planningApi, type CustomFieldRow, sprintApi } from "../services/api";
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
 import { usePlanningFeatures } from "../lib/use-planning";
@@ -1738,18 +1738,57 @@ function TicketDetailSheet({
 
   const assignMutation = useMutation({
     mutationFn: (assigneeId: string | null) => ticketApi.assign(ticketId as string, assigneeId),
+    // V12 10.3 — the picker shows the new name straight away. The name comes from the SAME list the
+    // picker rendered, so nothing is invented; anything the server changes beyond it arrives with
+    // the settle below.
+    onMutate: (assigneeId) =>
+      applyOptimistic<TicketDetail>(queryClient, [
+        {
+          key: ["ticket", ticketId],
+          update: (detail) => {
+            if (!("assignee" in detail)) return undefined;
+            if (!assigneeId) return { ...detail, assignee: null };
+            const picked = (members.data ?? []).find((m: any) => m.userId === assigneeId);
+            return picked ? { ...detail, assignee: picked.user } : undefined;
+          }
+        }
+      ]),
     onSuccess: () => {
       toast.success("Assignee updated");
       invalidate();
     },
-    onError: (err: any) => toast.error("Could not assign", { description: serverMessage(err, "Try again.") })
+    onSettled: () => settleOptimistic(queryClient, [["ticket", ticketId], ["tickets"]]),
+    onError: (err: any, _vars, context) => {
+      rollbackOptimistic(queryClient, context);
+      toast.error("Could not assign", { description: serverMessage(err, "Try again.") });
+    }
   });
 
   const watchMutation = useMutation({
     mutationFn: (watching: boolean) =>
       watching ? ticketApi.watchers.remove(ticketId as string, user!.id) : ticketApi.watchers.add(ticketId as string),
+    // V12 10.3 — Watch is a toggle, and a toggle that waits for the network reads as one that did
+    // not register the click. The optimistic row carries a placeholder id; the real one arrives on
+    // settle, and nothing keys off it in between.
+    onMutate: (watching) =>
+      applyOptimistic<TicketDetail>(queryClient, [
+        {
+          key: ["ticket", ticketId],
+          update: (detail) => {
+            if (!detail.watchers || !user) return undefined;
+            const watchers = watching
+              ? detail.watchers.filter((w) => w.userId !== user.id)
+              : [...detail.watchers, { id: `optimistic-${user.id}`, userId: user.id, user: { id: user.id, name: user.name, email: user.email, avatarUrl: user.avatarUrl ?? null } }];
+            return { ...detail, watchers };
+          }
+        }
+      ]),
     onSuccess: () => invalidate(),
-    onError: (err: any) => toast.error("Could not update watch status", { description: serverMessage(err, "Try again.") })
+    onSettled: () => settleOptimistic(queryClient, [["ticket", ticketId]]),
+    onError: (err: any, _vars, context) => {
+      rollbackOptimistic(queryClient, context);
+      toast.error("Could not update watch status", { description: serverMessage(err, "Try again.") });
+    }
   });
 
   const addCollaboratorMutation = useMutation({
@@ -1767,15 +1806,38 @@ function TicketDetailSheet({
   });
 
   const allLabels = useQuery({ queryKey: ["labels"], queryFn: labelApi.list });
+  // V12 10.3 — a label appears when picked and disappears when removed. Both patch the same list,
+  // so they share one updater rather than two that could disagree about the row's shape.
+  const patchLabels = (change: (rows: TicketLabelRow[]) => TicketLabelRow[]) => ({
+    key: ["ticket", ticketId] as const,
+    update: (detail: TicketDetail) => (detail.labels ? { ...detail, labels: change(detail.labels) } : undefined)
+  });
   const addLabelMutation = useMutation({
     mutationFn: (labelId: string) => ticketApi.labels.add(ticketId as string, labelId),
+    onMutate: (labelId) => {
+      const label = (allLabels.data ?? []).find((l) => l.id === labelId);
+      if (!label) return Promise.resolve(undefined);
+      return applyOptimistic<TicketDetail>(queryClient, [
+        patchLabels((rows) => (rows.some((r) => r.labelId === labelId) ? rows : [...rows, { id: `optimistic-${labelId}`, labelId, label }]))
+      ]);
+    },
     onSuccess: () => invalidate(),
-    onError: (err: any) => toast.error("Could not add label", { description: serverMessage(err, "Try again.") })
+    onSettled: () => settleOptimistic(queryClient, [["ticket", ticketId]]),
+    onError: (err: any, _vars, context) => {
+      rollbackOptimistic(queryClient, context);
+      toast.error("Could not add label", { description: serverMessage(err, "Try again.") });
+    }
   });
   const removeLabelMutation = useMutation({
     mutationFn: (labelId: string) => ticketApi.labels.remove(ticketId as string, labelId),
+    onMutate: (labelId) =>
+      applyOptimistic<TicketDetail>(queryClient, [patchLabels((rows) => rows.filter((r) => r.labelId !== labelId))]),
     onSuccess: () => invalidate(),
-    onError: (err: any) => toast.error("Could not remove label", { description: serverMessage(err, "Try again.") })
+    onSettled: () => settleOptimistic(queryClient, [["ticket", ticketId]]),
+    onError: (err: any, _vars, context) => {
+      rollbackOptimistic(queryClient, context);
+      toast.error("Could not remove label", { description: serverMessage(err, "Try again.") });
+    }
   });
 
   /** Panel width, remembered per browser. Declared above the early return so the hook order is

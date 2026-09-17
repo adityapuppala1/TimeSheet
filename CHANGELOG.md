@@ -23,6 +23,17 @@ number, on purpose — an installation must never render history for a version t
 - **Storage.** One nullable column on `AiProposal`, added by an idempotent migration. Proposals
   that did not come from a document carry NULL and link nothing, which is every existing row.
 
+### ⚡ Watch, labels and assignee answer instantly too
+
+- **Watch, a label and the assignee now change the moment you click**, joining the board drop, the
+  checklist tick and Resolve. Each is snapshotted first and put back exactly if the server refuses,
+  with the message it gave.
+- **Nothing is invented while waiting.** The new assignee's name comes from the list the picker just
+  showed, and a label from the list it was chosen in — so the interim screen says only what the app
+  already knew.
+- **My work rows lift under the pointer** and give way when pressed. On reduced motion the colour
+  change stays and the movement does not.
+
 ### ✨ Motion you can feel, and none at all if you asked for none
 
 - **A board column arrives instead of blinking into place**, and every button and card gives way

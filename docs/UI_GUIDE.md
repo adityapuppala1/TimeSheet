@@ -131,7 +131,7 @@ card and on the ticket's **Linked** tab.
 pointer. If your system asks for reduced motion you get none of it — the effects are not defined at
 all in that case.
 
-**Instant feedback.** Dragging a card between board columns, ticking a checklist item and resolving
+**Instant feedback.** Watch, labels and the assignee change immediately as well. Dragging a card between board columns, ticking a checklist item and resolving
 an assigned comment all change immediately rather than after a round trip. If the server refuses,
 the change is undone and the error explains why.
 
