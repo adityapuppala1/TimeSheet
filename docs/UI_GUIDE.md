@@ -123,6 +123,10 @@ beside the tick and the assigner hears. The Comments tab badge counts unresolved
 the Studio's list to relate it. A document page shows **Related tickets** (add by key, open, unlink),
 reading through the same project scope as the Tickets page.
 
+**Studio list.** The Requirements Studio list has a search box, a **Show** menu (All documents,
+Created by me, Archived), a type filter and a sort. Show, type and sort are remembered in this
+browser. Rows name the creator and count related tickets.
+
 **Colour.** The ticket sheet's header is tinted with the project's colour; phone cards carry a
 left rail in the status colour; views fade in as they change unless your system asks for reduced
 motion. All of it is measured by the contrast check, none of it is animation you cannot switch off.

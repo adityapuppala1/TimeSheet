@@ -7,7 +7,7 @@
  * WHO renders this: `App.tsx` at `/app/requirements`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, FileText, FileUp, Loader2, Plus, Sparkles } from "lucide-react";
+import { Download, FileText, FileUp, Link2, Loader2, Plus, Search, Sparkles, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { permissions } from "@timesheet/shared";
@@ -25,6 +25,20 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "../components/ui/toaster";
 import { useAuthStore } from "../store/auth";
+import { DEFAULT_STUDIO_FILTERS, filterStudioRows, loadStudioFilters, saveStudioFilters, type StudioFilters } from "../lib/studio-filters";
+
+/** " · you" for the signed-in person, " · Name" for anyone else, nothing when unknown. */
+function creatorLabel(createdBy: { id: string; name: string } | null | undefined, meId: string | undefined): string {
+  if (!createdBy) return "";
+  return createdBy.id === meId ? " · you" : ` · ${createdBy.name}`;
+}
+
+/** What an empty, filtered list should say — names the filter that hid everything. */
+function emptyReason(show: StudioFilters["show"]): string {
+  if (show === "archived") return "Nothing archived.";
+  if (show === "mine") return "You have not created a document yet, or none match the other filters.";
+  return "No document matches these filters.";
+}
 import { requirementsDocApi, type RequirementsDocRow, type RequirementsImportProposedTurnRow } from "../services/api";
 
 const IMPORT_ACCEPT = {
@@ -101,7 +115,17 @@ export function RequirementsStudioPage() {
   const [importDocumentText, setImportDocumentText] = useState<string | null>(null);
 
   const docs = useQuery({ queryKey: ["requirements-docs"], queryFn: requirementsDocApi.list });
-  const rows = (docs.data ?? []).filter((d) => d.status !== "ARCHIVED");
+  // V12 8.5: the list as a small Docs Hub — search, Show, type, sort; remembered in this browser.
+  const [filters, setFilters] = useState<StudioFilters>(() => loadStudioFilters(globalThis.localStorage ?? null));
+  const setFilter = (patch: Partial<StudioFilters>) =>
+    setFilters((f) => {
+      const next = { ...f, ...patch };
+      saveStudioFilters(globalThis.localStorage ?? null, next);
+      return next;
+    });
+  const isFiltered = filters.q !== "" || filters.show !== "all" || filters.docType !== "ALL" || filters.sort !== "newest";
+  const total = docs.data?.length ?? 0;
+  const rows = filterStudioRows(docs.data ?? [], filters, user?.id);
   const analyzeProgress = useIndeterminateProgress(importStage === "analyzing");
 
   function resetDialog() {
@@ -234,10 +258,53 @@ export function RequirementsStudioPage() {
           <Skeleton className="h-16 w-full" />
         </div>
       )}
+      {total > 0 && (
+        <div className="flex flex-wrap items-center gap-2" data-studio-toolbar>
+          <div className="relative min-w-[200px] flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            <Input value={filters.q} onChange={(e) => setFilter({ q: e.target.value })} placeholder="Search documents" aria-label="Search documents" className="h-[44px] pl-9" />
+          </div>
+          <Select value={filters.show} onValueChange={(v) => setFilter({ show: v as StudioFilters["show"] })}>
+            <SelectTrigger className="h-[44px] w-[160px]" aria-label="Show" data-studio-show><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All documents</SelectItem>
+              <SelectItem value="mine">Created by me</SelectItem>
+              <SelectItem value="archived">Archived</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={filters.docType} onValueChange={(v) => setFilter({ docType: v as StudioFilters["docType"] })}>
+            <SelectTrigger className="h-[44px] w-[120px]" aria-label="Document type" data-studio-type><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">Any type</SelectItem>
+              <SelectItem value="PRD">PRD</SelectItem>
+              <SelectItem value="BRD">BRD</SelectItem>
+              <SelectItem value="BOTH">Both</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={filters.sort} onValueChange={(v) => setFilter({ sort: v as StudioFilters["sort"] })}>
+            <SelectTrigger className="h-[44px] w-[170px]" aria-label="Sort" data-studio-sort><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="newest">Newest first</SelectItem>
+              <SelectItem value="updated">Recently updated</SelectItem>
+              <SelectItem value="title">Title A–Z</SelectItem>
+            </SelectContent>
+          </Select>
+          {isFiltered && (
+            <Button variant="ghost" size="sm" className="h-[44px]" onClick={() => setFilter(DEFAULT_STUDIO_FILTERS)}>
+              <X className="h-4 w-4" />Clear
+            </Button>
+          )}
+        </div>
+      )}
       {!docs.isLoading && rows.length === 0 && (
         <Card>
-          <CardContent className="py-10 text-center text-sm text-muted-foreground">
-            No requirements documents yet. Start one and answer a few questions to get a structured PRD/BRD.
+          <CardContent className="py-10 text-center text-sm text-muted-foreground" data-studio-empty>
+            {(docs.data?.length ?? 0) === 0 ? "No requirements documents yet. Start one and answer a few questions to get a structured PRD/BRD." : emptyReason(filters.show)}
+            {total > 0 && (
+              <div className="mt-3">
+                <Button variant="outline" size="sm" onClick={() => setFilter(DEFAULT_STUDIO_FILTERS)}>Clear filters</Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -250,10 +317,21 @@ export function RequirementsStudioPage() {
                   <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <div className="min-w-0">
                     <CardTitle className="truncate text-sm font-medium">{doc.title}</CardTitle>
-                    <p className="text-xs text-muted-foreground">{doc.docType}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {doc.docType}
+                      {creatorLabel(doc.createdBy, user?.id)}
+                    </p>
                   </div>
                 </div>
-                <Badge variant={STATUS_VARIANT[doc.status]}>{STATUS_LABEL[doc.status]}</Badge>
+                <div className="flex shrink-0 items-center gap-2">
+                  {(doc._count?.ticketLinks ?? 0) > 0 && (
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" title="Related tickets">
+                      <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      {doc._count?.ticketLinks}
+                    </span>
+                  )}
+                  <Badge variant={STATUS_VARIANT[doc.status]}>{STATUS_LABEL[doc.status]}</Badge>
+                </div>
               </CardHeader>
             </Card>
           ))}

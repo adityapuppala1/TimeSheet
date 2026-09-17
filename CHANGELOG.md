@@ -10,6 +10,14 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🗂️ The Requirements Studio list filters and sorts
+
+- **Find a document without scrolling.** Above the list: a title search, **Show** (All documents ·
+  Created by me · Archived — archived documents were simply hidden before), a type filter and a sort
+  (Newest · Recently updated · Title). Show, type and sort are remembered in this browser; the search
+  box is not. Each row now names who created it and how many tickets relate to it, and an empty,
+  filtered list says which filter hid everything, with a Clear button. No migration, no flag.
+
 ### 📎 Related documents on a ticket, related tickets on a document
 
 - **Relate a requirements document from the ticket's Linked tab.** Pick a document from the

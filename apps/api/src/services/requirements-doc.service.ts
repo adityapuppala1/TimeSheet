@@ -55,7 +55,13 @@ export async function createRequirementsDocument(input: { title: string; docType
 }
 
 export async function listRequirementsDocuments() {
-  return prisma.requirementsDocument.findMany({ orderBy: { createdAt: "desc" }, take: 50 });
+  // V12 8.5: who wrote it and how connected it is — the Studio list shows both and filters on the
+  // first ("Created by me"). Additive include; the row shape is otherwise unchanged.
+  return prisma.requirementsDocument.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 50,
+    include: { createdBy: { select: { id: true, name: true } }, _count: { select: { ticketLinks: true } } }
+  });
 }
 
 export async function getRequirementsDocument(id: string) {

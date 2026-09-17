@@ -5023,6 +5023,10 @@ export interface RequirementsDocRow {
   sourceDocumentSize: number | null;
   sourceDocumentUploadedAt: string | null;
   sourceDocumentUploadedBy: { id: string; name: string } | null;
+  /** V12 8.5: on the list only — who created it and how many tickets relate to it. */
+  createdById?: string | null;
+  createdBy?: { id: string; name: string } | null;
+  _count?: { ticketLinks: number };
   createdAt: string;
   updatedAt: string;
 }
