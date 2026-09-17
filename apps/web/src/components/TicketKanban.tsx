@@ -18,6 +18,7 @@ import { ticketStatuses, type TicketStatus } from "@timesheet/shared";
 import { iconForType, initialsFor, PRIORITY_VARIANT, serverMessage, STATUS_VARIANT } from "../pages/Tickets";
 import { TONE_ACCENT_CLASS, TONE_BORDER_CLASS } from "../lib/ticket-visuals";
 import { fileUrl, ticketApi, type TicketRow } from "../services/api";
+import { applyOptimistic, replaceById, rollbackOptimistic, settleOptimistic } from "../lib/optimistic";
 import { useFaceStatus } from "../lib/use-face-status";
 import { FaceVerificationDialog } from "./FaceVerificationDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
@@ -38,7 +39,7 @@ function TicketCard({ ticket }: { ticket: TicketRow }) {
   const TypeIcon = iconForType(ticket.type);
   const avatarSrc = fileUrl(ticket.assignee?.avatarUrl);
   return (
-    <div className="grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
+    <div data-kanban-card className="grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <span className="font-mono">{ticket.key}</span>
         {ticket.source === "EMAIL" && <Mail className="h-3 w-3" />}
@@ -73,6 +74,7 @@ function DraggableCard({ ticket, onOpen }: { ticket: TicketRow; onOpen: (id: str
   return (
     <div
       ref={setNodeRef}
+      data-kanban-draggable={ticket.id}
       {...listeners}
       {...attributes}
       onClick={() => !isDragging && onOpen(ticket.id)}
@@ -109,6 +111,7 @@ function KanbanColumn({
   return (
     <div
       ref={setNodeRef}
+      data-kanban-column={status}
       // The column wears its status colour as a top border and a dot — the SAME tone the badge and
       // the list's group heading use (lib/ticket-visuals.ts), so a column and a pill can never disagree.
       className={`grid w-72 shrink-0 auto-rows-min gap-2 rounded-lg border border-t-2 p-2 transition-colors ${isOver ? "border-primary bg-primary/5" : "border-border bg-muted/30"} ${TONE_BORDER_CLASS[STATUS_VARIANT[status] ?? "muted"]}`}
@@ -182,8 +185,17 @@ export function TicketKanban({ tickets, onOpenTicket }: { tickets: TicketRow[]; 
   const moveStatus = useMutation({
     mutationFn: ({ id, status, faceVerificationId }: { id: string; status: TicketStatus; faceVerificationId?: string }) =>
       ticketApi.updateStatus(id, status, faceVerificationId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tickets"] }),
-    onError: (err: any) => toast.error("Couldn't move ticket", { description: serverMessage(err, "That status change isn't allowed.") })
+    // V12 10.1 — the card stays in the column it was dropped into. Without this it snapped back to
+    // its old column and waited for the refetch, which reads as "the drop did not work".
+    onMutate: ({ id, status }) =>
+      applyOptimistic<TicketRow[]>(queryClient, [
+        { key: ["tickets"], update: (rows) => replaceById(rows, id, { status }) }
+      ]),
+    onSettled: () => settleOptimistic(queryClient, [["tickets"]]),
+    onError: (err: any, _vars, context) => {
+      rollbackOptimistic(queryClient, context);
+      toast.error("Couldn't move ticket", { description: serverMessage(err, "That status change isn't allowed.") });
+    }
   });
 
   // Face (identity) verification for drag-moves — same requireForTicket policy as the detail

@@ -85,6 +85,7 @@ import { StatusPill } from "../components/StatusPill";
 import { ViewsBar } from "../components/ViewsBar";
 import { readProjectSelection, withoutProjectSelection } from "../lib/project-tree";
 import { formatGroupLabel, groupRuns } from "../lib/group-rows";
+import { applyOptimistic, replaceById, rollbackOptimistic, settleOptimistic } from "../lib/optimistic";
 import { cn } from "../lib/utils";
 import { draftFor, draftFromFilters, type TicketDraftInitial } from "../lib/ticket-draft";
 import { IDENTITY_WASH_ALPHA, resolveIdentityColor } from "../lib/identity-colors";
@@ -2198,11 +2199,28 @@ function CommentsPanel({
   const queryClientForComments = useQueryClient();
   const patchComment = useMutation({
     mutationFn: (args: { commentId: string; payload: { assigneeId?: string | null; resolved?: boolean } }) => ticketApi.comments.patch(ticketId, args.commentId, args.payload),
+    // V12 10.1 — Resolve is a checkbox, and a checkbox that waits for a PATCH before it moves reads
+    // as broken. (8.3's own live probe caught this: Playwright's `check()` saw the old state.)
+    onMutate: (args) =>
+      applyOptimistic<TicketDetail>(queryClientForComments, [
+        {
+          key: ["ticket", ticketId],
+          update: (detail) => {
+            if (!detail.comments || args.payload.resolved === undefined) return undefined;
+            const resolvedAt = args.payload.resolved ? new Date().toISOString() : null;
+            return { ...detail, comments: replaceById(detail.comments, args.commentId, { resolvedAt }) };
+          }
+        }
+      ]),
     onSuccess: () => {
       onPosted();
       queryClientForComments.invalidateQueries({ queryKey: ["plan", "my-work"] });
     },
-    onError: (err: any) => toast.error("Could not update the comment", { description: serverMessage(err, "Try again.") })
+    onSettled: () => settleOptimistic(queryClientForComments, [["ticket", ticketId]]),
+    onError: (err: any, _vars, context) => {
+      rollbackOptimistic(queryClientForComments, context);
+      toast.error("Could not update the comment", { description: serverMessage(err, "Try again.") });
+    }
   });
   // V12 8.1: who can be @mentioned — the project's members, the same list the assignee picker
   // shows, so the role model decides who is offered (cached under the same query key).
@@ -2355,10 +2373,27 @@ function ChecklistPanel({
     },
     onError: (err: any) => toast.error("Could not add item", { description: serverMessage(err, "Try again.") })
   });
+  const checklistQueryClient = useQueryClient();
   const toggle = useMutation({
     mutationFn: ({ itemId, done }: { itemId: string; done: boolean }) => ticketApi.checklist.update(ticketId, itemId, { done }),
+    // V12 10.1 — the tick flips under the pointer rather than after a round trip and a refetch of
+    // the whole ticket.
+    onMutate: ({ itemId, done }) =>
+      applyOptimistic<TicketDetail>(checklistQueryClient, [
+        {
+          key: ["ticket", ticketId],
+          update: (detail) =>
+            detail.checklistItems
+              ? { ...detail, checklistItems: replaceById(detail.checklistItems, itemId, { done }) }
+              : undefined
+        }
+      ]),
     onSuccess: () => onChanged(),
-    onError: (err: any) => toast.error("Could not update item", { description: serverMessage(err, "Try again.") })
+    onSettled: () => settleOptimistic(checklistQueryClient, [["ticket", ticketId]]),
+    onError: (err: any, _vars, context) => {
+      rollbackOptimistic(checklistQueryClient, context);
+      toast.error("Could not update item", { description: serverMessage(err, "Try again.") });
+    }
   });
   const remove = useMutation({
     mutationFn: (itemId: string) => ticketApi.checklist.remove(ticketId, itemId),

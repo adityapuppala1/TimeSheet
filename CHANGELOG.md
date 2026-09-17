@@ -23,6 +23,15 @@ number, on purpose — an installation must never render history for a version t
 - **Storage.** One nullable column on `AiProposal`, added by an idempotent migration. Proposals
   that did not come from a document carry NULL and link nothing, which is every existing row.
 
+### ⚡ The things you do most now answer instantly
+
+- **A dragged card stays where you dropped it, a checklist item ticks under the pointer, and
+  Resolve moves the moment you click it.** These three waited for the server and then refetched, so
+  a card visibly snapped back to its old column and a tick lagged behind the finger that made it.
+- **A refusal puts things back.** Every optimistic change is snapshotted first and restored exactly
+  if the server says no, with the same message as before — a screen that quietly disagrees with the
+  database is worse than a slow one. The server always has the last word once it answers.
+
 ### ⚙️ The Studio feed answers "what did this flow do"
 
 - **Filter the run feed by flow and by status.** "What they have done" in the Workflow Studio now
