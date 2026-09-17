@@ -45,6 +45,43 @@ import { emitDomainEvent } from "./domain-events.js";
  */
 const DEFAULT_MAX_STEPS = 12;
 
+/**
+ * V12 9.2 — every status an agent run actually reaches, and nothing else.
+ *
+ * WHY A LIST AND NOT A FREE STRING: `AgentRun.status` is a VARCHAR, so an un-validated filter would
+ * happily accept "SKIPPED" (which belongs to backups, not agents) or a typo, and answer with an
+ * empty list that looks exactly like "nothing failed". A closed set turns that into a refusal.
+ *
+ * PARTIAL belongs here and is not a failure: a run stopped by its own step or cost ceiling did real
+ * work first, which is the distinction `finish()` was built to keep.
+ */
+export const AGENT_RUN_STATUSES = ["QUEUED", "RUNNING", "COMPLETED", "PARTIAL", "BLOCKED", "FAILED", "ABORTED"] as const;
+export type AgentRunStatus = (typeof AGENT_RUN_STATUSES)[number];
+
+export interface AgentRunFilters {
+  capability?: string;
+  flowId?: string;
+  status?: AgentRunStatus;
+  /** The reference's "Date run". Bounded at 90 days for the same reason the ledger history is. */
+  sinceDays?: number;
+}
+
+/**
+ * The `where` for the run list, as a pure function so the route and its test cannot drift apart.
+ * Every clause is omitted when its filter is absent — an empty filter set must read "everything",
+ * never "nothing".
+ */
+export function buildAgentRunWhere(f: AgentRunFilters, now: Date = new Date()): Record<string, unknown> {
+  const where: Record<string, unknown> = {};
+  if (f.capability) where.capability = f.capability;
+  if (f.flowId) where.flowId = f.flowId;
+  if (f.status) where.status = f.status;
+  if (f.sinceDays && f.sinceDays > 0) {
+    where.createdAt = { gte: new Date(now.getTime() - f.sinceDays * 24 * 60 * 60 * 1000) };
+  }
+  return where;
+}
+
 export interface QueueRunParams {
   capability: string;
   /** "manual" | "cron" | "event:<name>" */

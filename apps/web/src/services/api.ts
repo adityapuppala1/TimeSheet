@@ -5215,7 +5215,8 @@ export interface AgentRunRow {
 export const agentRunApi = {
   capabilities: async () =>
     (await api.get<Array<{ id: string; title: string; description: string; needsProject: boolean }>>("/agent-runs/capabilities")).data,
-  list: async (limit = 25, params: { capability?: string; flowId?: string } = {}) =>
+  /** V12 9.2: `status` and `sinceDays` are the reference's Status and Date-run filters. */
+  list: async (limit = 25, params: { capability?: string; flowId?: string; status?: string; sinceDays?: number } = {}) =>
     (await api.get<AgentRunRow[]>("/agent-runs", { params: { limit, ...params } })).data,
   get: async (id: string) => (await api.get<AgentRunRow>(`/agent-runs/${id}`)).data,
   queue: async (payload: { capability: string; goal?: string; projectId?: string }) =>

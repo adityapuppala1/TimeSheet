@@ -10,6 +10,16 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🤖 Agent activity, filtered by status and date
+
+- **Find the failures.** The Agent runs list in Workspace settings → AI now filters by status and by
+  when a run happened, and reads as dated sections. Both filters are applied by the server, so
+  "Failed, last 7 days" searches the whole history rather than re-filtering the newest 25 rows — the
+  version that would have answered "no failures" whenever the newest 25 happened to contain none.
+- **The statuses say what actually happened.** Stopped at a limit and Held for review are bounds
+  working, not failures, and they are labelled that way. A status no run can hold is refused rather
+  than answered with an empty list.
+
 ### 🗣️ Write my stand-up
 
 - **A stand-up card on My work.** Pick a period (24 hours, 3 days, 7 days) and the AI writes a short

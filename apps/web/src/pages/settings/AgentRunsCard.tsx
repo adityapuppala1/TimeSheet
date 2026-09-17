@@ -43,6 +43,7 @@ import { AiStrands } from "../../components/ui/ai-strands";
 import { toast } from "../../components/ui/toaster";
 import { cn } from "../../lib/utils";
 import { agentRunApi, projectApi, type AgentRunRow, type AgentRunStepRow } from "../../services/api";
+import { groupRunsByDay, RUN_PERIODS, RUN_STATUS_LABELS } from "../../lib/agent-runs";
 
 const IN_FLIGHT = new Set(["QUEUED", "RUNNING"]);
 
@@ -98,14 +99,23 @@ export function AgentRunsCard() {
   const queryClient = useQueryClient();
   const [openRunId, setOpenRunId] = useState<string | null>(null);
   const [capability, setCapability] = useState("");
+  // V12 9.2 — the Activity tab's own filters. Separate from `capability` above, which is what a NEW
+  // run would use: filtering the history by the capability you happen to be about to queue would be
+  // a surprise, and the reference keeps the two apart too.
+  const [status, setStatus] = useState("ALL");
+  const [period, setPeriod] = useState("0");
   const [goal, setGoal] = useState("");
   const [projectId, setProjectId] = useState("");
 
   const capabilities = useQuery({ queryKey: ["agent-runs", "capabilities"], queryFn: agentRunApi.capabilities });
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const runs = useQuery({
-    queryKey: ["agent-runs"],
-    queryFn: () => agentRunApi.list(25),
+    queryKey: ["agent-runs", status, period],
+    queryFn: () =>
+      agentRunApi.list(25, {
+        ...(status === "ALL" ? {} : { status }),
+        ...(period === "0" ? {} : { sinceDays: Number(period) })
+      }),
     // The worker ticks every minute, but a run's steps land continuously — 3s while anything is in
     // flight makes the trace feel live without polling an idle workspace forever.
     refetchInterval: (query) => ((query.state.data ?? []).some((r: AgentRunRow) => IN_FLIGHT.has(r.status)) ? 3000 : false)
@@ -144,6 +154,8 @@ export function AgentRunsCard() {
 
   const rows = runs.data ?? [];
   const active = rows.filter((r) => IN_FLIGHT.has(r.status));
+  const filtered = status !== "ALL" || period !== "0";
+  const dayGroups = groupRunsByDay(rows);
 
   return (
     <Card className={cn(active.length > 0 && "ai-glow")}>
@@ -238,15 +250,68 @@ export function AgentRunsCard() {
         <RunOutcomeStats rows={rows} />
 
         {/* --------------------------------- The runs --------------------------------- */}
+        {/* V12 9.2: Status and Date run, the two filters the reference's Activity tab offers that
+            this list did not. Both are applied by the SERVER, so a filtered view is the whole
+            history narrowed — not the last 25 rows filtered again in the browser, which would have
+            quietly answered "no failures" whenever the newest 25 happened to contain none. */}
+        <div className="flex flex-wrap items-center gap-2" data-runs-filters>
+          <Select value={status} onValueChange={setStatus}>
+            <SelectTrigger className="h-[44px] w-[190px]" aria-label="Filter by status" data-runs-status>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">Any status</SelectItem>
+              {Object.entries(RUN_STATUS_LABELS).map(([value, label]) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={period} onValueChange={setPeriod}>
+            <SelectTrigger className="h-[44px] w-[160px]" aria-label="Filter by date run" data-runs-period>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {RUN_PERIODS.map((p) => (
+                <SelectItem key={p.value} value={p.value}>
+                  {p.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {filtered && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-[44px]"
+              onClick={() => {
+                setStatus("ALL");
+                setPeriod("0");
+              }}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
         {runs.isLoading ? (
           <Skeleton className="h-32 w-full" />
         ) : rows.length === 0 ? (
-          <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-            Nothing has run yet. Queue one above — it will appear here with everything it did.
+          <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground" data-runs-empty>
+            {filtered
+              ? "No run matches those filters. Widen the period, or clear them."
+              : "Nothing has run yet. Queue one above — it will appear here with everything it did."}
           </p>
         ) : (
           <ul className="grid gap-2">
-            {rows.map((run) => (
+            {dayGroups.map((group) => (
+              <li key={group.key} className="grid gap-2">
+                <p className="pt-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground" data-runs-day>
+                  {group.label}
+                  <span className="ml-2 font-normal normal-case tracking-normal">{group.runs.length}</span>
+                </p>
+                <ul className="grid gap-2">
+                  {group.runs.map((run) => (
               <li key={run.id}>
                 <button
                   type="button"
@@ -292,6 +357,9 @@ export function AgentRunsCard() {
                     </Button>
                   </div>
                 )}
+              </li>
+                  ))}
+                </ul>
               </li>
             ))}
           </ul>

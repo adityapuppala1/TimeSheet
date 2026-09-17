@@ -123,6 +123,10 @@ beside the tick and the assigner hears. The Comments tab badge counts unresolved
 the Studio's list to relate it. A document page shows **Related tickets** (add by key, open, unlink),
 reading through the same project scope as the Tickets page.
 
+**Agent runs.** Under **Workspace settings → AI**, the Agent runs list filters by status and by
+when a run happened, and groups what it finds under Today, Yesterday or the date. Clearing the
+filters restores the full list.
+
 **Your stand-up.** At the top of **My work**, pick a period and press **Write it**: the AI phrases
 your own recent tickets, comments and logged hours as a short first-person stand-up you can copy.
 Nothing is invented — an empty period says so instead. The card is only there when the workspace has

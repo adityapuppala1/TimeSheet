@@ -475,7 +475,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
     steps: [
       "Create a teammate, name it, and scope it to specific capabilities and projects.",
       "Everything it proposes lands on the AI suggestions page as reviewable rows — accept or reject each individually; there is deliberately no apply-everything.",
-      "Runs are priced on the same ledger as human work, against the same AI budget."
+      "Runs are priced on the same ledger as human work, against the same AI budget.",
+      "Workspace settings → AI → Agent runs lists every run, grouped by the day it ran. Filter by status (Failed, Held for review, Stopped at a limit…) and by period to find one, then open it for its full step trace."
     ],
     screenshot: "agents.png",
     keywords: ["agents", "teammates", "workflows", "automation", "propose", "suggestions"]

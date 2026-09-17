@@ -18,7 +18,7 @@ import { z } from "zod";
 import { prisma } from "../config/prisma.js";
 import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
-import { queueAgentRun, requestAbort } from "../services/agent-run.service.js";
+import { AGENT_RUN_STATUSES, buildAgentRunWhere, queueAgentRun, requestAbort } from "../services/agent-run.service.js";
 import { AI_CAPABILITIES, findCapability, isAgentRunnable, needsProjectScope } from "../services/ai-capability.registry.js";
 
 export const agentRunRouter = Router();
@@ -51,17 +51,25 @@ agentRunRouter.get(
         .object({
           limit: z.coerce.number().int().min(1).max(100).optional(),
           capability: z.string().max(60).optional(),
-          flowId: z.string().uuid().optional()
+          flowId: z.string().uuid().optional(),
+          // V12 9.2 — the reference's Status and Date-run filters. `status` is a closed set so a
+          // typo is refused rather than answered with an empty list that reads as "nothing failed".
+          status: z.enum(AGENT_RUN_STATUSES).optional(),
+          sinceDays: z.coerce.number().int().min(1).max(90).optional()
         })
         .passthrough()
     })
   ),
   async (req, res) => {
     const runs = await prisma.agentRun.findMany({
-      where: {
-        ...(req.query.capability ? { capability: String(req.query.capability) } : {}),
-        ...(req.query.flowId ? { flowId: String(req.query.flowId) } : {})
-      },
+      where: buildAgentRunWhere({
+        capability: req.query.capability ? String(req.query.capability) : undefined,
+        flowId: req.query.flowId ? String(req.query.flowId) : undefined,
+        status: req.query.status as (typeof AGENT_RUN_STATUSES)[number] | undefined,
+        // `validate` hands the handler the RAW query (see the middleware's own note), so the coerce
+        // above is a guard, not a conversion — the number is made here.
+        sinceDays: req.query.sinceDays ? Number(req.query.sinceDays) : undefined
+      }),
       orderBy: { createdAt: "desc" },
       take: Number(req.query.limit) || 25,
       include: {
