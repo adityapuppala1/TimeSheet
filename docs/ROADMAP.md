@@ -423,6 +423,25 @@ Every row above governs cost/usage the same way `GlobalAISettings.monthlyBudgetU
 `AIUsageLog` already do for existing AI features — no new governance model needed, just new
 things flowing through the existing meter.
 
+## Dependency advisories, triaged 2026-09-17
+
+GitHub reported six open Dependabot alerts. Each was traced to the package that actually pulls it
+and to whether untrusted input can reach it, rather than treated as a number to drive to zero.
+
+| Advisory | Where it comes from | Reachable by untrusted input? | Action |
+|---|---|---|---|
+| `vitest` / `@vitest/mocker` — path traversal via redirect mock (medium ×2) | the test runner, dev only | No | **Fixed.** `apps/api` moved to `vitest ^4.1.11`; `apps/web` already was. |
+| `deepmerge-ts` — stack exhaustion on recursive graphs (high) | `prisma` → `@prisma/config`, the CLI, dev only | No — its input is our own Prisma config file | **No fix exists.** The LATEST `@prisma/config` still pins `deepmerge-ts@7.1.5`, so upgrading Prisma would not help, and forcing v8 through an override risks breaking the CLI's config loader across a major. Re-check when Prisma moves. |
+| `image-size` — infinite loops in the ICNS / JXL / HEIF parsers (high ×2) | `pptxgenjs`, a **devDependency** used by the pitch-deck export | No — it reads images this repo ships | **No patch published.** Nothing to upgrade to. It never reaches a deployed installation, because it is not a runtime dependency. |
+| `@tiptap/core` — `mergeAttributes()` turns an own `__proto__` key into inherited DOM attributes (medium) | the comment/description editor, **production** | Mitigated, see below | **Deferred to its own unit.** No 2.x fix exists (2.27.3 is the last 2.x); the patch is 3.30.4, i.e. a major editor upgrade covering `@tiptap/react`, the starter kit, every extension and the mention extension. That is a migration with real regression surface, not a version bump. |
+
+**Why the TipTap one is not an emergency here.** Rich text is filtered by an ALLOWLIST on both sides
+before it is ever rendered — `apps/api/src/utils/sanitize.ts` permits a fixed set of tags and, per
+tag, a fixed set of attributes, and `apps/web/src/lib/safe-html.ts` re-filters on render with an
+explicit `ALLOWED_ATTR`. An attribute named `__proto__` is in neither list, so the crafted input the
+advisory describes does not survive storage or rendering. The upgrade is still worth doing; it is
+worth doing carefully.
+
 ## Explicitly out of scope for now
 
 Captured here so it isn't silently forgotten, not because it's undesirable:
