@@ -64,6 +64,21 @@ export function contrast(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
+/** Alpha-blend `over` onto `under` (both HSL triplets) and return the result as an rgb array. */
+function blend(overTriplet, alpha, underTriplet) {
+  const o = hslTripletToRgb(overTriplet);
+  const u = hslTripletToRgb(underTriplet);
+  return o.map((v, i) => v * alpha + u[i] * (1 - alpha));
+}
+function contrastRgbVsTriplet(rgb, triplet) {
+  const la = luminance(rgb);
+  const lb = luminance(hslTripletToRgb(triplet));
+  const [hi, lo] = la > lb ? [la, lb] : [lb, la];
+  return (hi + 0.05) / (lo + 0.05);
+}
+/** Must match IDENTITY_WASH_ALPHA in apps/web/src/lib/identity-colors.ts. */
+const WASH_ALPHA = Number((identitySource.match(/IDENTITY_WASH_ALPHA = ([\d.]+)/) ?? [])[1] ?? 0.12);
+
 /* ---------------------------------------------------------------- token parsing */
 
 /** The `--name: h s% l%;` declarations inside the first block whose selector matches. */
@@ -132,6 +147,12 @@ for (const [theme, t, ink] of [
   for (const c of identity) check(theme, `identity ${c.id}: initial on fill`, contrast(c[theme], ink), TEXT);
   // Identity marks against the surfaces they sit on (a non-text component, 1.4.11).
   for (const c of identity) check(theme, `identity ${c.id}: fill vs background`, contrast(c[theme], t.background), UI);
+  // The ticket sheet's header wash (7.5): body and muted text over the card tinted by each identity colour.
+  for (const c of identity) {
+    const washed = blend(c[theme], WASH_ALPHA, t.card);
+    check(theme, `wash ${c.id}: foreground over tinted card`, contrastRgbVsTriplet(washed, t.foreground), TEXT);
+    check(theme, `wash ${c.id}: muted-foreground over tinted card`, contrastRgbVsTriplet(washed, t["muted-foreground"]), TEXT);
+  }
 
   // Status / priority tone dots on group headings and Board column top borders (non-text UI).
   for (const tone of ["success", "warning", "destructive", "info", "primary"]) {

@@ -10,6 +10,15 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🎨 Colour and motion
+
+- **A ticket wears its project's colour.** The ticket sheet's header carries a 3px top edge and a
+  soft wash in the project's identity colour, the same hue as its mark everywhere else, at a strength measured so
+  every foreground stays AA over it in both themes (32 more pairs in `npm run check:contrast`).
+- **Phone cards carry a status rail** in the status's colour, the same tone as the pill.
+- **Views and the ticket panel fade in** when they change, compositor-only and off under
+  reduced motion.
+
 ### 🧭 Timeline: add a work item from the sidebar
 
 - **Add work item** at the foot of the Timeline's tree opens the New ticket dialog pre-filled with

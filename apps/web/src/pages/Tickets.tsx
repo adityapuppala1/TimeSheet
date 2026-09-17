@@ -85,6 +85,9 @@ import { readProjectSelection, withoutProjectSelection } from "../lib/project-tr
 import { formatGroupLabel, groupRuns } from "../lib/group-rows";
 import { cn } from "../lib/utils";
 import { draftFor, draftFromFilters, type TicketDraftInitial } from "../lib/ticket-draft";
+import { IDENTITY_WASH_ALPHA, resolveIdentityColor } from "../lib/identity-colors";
+import { currentTheme, subscribeTheme } from "../lib/theme";
+import { useSyncExternalStore } from "react";
 import { displayValue, fieldsForTicket } from "../lib/custom-fields";
 import { isDefaultColumns, resolveVisibleColumns, type ColumnSpec } from "../lib/table-columns";
 import { TicketMetricsPanel } from "../components/TicketMetricsPanel";
@@ -143,7 +146,7 @@ export function iconForType(type: string) {
 /** Re-exported rather than defined here: the metric tiles above the table need the same palette,
  *  and they live in their own component, so the maps moved to lib/ticket-visuals.ts to avoid a
  *  circular import. TicketKanban.tsx still imports both from this module. */
-import { PRIORITY_VARIANT, STATUS_VARIANT, TONE_ACCENT_CLASS } from "../lib/ticket-visuals";
+import { PRIORITY_VARIANT, STATUS_VARIANT, TONE_ACCENT_CLASS, TONE_BORDER_CLASS } from "../lib/ticket-visuals";
 export { PRIORITY_VARIANT, STATUS_VARIANT };
 
 export function serverMessage(err: any, fallback: string) {
@@ -929,7 +932,7 @@ export function Tickets() {
       </Card>
 
       {viewMode === "board" && (
-        <Card>
+        <Card key="board" className="motion-safe:animate-fade-in">
           <CardContent className="p-3">
             {tickets.isLoading ? (
               <Skeleton className="h-64 w-full" />
@@ -941,7 +944,7 @@ export function Tickets() {
       )}
 
       {viewMode === "timeline" && (
-        <Card>
+        <Card key="timeline" className="motion-safe:animate-fade-in">
           <CardContent className="grid gap-3 p-3">
             <TimelineLegend
               zoom={timelineZoom}
@@ -976,7 +979,7 @@ export function Tickets() {
       )}
 
       {viewMode === "calendar" && (
-        <Card>
+        <Card key="calendar" className="motion-safe:animate-fade-in">
           <CardContent className="p-3">
             {calendarQuery.isLoading ? (
               <Skeleton className="h-96 w-full" />
@@ -995,7 +998,7 @@ export function Tickets() {
       )}
 
       {viewMode === "list" && (
-      <Card>
+      <Card key="list" className="motion-safe:animate-fade-in">
         <CardContent className="p-0">
           {/* Mobile card list — a 9-column table has no readable layout below ~sm; a phone user
               scrolling it sideways sees 1-2 columns at a time with no context. This renders the
@@ -1046,7 +1049,7 @@ export function Tickets() {
                         openTicket(row.id);
                       }
                     }}
-                    className="focus-ring grid cursor-pointer gap-2 rounded-lg border border-border bg-card p-3 text-left text-sm shadow-sm"
+                    className={cn("focus-ring grid cursor-pointer gap-2 rounded-lg border border-border border-l-4 bg-card p-3 text-left text-sm shadow-sm", TONE_BORDER_CLASS[STATUS_VARIANT[row.status] ?? "muted"])}
                     data-ticket-card
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -1629,6 +1632,14 @@ function ticketErrorHint(error: unknown): string {
  * person may close it "to keep the task details and description in focus". The choice is
  * remembered per browser like the width is. Nothing changes below the threshold.
  */
+/** The project's identity fill for the current theme, as an HSL triplet; grey when there is no ticket yet. */
+function useProjectFill(project: { id: string; color?: string | null } | undefined): string {
+  const theme = useSyncExternalStore(subscribeTheme, currentTheme, () => "light" as const);
+  if (!project) return "0 0% 50%";
+  const color = resolveIdentityColor(project.id, project.color);
+  return theme === "dark" ? color.dark : color.light;
+}
+
 function useTicketSheetLayout(sheetSize: SheetResizeState) {
   const viewportWide = useMediaQuery(`(min-width: ${SPLIT_MIN_SHEET_WIDTH}px)`);
   const storage = typeof window === "undefined" ? undefined : window.localStorage;
@@ -1768,6 +1779,8 @@ function TicketDetailSheet({
    *  identical whether or not a ticket is open. */
   const sheetSize = useSheetResize({ storageKey: "timesphere.ticket-sheet-width" });
   const { layout, splitPossible, activityHidden, toggleActivity } = useTicketSheetLayout(sheetSize);
+  // 7.5: the header's wash in the project's identity colour — a hook, so it sits above the early return.
+  const projectFill = useProjectFill(detail.data?.project);
 
   if (!ticketId) return null;
   const ticket = detail.data;
@@ -1841,7 +1854,10 @@ function TicketDetailSheet({
                 now maximize. Without it a long ticket title runs underneath them and the first
                 thing you try to click is the title. Only the header needs it; the body below runs
                 the full width. */}
-            <SheetHeader className="pr-16">
+            {/* 7.5: the header wears the project's colour as a soft wash — the same hue as its mark
+                everywhere else, at an alpha every foreground was measured over. Radial, so it reads
+                as a tint on the corner rather than a coloured bar. */}
+            <SheetHeader className="-mx-6 -mt-6 px-6 pt-6 pb-3 pr-16" style={{ backgroundImage: `radial-gradient(120% 140% at 0% 0%, hsl(${projectFill} / ${IDENTITY_WASH_ALPHA}), transparent 70%)`, boxShadow: `inset 0 3px 0 hsl(${projectFill})` }} data-sheet-wash>
               <div className="text-xs font-mono text-muted-foreground">{ticket.key}</div>
               <SheetTitle className="flex items-start gap-2 text-xl">
                 <TypeIcon className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
@@ -1884,8 +1900,9 @@ function TicketDetailSheet({
 
             <div
               data-sheet-layout={layout}
+              key={layout}
               className={cn(
-                "py-4",
+                "py-4 motion-safe:animate-fade-in",
                 layout === "split" && "grid items-start gap-6 grid-cols-[minmax(0,1fr)_minmax(360px,440px)]",
                 layout === "focus" && "mx-auto w-full max-w-3xl"
               )}

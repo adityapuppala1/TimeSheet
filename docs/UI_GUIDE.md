@@ -109,6 +109,10 @@ item keeps its length, an unscheduled one (dashed, shown on its SLA date) become
 day you drop it. The target day shows a ring while you hover. Drag is a pointer gesture; from the
 keyboard, change dates in the ticket sheet's **Plan** tab.
 
+**Colour.** The ticket sheet's header is tinted with the project's colour; phone cards carry a
+left rail in the status colour; views fade in as they change unless your system asks for reduced
+motion. All of it is measured by the contrast check, none of it is animation you cannot switch off.
+
 **The ticket sheet in two columns.** The sheet still opens at its remembered width. Drag its left
 edge out to 960px or wider, or press **Maximize** (top-right; `Home` on the resize handle), and it
 becomes two columns: status, assignee, collaborators, labels, description, watchers, sprint and

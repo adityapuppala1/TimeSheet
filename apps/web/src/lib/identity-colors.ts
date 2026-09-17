@@ -51,6 +51,15 @@ export function identityColorFor(key: string, palette: readonly IdentityColor[] 
 
 /** "PropTech_ERP" → "P"; "HICS Operations Platform" → "HO"; empty → "•". Two letters when the
  *  name has two words, one otherwise — a mark, not an abbreviation contest. */
+/** The colour a project shows: its chosen id when set and known, else the one derived from its id. */
+export function resolveIdentityColor(id: string, chosen?: string | null, palette: readonly IdentityColor[] = IDENTITY_COLORS): IdentityColor {
+  return palette.find((c) => c.id === chosen) ?? identityColorFor(id, palette);
+}
+
+/** How strong the ticket sheet's per-project wash is (7.5): measured — every foreground stays ≥ 4.5:1
+ *  over the card with any identity colour blended at this alpha (scripts/contrast-check.mjs). */
+export const IDENTITY_WASH_ALPHA = 0.12;
+
 export function initialsFor(name: string): string {
   const words = name.trim().split(/[\s_-]+/).filter(Boolean);
   if (words.length === 0) return "•";
