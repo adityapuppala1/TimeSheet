@@ -130,7 +130,9 @@ filters restores the full list.
 **Your stand-up.** At the top of **My work**, pick a period and press **Write it**: the AI phrases
 your own recent tickets, comments and logged hours as a short first-person stand-up you can copy.
 Nothing is invented — an empty period says so instead. The card is only there when the workspace has
-AI status writing switched on.
+AI status writing switched on. If you manage people, a picker beside the period offers your direct
+reports (an admin sees everyone): their stand-up is written **about** them in the third person, from
+the work you can already see.
 
 **Studio list.** The Requirements Studio list has a search box, a **Show** menu (All documents,
 Created by me, Archived), a type filter and a sort. Show, type and sort are remembered in this

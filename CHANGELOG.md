@@ -30,6 +30,14 @@ number, on purpose — an installation must never render history for a version t
   your own logged hours and the comments assigned to you — the model is handed that block and asked
   only to phrase it. A window with nothing in it is answered without calling the model at all, and a
   model that answers with nothing is reported as a failure rather than a blank card.
+- **A manager can write one for a direct report.** Pick the person beside the period. You are only
+  ever offered people whose work you may already read — yourself, plus your direct reports; an
+  admin may pick anyone — and the same rule refuses the request itself, so a picker cannot be talked
+  around. Their week is narrowed to the projects *you* can open, so a report's ticket on a project
+  you are not on never appears in your copy of it.
+- **It is written about them, never as them.** Somebody else's stand-up comes back in the third
+  person and labelled a draft from records, because a summary that reads like their own words is a
+  thing they did not say with their name on it.
 - **No new switch and no migration.** The card appears where "AI status writing" is already on (the
   same setting behind a project's stakeholder update), and disappears cleanly when it is off or the
   month's AI budget is spent.

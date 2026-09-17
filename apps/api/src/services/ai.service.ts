@@ -3290,10 +3290,27 @@ ${params.projectBreakdown}` : "",
  *
  * The caller checks `standupIsEmpty` first — an idle window must not cost a model call.
  */
-export async function generateStandup(params: { facts: string; periodLabel: string; personName: string; userId?: string }): Promise<{ standup: string }> {
+export async function generateStandup(params: {
+  facts: string;
+  periodLabel: string;
+  personName: string;
+  /** V12 9.3. Somebody else's stand-up is written ABOUT them, never as them — a summary that reads
+   *  like their own words is a thing they did not say, attributed to them. */
+  voice?: "self" | "about";
+  userId?: string;
+}): Promise<{ standup: string }> {
   const { settings } = await preflight("statusReportEnabled");
 
-  const p = await resolvePrompt("standup", { facts: params.facts, periodLabel: params.periodLabel, personName: params.personName });
+  const voice =
+    params.voice === "about"
+      ? `Write it in the THIRD PERSON, about ${params.personName} — never in the first person, and never as if ${params.personName} wrote it themselves.`
+      : "Write it in the first person, as the person themselves.";
+  const p = await resolvePrompt("standup", {
+    facts: params.facts,
+    periodLabel: params.periodLabel,
+    personName: params.personName,
+    voice
+  });
 
   const startedAt = Date.now();
   const result = await callChat(settings, { feature: "standup", model: settings.model, maxTokens: 700, prompt: p.text });

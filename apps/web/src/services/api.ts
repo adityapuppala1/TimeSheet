@@ -3689,8 +3689,16 @@ export const aiApi = {
     (await api.post<AIRefineResult>("/ai/text/refine", payload)).data,
   refineAvailability: async () => (await api.get<AIRefineAvailability>("/ai/text/refine/availability")).data,
   /** V12 9.1: your own stand-up. `empty` means the window held nothing and no model ran. */
-  standup: async (sinceHours: 24 | 72 | 168) =>
-    (await api.post<{ standup: string; empty: boolean; periodLabel: string }>("/ai/standup", { sinceHours })).data,
+  standup: async (sinceHours: 24 | 72 | 168, userId?: string) =>
+    (
+      await api.post<{ standup: string; empty: boolean; periodLabel: string; personName: string; isSelf: boolean }>("/ai/standup", {
+        sinceHours,
+        ...(userId ? { userId } : {})
+      })
+    ).data,
+  /** V12 9.3: who this person may write a stand-up for — self first, and only people whose work
+   *  they may already read. The same rule refuses a forged id on the POST. */
+  standupPeople: async () => (await api.get<Array<{ id: string; name: string; isSelf: boolean }>>("/ai/standup/people")).data,
   standupAvailability: async () => (await api.get<AIRefineAvailability>("/ai/standup/availability")).data,
   summarizeTicket: async (id: string) => (await api.post<{ summary: string }>(`/ai/tickets/${id}/summarize`)).data,
   ask: async (question: string) => (await api.post<{ answer: string }>("/ai/ask", { question })).data

@@ -127,13 +127,19 @@ Respond with ONLY the cleaned-up text — no preamble, no explanation, no quotat
       { name: "personName", description: "Who the stand-up is for. Always the caller.", sample: "Dev Patel" },
       { name: "periodLabel", description: "The window in words.", sample: "the last 3 days" },
       {
+        name: "voice",
+        description:
+          "First person for your own stand-up, third person when it is about somebody else. KEEP THIS PLACEHOLDER if you customise the template: without it, a manager's summary of a report can read as that report's own words.",
+        sample: "Write it in the first person, as the person themselves."
+      },
+      {
         name: "facts",
         description: "Everything the summary may use: tickets that moved, comments written, hours logged, comments still assigned. Gathered from the database, never from the model.",
         sample: "Tickets assigned to me that moved:\n- [WEB-12] Checkout returns 500 (now in progress)\n\nComments I wrote: (none)"
       }
     ],
     required: ["facts"],
-    defaultTemplate: `Write {{personName}}'s stand-up for {{periodLabel}}, in the first person.
+    defaultTemplate: `Write {{personName}}'s stand-up for {{periodLabel}}. {{voice}}
 
 Use ONLY the facts below. Never invent a ticket, a number, a person or a next step that is not there — if something is "(none)", either say nothing about it or say plainly that there was none.
 

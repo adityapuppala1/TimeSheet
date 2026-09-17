@@ -148,6 +148,11 @@ export function MyWorkPage() {
         </p>
       </div>
 
+      {/* V12 9.1/9.3: ABOVE the empty branch on purpose. A person whose queue is empty is exactly
+          who needs a recap of what they did, and a manager writing a report's stand-up may have
+          nothing assigned to them at all — the first version hid the card from precisely them. */}
+      <StandupCard />
+
       {empty ? (
         <Card>
           <CardContent className="grid gap-2 p-10 text-center">
@@ -158,9 +163,7 @@ export function MyWorkPage() {
         </Card>
       ) : (
         <>
-          {/* V12 9.1: "write my stand-up" — the card the AI StandUp reference puts on My Tasks. */}
-      <StandupCard />
-      {/* V12 8.3: comments assigned to me — action items, above the dated work. */}
+          {/* V12 8.3: comments assigned to me — action items, above the dated work. */}
           {assigned.length > 0 && (
             <Card data-assigned-comments>
               <CardHeader className="pb-3">
@@ -221,12 +224,22 @@ export function MyWorkPage() {
  */
 function StandupCard() {
   const [hours, setHours] = useState<"24" | "72" | "168">("72");
+  const [subject, setSubject] = useState("me");
   const [text, setText] = useState("");
   const [emptyWindow, setEmptyWindow] = useState(false);
   const [writtenAt, setWrittenAt] = useState<Date | null>(null);
   const availability = useQuery({ queryKey: ["ai", "standup", "availability"], queryFn: () => aiApi.standupAvailability() });
+  // Only fetched once the card is actually drawable — a workspace with AI status writing off has no
+  // reason to be asked who its managers manage.
+  const people = useQuery({
+    queryKey: ["ai", "standup", "people"],
+    queryFn: () => aiApi.standupPeople(),
+    enabled: availability.data?.available === true
+  });
+  const others = (people.data ?? []).filter((p) => !p.isSelf);
+  const subjectName = others.find((p) => p.id === subject)?.name ?? null;
   const write = useMutation({
-    mutationFn: () => aiApi.standup(Number(hours) as 24 | 72 | 168),
+    mutationFn: () => aiApi.standup(Number(hours) as 24 | 72 | 168, subject === "me" ? undefined : subject),
     onSuccess: (res) => {
       setText(res.standup);
       setEmptyWindow(res.empty);
@@ -243,13 +256,40 @@ function StandupCard() {
         <div className="grid gap-1">
           <CardTitle className="flex items-center gap-2 text-base">
             <Sparkles className="h-4 w-4 text-primary" />
-            Your stand-up
+            {subjectName ? `${subjectName}'s stand-up` : "Your stand-up"}
           </CardTitle>
           <CardDescription>
-            Written from your own tickets, comments and logged hours — nothing else, and nothing invented.
+            {subjectName
+              ? `Written about ${subjectName} from the work you can already see — nothing else, and nothing invented.`
+              : "Written from your own tickets, comments and logged hours — nothing else, and nothing invented."}
           </CardDescription>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* V12 9.3: only shown to somebody who actually has a choice — the reference's
+              "You can select another person", under this app's own rule about whose work you may read. */}
+          {others.length > 0 && (
+            <Select
+              value={subject}
+              onValueChange={(v) => {
+                setSubject(v);
+                setText("");
+                setEmptyWindow(false);
+                setWrittenAt(null);
+              }}
+            >
+              <SelectTrigger className="h-[44px] w-[170px]" aria-label="Whose stand-up" data-standup-person>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="me">Me</SelectItem>
+                {others.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Select value={hours} onValueChange={(v) => setHours(v as typeof hours)}>
             <SelectTrigger className="h-[44px] w-[150px]" aria-label="Stand-up period" data-standup-period>
               <SelectValue />
@@ -287,7 +327,9 @@ function StandupCard() {
       <CardContent className="grid gap-2">
         {emptyWindow && (
           <p className="text-sm text-muted-foreground">
-            Nothing recorded in that window — no ticket moved, no comment, no hours. Try a longer period.
+            {subjectName
+              ? `Nothing you can see from ${subjectName} in that window. Try a longer period.`
+              : "Nothing recorded in that window — no ticket moved, no comment, no hours. Try a longer period."}
           </p>
         )}
         {text && <p className="whitespace-pre-wrap text-sm" data-standup-text>{text}</p>}
@@ -295,7 +337,12 @@ function StandupCard() {
           <p className="text-sm text-muted-foreground">Pick a period and press Write it.</p>
         )}
         {writtenAt && !write.isPending && (
-          <p className="text-xs text-muted-foreground">Written {writtenAt.toLocaleTimeString()}. It is a draft — read it before you send it.</p>
+          <p className="text-xs text-muted-foreground">
+            Written {writtenAt.toLocaleTimeString()}.{" "}
+            {subjectName
+              ? `A draft about ${subjectName}, from records — not their words.`
+              : "It is a draft — read it before you send it."}
+          </p>
         )}
       </CardContent>
     </Card>

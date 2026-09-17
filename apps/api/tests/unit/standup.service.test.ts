@@ -7,8 +7,10 @@ import {
   excerpt,
   formatStandupFacts,
   isStandupWindow,
+  mayWriteStandupFor,
   standupIsEmpty,
   standupPeriodLabel,
+  standupSubjectRule,
   type StandupFacts
 } from "../../src/services/standup.service.js";
 
@@ -51,16 +53,16 @@ describe("formatStandupFacts", () => {
     const out = formatStandupFacts(full);
     expect(out).toContain("- [WEB-12] Checkout returns 500 (now in progress)");
     expect(out).toContain("- on [WEB-12]: Reproduced on Safari only.");
-    expect(out).toContain("Time I logged: 6.5 hours across WEB-12, WEB-13");
+    expect(out).toContain("Time logged: 6.5 hours across WEB-12, WEB-13");
     expect(out).toContain("- on [OPS-3], from Ana: Check the totals.");
   });
 
   it("says (none) rather than leaving a section out, so the model cannot fill the silence", () => {
     const out = formatStandupFacts(EMPTY);
-    expect(out).toContain("Tickets assigned to me that moved: (none)");
-    expect(out).toContain("Comments I wrote: (none)");
-    expect(out).toContain("Time I logged: (none recorded)");
-    expect(out).toContain("Comments assigned to me and still unresolved: (none)");
+    expect(out).toContain("Tickets assigned to this person that moved: (none)");
+    expect(out).toContain("Comments this person wrote: (none)");
+    expect(out).toContain("Time logged: (none recorded)");
+    expect(out).toContain("Comments assigned to this person and still unresolved: (none)");
   });
 
   it("caps each list, because a week of activity has no UI-enforced bound", () => {
@@ -86,5 +88,46 @@ describe("excerpt", () => {
   });
   it("never leaks a tag, even from a malformed body", () => {
     expect(excerpt("<script>alert(1)</script>ok")).not.toContain("<");
+  });
+});
+
+/* V12 9.3 — whose stand-up you may write. The picker and the route both ask this one function. */
+describe("standupSubjectRule", () => {
+  const ME = "me";
+  const REPORTS = ["r1", "r2"];
+
+  it("an employee is offered themselves and nobody else", () => {
+    const rule = standupSubjectRule("EMPLOYEE", ME, []);
+    expect(rule).toEqual({ unrestricted: false, allowedIds: [ME] });
+    expect(mayWriteStandupFor(rule, ME)).toBe(true);
+    expect(mayWriteStandupFor(rule, "someone")).toBe(false);
+  });
+
+  it("ignores reports handed to a role that cannot have them", () => {
+    // Defence in depth: if a caller ever passes reports for an EMPLOYEE, the rule still says no.
+    const rule = standupSubjectRule("EMPLOYEE", ME, REPORTS);
+    expect(rule.allowedIds).toEqual([ME]);
+    expect(mayWriteStandupFor(rule, "r1")).toBe(false);
+  });
+
+  it("a manager or team lead adds their direct reports, themselves included once", () => {
+    for (const role of ["MANAGER", "TEAM_LEAD"]) {
+      const rule = standupSubjectRule(role, ME, [...REPORTS, ME]);
+      expect(rule.unrestricted).toBe(false);
+      expect(rule.allowedIds).toEqual([ME, "r1", "r2"]);
+      expect(mayWriteStandupFor(rule, "r2")).toBe(true);
+      expect(mayWriteStandupFor(rule, "stranger")).toBe(false);
+    }
+  });
+
+  it("an admin is unrestricted, and an unknown role is treated as an employee", () => {
+    for (const role of ["SUPER_ADMIN", "ADMIN"]) {
+      const rule = standupSubjectRule(role, ME, []);
+      expect(rule.unrestricted).toBe(true);
+      expect(mayWriteStandupFor(rule, "anyone-at-all")).toBe(true);
+    }
+    // A role this build does not know must degrade to the floor, never to "everyone".
+    const unknown = standupSubjectRule("SOMETHING_NEW", ME, REPORTS);
+    expect(unknown).toEqual({ unrestricted: false, allowedIds: [ME] });
   });
 });

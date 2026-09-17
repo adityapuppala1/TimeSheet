@@ -15,7 +15,65 @@
  * open would be a data leak with a friendly voice.
  */
 import { prisma } from "../config/prisma.js";
+import { NOT_DEACTIVATED } from "./people-visibility.service.js";
 import { htmlToPlainText } from "../utils/sanitize.js";
+
+/**
+ * V12 9.3 — WHOSE stand-up you may write.
+ *
+ * Deliberately the same shape as `ticketProjectScope`, and for the same reason: "whose work may I
+ * read" already has one answer in this codebase, and a second one written here would be the bug.
+ * SUPER_ADMIN and ADMIN are unrestricted; a MANAGER or TEAM_LEAD adds the people whose `managerId`
+ * is theirs; everybody else is offered themselves and nobody else.
+ *
+ * Pure so the picker and the route cannot drift: the list a person is OFFERED and the check the
+ * route RUNS are this one function, not a list the server hopes the browser respected.
+ */
+const UNRESTRICTED_ROLES = new Set(["SUPER_ADMIN", "ADMIN"]);
+const MANAGING_ROLES = new Set(["MANAGER", "TEAM_LEAD"]);
+
+export interface StandupSubjectRule {
+  /** Everyone, because this person may already read everyone's work. */
+  unrestricted: boolean;
+  /** When not unrestricted: exactly the ids allowed, self included. */
+  allowedIds: string[];
+}
+
+export function standupSubjectRule(role: string, actorId: string, reportIds: string[]): StandupSubjectRule {
+  if (UNRESTRICTED_ROLES.has(role)) return { unrestricted: true, allowedIds: [] };
+  if (MANAGING_ROLES.has(role)) return { unrestricted: false, allowedIds: [...new Set([actorId, ...reportIds])] };
+  return { unrestricted: false, allowedIds: [actorId] };
+}
+
+export function mayWriteStandupFor(rule: StandupSubjectRule, targetId: string): boolean {
+  return rule.unrestricted || rule.allowedIds.includes(targetId);
+}
+
+/** The people this person may pick, self first. Deactivated accounts are left out through the one
+ *  predicate that decides that everywhere else. */
+export async function listStandupSubjects(role: string, actorId: string): Promise<Array<{ id: string; name: string; isSelf: boolean }>> {
+  const reports = MANAGING_ROLES.has(role)
+    ? await prisma.user.findMany({ where: { managerId: actorId, ...NOT_DEACTIVATED }, select: { id: true } })
+    : [];
+  const rule = standupSubjectRule(role, actorId, reports.map((r) => r.id));
+
+  const people = await prisma.user.findMany({
+    where: rule.unrestricted ? { ...NOT_DEACTIVATED } : { id: { in: rule.allowedIds }, ...NOT_DEACTIVATED },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+    take: 200
+  });
+  return people
+    .map((p) => ({ ...p, isSelf: p.id === actorId }))
+    .sort((a, b) => Number(b.isSelf) - Number(a.isSelf) || a.name.localeCompare(b.name));
+}
+
+/** Resolve the rule for a request, reading the reports only when the role could have any. */
+export async function resolveStandupRule(role: string, actorId: string): Promise<StandupSubjectRule> {
+  if (!MANAGING_ROLES.has(role)) return standupSubjectRule(role, actorId, []);
+  const reports = await prisma.user.findMany({ where: { managerId: actorId, ...NOT_DEACTIVATED }, select: { id: true } });
+  return standupSubjectRule(role, actorId, reports.map((r) => r.id));
+}
 
 /** The periods the card offers. ClickUp's range is "24 hours to the Last 7 days". */
 export const STANDUP_WINDOWS = [24, 72, 168] as const;
@@ -70,10 +128,10 @@ function section(label: string, lines: string[], noneText = "(none)"): string {
 }
 
 function hoursLine(f: StandupFacts): string {
-  if (f.hoursLogged <= 0) return "Time I logged: (none recorded)";
+  if (f.hoursLogged <= 0) return "Time logged: (none recorded)";
   const tickets = f.timesheetTickets.slice(0, MAX_TICKETS);
-  if (tickets.length === 0) return `Time I logged: ${f.hoursLogged} hours`;
-  return `Time I logged: ${f.hoursLogged} hours across ${tickets.join(", ")}`;
+  if (tickets.length === 0) return `Time logged: ${f.hoursLogged} hours`;
+  return `Time logged: ${f.hoursLogged} hours across ${tickets.join(", ")}`;
 }
 
 /**
@@ -88,37 +146,52 @@ export function formatStandupFacts(f: StandupFacts): string {
   const waiting = f.openAssignedComments.slice(0, MAX_ASSIGNED).map((c) => `- on [${c.ticketKey}], from ${c.from}: ${c.excerpt}`);
 
   return [
-    section("Tickets assigned to me that moved", moved),
-    section("Comments I wrote", written),
+    // V12 9.3: the labels are person-neutral on purpose. "Comments I wrote" would argue with the
+    // third-person voice a manager's copy is asked for, and the facts must not fight the framing.
+    section("Tickets assigned to this person that moved", moved),
+    section("Comments this person wrote", written),
     hoursLine(f),
-    section("Comments assigned to me and still unresolved", waiting)
+    section("Comments assigned to this person and still unresolved", waiting)
   ].join("\n\n");
 }
 
-/** Gathers the window's facts for ONE person — always the caller. There is no `userId` the caller
- *  chooses: summarising somebody else needs a rule about whose work you may read (see the plan). */
-export async function gatherStandupFacts(userId: string, sinceHours: StandupWindow): Promise<StandupFacts> {
+/**
+ * Gathers one person's window.
+ *
+ * V12 9.3 — `projectIds` is THE guard when the subject is somebody else: their tickets and comments
+ * are intersected with the projects the READER may open, so a manager writing a report's stand-up
+ * can never be shown a ticket key or a comment from a project they cannot open themselves. Pass
+ * `null` only for a person's own facts, where their whole week is theirs by definition.
+ */
+export async function gatherStandupFacts(
+  userId: string,
+  sinceHours: StandupWindow,
+  projectIds: string[] | null = null
+): Promise<StandupFacts> {
   const since = new Date(Date.now() - sinceHours * 60 * 60 * 1000);
+  // An empty allow-list means "no projects", which must read as no rows — never as "unrestricted".
+  const ticketScope = projectIds === null ? {} : { projectId: { in: projectIds } };
+  const viaTicket = projectIds === null ? {} : { projectId: { in: projectIds } };
 
   const [tickets, comments, timesheets, assigned] = await Promise.all([
     prisma.ticket.findMany({
-      where: { assigneeId: userId, deletedAt: null, updatedAt: { gte: since } },
+      where: { assigneeId: userId, deletedAt: null, updatedAt: { gte: since }, ...ticketScope },
       select: { key: true, title: true, status: true },
       orderBy: { updatedAt: "desc" },
       take: MAX_TICKETS
     }),
     prisma.ticketComment.findMany({
-      where: { authorId: userId, createdAt: { gte: since }, ticket: { deletedAt: null } },
+      where: { authorId: userId, createdAt: { gte: since }, ticket: { deletedAt: null, ...viaTicket } },
       select: { body: true, ticket: { select: { key: true } } },
       orderBy: { createdAt: "desc" },
       take: MAX_COMMENTS
     }),
     prisma.timesheet.findMany({
-      where: { userId, deletedAt: null, workDate: { gte: since } },
+      where: { userId, deletedAt: null, workDate: { gte: since }, ...ticketScope },
       select: { totalHours: true, ticket: { select: { key: true } } }
     }),
     prisma.ticketComment.findMany({
-      where: { assigneeId: userId, resolvedAt: null, ticket: { deletedAt: null } },
+      where: { assigneeId: userId, resolvedAt: null, ticket: { deletedAt: null, ...viaTicket } },
       select: { body: true, ticket: { select: { key: true } }, author: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
       take: MAX_ASSIGNED

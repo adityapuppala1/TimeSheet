@@ -418,9 +418,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Pick a period: the last 24 hours, 3 days or 7 days.",
       "Press Write it. The recap uses only your tickets, your comments, your logged hours and the comments assigned to you.",
       "Press Regenerate after more work lands, and Copy to paste it into your team's channel.",
-      "If the period held nothing, it says so rather than inventing something — try a longer one."
+      "If the period held nothing, it says so rather than inventing something — try a longer one.",
+      "Managing people? Pick a direct report beside the period to get their stand-up, written about them in the third person from work you can already see."
     ],
-    notes: "It is a draft written in your voice, so read it before you send it. The card only appears when a super admin has AI status writing turned on and the workspace's AI budget still has room. It summarises your own work only; somebody else's is not offered.",
+    notes: "It is a draft written in your voice, so read it before you send it. The card only appears when a super admin has AI status writing turned on and the workspace's AI budget still has room. You can only pick people whose work you may already read — your direct reports, or everyone if you are an admin — and their week is narrowed to the projects you can open.",
     keywords: ["standup", "stand-up", "summary", "recap", "my work", "ai", "daily"]
   },
   {

@@ -28,6 +28,10 @@ vi.mock("../../src/middleware/auth.js", async () => {
   };
 });
 
+const userFindMany = vi.fn().mockResolvedValue([]);
+const userFindFirst = vi.fn().mockResolvedValue({ name: "Reportee" });
+const projectAssignmentFindMany = vi.fn().mockResolvedValue([{ projectId: "p-mine" }]);
+
 vi.mock("../../src/config/prisma.js", () => ({
   prisma: {
     project: { findFirst: vi.fn() },
@@ -36,7 +40,8 @@ vi.mock("../../src/config/prisma.js", () => ({
     globalTicketSettings: { findUnique: vi.fn() },
     timesheet: { findMany: vi.fn().mockResolvedValue([]) },
     ticketComment: { findMany: vi.fn().mockResolvedValue([]) },
-    user: { findMany: vi.fn() },
+    user: { findMany: (...a: unknown[]) => userFindMany(...a), findFirst: (...a: unknown[]) => userFindFirst(...a) },
+    userProjectAssignment: { findMany: (...a: unknown[]) => projectAssignmentFindMany(...a) },
     aIInteraction: { findUnique: vi.fn() }
   }
 }));
@@ -107,16 +112,22 @@ const IDLE = { movedTickets: [], commentsWritten: [], hoursLogged: 0, timesheetT
 
 describe("POST /api/ai/standup", () => {
   beforeEach(() => {
+    actor.role = "EMPLOYEE";
     generateStandup.mockClear();
     gatherStandupFacts.mockReset().mockResolvedValue(BUSY);
+    userFindMany.mockClear().mockResolvedValue([]);
+    userFindFirst.mockClear().mockResolvedValue({ name: "Reportee" });
+    projectAssignmentFindMany.mockClear().mockResolvedValue([{ projectId: "p-mine" }]);
   });
 
   it("writes a stand-up from the caller's own facts, for the period asked for", async () => {
     const res = await request(app()).post("/ai/standup").send({ sinceHours: 72 }).expect(200);
-    expect(res.body).toEqual({ standup: "Yesterday I moved WEB-12.", empty: false, periodLabel: "the last 3 days" });
+    expect(res.body).toEqual({ standup: "Yesterday I moved WEB-12.", empty: false, periodLabel: "the last 3 days", personName: "Dev Patel", isSelf: true });
 
     // The gatherer is handed the SIGNED-IN id and the validated window — never anything else.
-    expect(gatherStandupFacts).toHaveBeenCalledWith("emp-1", 72);
+    // Own facts are gathered unrestricted — your week is yours.
+    expect(gatherStandupFacts).toHaveBeenCalledWith("emp-1", 72, null);
+    expect(generateStandup.mock.calls[0][0].voice).toBe("self");
     const passed = generateStandup.mock.calls[0][0];
     expect(passed.personName).toBe("Dev Patel");
     expect(passed.userId).toBe("emp-1");
@@ -135,7 +146,7 @@ describe("POST /api/ai/standup", () => {
   it("answers an empty window itself, without spending a model call", async () => {
     gatherStandupFacts.mockResolvedValue(IDLE);
     const res = await request(app()).post("/ai/standup").send({ sinceHours: 24 }).expect(200);
-    expect(res.body).toEqual({ standup: "", empty: true, periodLabel: "the last 24 hours" });
+    expect(res.body).toEqual({ standup: "", empty: true, periodLabel: "the last 24 hours", personName: "Dev Patel", isSelf: true });
     expect(generateStandup).not.toHaveBeenCalled();
   });
 
@@ -148,8 +159,57 @@ describe("POST /api/ai/standup", () => {
     expect(res.body.message).toMatch(/empty stand-up/);
   });
 
-  it("takes no user id from the body — a swapped id changes nothing about whose week is read", async () => {
-    await request(app()).post("/ai/standup").send({ sinceHours: 24, userId: "someone-else" }).expect(200);
-    expect(gatherStandupFacts).toHaveBeenCalledWith("emp-1", 24);
+  it("refuses somebody else outright, rather than answering with an empty summary", async () => {
+    // An EMPLOYEE may write for themselves and nobody else. A forged id is a 403, not a filtered [].
+    const res = await request(app())
+      .post("/ai/standup")
+      .send({ sinceHours: 24, userId: "99999999-9999-4999-8999-999999999999" })
+      .expect(403);
+    expect(res.body.message).toMatch(/cannot write a stand-up for that person/);
+    expect(gatherStandupFacts).not.toHaveBeenCalled();
+    expect(generateStandup).not.toHaveBeenCalled();
+  });
+});
+
+/* V12 9.3 — somebody else's stand-up, and the two rules that make it safe. */
+describe("POST /api/ai/standup for somebody else", () => {
+  const REPORT = "88888888-8888-4888-8888-888888888888";
+
+  beforeEach(() => {
+    actor.role = "MANAGER";
+    generateStandup.mockClear();
+    gatherStandupFacts.mockReset().mockResolvedValue(BUSY);
+    userFindMany.mockReset().mockResolvedValue([{ id: REPORT }]);
+    userFindFirst.mockReset().mockResolvedValue({ name: "Dev Patel" });
+    projectAssignmentFindMany.mockReset().mockResolvedValue([{ projectId: "p-mine" }]);
+  });
+
+  it("writes a report's stand-up in the third person, narrowed to the READER's projects", async () => {
+    const res = await request(app()).post("/ai/standup").send({ sinceHours: 168, userId: REPORT }).expect(200);
+    expect(res.body.isSelf).toBe(false);
+    expect(res.body.personName).toBe("Dev Patel");
+
+    // THE LEAK GUARD: the report's week is intersected with the manager's own project scope.
+    expect(gatherStandupFacts).toHaveBeenCalledWith(REPORT, 168, ["p-mine"]);
+    const passed = generateStandup.mock.calls[0][0];
+    expect(passed.voice).toBe("about");
+    expect(passed.personName).toBe("Dev Patel");
+    // The spend is still attributed to whoever asked, not to the person being written about.
+    expect(passed.userId).toBe("emp-1");
+  });
+
+  it("refuses somebody who is not a direct report", async () => {
+    userFindMany.mockResolvedValue([{ id: REPORT }]);
+    await request(app())
+      .post("/ai/standup")
+      .send({ sinceHours: 24, userId: "77777777-7777-4777-8777-777777777777" })
+      .expect(403);
+    expect(gatherStandupFacts).not.toHaveBeenCalled();
+  });
+
+  it("404s when the person is gone, before any model call", async () => {
+    userFindFirst.mockResolvedValue(null);
+    await request(app()).post("/ai/standup").send({ sinceHours: 24, userId: REPORT }).expect(404);
+    expect(generateStandup).not.toHaveBeenCalled();
   });
 });

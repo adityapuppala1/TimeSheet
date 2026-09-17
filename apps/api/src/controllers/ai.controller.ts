@@ -52,6 +52,9 @@ import {
   formatStandupFacts,
   gatherStandupFacts,
   isStandupWindow,
+  listStandupSubjects,
+  mayWriteStandupFor,
+  resolveStandupRule,
   standupIsEmpty,
   standupPeriodLabel
 } from "../services/standup.service.js";
@@ -223,26 +226,51 @@ aiRouter.post("/tickets/:id/summarize", requirePermission(permissions.TICKETS_VI
  * can reach is the caller's own work, gathered under their own id in `standup.service.ts`. An empty
  * window is answered here, before the model, so an idle day costs nothing.
  */
-const standupSchema = z.object({ body: z.object({ sinceHours: z.number().int() }) });
+const standupSchema = z.object({ body: z.object({ sinceHours: z.number().int(), userId: z.string().uuid().optional() }) });
+
+/** V12 9.3: who this caller may write a stand-up for. Above the rate limiter — the card asks on
+ *  mount and it makes no model call. */
+aiRouter.get("/standup/people", async (req, res) => {
+  res.json(await listStandupSubjects(req.user!.role, req.user!.id));
+});
 
 aiRouter.post("/standup", validate(standupSchema), async (req, res) => {
   const hours = Number(req.body.sinceHours);
   if (!isStandupWindow(hours)) throw new AppError(422, "Pick 24 hours, 3 days or 7 days.");
 
-  const facts = await gatherStandupFacts(req.user!.id, hours);
+  // V12 9.3 — whose week. Absent means your own; anybody else is checked against the same rule the
+  // picker was built from, and refused outright rather than answered with an empty summary.
+  const subjectId = req.body.userId ? String(req.body.userId) : req.user!.id;
+  const isSelf = subjectId === req.user!.id;
+  let subjectName = req.user!.name;
+  let projectIds: string[] | null = null;
+
+  if (!isSelf) {
+    const rule = await resolveStandupRule(req.user!.role, req.user!.id);
+    if (!mayWriteStandupFor(rule, subjectId)) throw new AppError(403, "You cannot write a stand-up for that person.");
+    const subject = await prisma.user.findFirst({ where: { id: subjectId, deletedAt: null }, select: { name: true } });
+    if (!subject) throw new AppError(404, "That person no longer exists.");
+    subjectName = subject.name;
+    // THE GUARD: their week, narrowed to what the READER may already open.
+    const scope = await ticketProjectScope(req);
+    projectIds = scope.unrestricted ? null : scope.projectIds;
+  }
+
+  const facts = await gatherStandupFacts(subjectId, hours, projectIds);
   const periodLabel = standupPeriodLabel(hours);
   if (standupIsEmpty(facts)) {
-    res.json({ standup: "", empty: true, periodLabel });
+    res.json({ standup: "", empty: true, periodLabel, personName: subjectName, isSelf });
     return;
   }
 
   const result = await generateStandup({
     facts: formatStandupFacts(facts),
     periodLabel,
-    personName: req.user!.name,
+    personName: subjectName,
+    voice: isSelf ? "self" : "about",
     userId: req.user!.id
   });
-  res.json({ standup: result.standup, empty: false, periodLabel });
+  res.json({ standup: result.standup, empty: false, periodLabel, personName: subjectName, isSelf });
 });
 
 const askSchema = z.object({ body: z.object({ question: z.string().min(3).max(500) }) });
