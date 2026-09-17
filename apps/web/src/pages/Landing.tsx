@@ -207,7 +207,7 @@ const TOUR = [
     label: "Requirements",
     icon: FileText,
     title: "A spec, then the tickets that build it",
-    body: "An AI interview turns an idea — or a PRD you already have — into a structured document: scope, features, architecture, timeline. It asks about what is missing rather than inventing it, exports as a client-grade PDF or Word file, and turns into real tickets and goals in the same workspace.",
+    body: "An AI interview turns an idea — or a PRD you already have — into a structured document: scope, features, architecture, timeline. It asks about what is missing rather than inventing it, exports as a client-grade PDF or Word file, and turns into real tickets and goals in the same workspace. Documents and tickets relate in both directions, each side listing only what the reader is allowed to open.",
     image: "/product/requirements.png"
   },
   {
@@ -319,7 +319,7 @@ const FEATURES: Feature[] = [
     icon: LayoutGrid,
     group: "Track the work",
     title: "Jira-style ticketing",
-    body: "Kanban with drag-and-drop and manager swimlanes, labels, cross-ticket links, sub-task checklists, saved views, custom fields, and SLA due-dates that escalate on their own. Admin-defined statuses each declare which built-in state they behave like, so reports and exports never drift."
+    body: "Kanban with drag-and-drop and manager swimlanes, labels, cross-ticket links, sub-task checklists, saved views, custom fields, and SLA due-dates that escalate on their own. Comments take @mentions of project members, and a comment can be assigned as an action item that shows on the assignee's My work until somebody ticks it resolved. Admin-defined statuses each declare which built-in state they behave like, so reports and exports never drift."
   },
   {
     icon: GitPullRequest,
