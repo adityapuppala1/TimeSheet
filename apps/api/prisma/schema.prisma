@@ -247,6 +247,7 @@ model User {
   assignedTickets          Ticket[]             @relation("TicketAssignee")
   ticketComments           TicketComment[]
   assignedComments         TicketComment[] @relation("CommentAssignee")
+  ticketDocumentLinks      TicketDocumentLink[] @relation("TicketDocumentLinkCreator")
   resolvedComments         TicketComment[] @relation("CommentResolver")
   ticketWatches            TicketWatcher[]
   ticketCollaborations     TicketCollaborator[] @relation("TicketCollaboratorUser")
@@ -1014,6 +1015,7 @@ model Ticket {
   aiInteractions   AIInteraction[]
   linksFrom        TicketLink[]          @relation("TicketLinkSource")
   linksTo          TicketLink[]          @relation("TicketLinkTarget")
+  documentLinks    TicketDocumentLink[]
   checklistItems   TicketChecklistItem[]
   securityFindings SecurityFinding[]
   testRuns         TestRun[]
@@ -4225,11 +4227,31 @@ model RequirementsDocument {
   createdById String?
   createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
+  /// V12 8.4: tickets related to this document (either side may add the link).
+  ticketLinks TicketDocumentLink[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([projectId])
   @@index([status, createdAt])
+}
+
+/// V12 8.4 — a ticket ↔ requirements-document relationship. One row per pair; cascades from both
+/// sides so a deleted document or ticket leaves no dangling link. Who linked it is kept for the
+/// audit trail only and is nulled if that person is deleted.
+model TicketDocumentLink {
+  id          String               @id @default(uuid())
+  ticketId    String
+  ticket      Ticket               @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  documentId  String
+  document    RequirementsDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  createdById String?
+  createdBy   User?                @relation("TicketDocumentLinkCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime             @default(now())
+
+  @@unique([ticketId, documentId])
+  @@index([documentId])
 }
 
 enum ApprovalDecision {

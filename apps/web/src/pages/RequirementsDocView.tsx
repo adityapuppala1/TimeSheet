@@ -25,10 +25,12 @@ import { MermaidDiagram, renderMermaidSvg } from "../components/ui/mermaid-diagr
 import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
+import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { useAuthStore } from "../store/auth";
 import { useIndeterminateProgress } from "./RequirementsStudio";
+import { serverMessage } from "./Tickets";
 import {
   projectApi,
   requirementsDocApi,
@@ -113,6 +115,7 @@ export function RequirementsDocViewPage() {
   const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const canWrite = Boolean(user?.permissions.includes(permissions.PLAN_WRITE));
+  const canLinkTickets = Boolean(user?.permissions.includes(permissions.TICKETS_WRITE));
 
   const doc = useQuery({ queryKey: ["requirements-docs", docId], queryFn: () => requirementsDocApi.get(docId) });
 
@@ -215,6 +218,9 @@ export function RequirementsDocViewPage() {
           interviewDone={interviewDone}
         />
       )}
+
+      {/* V12 8.4: the document's Relationships panel — related tickets, read through the ticket scope. */}
+      {data.status !== "ARCHIVED" && <RelatedTicketsCard docId={docId} canWrite={canLinkTickets} />}
 
       {data.sections && (
         <DocumentViewer
@@ -1129,6 +1135,77 @@ function renderSection(key: string, s: NonNullable<ReturnType<typeof requirement
     default:
       return null;
   }
+}
+
+/** V12 8.4: tickets related to this document; add by key, open, or unlink. */
+function RelatedTicketsCard({ docId, canWrite }: { docId: string; canWrite: boolean }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [key, setKey] = useState("");
+  const rows = useQuery({ queryKey: ["requirements-docs", docId, "tickets"], queryFn: () => requirementsDocApi.tickets.list(docId) });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["requirements-docs", docId, "tickets"] });
+  const add = useMutation({
+    mutationFn: () => requirementsDocApi.tickets.add(docId, key.trim()),
+    onSuccess: () => {
+      setKey("");
+      refresh();
+    },
+    onError: (err: any) => toast.error("Could not relate the ticket", { description: serverMessage(err, "Check the ticket key and try again.") })
+  });
+  const remove = useMutation({
+    mutationFn: (linkId: string) => requirementsDocApi.tickets.remove(docId, linkId),
+    onSuccess: refresh,
+    onError: (err: any) => toast.error("Could not remove the ticket", { description: serverMessage(err, "Try again.") })
+  });
+  const list = rows.data ?? [];
+  return (
+    <Card data-related-tickets>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Ticket className="h-4 w-4 text-primary" />
+          Related tickets
+          <Badge variant="secondary">{list.length}</Badge>
+        </CardTitle>
+        <CardDescription>Work this document informs. You see only tickets on projects you can open.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <div className="grid gap-1.5">
+          {list.map((row) => (
+            <div key={row.id} className="flex min-w-0 items-center gap-2 rounded-md border border-border px-2 py-1.5 text-sm">
+              <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 text-left hover:underline" onClick={() => navigate(`/app/tickets?open=${row.ticket.id}`)}>
+                <span className="shrink-0 font-mono text-xs text-muted-foreground">{row.ticket.key}</span>
+                <span className="truncate">{row.ticket.title}</span>
+              </button>
+              <Badge variant="muted" className="hidden shrink-0 sm:inline-flex">{row.ticket.status.replace(/_/g, " ").toLowerCase()}</Badge>
+              {canWrite && (
+                <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive" aria-label={`Remove ${row.ticket.key}`} onClick={() => remove.mutate(row.id)}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+          ))}
+          {list.length === 0 && !rows.isLoading && <p className="text-sm text-muted-foreground">No related tickets yet.</p>}
+        </div>
+        {canWrite && (
+          <div className="flex min-w-0 gap-2">
+            <Input
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+              placeholder="Ticket key (e.g. WEB-12)"
+              aria-label="Ticket key to relate"
+              className="h-[44px] min-w-0 flex-1"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && key.trim()) add.mutate();
+              }}
+            />
+            <Button size="sm" className="h-[44px] shrink-0" disabled={!key.trim() || add.isPending} onClick={() => add.mutate()}>
+              Relate
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 function BulletList({ items }: { items: string[] }) {

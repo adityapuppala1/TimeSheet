@@ -119,6 +119,10 @@ project member: they get an inbox item and the comment is listed under **Comment
 at the top of My work. Anyone who can see the ticket may tick **Resolve**; the resolver's name shows
 beside the tick and the assigner hears. The Comments tab badge counts unresolved assigned comments.
 
+**Related documents.** The ticket's **Linked** tab also lists requirements documents; pick one from
+the Studio's list to relate it. A document page shows **Related tickets** (add by key, open, unlink),
+reading through the same project scope as the Tickets page.
+
 **Colour.** The ticket sheet's header is tinted with the project's colour; phone cards carry a
 left rail in the status colour; views fade in as they change unless your system asks for reduced
 motion. All of it is measured by the contrast check, none of it is animation you cannot switch off.

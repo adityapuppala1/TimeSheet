@@ -75,13 +75,15 @@ function linkLabel(type: string, direction: "outgoing" | "incoming"): string {
 }
 
 /** Merges linksFrom/linksTo into one `links` array, labeled from the viewed ticket's side. */
-function serializeTicketLinks<T extends { linksFrom: any[]; linksTo: any[] }>(ticket: T) {
-  const { linksFrom, linksTo, ...rest } = ticket;
+function serializeTicketLinks<T extends { linksFrom: any[]; linksTo: any[]; documentLinks?: any[] }>(ticket: T) {
+  const { linksFrom, linksTo, documentLinks, ...rest } = ticket;
   const links = [
     ...linksFrom.map((l) => ({ id: l.id, type: l.type, label: linkLabel(l.type, "outgoing"), ticket: l.targetTicket })),
     ...linksTo.map((l) => ({ id: l.id, type: l.type, label: linkLabel(l.type, "incoming"), ticket: l.sourceTicket }))
   ];
-  return { ...rest, links };
+  // V12 8.4: `documents` sits beside `links` — the Linked tab shows both.
+  const documents = (documentLinks ?? []).map((l) => ({ id: l.id, document: l.document }));
+  return { ...rest, links, documents };
 }
 
 /**
@@ -525,6 +527,8 @@ ticketRouter.get("/:id", requirePermission(permissions.TICKETS_VIEW), async (req
       branches: { include: { addedBy: { select: USER_SUMMARY } }, orderBy: { createdAt: "desc" } },
       linksFrom: { include: { targetTicket: { select: TICKET_LINK_SUMMARY } } },
       linksTo: { include: { sourceTicket: { select: TICKET_LINK_SUMMARY } } },
+      // V12 8.4: related requirements documents, shown on the Linked tab.
+      documentLinks: { include: { document: { select: { id: true, title: true, docType: true, status: true } } }, orderBy: { createdAt: "asc" } },
       // Planning layer (V6). Included on the DETAIL only, never the list — the list is one query
       // by design, and hierarchy is a per-ticket question. `children` is capped because an epic
       // with hundreds of subtasks must not turn opening one ticket into a page-sized response;
@@ -1393,6 +1397,41 @@ ticketRouter.delete("/:id/links/:linkId", requirePermission(permissions.TICKETS_
   if (!link) throw new AppError(404, "Link not found");
   await prisma.ticketLink.delete({ where: { id: linkId } });
   await audit(req.user!.id, "ticket.link_removed", "Ticket", ticketId, { linkId });
+  res.status(204).send();
+});
+
+/* ---------- V12 8.4: related requirements documents ---------- */
+// The source: "Relate a doc with a task, right from the task". A link is visible to whoever can
+// see the ticket; adding one needs tickets:write on a visible ticket. The document itself is the
+// Studio's (tickets:view) — the link never widens what either side shows.
+const documentLinkSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({ documentId: z.string().uuid() })
+});
+
+ticketRouter.post("/:id/documents", requirePermission(permissions.TICKETS_WRITE), validate(documentLinkSchema), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+  const document = await prisma.requirementsDocument.findFirst({ where: { id: req.body.documentId }, select: { id: true, title: true, docType: true, status: true } });
+  if (!document) throw new AppError(404, "Document not found");
+  const existing = await prisma.ticketDocumentLink.findFirst({ where: { ticketId, documentId: document.id }, select: { id: true } });
+  if (existing) throw new AppError(422, "Already related to that document");
+  const created = await prisma.ticketDocumentLink.create({ data: { ticketId, documentId: document.id, createdById: req.user!.id } });
+  await audit(req.user!.id, "ticket.document_linked", "Ticket", ticketId, { documentId: document.id });
+  res.status(201).json({ id: created.id, document });
+});
+
+ticketRouter.delete("/:id/documents/:linkId", requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+  const link = await prisma.ticketDocumentLink.findFirst({ where: { id: String(req.params.linkId), ticketId } });
+  if (!link) throw new AppError(404, "Link not found");
+  await prisma.ticketDocumentLink.delete({ where: { id: link.id } });
+  await audit(req.user!.id, "ticket.document_unlinked", "Ticket", ticketId, { documentId: link.documentId });
   res.status(204).send();
 });
 

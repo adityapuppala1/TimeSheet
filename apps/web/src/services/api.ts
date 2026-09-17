@@ -3052,6 +3052,17 @@ export interface TicketLinkRow {
   ticket: { id: string; key: string; title: string; status: TicketStatus; priority: TicketPriority };
 }
 
+/** V12 8.4: a ticket ↔ requirements-document relationship, as the ticket sees it. */
+export interface TicketDocumentLinkRow {
+  id: string;
+  document: Pick<RequirementsDocRow, "id" | "title" | "docType" | "status">;
+}
+/** The same link as the document sees it. */
+export interface DocumentTicketLinkRow {
+  id: string;
+  ticket: { id: string; key: string; title: string; status: TicketStatus; priority: TicketPriority };
+}
+
 export interface TicketChecklistItemRow {
   id: string;
   label: string;
@@ -3156,6 +3167,8 @@ export interface TicketDetail extends TicketRow {
   attachments: TicketAttachmentRow[];
   timesheets: TicketTimesheetRow[];
   links: TicketLinkRow[];
+  /** V12 8.4: related requirements documents (Linked tab). */
+  documents: TicketDocumentLinkRow[];
   checklistItems: TicketChecklistItemRow[];
   branches: TicketBranchRow[];
   /** The most recent face check spent on this ticket (creation or a status transition). */
@@ -3422,6 +3435,11 @@ export const ticketApi = {
     add: async (id: string, targetKey: string, type: TicketLinkType) =>
       (await api.post<TicketLinkRow>(`/tickets/${id}/links`, { targetKey, type })).data,
     remove: async (id: string, linkId: string) => api.delete(`/tickets/${id}/links/${linkId}`)
+  },
+  /** V12 8.4: relate a requirements document from the ticket. */
+  documents: {
+    add: async (id: string, documentId: string) => (await api.post<TicketDocumentLinkRow>(`/tickets/${id}/documents`, { documentId })).data,
+    remove: async (id: string, linkId: string) => api.delete(`/tickets/${id}/documents/${linkId}`)
   },
   checklist: {
     add: async (id: string, label: string) => (await api.post<TicketChecklistItemRow>(`/tickets/${id}/checklist`, { label })).data,
@@ -5039,6 +5057,12 @@ export const requirementsDocApi = {
   get: async (id: string) => (await api.get<RequirementsDocRow>(`/requirements-docs/${id}`)).data,
   create: async (payload: { title: string; docType: "PRD" | "BRD" | "BOTH" }) =>
     (await api.post<RequirementsDocRow>("/requirements-docs", payload)).data,
+  /** V12 8.4: related tickets, read through the ticket scope. */
+  tickets: {
+    list: async (id: string) => (await api.get<DocumentTicketLinkRow[]>(`/requirements-docs/${id}/tickets`)).data,
+    add: async (id: string, ticketKey: string) => (await api.post<DocumentTicketLinkRow>(`/requirements-docs/${id}/tickets`, { ticketKey })).data,
+    remove: async (id: string, linkId: string) => api.delete(`/requirements-docs/${id}/tickets/${linkId}`)
+  },
   archive: async (id: string) => (await api.patch<RequirementsDocRow>(`/requirements-docs/${id}`, { status: "ARCHIVED" })).data,
   /** `{}` (both fields omitted) asks for the opening question. */
   interviewTurn: async (id: string, payload: { answer?: string; skip?: boolean }) =>

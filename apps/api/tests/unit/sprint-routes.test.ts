@@ -91,7 +91,14 @@ beforeEach(() => {
     user: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null) },
     ticketCollaborator: { findFirst: vi.fn().mockResolvedValue(null) },
     globalTicketSettings: { upsert: vi.fn().mockResolvedValue({ slaLowHours: 1, slaMediumHours: 1, slaHighHours: 1, slaCriticalHours: 1 }) },
-    ticketType: { findFirst: vi.fn().mockResolvedValue({ id: "tt", name: "BUG", isActive: true }) }
+    ticketType: { findFirst: vi.fn().mockResolvedValue({ id: "tt", name: "BUG", isActive: true }) },
+    // V12 8.4
+    requirementsDocument: { findFirst: vi.fn().mockResolvedValue({ id: "77777777-7777-4777-8777-777777777777", title: "Onboarding PRD", docType: "PRD", status: "READY" }) },
+    ticketDocumentLink: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockImplementation(async ({ data }: any) => ({ id: "dl1", ...data, createdAt: new Date() })),
+      delete: vi.fn().mockResolvedValue({})
+    }
   } as unknown as PrismaClient;
 });
 
@@ -260,5 +267,30 @@ describe("assigned comments", () => {
     const data = (vi.mocked(client.ticketComment.update).mock.calls[0][0] as any).data;
     expect(data.resolvedById).toBe("user-1");
     expect(data.resolvedAt).toBeInstanceOf(Date);
+  });
+});
+
+/* V12 8.4 — related documents from the ticket's side. */
+describe("related documents", () => {
+  const DOC = "77777777-7777-4777-8777-777777777777";
+  it("relates a document and answers with its summary", async () => {
+    const res = await request(buildApp()).post(`/api/tickets/${TICKET.id}/documents`).send({ documentId: DOC });
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ id: "dl1", document: { id: DOC, title: "Onboarding PRD", docType: "PRD", status: "READY" } });
+    expect((vi.mocked(client.ticketDocumentLink.create).mock.calls[0][0] as any).data).toMatchObject({ ticketId: TICKET.id, documentId: DOC, createdById: "user-1" });
+  });
+  it("refuses the same pair twice", async () => {
+    vi.mocked(client.ticketDocumentLink.findFirst).mockResolvedValueOnce({ id: "dl1" } as never);
+    const res = await request(buildApp()).post(`/api/tickets/${TICKET.id}/documents`).send({ documentId: DOC });
+    expect(res.status).toBe(422);
+    expect(client.ticketDocumentLink.create).not.toHaveBeenCalled();
+  });
+  it("unlinks only a link that belongs to this ticket", async () => {
+    const missing = await request(buildApp()).delete(`/api/tickets/${TICKET.id}/documents/88888888-8888-4888-8888-888888888888`);
+    expect(missing.status).toBe(404);
+    vi.mocked(client.ticketDocumentLink.findFirst).mockResolvedValueOnce({ id: "dl1", ticketId: TICKET.id, documentId: DOC } as never);
+    const res = await request(buildApp()).delete(`/api/tickets/${TICKET.id}/documents/88888888-8888-4888-8888-888888888888`);
+    expect(res.status).toBe(204);
+    expect(client.ticketDocumentLink.delete).toHaveBeenCalledWith({ where: { id: "dl1" } });
   });
 });

@@ -29,6 +29,7 @@ import { assertGoalsEnabled, assertPlanningEnabled } from "../services/planning.
 import { getPlanningEntitlements } from "../services/plan-limits.service.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { audit } from "../services/audit.service.js";
+import { ticketProjectScope } from "../services/ticket.service.js";
 import { createProposal, type DraftChange } from "../services/ai-proposal.service.js";
 import {
   analyzeImportedDocument,
@@ -103,6 +104,69 @@ requirementsDocRouter.get(
   async (req, res) => {
     await assertPlanningEnabled();
     res.json(await getRequirementsDocument(String(req.params.id)));
+  }
+);
+
+/* ---------- V12 8.4: related tickets, from the document's side ---------- */
+// The source's Relationships panel: "The Page links section displays a count and list of items
+// linked". Read THROUGH the ticket scope (the same rule every ticket route derives from
+// ticketProjectScope) so a document never shows a ticket its reader could not open.
+const DOC_TICKET_SUMMARY = { id: true, key: true, title: true, status: true, priority: true } as const;
+
+requirementsDocRouter.get(
+  "/:id/tickets",
+  requirePermission(permissions.TICKETS_VIEW),
+  validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
+  async (req, res) => {
+    await getRequirementsDocument(String(req.params.id));
+    const scope = await ticketProjectScope(req);
+    const rows = await prisma.ticketDocumentLink.findMany({
+      where: {
+        documentId: String(req.params.id),
+        ticket: { deletedAt: null, ...(scope.unrestricted ? {} : { projectId: { in: scope.projectIds } }) }
+      },
+      select: { id: true, ticket: { select: DOC_TICKET_SUMMARY } },
+      orderBy: { createdAt: "asc" }
+    });
+    res.json(rows);
+  }
+);
+
+requirementsDocRouter.post(
+  "/:id/tickets",
+  requirePermission(permissions.TICKETS_WRITE),
+  validate(z.object({ params: z.object({ id: z.string().uuid() }), body: z.object({ ticketKey: z.string().min(1).max(20) }) })),
+  async (req, res) => {
+    const documentId = String(req.params.id);
+    await getRequirementsDocument(documentId);
+    const scope = await ticketProjectScope(req);
+    const ticket = await prisma.ticket.findFirst({
+      where: { key: req.body.ticketKey.trim().toUpperCase(), deletedAt: null, ...(scope.unrestricted ? {} : { projectId: { in: scope.projectIds } }) },
+      select: DOC_TICKET_SUMMARY
+    });
+    if (!ticket) throw new AppError(404, `No ticket found with key "${req.body.ticketKey}"`);
+    const existing = await prisma.ticketDocumentLink.findFirst({ where: { ticketId: ticket.id, documentId }, select: { id: true } });
+    if (existing) throw new AppError(422, "Already related to that ticket");
+    const created = await prisma.ticketDocumentLink.create({ data: { ticketId: ticket.id, documentId, createdById: req.user!.id } });
+    await audit(req.user!.id, "ticket.document_linked", "Ticket", ticket.id, { documentId });
+    res.status(201).json({ id: created.id, ticket });
+  }
+);
+
+requirementsDocRouter.delete(
+  "/:id/tickets/:linkId",
+  requirePermission(permissions.TICKETS_WRITE),
+  validate(z.object({ params: z.object({ id: z.string().uuid(), linkId: z.string().uuid() }) })),
+  async (req, res) => {
+    const documentId = String(req.params.id);
+    const scope = await ticketProjectScope(req);
+    const link = await prisma.ticketDocumentLink.findFirst({
+      where: { id: String(req.params.linkId), documentId, ticket: scope.unrestricted ? {} : { projectId: { in: scope.projectIds } } }
+    });
+    if (!link) throw new AppError(404, "Link not found");
+    await prisma.ticketDocumentLink.delete({ where: { id: link.id } });
+    await audit(req.user!.id, "ticket.document_unlinked", "Ticket", link.ticketId, { documentId });
+    res.status(204).send();
   }
 );
 

@@ -48,6 +48,7 @@ import {
   GitBranch,
   LayoutGrid,
   Link2,
+  BookOpen,
   ListChecks,
   Loader2,
   Download,
@@ -68,7 +69,7 @@ import {
   X
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useSearchParams } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRefine";
 import { PlanCalendar, type CalendarPeriod } from "../components/PlanCalendar";
 import { TicketApprovalsPanel } from "../components/TicketApprovalsPanel";
@@ -127,7 +128,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { plainTextLength, safeHtml } from "../lib/safe-html";
-import { aiApi, fileUrl, labelApi, planApi, projectApi, settingsApi, ticketApi, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLineageEvent, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow , planningApi, type CustomFieldRow, sprintApi } from "../services/api";
+import { aiApi, fileUrl, labelApi, planApi, projectApi, requirementsDocApi, settingsApi, ticketApi, type TicketDocumentLinkRow, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLineageEvent, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow , planningApi, type CustomFieldRow, sprintApi } from "../services/api";
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
 import { usePlanningFeatures } from "../lib/use-planning";
@@ -2110,7 +2111,7 @@ function TicketDetailSheet({
                   {planFeatures.proofing && (
                     <TabsTrigger value="proofing"><MessageSquarePlus className="h-3.5 w-3.5" />Proofing</TabsTrigger>
                   )}
-                  <TabsTrigger value="links"><Link2 className="h-3.5 w-3.5" />Linked ({ticket.links.length})</TabsTrigger>
+                  <TabsTrigger value="links"><Link2 className="h-3.5 w-3.5" />Linked ({ticket.links.length + ticket.documents.length})</TabsTrigger>
                   <TabsTrigger value="time"><TimerReset className="h-3.5 w-3.5" />Time logged</TabsTrigger>
                   <TabsTrigger value="dev"><GitBranch className="h-3.5 w-3.5" />Dev ({ticket.branches.length})</TabsTrigger>
                   <TabsTrigger value="security"><ShieldAlert className="h-3.5 w-3.5" />Security</TabsTrigger>
@@ -2140,6 +2141,8 @@ function TicketDetailSheet({
 
                 <TabsContent value="links">
                   <LinksPanel ticketId={ticket.id} links={ticket.links} onChanged={invalidate} onOpenTicket={onOpenTicket} />
+                  {/* V12 8.4: related documents live on the same tab — "Relate a doc with a task, right from the task". */}
+                  <RelatedDocumentsPanel ticketId={ticket.id} documents={ticket.documents} onChanged={invalidate} />
                 </TabsContent>
                 <TabsContent value="time">
                   <TimeLoggedPanel timesheets={ticket.timesheets} />
@@ -2491,6 +2494,65 @@ function LinksPanel({
         />
         <Button size="sm" disabled={!draft.targetKey.trim() || add.isPending} onClick={() => add.mutate()}>
           <Link2 className="h-4 w-4" />Link
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** V12 8.4: the ticket's related requirements documents, with a picker over the Studio's list. */
+function RelatedDocumentsPanel({ ticketId, documents, onChanged }: { ticketId: string; documents: TicketDocumentLinkRow[]; onChanged: () => void }) {
+  const navigate = useNavigate();
+  const [pick, setPick] = useState("");
+  const all = useQuery({ queryKey: ["requirements-docs"], queryFn: () => requirementsDocApi.list() });
+  const linked = new Set(documents.map((d) => d.document.id));
+  const candidates = (all.data ?? []).filter((d) => d.status !== "ARCHIVED" && !linked.has(d.id));
+  const add = useMutation({
+    mutationFn: () => ticketApi.documents.add(ticketId, pick),
+    onSuccess: () => {
+      setPick("");
+      onChanged();
+    },
+    onError: (err: any) => toast.error("Could not relate the document", { description: serverMessage(err, "Try again.") })
+  });
+  const remove = useMutation({
+    mutationFn: (linkId: string) => ticketApi.documents.remove(ticketId, linkId),
+    onSuccess: () => onChanged(),
+    onError: (err: any) => toast.error("Could not remove the document", { description: serverMessage(err, "Try again.") })
+  });
+  return (
+    <div className="mt-4 grid gap-2 border-t border-border pt-4" data-related-documents>
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Related documents</p>
+      <div className="grid gap-1.5">
+        {documents.map((d) => (
+          <div key={d.id} className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-sm">
+            <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <button type="button" className="flex flex-1 items-center gap-1.5 truncate text-left hover:underline" onClick={() => navigate(`/app/requirements/${d.document.id}`)}>
+              <span className="truncate">{d.document.title}</span>
+              <ArrowUpRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+            </button>
+            <Badge variant="muted">{d.document.docType}</Badge>
+            <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive" aria-label={`Remove ${d.document.title}`} onClick={() => remove.mutate(d.id)}>
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        ))}
+        {documents.length === 0 && <EmptyState compact title="No related documents yet" />}
+      </div>
+      <div className="flex gap-2">
+        <Select value={pick || "none"} onValueChange={(v) => setPick(v === "none" ? "" : v)}>
+          <SelectTrigger className="h-[44px] flex-1" aria-label="Pick a document to relate" data-document-pick>
+            <SelectValue placeholder="Pick a document" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">Pick a document</SelectItem>
+            {candidates.map((d) => (
+              <SelectItem key={d.id} value={d.id}>{d.title}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button size="sm" className="h-[44px]" disabled={!pick || add.isPending} onClick={() => add.mutate()}>
+          <Link2 className="h-4 w-4" />Relate
         </Button>
       </div>
     </div>

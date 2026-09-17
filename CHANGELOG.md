@@ -10,6 +10,16 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 📎 Related documents on a ticket, related tickets on a document
+
+- **Relate a requirements document from the ticket's Linked tab.** Pick a document from the
+  Studio's list; it appears under Related documents beside the ticket links and opens the document.
+  The document page gains a **Related tickets** card: add by key, open, or unlink. A document lists
+  only tickets on projects you can open, exactly as the Tickets page does.
+- **Storage.** One additive table, `TicketDocumentLink` (one row per pair, cascades from both
+  sides). Nothing existing changes. Tickets created from a document by the AI proposal are not
+  linked automatically yet; relate them by hand.
+
 ### ✅ Assigned comments — a comment as an action item
 
 - **Assign a comment to a project member.** Beside Post comment, "Assign to" names a member (or an
