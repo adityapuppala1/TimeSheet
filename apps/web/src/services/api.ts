@@ -6000,8 +6000,9 @@ export const flowApi = {
   update: async (id: string, payload: Partial<FlowPayload>) => (await api.patch<FlowRow>(`/flows/${id}`, payload)).data,
   setEnabled: async (id: string, enabled: boolean) => (await api.post<FlowRow>(`/flows/${id}/enabled`, { enabled })).data,
   /** What the flows have actually done. Readable by anybody who can see tickets — see the route. */
-  runs: async (flowId?: string, limit = 20) =>
-    (await api.get<FlowRunRow[]>("/flows/runs", { params: { flowId, limit } })).data,
+  /** V12 9.5: `status` is the second half of the activity view's filters. */
+  runs: async (flowId?: string, limit = 20, status?: string) =>
+    (await api.get<FlowRunRow[]>("/flows/runs", { params: { flowId, limit, status } })).data,
   /** Clear a gate. Only the person the step named may — the server enforces it, not this call. */
   decide: async (runId: string, approved: boolean) => {
     await api.post(`/flows/runs/${runId}/decision`, { approved });

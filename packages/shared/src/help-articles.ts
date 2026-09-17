@@ -478,7 +478,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Create a teammate, name it, and scope it to specific capabilities and projects.",
       "Everything it proposes lands on the AI suggestions page as reviewable rows — accept or reject each individually; there is deliberately no apply-everything.",
       "Runs are priced on the same ledger as human work, against the same AI budget.",
-      "Workspace settings → AI → Agent runs lists every run, grouped by the day it ran. Filter by status (Failed, Held for review, Stopped at a limit…) and by period to find one, then open it for its full step trace."
+      "Workspace settings → AI → Agent runs lists every run, grouped by the day it ran. Filter by status (Failed, Held for review, Stopped at a limit…) and by period to find one, then open it for its full step trace.",
+      "In the Workflow Studio, \"What they have done\" filters the same way — pick a flow, a status, or both — and a run stopped by a condition is the flow working, not a failure."
     ],
     screenshot: "agents.png",
     keywords: ["agents", "teammates", "workflows", "automation", "propose", "suggestions"]

@@ -127,6 +127,9 @@ reading through the same project scope as the Tickets page.
 each one comes back already related to that document — see it on the document's **Related tickets**
 card and on the ticket's **Linked** tab.
 
+**Flow runs.** In the **Workflow Studio**, "What they have done" filters by flow and by status and
+groups runs under Today, Yesterday or the date. Clearing the filters restores the whole feed.
+
 **Agent runs.** Under **Workspace settings → AI**, the Agent runs list filters by status and by
 when a run happened, and groups what it finds under Today, Yesterday or the date. Clearing the
 filters restores the full list.

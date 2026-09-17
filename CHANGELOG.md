@@ -23,6 +23,18 @@ number, on purpose — an installation must never render history for a version t
 - **Storage.** One nullable column on `AiProposal`, added by an idempotent migration. Proposals
   that did not come from a document carry NULL and link nothing, which is every existing row.
 
+### ⚙️ The Studio feed answers "what did this flow do"
+
+- **Filter the run feed by flow and by status.** "What they have done" in the Workflow Studio now
+  narrows to one flow, one outcome, or both, and groups what it finds under Today, Yesterday or the
+  date. The flow filter existed in the API all along and nothing ever passed it.
+- **Applied by the server, and a closed set.** Filtering the newest twenty rows in the browser would
+  say "no failures" whenever those twenty held none. A status no flow run can reach is refused
+  rather than answered with an empty list, and the two that are the flow working rather than failing
+  keep their own words: Stopped by a condition, and Waiting for a person.
+- **Still readable by anybody who can see tickets.** "What automation touched my work" is the
+  question this feed exists to answer, so narrowing it does not need an admin.
+
 ### 🤖 Agent activity, filtered by status and date
 
 - **Find the failures.** The Agent runs list in Workspace settings → AI now filters by status and by

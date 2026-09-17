@@ -72,6 +72,7 @@ import { StatCard } from "../components/ui/stat-card";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
+import { groupRunsByDay } from "../lib/agent-runs";
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 import {
@@ -290,7 +291,7 @@ export function StudioPage() {
         </>
       )}
 
-      {!gateMessage && !flows.isLoading && rows.length > 0 && <RunFeed currentUserId={user?.id ?? null} />}
+      {!gateMessage && !flows.isLoading && rows.length > 0 && <RunFeed currentUserId={user?.id ?? null} flows={rows} />}
 
       {(creating || editing) && (
         <FlowDialog
@@ -319,10 +320,20 @@ export function StudioPage() {
  * is an approval that waits. The buttons appear only for the person the gate named — the server refuses
  * anybody else, so this is the door and not the lock.
  */
-function RunFeed({ currentUserId }: Readonly<{ currentUserId: string | null }>) {
+function RunFeed({ currentUserId, flows }: Readonly<{ currentUserId: string | null; flows: Array<{ id: string; name: string; emoji?: string | null }> }>) {
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState<string | null>(null);
-  const runs = useQuery({ queryKey: ["flows", "runs"], queryFn: () => flowApi.runs(undefined, 20), retry: false });
+  // V12 9.5 — the two filters the reference's activity view has and this feed did not. Both are
+  // applied by the SERVER: filtering the newest 20 rows in the browser would answer "no failures"
+  // whenever those 20 happened to hold none.
+  const [flowId, setFlowId] = useState("ALL");
+  const [status, setStatus] = useState("ALL");
+  const filtered = flowId !== "ALL" || status !== "ALL";
+  const runs = useQuery({
+    queryKey: ["flows", "runs", flowId, status],
+    queryFn: () => flowApi.runs(flowId === "ALL" ? undefined : flowId, 20, status === "ALL" ? undefined : status),
+    retry: false
+  });
 
   const decide = useMutation({
     mutationFn: ({ runId, approved }: { runId: string; approved: boolean }) => flowApi.decide(runId, approved),
@@ -349,22 +360,75 @@ function RunFeed({ currentUserId }: Readonly<{ currentUserId: string | null }>) 
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2 pt-0">
+        <div className="flex flex-wrap items-center gap-2" data-flow-runs-filters>
+          <Select value={flowId} onValueChange={setFlowId}>
+            <SelectTrigger className="h-[44px] w-[190px]" aria-label="Filter by flow" data-flow-runs-flow>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">Any flow</SelectItem>
+              {flows.map((f) => (
+                <SelectItem key={f.id} value={f.id}>
+                  {f.emoji ? `${f.emoji} ` : ""}
+                  {f.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={status} onValueChange={setStatus}>
+            <SelectTrigger className="h-[44px] w-[200px]" aria-label="Filter by status" data-flow-runs-status>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">Any status</SelectItem>
+              {Object.entries(RUN_STATUS).map(([value, meta]) => (
+                <SelectItem key={value} value={value}>
+                  {meta.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {filtered && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-[44px]"
+              onClick={() => {
+                setFlowId("ALL");
+                setStatus("ALL");
+              }}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
         {runs.isLoading && <Skeleton className="h-20" />}
         {!runs.isLoading && rows.length === 0 && (
-          <p className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
-            Nothing has fired yet. A live flow runs when its trigger happens — or you can run one by hand from its card.
+          <p className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground" data-flow-runs-empty>
+            {filtered
+              ? "No run matches those filters. Clear them to see everything these flows have done."
+              : "Nothing has fired yet. A live flow runs when its trigger happens — or you can run one by hand from its card."}
           </p>
         )}
-        {rows.map((run) => (
-          <RunRow
-            key={run.id}
-            run={run}
-            open={expanded === run.id}
-            onToggle={() => setExpanded(expanded === run.id ? null : run.id)}
-            canDecide={run.status === "WAITING" && run.awaitingUser?.id === currentUserId}
-            busy={decide.isPending}
-            onDecide={(approved) => decide.mutate({ runId: run.id, approved })}
-          />
+        {/* V12 9.5: dated sections, through the same pure helper the agent-run list uses. */}
+        {groupRunsByDay(rows.map((r) => ({ ...r, createdAt: r.startedAt }))).map((group) => (
+          <div key={group.key} className="space-y-2">
+            <p className="pt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground" data-flow-runs-day>
+              {group.label}
+              <span className="ml-2 font-normal normal-case tracking-normal">{group.runs.length}</span>
+            </p>
+            {group.runs.map((run) => (
+              <RunRow
+                key={run.id}
+                run={run}
+                open={expanded === run.id}
+                onToggle={() => setExpanded(expanded === run.id ? null : run.id)}
+                canDecide={run.status === "WAITING" && run.awaitingUser?.id === currentUserId}
+                busy={decide.isPending}
+                onDecide={(approved) => decide.mutate({ runId: run.id, approved })}
+              />
+            ))}
+          </div>
         ))}
       </CardContent>
     </Card>

@@ -143,11 +143,43 @@ automationFlowRouter.get("/catalogue", requirePermission(permissions.TICKETS_VIE
  * flow list is: "what automation touched my work, and what did it do" is a fair question for the person
  * whose work it touched.
  */
-automationFlowRouter.get("/runs", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+/**
+ * V12 9.5 — every status a flow run actually reaches, and nothing else.
+ *
+ * Closed for the reason 9.2's agent list is: `status` is a VARCHAR, so an un-validated filter would
+ * accept a typo and answer with an empty list — and an empty list of failures reads as "nothing
+ * failed". Two of these are the flow working rather than failing, which is why the UI labels them
+ * "Stopped by a condition" and "Waiting for a person" instead of lumping them in with FAILED.
+ */
+export const FLOW_RUN_STATUSES = ["RUNNING", "WAITING", "COMPLETED", "STOPPED", "FAILED"] as const;
+export type FlowRunStatus = (typeof FLOW_RUN_STATUSES)[number];
+
+/** Pure, so the route and its test cannot drift. No filter means everything, never nothing. */
+export function buildFlowRunWhere(f: { flowId?: string; status?: FlowRunStatus }): Record<string, unknown> {
+  const where: Record<string, unknown> = {};
+  if (f.flowId) where.flowId = f.flowId;
+  if (f.status) where.status = f.status;
+  return where;
+}
+
+const flowRunQuerySchema = z.object({
+  query: z
+    .object({
+      flowId: z.string().uuid().optional(),
+      status: z.enum(FLOW_RUN_STATUSES).optional(),
+      limit: z.coerce.number().int().min(1).max(50).optional()
+    })
+    .passthrough()
+});
+
+automationFlowRouter.get("/runs", requirePermission(permissions.TICKETS_VIEW), validate(flowRunQuerySchema), async (req, res) => {
   await assertStudioAllowed();
   const limit = Math.min(50, Math.max(1, Number(req.query.limit ?? 20)));
   const runs = await prisma.automationFlowRun.findMany({
-    where: req.query.flowId ? { flowId: String(req.query.flowId) } : {},
+    where: buildFlowRunWhere({
+      flowId: req.query.flowId ? String(req.query.flowId) : undefined,
+      status: req.query.status as FlowRunStatus | undefined
+    }),
     orderBy: { startedAt: "desc" },
     take: limit,
     include: {
