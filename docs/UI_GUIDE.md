@@ -186,7 +186,14 @@ Engineering:
 
 ---
 
-## 10. Timeline zoom
+## 10. Portfolio in 3D
+
+On Plan → Portfolio, **Show 3D** (above the Projects table) draws the projects as spheres: bigger
+for more open work, in each project's colour. Hover one for its name and numbers, click to open its
+tickets. It is off until you switch it on, remembered in this browser, still under reduced motion,
+and absent without WebGL — the table always has everything.
+
+## 11. Timeline zoom
 
 The Timeline (Plan → Timeline) zooms Day, Week, Month, **Quarter** and **Year**. Quarter shows month
 ticks with the quarter named on its first month ("Q4 26"); Year shows quarter ticks only and is an
@@ -194,7 +201,7 @@ overview, not a place to read dates; a one-day task still draws as a mark at eve
 Dragging, dependencies, baselines and the critical path work at every zoom. If you can plan, **Add
 work item** at the foot of the tree opens the New ticket dialog for the project you are viewing.
 
-## 11. Workload measures
+## 12. Workload measures
 
 The Workload board (Plan → Workload, needs the resource permission) has a **Measure** control:
 **Hours booked** (the original: bookings against capacity, with logged hours for comparison),

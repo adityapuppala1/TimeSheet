@@ -4502,6 +4502,8 @@ export interface PortfolioProjectRollup {
   id: string;
   code: string;
   name: string;
+  /** The project's chosen identity colour, if any (V12 7.6: the 3D view draws it). */
+  color?: string | null;
   status: string;
   portfolio: { id: string; code: string; name: string; color: string | null } | null;
   plannedStart: string | null;

@@ -181,7 +181,7 @@ portfolioRouter.get("/rollup", requirePermission(permissions.REPORTS_VIEW), asyn
       ...(scope.unrestricted ? {} : { id: { in: scope.projectIds } })
     },
     select: {
-      id: true, code: true, name: true, status: true, portfolioId: true,
+      id: true, code: true, name: true, color: true, status: true, portfolioId: true,
       budgetAmount: true, budgetCurrency: true, budgetAlertPct: true, billingCurrency: true,
       plannedStartDate: true, plannedEndDate: true,
       portfolio: { select: { id: true, code: true, name: true, color: true } }

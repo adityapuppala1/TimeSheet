@@ -10,6 +10,14 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🪐 Portfolio in 3D, on request
+
+- **Show 3D on the Portfolio page** turns the projects into a slowly turning field of spheres —
+  sized by open work, coloured by each project's colour, named on hover, opened on click. It is
+  off by default and loads its renderer only when you switch it on (the choice is remembered in
+  your browser); under reduced motion the field holds still; without WebGL the table below is
+  untouched. A screen-reader list of the same projects sits beside it.
+
 ### 🎨 Colour and motion
 
 - **A ticket wears its project's colour.** The ticket sheet's header carries a 3px top edge and a

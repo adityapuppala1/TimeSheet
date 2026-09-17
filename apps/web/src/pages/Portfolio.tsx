@@ -16,8 +16,18 @@
  * WHO renders this: `App.tsx` at `/app/portfolio`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Briefcase, Loader2, Lock, Plus, Target, Trash2, TrendingUp, Wrench } from "lucide-react";
-import { useState } from "react";
+import { AlertTriangle, Briefcase, Loader2, Lock, Orbit, Plus, Target, Trash2, TrendingUp, Wrench } from "lucide-react";
+import { PortfolioScene } from "../components/PortfolioScene";
+
+const SHOW_3D_KEY = "timesphere.portfolio-3d";
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { permissions } from "@timesheet/shared";
 import { Badge } from "../components/ui/badge";
@@ -69,6 +79,15 @@ const BAND_CLASS = {
 export function PortfolioPage() {
   const user = useAuthStore((s) => s.user);
   const navigate = useNavigate();
+  const [show3d, setShow3d] = useState(() => readStored(SHOW_3D_KEY) === "1");
+  useEffect(() => {
+    try {
+      if (show3d) localStorage.setItem(SHOW_3D_KEY, "1");
+      else localStorage.removeItem(SHOW_3D_KEY);
+    } catch {
+      /* private mode: the choice lasts the session */
+    }
+  }, [show3d]);
   const queryClient = useQueryClient();
   const canManage = Boolean(user?.permissions.includes(permissions.PORTFOLIOS_MANAGE));
   const canPlan = Boolean(user?.permissions.includes(permissions.PLAN_WRITE));
@@ -264,12 +283,34 @@ export function PortfolioPage() {
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">Projects</CardTitle>
-              <CardDescription>
-                Health is deterministic: red means the forecast exceeds the budget or the schedule runs past the planned
-                end date. Hover a dot to see exactly why.
-              </CardDescription>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <CardTitle className="text-base">Projects</CardTitle>
+                  <CardDescription>
+                    Health is deterministic: red means the forecast exceeds the budget or the schedule runs past the planned
+                    end date. Hover a dot to see exactly why.
+                  </CardDescription>
+                </div>
+                {/* 7.6: the one three.js surface — opt-in, loaded only when shown, remembered per browser. */}
+                <Button
+                  type="button"
+                  variant={show3d ? "default" : "outline"}
+                  size="sm"
+                  className="h-[44px]"
+                  aria-pressed={show3d}
+                  onClick={() => setShow3d((v) => !v)}
+                  data-portfolio-3d-toggle
+                >
+                  <Orbit className="h-4 w-4" />
+                  {show3d ? "Hide 3D" : "Show 3D"}
+                </Button>
+              </div>
             </CardHeader>
+            {show3d && (
+              <CardContent className="pb-2">
+                <PortfolioScene projects={rows} onOpen={(id) => navigate(`/app/tickets?project=${id}`)} />
+              </CardContent>
+            )}
             <CardContent className="overflow-x-auto p-0 sm:p-0">
               <Table>
                 <TableHeader>
