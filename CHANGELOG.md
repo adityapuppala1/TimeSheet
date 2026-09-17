@@ -10,6 +10,13 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🔎 The palette finds changes and documents
+
+- **Type a change's key or a document's title.** The command palette gains Changes and Documents
+  groups beside Tickets, Projects and People: a change reads through the same visibility rule as
+  the ticket it wraps and opens its page; a requirements document is offered to anyone who can
+  open the Studio. A change no longer appears twice, once as a ticket and once as a change.
+
 ### 💬 @mentions in ticket comments
 
 - **Type @ in a comment to mention a project member.** The list offers the people the project

@@ -44,10 +44,25 @@ export interface PersonHit {
   name: string;
   email: string;
 }
+/** A change IS a ticket (change management), so it carries the ticket's key and title. */
+export interface ChangeHit {
+  id: string;
+  key: string;
+  title: string;
+  state: string;
+}
+export interface DocHit {
+  id: string;
+  title: string;
+  status: string;
+}
 export interface QuickSearchResult {
   tickets: TicketHit[];
   projects: ProjectHit[];
   people: PersonHit[];
+  /** V12 8.2: the other two record types a person opens by name. */
+  changes: ChangeHit[];
+  docs: DocHit[];
 }
 
 /**
@@ -64,7 +79,7 @@ export function rankTickets<T extends { key: string; title: string }>(q: string,
 
 export async function quickSearch(req: any, rawQuery: string): Promise<QuickSearchResult> {
   const q = rawQuery.trim().slice(0, SEARCH_MAX_LENGTH);
-  if (q.length < SEARCH_MIN_LENGTH) return { tickets: [], projects: [], people: [] };
+  if (q.length < SEARCH_MIN_LENGTH) return { tickets: [], projects: [], people: [], changes: [], docs: [] };
 
   const scope = await ticketProjectScope(req);
   const projectWhere = scope.unrestricted ? {} : { id: { in: scope.projectIds } };
@@ -72,7 +87,7 @@ export async function quickSearch(req: any, rawQuery: string): Promise<QuickSear
   const canSeeTickets = Boolean(req.user?.permissions?.includes(permissions.TICKETS_VIEW));
   const canManageUsers = Boolean(req.user?.permissions?.includes(permissions.USERS_MANAGE));
 
-  const [projects, tickets, people] = await Promise.all([
+  const [projects, tickets, people, changes, docs] = await Promise.all([
     // A restricted caller with no assignments must get nothing, not everything: `in: []` is what
     // Prisma turns into a false predicate, so the empty list is passed through on purpose.
     prisma.project.findMany({
@@ -91,6 +106,8 @@ export async function quickSearch(req: any, rawQuery: string): Promise<QuickSear
           where: {
             deletedAt: null,
             ...ticketProjectWhere,
+            // A change is a ticket; it is listed under Changes (8.2), not twice.
+            changeRequest: { is: null },
             OR: [{ key: { contains: q } }, { title: { contains: q } }]
           },
           select: { id: true, key: true, title: true, status: true, project: { select: { name: true } } },
@@ -111,12 +128,34 @@ export async function quickSearch(req: any, rawQuery: string): Promise<QuickSear
           orderBy: { name: "asc" },
           take: SEARCH_LIMIT
         })
+      : Promise.resolve([]),
+    // Changes read through the SAME ticket scope the change routes enforce — a change is a ticket
+    // and can never be more visible than the ticket it wraps.
+    prisma.changeRequest.findMany({
+      where: {
+        ticket: { deletedAt: null, ...ticketProjectWhere, OR: [{ key: { contains: q } }, { title: { contains: q } }] }
+      },
+      select: { id: true, state: true, ticket: { select: { key: true, title: true } } },
+      orderBy: { ticket: { updatedAt: "desc" } },
+      take: SEARCH_LIMIT
+    }),
+    // Requirements documents: the Studio needs tickets:view and lists documents unscoped (they are
+    // workspace documents, optionally attached to a project) — the palette mirrors exactly that.
+    canSeeTickets
+      ? prisma.requirementsDocument.findMany({
+          where: { title: { contains: q } },
+          select: { id: true, title: true, status: true },
+          orderBy: { createdAt: "desc" },
+          take: SEARCH_LIMIT
+        })
       : Promise.resolve([])
   ]);
 
   return {
     projects,
     people,
+    changes: changes.map((c) => ({ id: c.id, key: c.ticket.key, title: c.ticket.title, state: c.state })),
+    docs,
     tickets: rankTickets(q, tickets)
       .slice(0, SEARCH_LIMIT)
       .map((t) => ({ id: t.id, key: t.key, title: t.title, status: t.status, projectName: t.project.name }))

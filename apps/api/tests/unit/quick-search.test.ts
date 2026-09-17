@@ -47,7 +47,9 @@ beforeEach(() => {
     ticket: { findMany: vi.fn().mockResolvedValue([TICKET]) },
     project: { findMany: vi.fn().mockResolvedValue([{ id: "p1", code: "WEB", name: "Web" }]) },
     userProjectAssignment: { findMany: vi.fn().mockResolvedValue([{ projectId: "p1" }]) },
-    user: { findMany: vi.fn().mockResolvedValue([]) }
+    user: { findMany: vi.fn().mockResolvedValue([]) },
+    changeRequest: { findMany: vi.fn().mockResolvedValue([{ id: "c1", state: "ASSESSING", ticket: { key: "WEB-9", title: "Rotate the payments key" } }]) },
+    requirementsDocument: { findMany: vi.fn().mockResolvedValue([{ id: "d1", title: "Onboarding PRD", status: "DRAFTING" }]) }
   } as unknown as PrismaClient;
 });
 
@@ -90,7 +92,7 @@ describe("scope", () => {
 describe("the two rules a person can feel", () => {
   it("asks nothing under two characters", async () => {
     const res = await request(buildApp()).get("/api/search?q=w");
-    expect(res.body).toEqual({ tickets: [], projects: [], people: [] });
+    expect(res.body).toEqual({ tickets: [], projects: [], people: [], changes: [], docs: [] });
     expect(client.ticket.findMany).not.toHaveBeenCalled();
     expect(client.project.findMany).not.toHaveBeenCalled();
   });
@@ -122,5 +124,28 @@ describe("people", () => {
     expect(res.body.people).toEqual([{ id: "u1", name: "Ana Reyes", email: "ana@x.io" }]);
     const where = (vi.mocked(client.user.findMany).mock.calls[0][0] as any).where;
     expect(where).toMatchObject({ deletedAt: null, status: "ACTIVE", isAgent: false });
+  });
+});
+
+/* V12 8.2 — changes and documents in the palette, each under the rule its own page enforces. */
+describe("changes and documents", () => {
+  it("searches changes through the ticket scope and shapes them as key/title/state", async () => {
+    const res = await request(buildApp()).get("/api/search?q=pay");
+    expect(res.status).toBe(200);
+    const where = (vi.mocked((client as any).changeRequest.findMany).mock.calls[0][0] as any).where;
+    expect(where.ticket.projectId).toEqual({ in: ["p1"] });
+    expect(res.body.changes).toEqual([{ id: "c1", key: "WEB-9", title: "Rotate the payments key", state: "ASSESSING" }]);
+    // …and the ticket query leaves change-backed tickets to the Changes group.
+    expect(ticketWhere().changeRequest).toEqual({ is: null });
+  });
+  it("lists documents only with tickets:view, exactly as the Studio does", async () => {
+    const withView = await request(buildApp()).get("/api/search?q=onb");
+    expect(withView.body.docs).toEqual([{ id: "d1", title: "Onboarding PRD", status: "DRAFTING" }]);
+    actor.permissions = [];
+    vi.mocked((client as any).requirementsDocument.findMany).mockClear();
+    const without = await request(buildApp()).get("/api/search?q=onb");
+    expect(without.status).toBe(200);
+    expect(without.body.docs).toEqual([]);
+    expect((client as any).requirementsDocument.findMany).not.toHaveBeenCalled();
   });
 });

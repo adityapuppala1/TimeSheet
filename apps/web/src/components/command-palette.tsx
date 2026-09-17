@@ -45,7 +45,10 @@ import {
   TrendingUp,
   UserRound,
   Users,
-  Users2, CircleHelp, Keyboard } from "lucide-react";
+  Users2,
+  CircleHelp,
+  Keyboard,
+  BookOpen } from "lucide-react";
 import { ticketsHref } from "../lib/project-tree";
 import { comboForRoute, formatCombo, SHORTCUTS } from "../lib/shortcuts";
 import { permissions } from "@timesheet/shared";
@@ -169,6 +172,9 @@ export function CommandPalette({ open, onOpenChange, onOpenShortcuts }: Props) {
   const ticketHits = records.data?.tickets ?? [];
   const projectHits = records.data?.projects ?? [];
   const peopleHits = records.data?.people ?? [];
+  const changeHits = records.data?.changes ?? [];
+  const docHits = records.data?.docs ?? [];
+  const anyHit = ticketHits.length + projectHits.length + peopleHits.length + changeHits.length + docHits.length > 0;
 
   const visibleRoutes = useMemo(
     () =>
@@ -258,7 +264,30 @@ export function CommandPalette({ open, onOpenChange, onOpenShortcuts }: Props) {
             ))}
           </CommandGroup>
         )}
-        {(ticketHits.length > 0 || projectHits.length > 0 || peopleHits.length > 0) && <CommandSeparator />}
+        {changeHits.length > 0 && (
+          <CommandGroup heading="Changes">
+            {changeHits.map((c) => (
+              <CommandItem key={c.id} value={`change ${c.key} ${c.title}`} keywords={[debounced]} onSelect={() => jump(`/app/changes/${c.id}`)}>
+                <Workflow className="text-muted-foreground" />
+                <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground">{c.key}</span>
+                <span className="truncate">{c.title}</span>
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">{c.state.replace(/_/g, " ").toLowerCase()}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
+        {docHits.length > 0 && (
+          <CommandGroup heading="Documents">
+            {docHits.map((d) => (
+              <CommandItem key={d.id} value={`doc ${d.title}`} keywords={[debounced]} onSelect={() => jump(`/app/requirements/${d.id}`)}>
+                <BookOpen className="text-muted-foreground" />
+                <span className="truncate">{d.title}</span>
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">{d.status.replace(/_/g, " ").toLowerCase()}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
+        {anyHit && <CommandSeparator />}
         <CommandGroup heading="Navigate">
           {visibleRoutes.map((route) => (
             <CommandItem key={route.to} value={`${route.label} ${route.hint ?? ""}`} onSelect={() => jump(route.to)}>

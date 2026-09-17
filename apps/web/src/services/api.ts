@@ -3275,6 +3275,10 @@ export interface QuickSearchResult {
   projects: Array<{ id: string; code: string; name: string }>;
   /** Only for callers who may manage users (the Users page is the deep-link target). */
   people: Array<{ id: string; name: string; email: string }>;
+  /** V12 8.2: a change is a ticket — key and title come from it; opens /app/changes/:id. */
+  changes: Array<{ id: string; key: string; title: string; state: string }>;
+  /** Requirements documents by title; opens /app/requirements/:id. */
+  docs: Array<{ id: string; title: string; status: string }>;
 }
 
 export type SprintStatusValue = "PLANNED" | "ACTIVE" | "COMPLETED";
