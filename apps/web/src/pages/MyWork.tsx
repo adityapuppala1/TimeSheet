@@ -15,15 +15,19 @@
  *
  * WHO renders this: `App.tsx` at `/app/my-work`.
  */
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CalendarClock, CheckCircle2, ChevronRight, Diamond, ListTodo, Lock, MessageSquare } from "lucide-react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { AlertTriangle, CalendarClock, CheckCircle2, ChevronRight, Copy, Diamond, ListTodo, Lock, MessageSquare, RefreshCw, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Button } from "../components/ui/button";
 import { Progress } from "../components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { toast } from "../components/ui/toaster";
+import { useState } from "react";
 import { Skeleton } from "../components/ui/skeleton";
 import { cn } from "../lib/utils";
-import { planApi, type MyWorkItem } from "../services/api";
+import { aiApi, planApi, type MyWorkItem } from "../services/api";
 
 const PRIORITY_VARIANT: Record<string, "secondary" | "info" | "warning" | "destructive"> = {
   LOW: "secondary",
@@ -154,7 +158,9 @@ export function MyWorkPage() {
         </Card>
       ) : (
         <>
-          {/* V12 8.3: comments assigned to me — action items, above the dated work. */}
+          {/* V12 9.1: "write my stand-up" — the card the AI StandUp reference puts on My Tasks. */}
+      <StandupCard />
+      {/* V12 8.3: comments assigned to me — action items, above the dated work. */}
           {assigned.length > 0 && (
             <Card data-assigned-comments>
               <CardHeader className="pb-3">
@@ -205,5 +211,93 @@ export function MyWorkPage() {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * V12 9.1 — your own stand-up, phrased by the AI from facts the API gathered under your identity.
+ * The availability probe is free and answers first, so a workspace with AI status writing switched
+ * off simply never draws the card rather than offering a button that 403s.
+ */
+function StandupCard() {
+  const [hours, setHours] = useState<"24" | "72" | "168">("72");
+  const [text, setText] = useState("");
+  const [emptyWindow, setEmptyWindow] = useState(false);
+  const [writtenAt, setWrittenAt] = useState<Date | null>(null);
+  const availability = useQuery({ queryKey: ["ai", "standup", "availability"], queryFn: () => aiApi.standupAvailability() });
+  const write = useMutation({
+    mutationFn: () => aiApi.standup(Number(hours) as 24 | 72 | 168),
+    onSuccess: (res) => {
+      setText(res.standup);
+      setEmptyWindow(res.empty);
+      setWrittenAt(new Date());
+    },
+    onError: () => toast.error("Could not write your stand-up", { description: "Try again in a moment." })
+  });
+
+  if (!availability.data?.available) return null;
+
+  return (
+    <Card data-standup>
+      <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
+        <div className="grid gap-1">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Sparkles className="h-4 w-4 text-primary" />
+            Your stand-up
+          </CardTitle>
+          <CardDescription>
+            Written from your own tickets, comments and logged hours — nothing else, and nothing invented.
+          </CardDescription>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={hours} onValueChange={(v) => setHours(v as typeof hours)}>
+            <SelectTrigger className="h-[44px] w-[150px]" aria-label="Stand-up period" data-standup-period>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="24">Last 24 hours</SelectItem>
+              <SelectItem value="72">Last 3 days</SelectItem>
+              <SelectItem value="168">Last 7 days</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button variant="ai" size="sm" className="h-[44px]" disabled={write.isPending} onClick={() => write.mutate()} data-standup-write>
+            <RefreshCw className={cn("h-3.5 w-3.5", write.isPending && "motion-safe:animate-spin")} />
+            {text || emptyWindow ? "Regenerate" : "Write it"}
+          </Button>
+          {text && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-[44px]"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(text);
+                  toast.success("Stand-up copied");
+                } catch {
+                  toast.error("Could not copy", { description: "Select the text and copy it by hand." });
+                }
+              }}
+            >
+              <Copy className="h-3.5 w-3.5" />
+              Copy
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-2">
+        {emptyWindow && (
+          <p className="text-sm text-muted-foreground">
+            Nothing recorded in that window — no ticket moved, no comment, no hours. Try a longer period.
+          </p>
+        )}
+        {text && <p className="whitespace-pre-wrap text-sm" data-standup-text>{text}</p>}
+        {!text && !emptyWindow && !write.isPending && (
+          <p className="text-sm text-muted-foreground">Pick a period and press Write it.</p>
+        )}
+        {writtenAt && !write.isPending && (
+          <p className="text-xs text-muted-foreground">Written {writtenAt.toLocaleTimeString()}. It is a draft — read it before you send it.</p>
+        )}
+      </CardContent>
+    </Card>
   );
 }

@@ -20,6 +20,8 @@ import {
   answerWorkspaceQuestion,
   classifyTicket,
   findDuplicateTickets,
+  generateStandup,
+  getStandupAvailability,
   getTextRefineAvailability,
   improveText,
   refineText,
@@ -46,6 +48,13 @@ import { enqueueEvalRun, getEvalRun, isReplayable, listEvalRuns } from "../servi
 import { setInteractionFeedback } from "../services/ai-quality.service.js";
 import { computeTimesheetCost } from "../services/billing-rate.service.js";
 import { assertTicketVisible, ticketProjectScope } from "../services/ticket.service.js";
+import {
+  formatStandupFacts,
+  gatherStandupFacts,
+  isStandupWindow,
+  standupIsEmpty,
+  standupPeriodLabel
+} from "../services/standup.service.js";
 
 import { getAiOverview } from "../services/ai-overview.service.js";
 
@@ -60,6 +69,11 @@ aiRouter.use(requireAuth);
  */
 aiRouter.get("/text/refine/availability", async (_req, res) => {
   res.json(await getTextRefineAvailability());
+});
+
+/** V12 9.1: the stand-up card's own probe, free and above the limiter for the same reason. */
+aiRouter.get("/standup/availability", async (_req, res) => {
+  res.json(await getStandupAvailability());
 });
 
 // AI calls cost real money and take longer than a normal request — a tighter cap
@@ -202,6 +216,33 @@ aiRouter.post("/tickets/:id/summarize", requirePermission(permissions.TICKETS_VI
     userId: req.user!.id
   });
   res.json(result);
+});
+
+/**
+ * V12 9.1 — "write my stand-up", for YOURSELF. No permission beyond being signed in: every fact it
+ * can reach is the caller's own work, gathered under their own id in `standup.service.ts`. An empty
+ * window is answered here, before the model, so an idle day costs nothing.
+ */
+const standupSchema = z.object({ body: z.object({ sinceHours: z.number().int() }) });
+
+aiRouter.post("/standup", validate(standupSchema), async (req, res) => {
+  const hours = Number(req.body.sinceHours);
+  if (!isStandupWindow(hours)) throw new AppError(422, "Pick 24 hours, 3 days or 7 days.");
+
+  const facts = await gatherStandupFacts(req.user!.id, hours);
+  const periodLabel = standupPeriodLabel(hours);
+  if (standupIsEmpty(facts)) {
+    res.json({ standup: "", empty: true, periodLabel });
+    return;
+  }
+
+  const result = await generateStandup({
+    facts: formatStandupFacts(facts),
+    periodLabel,
+    personName: req.user!.name,
+    userId: req.user!.id
+  });
+  res.json({ standup: result.standup, empty: false, periodLabel });
 });
 
 const askSchema = z.object({ body: z.object({ question: z.string().min(3).max(500) }) });

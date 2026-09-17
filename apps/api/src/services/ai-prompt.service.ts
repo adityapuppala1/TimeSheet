@@ -120,6 +120,29 @@ Respond with ONLY the cleaned-up text — no preamble, no explanation, no quotat
 {{thread}}`
   },
   {
+    feature: "standup",
+    label: "Personal stand-up",
+    description: "Turns one person's own recent activity into a short first-person stand-up.",
+    placeholders: [
+      { name: "personName", description: "Who the stand-up is for. Always the caller.", sample: "Dev Patel" },
+      { name: "periodLabel", description: "The window in words.", sample: "the last 3 days" },
+      {
+        name: "facts",
+        description: "Everything the summary may use: tickets that moved, comments written, hours logged, comments still assigned. Gathered from the database, never from the model.",
+        sample: "Tickets assigned to me that moved:\n- [WEB-12] Checkout returns 500 (now in progress)\n\nComments I wrote: (none)"
+      }
+    ],
+    required: ["facts"],
+    defaultTemplate: `Write {{personName}}'s stand-up for {{periodLabel}}, in the first person.
+
+Use ONLY the facts below. Never invent a ticket, a number, a person or a next step that is not there — if something is "(none)", either say nothing about it or say plainly that there was none.
+
+Structure it as three short labelled lines or sections: what I finished or moved, what I am working on, and anything waiting on me. Keep it under 120 words, keep ticket keys exactly as written in brackets, and write it so it can be pasted into a team channel as-is — no greeting, no sign-off, no headings beyond those three labels.
+
+Facts:
+{{facts}}`
+  },
+  {
     feature: "ask_ai",
     label: "Ask AI",
     description: "Answers a free-text question about the backlog, grounded in the tickets the asker can see.",

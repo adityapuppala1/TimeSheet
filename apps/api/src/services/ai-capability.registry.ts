@@ -413,6 +413,18 @@ const CAPABILITIES: ReadonlyArray<AiCapabilitySpec> = [
     tools: []
   },
 
+  {
+    id: "standup",
+    title: "Personal stand-up",
+    description: "Phrases your own recent activity as a short stand-up you can paste into a channel.",
+    featureToggle: "statusReportEnabled",
+    maxLevel: "SUGGEST",
+    ceilingReason:
+      "A stand-up is written in the first person and sent to a team as if the person wrote it. The same argument as Refine with AI applies, only louder: nothing that speaks AS somebody may post on its own.",
+    actsOnUntrustedInput: false,
+    tools: []
+  },
+
   // ── Text a person is about to put their name on. Suggestion only, always.
   {
     id: "text_refine",

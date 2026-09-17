@@ -409,6 +409,21 @@ export const HELP_ARTICLES: HelpArticle[] = [
     keywords: ["ask ai", "assistant", "chat", "question", "slash", "capabilities", "chart"]
   },
   {
+    id: "standup",
+    category: "AI",
+    title: "Write your stand-up",
+    where: "Sidebar → My work → Your stand-up",
+    when: "Before a stand-up or a weekly check-in, when you want a recap of your own work without writing it from memory.",
+    steps: [
+      "Pick a period: the last 24 hours, 3 days or 7 days.",
+      "Press Write it. The recap uses only your tickets, your comments, your logged hours and the comments assigned to you.",
+      "Press Regenerate after more work lands, and Copy to paste it into your team's channel.",
+      "If the period held nothing, it says so rather than inventing something — try a longer one."
+    ],
+    notes: "It is a draft written in your voice, so read it before you send it. The card only appears when a super admin has AI status writing turned on and the workspace's AI budget still has room. It summarises your own work only; somebody else's is not offered.",
+    keywords: ["standup", "stand-up", "summary", "recap", "my work", "ai", "daily"]
+  },
+  {
     id: "requirements-studio",
     category: "AI",
     title: "Requirements Studio: idea → PRD → tickets",

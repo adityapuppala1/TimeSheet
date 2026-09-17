@@ -10,6 +10,20 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🗣️ Write my stand-up
+
+- **A stand-up card on My work.** Pick a period (24 hours, 3 days, 7 days) and the AI writes a short
+  first-person recap: what you moved, what you are working on, and what is waiting on you. Regenerate
+  it, copy it, paste it into your team's channel. It is a draft with your name on it, so it is never
+  posted anywhere for you.
+- **It can only say what happened.** The facts are gathered from your own tickets, your own comments,
+  your own logged hours and the comments assigned to you — the model is handed that block and asked
+  only to phrase it. A window with nothing in it is answered without calling the model at all, and a
+  model that answers with nothing is reported as a failure rather than a blank card.
+- **No new switch and no migration.** The card appears where "AI status writing" is already on (the
+  same setting behind a project's stakeholder update), and disappears cleanly when it is off or the
+  month's AI budget is spent.
+
 ## 5.5.0 — records that know about each other — 2026-09-17
 
 ### 🗂️ The Requirements Studio list filters and sorts

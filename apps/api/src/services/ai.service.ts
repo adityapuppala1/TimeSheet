@@ -3279,6 +3279,61 @@ ${params.projectBreakdown}` : "",
   return { report: result.text };
 }
 
+/* --------------------------- Personal stand-up (V12 9.1) ---------------------------------- */
+
+/**
+ * "Write my stand-up" — the same bargain `status_report` strikes, one person wide: the facts are
+ * gathered from the database by `standup.service.ts` and this only phrases them. It rides
+ * `statusReportEnabled` rather than adding a switch, because that toggle already means "let the AI
+ * write a status narrative out of numbers it was given", and one switch for one idea is what the
+ * capability registry's header asks for.
+ *
+ * The caller checks `standupIsEmpty` first — an idle window must not cost a model call.
+ */
+export async function generateStandup(params: { facts: string; periodLabel: string; personName: string; userId?: string }): Promise<{ standup: string }> {
+  const { settings } = await preflight("statusReportEnabled");
+
+  const p = await resolvePrompt("standup", { facts: params.facts, periodLabel: params.periodLabel, personName: params.personName });
+
+  const startedAt = Date.now();
+  const result = await callChat(settings, { feature: "standup", model: settings.model, maxTokens: 700, prompt: p.text });
+
+  await logAIUsage({
+    feature: "standup",
+    params: { periodLabel: params.periodLabel, facts: params.facts },
+    model: result.model,
+    provider: result.provider,
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
+    userId: params.userId,
+    promptVersionId: p.promptVersionId,
+    promptFallbackReason: p.fallbackReason
+  });
+
+  // An empty answer is a failure, not an empty week — the caller already ruled the empty week out
+  // before spending this call. Logged above first, exactly as `refineText` does: the request cost
+  // money whatever came back, and the AI activity log is where that is answered for.
+  const text = result.text.trim();
+  if (!text) throw new AppError(502, "The AI returned an empty stand-up. Try again.");
+
+  return { standup: text };
+}
+
+/** Same shape as the Refine button's availability probe, and free for the same reason: the card
+ *  asks on mount, and a card that cannot be drawn must not consume the AI rate limit to find out. */
+export async function getStandupAvailability(): Promise<RefineAvailability> {
+  try {
+    await preflight("statusReportEnabled");
+    return { available: true, reason: "ok", message: "" };
+  } catch (error) {
+    const status = error instanceof AppError ? error.statusCode : 0;
+    if (status === 403) return { available: false, reason: "disabled", message: "AI status writing is turned off for this workspace." };
+    if (status === 402) return { available: false, reason: "budget", message: "This month's AI budget has been used up. It resets at the start of next month." };
+    return { available: false, reason: "unavailable", message: "AI is unavailable right now." };
+  }
+}
+
 /* --------------------------- Weekly AI/ML practice update --------------------------------- */
 
 export interface PracticeUpdateNarrative {

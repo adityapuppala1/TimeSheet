@@ -127,7 +127,7 @@ const TOUR = [
     label: "Dashboard",
     icon: LayoutDashboard,
     title: "Everyone opens to what's theirs",
-    body: "An engineer sees today's timeline and what's still unlogged. A manager sees the queue waiting on them and which SLA timers are running down. Same page, different job — nobody hunts through menus for their own work.",
+    body: "An engineer sees today's timeline and what's still unlogged. A manager sees the queue waiting on them and which SLA timers are running down. Same page, different job — nobody hunts through menus for their own work. My work will also write your stand-up: a short recap of your own tickets, comments and hours over the last day or week, from those records and nothing else.",
     image: "/product/dashboard.png"
   },
   {

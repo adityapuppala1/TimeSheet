@@ -41,6 +41,7 @@ import {
   judgeAnswerEquivalence,
   planAgentStep,
   refineText,
+  generateStandup,
   summarizeComments,
   summarizePullRequest,
   suggestStaleTicketNextAction
@@ -157,6 +158,11 @@ const REPLAYERS: Record<string, Replayer> = {
       comments: z.array(z.object({ authorName: z.string(), body: z.string(), createdAt: z.coerce.date() }))
     }),
     invoke: async (p) => (await summarizeComments(p)).summary
+  },
+  standup: {
+    structured: false,
+    schema: z.object({ facts: z.string(), periodLabel: z.string(), personName: z.string() }),
+    invoke: async (p) => (await generateStandup(p)).standup
   },
   ask_ai: {
     structured: false,

@@ -123,6 +123,11 @@ beside the tick and the assigner hears. The Comments tab badge counts unresolved
 the Studio's list to relate it. A document page shows **Related tickets** (add by key, open, unlink),
 reading through the same project scope as the Tickets page.
 
+**Your stand-up.** At the top of **My work**, pick a period and press **Write it**: the AI phrases
+your own recent tickets, comments and logged hours as a short first-person stand-up you can copy.
+Nothing is invented — an empty period says so instead. The card is only there when the workspace has
+AI status writing switched on.
+
 **Studio list.** The Requirements Studio list has a search box, a **Show** menu (All documents,
 Created by me, Archived), a type filter and a sort. Show, type and sort are remembered in this
 browser. Rows name the creator and count related tickets.

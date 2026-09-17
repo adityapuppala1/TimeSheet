@@ -37,7 +37,8 @@ const FEATURES = [
   { value: "comment_summary", label: "Comment summary" },
   { value: "writing_assistant", label: "Writing assistant" },
   { value: "text_refine", label: "Refine text" },
-  { value: "ask_ai", label: "Ask AI" }
+  { value: "ask_ai", label: "Ask AI" },
+  { value: "standup", label: "Personal stand-up" }
 ];
 
 function featureLabel(value: string): string {
