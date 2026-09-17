@@ -3014,6 +3014,10 @@ export interface TicketComment {
   body: string;
   createdAt: string;
   author: TicketUserSummary;
+  /** V12 8.3: an assigned comment is an action item; resolved carries who ticked it and when. */
+  assignee?: TicketUserSummary | null;
+  resolvedAt?: string | null;
+  resolvedBy?: TicketUserSummary | null;
 }
 
 export interface TicketAttachmentRow {
@@ -3380,7 +3384,11 @@ export const ticketApi = {
   activity: async (id: string) => (await api.get<AuditEntry[]>(`/tickets/${id}/activity`)).data,
   comments: {
     list: async (id: string) => (await api.get<TicketComment[]>(`/tickets/${id}/comments`)).data,
-    add: async (id: string, body: string) => (await api.post<TicketComment>(`/tickets/${id}/comments`, { body })).data
+    add: async (ticketId: string, body: string, assigneeId?: string | null) =>
+      (await api.post<TicketComment>(`/tickets/${ticketId}/comments`, { body, ...(assigneeId ? { assigneeId } : {}) })).data,
+    /** V12 8.3: assign (or un-assign with null) and resolve / reopen. */
+    patch: async (ticketId: string, commentId: string, payload: { assigneeId?: string | null; resolved?: boolean }) =>
+      (await api.patch<TicketComment>(`/tickets/${ticketId}/comments/${commentId}`, payload)).data,
   },
   attachments: {
     upload: async (id: string, files: File[]) => {
@@ -4408,7 +4416,19 @@ export interface MyWorkItem {
   blockers: Array<{ id: string; key: string; title: string; status: string }>;
 }
 
+export interface AssignedCommentItem {
+  id: string;
+  ticketId: string;
+  ticketKey: string;
+  ticketTitle: string;
+  excerpt: string;
+  author: { id: string; name: string };
+  createdAt: string;
+}
+
 export interface MyWork {
+  /** V12 8.3: comments assigned to you and not yet resolved. */
+  assignedComments: AssignedCommentItem[];
   overdue: MyWorkItem[];
   today: MyWorkItem[];
   thisWeek: MyWorkItem[];

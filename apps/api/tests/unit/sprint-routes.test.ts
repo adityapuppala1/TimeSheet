@@ -80,7 +80,11 @@ beforeEach(() => {
     },
     auditLog: { findMany: vi.fn().mockResolvedValue([]) },
     project: { update: vi.fn().mockResolvedValue({ code: "X", ticketSeq: 7 }) },
-    ticketComment: { create: vi.fn().mockImplementation(async ({ data }: any) => ({ id: "c1", ...data, author: { id: "user-1", name: "Lead" }, createdAt: new Date() })) },
+    ticketComment: {
+      create: vi.fn().mockImplementation(async ({ data }: any) => ({ id: "c1", ...data, author: { id: "user-1", name: "Lead" }, createdAt: new Date() })),
+      findFirst: vi.fn().mockResolvedValue({ id: "c1", ticketId: "11111111-1111-4111-8111-111111111111", authorId: "author-9", body: "<p>please check</p>", assigneeId: "44444444-4444-4444-8444-444444444444", resolvedAt: null }),
+      update: vi.fn().mockImplementation(async ({ data }: any) => ({ id: "c1", ...data }))
+    },
     $transaction: (fn: (tx: unknown) => Promise<unknown>) => fn(client),
     // The lead is on project 3333… only.
     userProjectAssignment: { findMany: vi.fn().mockResolvedValue([{ projectId: "33333333-3333-4333-8333-333333333333" }]), findFirst: vi.fn().mockResolvedValue({ id: "a" }) },
@@ -227,5 +231,34 @@ describe("@mentions in a comment", () => {
     const res = await request(buildApp()).post(`/api/tickets/${TICKET.id}/comments`).send({ body: `<p><span data-mention-id="${STRANGER}">@Nobody</span></p>` });
     expect(res.status).toBe(201);
     expect(notifySpy.mock.calls.some((c) => c[0].userId === STRANGER)).toBe(false);
+  });
+});
+
+/* V12 8.3 — assigned comments: assign notifies the assignee; resolve notifies the assigner; only members. */
+describe("assigned comments", () => {
+  const MEMBER = "44444444-4444-4444-8444-444444444444";
+  it("POST with assigneeId notifies the assignee once, under ticket.comment_assigned", async () => {
+    notifySpy.mockClear();
+    const res = await request(buildApp()).post(`/api/tickets/${TICKET.id}/comments`).send({ body: "<p>please check</p>", assigneeId: MEMBER });
+    expect(res.status).toBe(201);
+    const cats = notifySpy.mock.calls.map((c) => c[0]).filter((n) => n.userId === MEMBER).map((n) => n.category);
+    expect(cats).toEqual(["ticket.comment_assigned"]);
+  });
+  it("refuses assigning to someone who is not on the project", async () => {
+    vi.mocked(client.userProjectAssignment.findFirst).mockResolvedValueOnce(null as never);
+    const res = await request(buildApp()).post(`/api/tickets/${TICKET.id}/comments`).send({ body: "<p>x</p>", assigneeId: "55555555-5555-4555-8555-555555555555" });
+    expect(res.status).toBe(422);
+    expect(res.body.message).toMatch(/not on this project/);
+  });
+  it("PATCH resolved notifies the comment's author with the resolver's name", async () => {
+    notifySpy.mockClear();
+    const res = await request(buildApp()).patch(`/api/tickets/${TICKET.id}/comments/c1`.replace("c1", "66666666-6666-4666-8666-666666666666")).send({ resolved: true });
+    expect(res.status).toBe(200);
+    const toAuthor = notifySpy.mock.calls.map((c) => c[0]).find((n) => n.userId === "author-9");
+    expect(toAuthor?.category).toBe("ticket.comment_resolved");
+    expect(toAuthor?.title).toMatch(/Lead resolved your comment on X-1/);
+    const data = (vi.mocked(client.ticketComment.update).mock.calls[0][0] as any).data;
+    expect(data.resolvedById).toBe("user-1");
+    expect(data.resolvedAt).toBeInstanceOf(Date);
   });
 });

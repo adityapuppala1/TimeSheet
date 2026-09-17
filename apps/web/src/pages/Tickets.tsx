@@ -41,6 +41,7 @@ import {
   ChevronUp,
   Eye,
   EyeOff,
+  UserRound,
   PanelRightClose,
   PanelRightOpen,
   GanttChartSquare,
@@ -2088,7 +2089,7 @@ function TicketDetailSheet({
             >
               <Tabs defaultValue="comments" className="grid gap-3">
                 <TabsList>
-                  <TabsTrigger value="comments"><MessageSquare className="h-3.5 w-3.5" />Comments ({ticket.comments.length})</TabsTrigger>
+                  <TabsTrigger value="comments"><MessageSquare className="h-3.5 w-3.5" />Comments ({ticket.comments.length}){ticket.comments.some((c) => c.assignee && !c.resolvedAt) && <span className="ml-1 rounded-full bg-warning/15 px-1.5 text-[10px] font-semibold text-warning" title="Unresolved assigned comments">{ticket.comments.filter((c) => c.assignee && !c.resolvedAt).length}</span>}</TabsTrigger>
                   {/* Second, immediately after Comments. The two are read together — a comment
                       almost always refers to a file, and a file almost always needs a comment —
                       and Files used to sit eighth, past four conditional tabs, which is far
@@ -2190,6 +2191,16 @@ function CommentsPanel({
   onPosted: () => void;
 }) {
   const [body, setBody] = useState("");
+  const [assignTo, setAssignTo] = useState<string>("");
+  const queryClientForComments = useQueryClient();
+  const patchComment = useMutation({
+    mutationFn: (args: { commentId: string; payload: { assigneeId?: string | null; resolved?: boolean } }) => ticketApi.comments.patch(ticketId, args.commentId, args.payload),
+    onSuccess: () => {
+      onPosted();
+      queryClientForComments.invalidateQueries({ queryKey: ["plan", "my-work"] });
+    },
+    onError: (err: any) => toast.error("Could not update the comment", { description: serverMessage(err, "Try again.") })
+  });
   // V12 8.1: who can be @mentioned — the project's members, the same list the assignee picker
   // shows, so the role model decides who is offered (cached under the same query key).
   const members = useQuery({ queryKey: ["project-assignments", projectId], queryFn: () => projectApi.assignments(projectId) });
@@ -2199,9 +2210,10 @@ function CommentsPanel({
   );
   const [showSummary, setShowSummary] = useState(false);
   const post = useMutation({
-    mutationFn: () => ticketApi.comments.add(ticketId, body),
+    mutationFn: () => ticketApi.comments.add(ticketId, body, assignTo || null),
     onSuccess: () => {
       setBody("");
+      setAssignTo("");
       onPosted();
     },
     onError: (err: any) => toast.error("Could not post comment", { description: serverMessage(err, "Try again.") })
@@ -2255,6 +2267,31 @@ function CommentsPanel({
                 <span>{new Date(c.createdAt).toLocaleString()}</span>
               </div>
               <div className="prose-sm text-sm" dangerouslySetInnerHTML={safeHtml(c.body)} />
+              {/* V12 8.3: an assigned comment is an action item — who owns it, and a Resolve tick
+                  anyone who can see the ticket may use; the resolver's name shows beside it. */}
+              {c.assignee && (
+                <div className="mt-1 flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2 text-xs" data-assigned-comment={c.id}>
+                  <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                    <UserRound className="h-3.5 w-3.5" aria-hidden="true" />
+                    Assigned to <span className="font-medium text-foreground">{c.assignee.name}</span>
+                  </span>
+                  <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-[hsl(var(--primary))]"
+                      checked={Boolean(c.resolvedAt)}
+                      disabled={patchComment.isPending}
+                      onChange={(e) => patchComment.mutate({ commentId: c.id, payload: { resolved: e.target.checked } })}
+                      aria-label={c.resolvedAt ? "Reopen this comment" : "Resolve this comment"}
+                    />
+                    {c.resolvedAt ? (
+                      <span className="text-success">Resolved{c.resolvedBy ? ` by ${c.resolvedBy.name}` : ""}</span>
+                    ) : (
+                      <span>Resolve</span>
+                    )}
+                  </label>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -2274,9 +2311,23 @@ function CommentsPanel({
         mentions={mentionCandidates}
       />
       <AiRefinePanel state={refineComment} />
-      <Button size="sm" className="justify-self-end" disabled={plainLength === 0 || post.isPending} onClick={() => post.mutate()}>
-        Post comment
-      </Button>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {/* V12 8.3: "Assign to" turns the comment into an action item for a project member. */}
+        <Select value={assignTo || "none"} onValueChange={(v) => setAssignTo(v === "none" ? "" : v)}>
+          <SelectTrigger className="h-[44px] w-[200px]" aria-label="Assign this comment to" data-comment-assign>
+            <SelectValue placeholder="Assign to (optional)" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">Not assigned</SelectItem>
+            {mentionCandidates.map((m) => (
+              <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button size="sm" className="h-[44px]" disabled={plainLength === 0 || post.isPending} onClick={() => post.mutate()}>
+          Post comment
+        </Button>
+      </div>
     </div>
   );
 }

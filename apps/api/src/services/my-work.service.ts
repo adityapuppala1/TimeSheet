@@ -15,6 +15,7 @@
  * WHO CALLS THIS: `controllers/plan.controller.ts` (`/my-work`) and `services/inbox.service.ts`.
  */
 import { prisma } from "../config/prisma.js";
+import { htmlToPlainText } from "../utils/sanitize.js";
 import { dayKey, legacyCategory, toDay } from "./plan-schedule.service.js";
 
 export interface MyWorkItem {
@@ -39,7 +40,19 @@ export interface MyWorkItem {
   blockers: Array<{ id: string; key: string; title: string; status: string }>;
 }
 
+/** V12 8.3: a comment assigned to this person and not yet resolved — an action item. */
+export interface AssignedCommentItem {
+  id: string;
+  ticketId: string;
+  ticketKey: string;
+  ticketTitle: string;
+  excerpt: string;
+  author: { id: string; name: string };
+  createdAt: string;
+}
+
 export interface MyWork {
+  assignedComments: AssignedCommentItem[];
   overdue: MyWorkItem[];
   today: MyWorkItem[];
   thisWeek: MyWorkItem[];
@@ -106,7 +119,24 @@ export async function computeMyWork(userId: string, now: Date = new Date()): Pro
   const bucket = (predicate: (deadline: Date | null) => boolean) =>
     actionable.filter((t) => predicate(t.deadline ? toDay(t.deadline) : null));
 
+  const assignedRows = await prisma.ticketComment.findMany({
+    where: { assigneeId: userId, resolvedAt: null, ticket: { deletedAt: null } },
+    select: { id: true, body: true, createdAt: true, ticket: { select: { id: true, key: true, title: true } }, author: { select: { id: true, name: true } } },
+    orderBy: { createdAt: "desc" },
+    take: 50
+  });
+  const assignedComments: AssignedCommentItem[] = assignedRows.map((c) => ({
+    id: c.id,
+    ticketId: c.ticket.id,
+    ticketKey: c.ticket.key,
+    ticketTitle: c.ticket.title,
+    excerpt: htmlToPlainText(c.body).trim().slice(0, 140),
+    author: c.author,
+    createdAt: c.createdAt.toISOString()
+  }));
+
   return {
+    assignedComments,
     overdue: bucket((d) => Boolean(d && d < today)),
     today: bucket((d) => Boolean(d && dayKey(d) === dayKey(today))),
     thisWeek: bucket((d) => Boolean(d && d > today && d <= weekEnd)),

@@ -514,7 +514,7 @@ ticketRouter.get("/:id", requirePermission(permissions.TICKETS_VIEW), async (req
         orderBy: { createdAt: "asc" }
       },
       labels: { include: { label: true } },
-      comments: { include: { author: { select: USER_SUMMARY } }, orderBy: { createdAt: "asc" } },
+      comments: { include: { author: { select: USER_SUMMARY }, assignee: { select: USER_SUMMARY }, resolvedBy: { select: USER_SUMMARY } }, orderBy: { createdAt: "asc" } },
       attachments: { include: { uploadedBy: { select: { id: true, name: true } } }, orderBy: { createdAt: "desc" } },
       timesheets: {
         where: { deletedAt: null },
@@ -1650,7 +1650,7 @@ ticketRouter.get("/:id/comments", requirePermission(permissions.TICKETS_VIEW), a
 
   const comments = await prisma.ticketComment.findMany({
     where: { ticketId },
-    include: { author: { select: USER_SUMMARY } },
+    include: { author: { select: USER_SUMMARY }, assignee: { select: USER_SUMMARY }, resolvedBy: { select: USER_SUMMARY } },
     orderBy: { createdAt: "asc" }
   });
   res.json(comments);
@@ -1658,7 +1658,94 @@ ticketRouter.get("/:id/comments", requirePermission(permissions.TICKETS_VIEW), a
 
 const commentSchema = z.object({
   params: z.object({ id: z.string().uuid() }),
-  body: z.object({ body: z.string().min(1).max(10000) })
+  body: z.object({
+    body: z.string().min(1).max(10000),
+    /// V12 8.3: assign the comment as an action item on creation (a project member or admin).
+    assigneeId: z.string().uuid().optional().or(z.literal(""))
+  })
+});
+
+/** May this person be handed a comment or a mention on this project? Members, or admins. */
+async function canBeAddressed(userId: string, projectId: string): Promise<boolean> {
+  if (await isProjectMember(userId, projectId)) return true;
+  const privileged = await prisma.user.findFirst({ where: { id: userId, deletedAt: null, role: { name: { in: ["SUPER_ADMIN", "ADMIN"] } } }, select: { id: true } });
+  return Boolean(privileged);
+}
+
+const commentPatchSchema = z.object({
+  params: z.object({ id: z.string().uuid(), commentId: z.string().uuid() }),
+  body: z
+    .object({
+      assigneeId: z.string().uuid().nullable().optional(),
+      resolved: z.boolean().optional()
+    })
+    .refine((b) => "assigneeId" in b || "resolved" in b, { message: "Nothing to change" })
+});
+
+/** The assignee hears once, personally, and the audit trail records who handed it over. */
+async function notifyCommentAssigned(actor: { id: string; name: string }, ticket: { id: string; key: string }, commentId: string, assigneeId: string, body: string): Promise<void> {
+  if (assigneeId === actor.id) return;
+  await audit(actor.id, "ticket.comment_assigned", "Ticket", ticket.id, { commentId, assigneeId });
+  await dispatchNotification({
+    userId: assigneeId,
+    category: "ticket.comment_assigned",
+    title: `${actor.name} assigned you a comment on ${ticket.key}`,
+    body: plainDescription(body).slice(0, 160),
+    link: `/app/tickets?open=${ticket.id}`
+  });
+}
+
+type CommentPatchBody = { assigneeId?: string | null; resolved?: boolean };
+
+/** Pure: the columns a PATCH changes. A re-assignment reopens the item — the new person has not done anything yet. */
+function commentPatchData(existing: { assigneeId: string | null }, body: CommentPatchBody, actorId: string): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  if ("assigneeId" in body) {
+    const next = body.assigneeId ?? null;
+    data.assigneeId = next;
+    if (next && next !== existing.assigneeId) {
+      data.resolvedAt = null;
+      data.resolvedById = null;
+    }
+  }
+  if ("resolved" in body) {
+    data.resolvedAt = body.resolved ? new Date() : null;
+    data.resolvedById = body.resolved ? actorId : null;
+  }
+  return data;
+}
+
+/**
+ * V12 8.3 — assign a comment as an action item, or resolve/reopen it. Anyone who can see the
+ * ticket may resolve (the reference lets anyone tick the box); assigning names a member or admin.
+ * The assignee hears about the assignment; the assigner hears about the resolution.
+ */
+ticketRouter.patch("/:id/comments/:commentId", requirePermission(permissions.TICKETS_WRITE), validate(commentPatchSchema), async (req, res) => {
+  const ticket = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null }, select: { id: true, key: true, title: true, projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+  const existing = await prisma.ticketComment.findFirst({ where: { id: String(req.params.commentId), ticketId: ticket.id } });
+  if (!existing) throw new AppError(404, "Comment not found");
+
+  const body = req.body as CommentPatchBody;
+  const nextAssignee = body.assigneeId ?? null;
+  if (nextAssignee && !(await canBeAddressed(nextAssignee, ticket.projectId))) throw new AppError(422, "That person is not on this project.");
+  const data = commentPatchData(existing, body, req.user!.id);
+  const updated = await prisma.ticketComment.update({ where: { id: existing.id }, data, include: { author: { select: USER_SUMMARY }, assignee: { select: USER_SUMMARY }, resolvedBy: { select: USER_SUMMARY } } });
+
+  if (nextAssignee && nextAssignee !== existing.assigneeId) await notifyCommentAssigned(req.user!, ticket, existing.id, nextAssignee, existing.body);
+  const newlyResolved = body.resolved === true && !existing.resolvedAt;
+  if (newlyResolved) await audit(req.user!.id, "ticket.comment_resolved", "Ticket", ticket.id, { commentId: existing.id });
+  if (newlyResolved && existing.authorId !== req.user!.id) {
+    await dispatchNotification({
+      userId: existing.authorId,
+      category: "ticket.comment_resolved",
+      title: `${req.user!.name} resolved your comment on ${ticket.key}`,
+      body: plainDescription(existing.body).slice(0, 160),
+      link: `/app/tickets?open=${ticket.id}`
+    });
+  }
+  res.json(updated);
 });
 
 /** The mentioned ids that may actually see the project — members, or admins — minus the author. */
@@ -1685,11 +1772,15 @@ ticketRouter.post("/:id/comments", requirePermission(permissions.TICKETS_WRITE),
   await assertTicketVisible(req, ticket.projectId);
 
   const cleanBody = sanitizeRichText(req.body.body);
+  // V12 8.3: an assignee on creation makes the comment an action item.
+  const assigneeId = req.body.assigneeId || null;
+  if (assigneeId && !(await canBeAddressed(assigneeId, ticket.projectId))) throw new AppError(422, "That person is not on this project.");
   const comment = await prisma.ticketComment.create({
-    data: { ticketId: ticket.id, authorId: req.user!.id, body: cleanBody },
-    include: { author: { select: USER_SUMMARY } }
+    data: { ticketId: ticket.id, authorId: req.user!.id, body: cleanBody, assigneeId },
+    include: { author: { select: USER_SUMMARY }, assignee: { select: USER_SUMMARY }, resolvedBy: { select: USER_SUMMARY } }
   });
   await audit(req.user!.id, "ticket.commented", "Ticket", ticket.id);
+  if (assigneeId) await notifyCommentAssigned(req.user!, ticket, comment.id, assigneeId, cleanBody);
 
   // V12 8.1: @mentions. Only people who may see the project count — an id pasted into the HTML by
   // hand notifies nobody the role model would not show. Mentioned people get the stronger,
@@ -1720,6 +1811,7 @@ ticketRouter.post("/:id/comments", requirePermission(permissions.TICKETS_WRITE),
   if (ticket.assigneeId && ticket.assigneeId !== req.user!.id) recipients.add(ticket.assigneeId);
   for (const watcher of ticket.watchers) if (watcher.userId !== req.user!.id) recipients.add(watcher.userId);
   for (const id of mentioned) recipients.delete(id);
+  if (assigneeId) recipients.delete(assigneeId);
 
   for (const userId of recipients) {
     await dispatchNotification({

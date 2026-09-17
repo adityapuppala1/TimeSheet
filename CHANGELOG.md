@@ -10,6 +10,17 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### ✅ Assigned comments — a comment as an action item
+
+- **Assign a comment to a project member.** Beside Post comment, "Assign to" names a member (or an
+  admin); they get an inbox item and an email under the comment preference, and the comment appears
+  under **Comments assigned to you** at the top of their My work page. Anyone who can see the ticket
+  may tick **Resolve**; the resolver's name shows beside the tick and the person who assigned it
+  hears about it. Re-assigning reopens the item. The Comments tab counts what is still open.
+- **Storage.** Three nullable columns on `TicketComment` (`assigneeId`, `resolvedAt`, `resolvedById`),
+  added by an idempotent migration; existing comments are untouched. No flag: an unassigned comment
+  behaves exactly as before.
+
 ### 🔎 The palette finds changes and documents
 
 - **Type a change's key or a document's title.** The command palette gains Changes and Documents

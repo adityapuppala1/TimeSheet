@@ -114,6 +114,11 @@ keyboard, change dates in the ticket sheet's **Plan** tab.
 opens the ticket. Arrow keys move the list, Enter picks, Escape closes. Only people on the project
 are offered, so a mention cannot reach someone the ticket would not.
 
+**Assigned comments.** "Assign to" beside Post comment turns the comment into an action item for a
+project member: they get an inbox item and the comment is listed under **Comments assigned to you**
+at the top of My work. Anyone who can see the ticket may tick **Resolve**; the resolver's name shows
+beside the tick and the assigner hears. The Comments tab badge counts unresolved assigned comments.
+
 **Colour.** The ticket sheet's header is tinted with the project's colour; phone cards carry a
 left rail in the status colour; views fade in as they change unless your system asks for reduced
 motion. All of it is measured by the contrast check, none of it is animation you cannot switch off.

@@ -16,7 +16,7 @@
  * WHO renders this: `App.tsx` at `/app/my-work`.
  */
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CalendarClock, CheckCircle2, ChevronRight, Diamond, ListTodo, Lock } from "lucide-react";
+import { AlertTriangle, CalendarClock, CheckCircle2, ChevronRight, Diamond, ListTodo, Lock, MessageSquare } from "lucide-react";
 import { useNavigate } from "react-router";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -117,6 +117,7 @@ export function MyWorkPage() {
   const navigate = useNavigate();
   const work = useQuery({ queryKey: ["plan", "my-work"], queryFn: planApi.myWork });
   const open = (id: string) => navigate(`/app/tickets?open=${id}`);
+  const assigned = work.data?.assignedComments ?? [];
 
   if (work.isLoading) {
     return (
@@ -153,6 +154,35 @@ export function MyWorkPage() {
         </Card>
       ) : (
         <>
+          {/* V12 8.3: comments assigned to me — action items, above the dated work. */}
+          {assigned.length > 0 && (
+            <Card data-assigned-comments>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <MessageSquare className="h-4 w-4 text-primary" />
+                  Comments assigned to you
+                  <Badge variant="secondary">{assigned.length}</Badge>
+                </CardTitle>
+                <CardDescription>Somebody asked you to act on these. Resolve them from the ticket's Comments tab.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-2">
+                {assigned.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => open(c.ticketId)}
+                    className="focus-ring flex min-h-[44px] w-full items-start gap-3 rounded-md border border-border px-3 py-2 text-left hover:bg-muted"
+                  >
+                    <span className="shrink-0 font-mono text-xs text-muted-foreground">{c.ticketKey}</span>
+                    <span className="grid min-w-0 gap-0.5">
+                      <span className="truncate text-sm font-medium">{c.ticketTitle}</span>
+                      <span className="truncate text-xs text-muted-foreground">{c.author.name}: {c.excerpt}</span>
+                    </span>
+                  </button>
+                ))}
+              </CardContent>
+            </Card>
+          )}
           <Bucket
             title="Overdue"
             description="Past its planned end date or its SLA deadline."

@@ -204,7 +204,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Tick Columns to show or hide columns, including one per custom field and Sprint; a saved view remembers the set.",
       "Open a ticket: drag its sheet wider than 960px or press Maximize, and the fields sit beside Comments and Activity in two columns. Hide activity keeps the details in focus; the choice is remembered in this browser.",
       "In the Calendar view choose Month or Week. If you can plan, drag a chip onto another day: a scheduled item keeps its length, an unscheduled one becomes scheduled on that day.",
-      "In a comment, type @ and pick a project member to mention them: they get an inbox item that opens the ticket. Only people on the project are offered."
+      "In a comment, type @ and pick a project member to mention them: they get an inbox item that opens the ticket. Only people on the project are offered.",
+      "To make a comment an action item, pick a member under Assign to before posting. They get an inbox item and see it under Comments assigned to you on My work; anyone who can see the ticket can tick Resolve, and the person who assigned it hears."
     ],
     notes:
       "Every project has a colour mark — chosen under Administration → Projects (Edit project), or derived from its id until someone chooses. Keyboard: arrows move between views, Enter toggles a group, a row opens on Enter, and the shortcuts dialog (press ?) lists the rest.",
