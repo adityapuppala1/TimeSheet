@@ -10,6 +10,8 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 5.4.0 — colour, motion and the last calendar and workload gaps — 2026-09-17
+
 ### 🏷️ Sprints belong to the plan that includes timelines
 
 - **Sprints now carry a tier entitlement**, the same one as the Gantt: iterations, points and a
@@ -76,6 +78,19 @@ number, on purpose — an installation must never render history for a version t
   moved out mid-sprint keeps its early days and loses the later ones, and one planned in late
   appears from the day it joined. Sprints that predate the audit keep exactly the series they
   had. The ideal line stays over the current members' total: the plan as it stands.
+
+### ⬆ Upgrading from 5.3.0
+
+- **No migration, no new environment variable, no new dependency.** `update.sh` / `update.ps1`
+  as usual; three.js was already installed and now loads only behind the Portfolio page's
+  "Show 3D" toggle.
+- **One behavioural change for operators:** sprints now require the plan that includes timelines
+  (the same entitlement as the Gantt). A workspace on a plan without timelines that had switched
+  sprints on sees the Sprints page and the sprint fields go quiet and the routes refuse with an
+  upgrade message; its data is untouched and returns on upgrade. Workspaces on Team or Enterprise
+  see no change.
+- **New audit rows** (`ticket.sprint_changed`) appear from now on; earlier sprints keep their
+  burndown series exactly as it was.
 
 ## 5.3.0 — the tickets workspace grows up — 2026-09-17
 
