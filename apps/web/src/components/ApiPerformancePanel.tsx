@@ -25,9 +25,9 @@
  * was served — an empty chart that cannot distinguish the two is how a monitoring page gets
  * mistrusted on day one.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Database, Gauge, Server, Timer } from "lucide-react";
+import { Activity, AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Database, Gauge, Pause, Play, RefreshCw, Server, Timer } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -41,6 +41,7 @@ import {
   YAxis
 } from "recharts";
 
+import { cn } from "../lib/utils";
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
@@ -89,6 +90,100 @@ const STATUS_CLASS_COLOR: Record<string, string> = {
   "5xx": "hsl(var(--destructive))"
 };
 const STATUS_CLASS_ORDER = ["1xx", "2xx", "3xx", "4xx", "5xx"];
+
+const LIVE_INTERVAL_MS = 10_000;
+const LIVE_KEY = "ts.api-performance.live";
+
+/**
+ * Live by default. Ten seconds is the cadence at which a person watching a deploy can see a spike
+ * appear and fade; the request log used to never refresh at all, and the overview once a minute, so
+ * the two tabs could disagree about the same minute. Pausing is remembered per browser because
+ * somebody reading a specific row does not want it to move under them. `tick` advances once a
+ * second so an "updated Ns ago" line can re-render without its own timer.
+ */
+function useLiveRefresh() {
+  const [live, setLive] = useState(() => {
+    try {
+      return localStorage.getItem(LIVE_KEY) !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!live) return;
+    const timer = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(timer);
+  }, [live]);
+  const toggleLive = () => {
+    const next = !live;
+    setLive(next);
+    try {
+      localStorage.setItem(LIVE_KEY, next ? "1" : "0");
+    } catch {
+      /* private mode — the choice just does not persist */
+    }
+  };
+  const refetchInterval: number | false = live ? LIVE_INTERVAL_MS : false;
+  return { live, toggleLive, tick, refetchInterval };
+}
+
+/** "Move it now": refetch every query the panel holds, and say how old the newest answer is.
+ *  `tick` is read so the age re-renders each second; its value is otherwise unused. */
+type RefreshableQuery = { isFetching: boolean; dataUpdatedAt: number; refetch: () => Promise<unknown> };
+// Takes the narrow shape rather than the full UseQueryResult, and the call site casts, so handing
+// two queries with different data types to one array does not widen either one's `data` to `{}`.
+function useManualRefresh(queries: RefreshableQuery[], tick: number) {
+  const refreshing = queries.some((q) => q.isFetching);
+  const refreshNow = () => {
+    // Fire-and-forget on purpose: the queries report their own state, and a click handler that
+    // awaited them would only delay re-enabling the button.
+    for (const q of queries) q.refetch().catch(() => undefined);
+  };
+  const newest = Math.max(0, ...queries.map((q) => q.dataUpdatedAt));
+  const updatedAgo = newest > 0 && tick >= 0 ? Math.max(0, Math.round((Date.now() - newest) / 1000)) : null;
+  return { refreshing, refreshNow, updatedAgo };
+}
+
+/** "Is it moving" and "move it now", side by side. The counter is what makes the live state
+ *  believable — a panel that says Live with no visible evidence is one people reload. */
+function LiveControls({
+  live,
+  onToggle,
+  onRefresh,
+  refreshing,
+  updatedAgo
+}: {
+  live: boolean;
+  onToggle: () => void;
+  onRefresh: () => void;
+  refreshing: boolean;
+  updatedAgo: number | null;
+}) {
+  return (
+    <>
+      <span className="text-xs tabular-nums text-muted-foreground" data-perf-updated>
+        {updatedAgo === null ? "—" : `updated ${updatedAgo}s ago`}
+      </span>
+      <Button
+        variant={live ? "secondary" : "outline"}
+        size="sm"
+        className="h-9"
+        aria-pressed={live}
+        data-perf-live
+        onClick={onToggle}
+        title={live ? "Pause automatic refresh" : "Refresh every 10 seconds"}
+      >
+        {live ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+        {live ? "Live · 10s" : "Paused"}
+      </Button>
+      <Button variant="outline" size="sm" className="h-9" onClick={onRefresh} disabled={refreshing} data-perf-refresh title="Refresh now">
+        <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "motion-safe:animate-spin")} />
+        Refresh
+      </Button>
+    </>
+  );
+}
 
 const WINDOWS = [
   { value: "1", label: "Last hour" },
@@ -209,16 +304,24 @@ export function ApiPerformancePanel() {
    *  four shows an empty table and looks like "no results" rather than "you are past the end". */
   const setDrilldown = (next: ApiRequestQuery) => setDrilldownRaw({ ...next, offset: 0 });
 
+  const { live, toggleLive, refetchInterval, tick } = useLiveRefresh();
+
   const overview = useQuery({
     queryKey: ["api-performance", hours],
     queryFn: () => apiPerformanceApi.overview(Number(hours)),
-    refetchInterval: 60_000
+    refetchInterval
   });
 
   const requests = useQuery({
     queryKey: ["api-performance", "requests", hours, drilldown],
-    queryFn: () => apiPerformanceApi.requests({ ...drilldown, hours: Number(hours) })
+    queryFn: () => apiPerformanceApi.requests({ ...drilldown, hours: Number(hours) }),
+    refetchInterval
   });
+
+  const { refreshing, refreshNow, updatedAgo } = useManualRefresh(
+    [overview as RefreshableQuery, requests as RefreshableQuery],
+    tick
+  );
 
   const data = overview.data;
   const collection = data?.collection;
@@ -270,7 +373,8 @@ export function ApiPerformancePanel() {
             Per-request timings — how long endpoints took, how often they failed, and which host or pod served them.
           </CardDescription>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <LiveControls live={live} onToggle={toggleLive} onRefresh={refreshNow} refreshing={refreshing} updatedAgo={updatedAgo} />
           <Select value={hours} onValueChange={setHours}>
             <SelectTrigger className="h-9 w-[9.5rem]"><SelectValue /></SelectTrigger>
             <SelectContent>

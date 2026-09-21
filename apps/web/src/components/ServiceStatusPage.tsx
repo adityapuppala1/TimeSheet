@@ -22,7 +22,7 @@
  */
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, AlertTriangle, CheckCircle2, HelpCircle, Loader2, RefreshCw } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, ChevronRight, HelpCircle, Loader2, RefreshCw } from "lucide-react";
 
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -30,8 +30,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Skeleton } from "./ui/skeleton";
 import { toast } from "./ui/toaster";
-import { statusPageApi, type ServiceStatusValue, type StatusDay } from "../services/api";
+import { statusPageApi, type ServiceStatusValue, type StatusDay, type StatusIncident } from "../services/api";
 import { cn } from "../lib/utils";
+import { groupIncidentsByMonth, incidentMixLabel } from "../lib/incidents";
 
 const STATUS_TEXT: Record<ServiceStatusValue, string> = {
   OPERATIONAL: "Operational",
@@ -238,22 +239,7 @@ export function ServiceStatusPage() {
                   Nothing recorded in this window.
                 </p>
               ) : (
-                <div className="divide-y divide-border rounded-lg border border-border">
-                  {pastIncidents.slice(0, 25).map((incident) => (
-                    <div key={incident.id} className="flex flex-wrap items-center gap-2 p-3 text-sm">
-                      <Badge variant={badgeVariant(incident.status)}>{STATUS_TEXT[incident.status]}</Badge>
-                      <span className="font-medium">{incident.serviceLabel}</span>
-                      <span className="text-muted-foreground">
-                        {formatWhen(incident.startedAt)} → {incident.endedAt ? formatWhen(incident.endedAt) : "ongoing"}
-                      </span>
-                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                        {formatDuration(incident.durationMinutes)} · {incident.sampleCount}{" "}
-                        {incident.sampleCount === 1 ? "check" : "checks"}
-                      </span>
-                      {incident.detail && <span className="w-full text-xs text-muted-foreground">{incident.detail}</span>}
-                    </div>
-                  ))}
-                </div>
+                <PastIncidents incidents={pastIncidents} />
               )}
             </div>
 
@@ -274,5 +260,61 @@ export function ServiceStatusPage() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/** The month accordion, on its own so the page component stays readable. Native details/summary:
+ *  keyboard and screen-reader behaviour for free, no dependency, and the open state is the
+ *  element's own. Each heading carries the month's count and worst status, so a folded month still
+ *  says whether anything inside it was a real outage. */
+function PastIncidents({ incidents }: { incidents: StatusIncident[] }) {
+  return (
+                <div className="grid gap-2" data-incident-months>
+      {/* One accordion per month, the newest open. Native details/summary: keyboard
+          and screen-reader behaviour for free, no dependency, and the open state is
+          the element's own. Each heading carries the month's count and worst status,
+          so a folded month still says whether anything inside it was a real outage. */}
+      {groupIncidentsByMonth(incidents).map((month, index) => (
+        <details
+          key={month.key}
+          open={index === 0}
+          className="group rounded-lg border border-border bg-card open:shadow-sm"
+          data-incident-month={month.key}
+        >
+          <summary className="focus-ring flex cursor-pointer list-none flex-wrap items-center gap-2 rounded-lg px-3 py-2.5 text-sm hover:bg-muted/50 [&::-webkit-details-marker]:hidden">
+            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" aria-hidden />
+            <span className="font-semibold">{month.label}</span>
+            <Badge variant={badgeVariant(month.worst)}>{STATUS_TEXT[month.worst]}</Badge>
+            <span className="ml-auto text-xs text-muted-foreground">
+              {month.count} {month.count === 1 ? "incident" : "incidents"}
+              {incidentMixLabel(month.byStatus) ? ` · ${incidentMixLabel(month.byStatus)}` : ""}
+            </span>
+          </summary>
+          <div className="grid gap-3 border-t border-border px-3 pb-3 pt-2">
+            {month.days.map((day) => (
+              <div key={day.key} className="grid gap-1.5" data-incident-day={day.key}>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{day.label}</p>
+                <div className="divide-y divide-border rounded-md border border-border">
+                  {day.incidents.map((incident) => (
+                    <div key={incident.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                      <Badge variant={badgeVariant(incident.status)}>{STATUS_TEXT[incident.status]}</Badge>
+                      <span className="font-medium">{incident.serviceLabel}</span>
+                      <span className="text-muted-foreground">
+                        {formatWhen(incident.startedAt)} → {incident.endedAt ? formatWhen(incident.endedAt) : "ongoing"}
+                      </span>
+                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                        {formatDuration(incident.durationMinutes)} · {incident.sampleCount}{" "}
+                        {incident.sampleCount === 1 ? "check" : "checks"}
+                      </span>
+                      {incident.detail && <span className="w-full text-xs text-muted-foreground">{incident.detail}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </details>
+      ))}
+    </div>
   );
 }

@@ -1226,10 +1226,15 @@ export function ProjectsPage() {
   const projects = useQuery({ queryKey: ["projects", "admin"], queryFn: () => projectApi.list({ includeArchived: true }) });
   /** The same list this page asked for — archived included, because that is what is on screen. */
   const exportProjects = useMutation({
-    mutationFn: () => projectApi.exportCsv({ includeArchived: true }),
-    onSuccess: ({ blob, rows }) => {
-      saveBlob(blob, `projects-${exportStamp()}.csv`);
-      toast.success(`Exported ${rows} ${rows === 1 ? "project" : "projects"}`);
+    mutationFn: async (format: "csv" | "xlsx") =>
+      format === "xlsx"
+        ? { format, ...(await projectApi.exportXlsx({ includeArchived: true })) }
+        : { format, ...(await projectApi.exportCsv({ includeArchived: true })) },
+    onSuccess: ({ blob, rows, format }) => {
+      saveBlob(blob, `projects-${exportStamp()}.${format}`);
+      toast.success(`Exported ${rows} ${rows === 1 ? "project" : "projects"}`, {
+        description: format === "xlsx" ? "Two sheets: the list, and every module and submodule." : undefined
+      });
     },
     onError: () => toast.error("Could not export", { description: "Try again in a moment." })
   });
@@ -1540,17 +1545,31 @@ export function ProjectsPage() {
             emptyMessage="No projects yet."
             pageSize={20}
             toolbar={
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-9"
-                disabled={exportProjects.isPending || (projects.data ?? []).length === 0}
-                onClick={() => exportProjects.mutate()}
-                title="Download these projects as CSV"
-              >
-                <Download className={cn("h-3.5 w-3.5", exportProjects.isPending && "motion-safe:animate-pulse")} />
-                {exportProjects.isPending ? "Preparing…" : "Export CSV"}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9"
+                  disabled={exportProjects.isPending || (projects.data ?? []).length === 0}
+                  onClick={() => exportProjects.mutate("csv")}
+                  title="Download the project list as CSV"
+                >
+                  <Download className={cn("h-3.5 w-3.5", exportProjects.isPending && exportProjects.variables === "csv" && "motion-safe:animate-pulse")} />
+                  Export CSV
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9"
+                  disabled={exportProjects.isPending || (projects.data ?? []).length === 0}
+                  onClick={() => exportProjects.mutate("xlsx")}
+                  title="Download an Excel workbook: the project list, plus every module and submodule on a second sheet"
+                  data-export-xlsx
+                >
+                  <FileSpreadsheet className={cn("h-3.5 w-3.5", exportProjects.isPending && exportProjects.variables === "xlsx" && "motion-safe:animate-pulse")} />
+                  Export Excel
+                </Button>
+              </div>
             }
           />
         </CardContent>

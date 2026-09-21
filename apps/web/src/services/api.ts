@@ -662,6 +662,15 @@ export const projectApi = {
     });
     return { blob: res.data as Blob, rows: Number(res.headers["x-export-rows-included"] ?? 0) };
   },
+  /** The same rows as the CSV, as a workbook: a "Projects" sheet and a "Hierarchy" sheet with one
+   *  row per module and submodule. */
+  exportXlsx: async (opts?: { includeArchived?: boolean; search?: string }) => {
+    const res = await api.get("/projects/export.xlsx", {
+      params: { ...(opts?.includeArchived ? { includeArchived: 1 } : {}), ...(opts?.search ? { search: opts.search } : {}) },
+      responseType: "blob"
+    });
+    return { blob: res.data as Blob, rows: Number(res.headers["x-export-rows-included"] ?? 0) };
+  },
   create: async (payload: unknown) => (await api.post("/projects", payload)).data,
   update: async (id: string, payload: unknown) => (await api.patch(`/projects/${id}`, payload)).data,
   remove: async (id: string) => api.delete(`/projects/${id}`),

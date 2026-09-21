@@ -18,6 +18,7 @@ import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { csvCell, CSV_EOL, UTF8_BOM } from "../utils/csv.js";
+import { buildProjectWorkbook } from "../services/project-export.service.js";
 
 const PRIVILEGED_ROLES = new Set(["SUPER_ADMIN", "ADMIN"]);
 
@@ -121,6 +122,53 @@ projectRouter.get("/export.csv", async (req, res) => {
   res.setHeader("X-Export-Rows-Included", String(projects.length));
   res.setHeader("Access-Control-Expose-Headers", "X-Export-Rows-Included, Content-Disposition");
   res.send(UTF8_BOM + lines.join(CSV_EOL) + CSV_EOL);
+});
+
+/**
+ * GET /projects/export.xlsx — the same rows as the CSV, as a two-sheet workbook: the project list,
+ * and one row per module and submodule under "Hierarchy". Same scope, same archive choice, same
+ * search — see the CSV route above for why an export must equal the page it came from.
+ */
+projectRouter.get("/export.xlsx", async (req, res) => {
+  const scope = await visibilityScope(req);
+  const includeArchived = req.query.includeArchived === "1" || req.query.includeArchived === "true";
+  const search = String(req.query.search ?? "").trim();
+
+  const projects = await prisma.project.findMany({
+    where: {
+      deletedAt: null,
+      ...(includeArchived ? {} : { status: "ACTIVE" }),
+      ...(scope.unrestricted ? {} : { assignments: { some: { userId: { in: scope.userIds } } } }),
+      ...(search ? { OR: [{ code: { contains: search } }, { name: { contains: search } }] } : {})
+    },
+    include: {
+      modules: {
+        select: { name: true, createdAt: true, submodules: { select: { name: true, createdAt: true }, orderBy: { name: "asc" } } },
+        orderBy: { name: "asc" }
+      },
+      assignments: { include: { user: { select: { name: true } } } }
+    },
+    orderBy: { name: "asc" }
+  });
+
+  const buffer = await buildProjectWorkbook(
+    projects.map((p) => ({
+      code: p.code,
+      name: p.name,
+      status: p.status,
+      description: p.description ?? null,
+      createdAt: p.createdAt,
+      team: p.assignments.map((a) => ({ name: a.user.name })),
+      modules: p.modules
+    })),
+    req.user!.name
+  );
+
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="projects-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+  res.setHeader("X-Export-Rows-Included", String(projects.length));
+  res.setHeader("Access-Control-Expose-Headers", "X-Export-Rows-Included, Content-Disposition");
+  res.send(buffer);
 });
 
 projectRouter.post(

@@ -23,6 +23,18 @@ number, on purpose — an installation must never render history for a version t
 - **Storage.** One nullable column on `AiProposal`, added by an idempotent migration. Proposals
   that did not come from a document carry NULL and link nothing, which is every existing row.
 
+### 📊 A two-sheet project workbook, incidents by month, and a live performance panel
+
+- **Export projects as Excel.** Beside the CSV, an Export Excel button downloads one workbook with
+  a Projects sheet (the same columns as the CSV) and a Hierarchy sheet with one row per module and
+  submodule, each carrying its project's code, name, status and dates. Both sheets are built from
+  the same rows, so they cannot disagree about which projects are in the file.
+- **Past incidents fold by month.** The status page's history is now an accordion: one section per
+  month with its count and worst status on the heading, days inside, the newest month open.
+- **API performance is live.** The panel refreshes every ten seconds, the request log included,
+  with a counter showing how long ago; a Refresh button reloads it by hand without reloading the
+  page, and Pause is remembered per browser.
+
 ### 📨 The practice update says what happened, in the order leadership asked for
 
 - **Each project now names its work.** Under every initiative's "This period", up to three concrete

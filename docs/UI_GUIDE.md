@@ -127,7 +127,8 @@ reading through the same project scope as the Tickets page.
 each one comes back already related to that document — see it on the document's **Related tickets**
 card and on the ticket's **Linked** tab.
 
-**Exports.** The people table and the project table each have an **Export CSV** button that
+**Exports.** The project table also offers **Export Excel**, a workbook whose second sheet lists
+every module and submodule. The people table and the project table each have an **Export CSV** button that
 downloads exactly the rows on screen, filters included.
 
 **The sidebar.** Section headings fold, and your choice is remembered per browser. The project tree
