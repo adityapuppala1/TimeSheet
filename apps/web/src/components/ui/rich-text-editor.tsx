@@ -1,8 +1,9 @@
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import Underline from "@tiptap/extension-underline";
-import Link from "@tiptap/extension-link";
-import Placeholder from "@tiptap/extension-placeholder";
+// TipTap 3 (2026-09-21, GHSA-cp6q-959q-f8rh): Link and Underline ship inside StarterKit and are
+// configured there; Placeholder moved into `@tiptap/extensions`. The editor's behaviour is the
+// same — the toolbar's toggleUnderline/setLink commands are the ones StarterKit registers.
+import { Placeholder } from "@tiptap/extensions";
 import TextAlign from "@tiptap/extension-text-align";
 import { mentionExtension, type MentionCandidate } from "./mention-suggestion";
 import {
@@ -84,9 +85,10 @@ export function RichTextEditor({
 
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
-      Underline,
-      Link.configure({ openOnClick: false, HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" } }),
+      StarterKit.configure({
+        heading: { levels: [1, 2, 3] },
+        link: { openOnClick: false, HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" } }
+      }),
       Placeholder.configure({ placeholder }),
       TextAlign.configure({ types: ["heading", "paragraph"] }),
       ...(mentions ? [mentionExtension(() => mentionsRef.current ?? [])] : [])
@@ -97,7 +99,7 @@ export function RichTextEditor({
         class: cn("tiptap focus:outline-none", minHeight),
         "aria-label": ariaLabel ?? "Rich text editor"
       },
-      handlePaste: (_view, event) => handleSmartPaste(editorRef.current, event)
+      handlePaste: (_view, event) => handleSmartPaste(editorRef.current?.isDestroyed ? null : editorRef.current, event)
     },
     onUpdate: ({ editor }) => onChange(editor.getHTML())
   });
@@ -107,9 +109,12 @@ export function RichTextEditor({
   }, [editor]);
 
   useEffect(() => {
-    if (!editor) return;
+    // `isDestroyed` matters since TipTap 3: under React's strict-mode double mount the first
+    // editor instance is destroyed and its state is gone, and `getHTML()` on it threw from inside
+    // ProseMirror's serializer — which took the whole timesheet page down to the error boundary.
+    if (!editor || editor.isDestroyed) return;
     const current = editor.getHTML();
-    if (value !== current) editor.commands.setContent(value || "", false);
+    if (value !== current) editor.commands.setContent(value || "", { emitUpdate: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
@@ -453,6 +458,11 @@ function Btn({
   return (
     <button
       type="button"
+      // Keep the caret in the editor. A button takes focus on mousedown, and TipTap gives it back
+      // only on the next animation frame — so the first characters typed straight after a click on
+      // Bold used to land on the button and vanish. Preventing the default keeps focus (and the
+      // selection) where it was; the command still runs from the click.
+      onMouseDown={(event) => event.preventDefault()}
       onClick={onClick}
       disabled={disabled}
       aria-label={label}

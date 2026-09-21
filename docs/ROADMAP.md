@@ -442,6 +442,24 @@ explicit `ALLOWED_ATTR`. An attribute named `__proto__` is in neither list, so t
 advisory describes does not survive storage or rendering. The upgrade is still worth doing; it is
 worth doing carefully.
 
+### Closed 2026-09-21 — `npm audit` reports zero, dev included
+
+| Advisory | What changed | How it was proven |
+|---|---|---|
+| `@tiptap/core` | **Upgraded the editor to TipTap 3.31.3** — `@tiptap/react`, `starter-kit`, `extension-mention`, `extension-text-align`, `pm`, `suggestion`, and `@tiptap/extensions` (Placeholder's new home). `extension-link`, `-underline` and `-placeholder` are no longer direct dependencies: Link and Underline ship inside StarterKit 3 and are configured there. The only code changes were the imports, `StarterKit.configure({ link: … })`, and `setContent(html, { emitUpdate: false })`. | Typecheck; both unit suites; the editor-heavy Playwright specs; a live probe typing bold text and an `@mention` into a real comment and reading the sanitised HTML back — the mention still stores as `<span data-mention-id data-mention-label>`. |
+| `deepmerge-ts` | A root **override to `^8.0.2`**. The re-check the row above asked for: `@prisma/config` still pins 7.1.5, `deepmerge-ts` 8 keeps the `deepmerge` API the CLI's config loader calls, and 8.0.2 is out. `npm update deepmerge-ts` was needed for npm to honour the override against the existing lock. | `prisma validate` on both schemas, `prisma migrate status`, `prisma generate` for the control client — all through the overridden loader. |
+| `image-size` ×2 | A root **override to `^2.0.4`** (the patched line exists now). Safe because `pptxgenjs` never actually loads it: its Node branch does `require('sizeof')` — a misspelling in the library — so the dependency is declared and never executed. | `npm run pitch:pptx` rebuilt the deck (3.0 MB). |
+
+One regression the upgrade DID introduce, caught by a single Playwright test: under React's
+strict-mode double mount TipTap 3 destroys the first editor instance, and the `[value]` effect's
+`editor.getHTML()` on it threw from inside ProseMirror's serializer — which sent the whole
+timesheet page to the error boundary. The effect now returns on `editor.isDestroyed`.
+
+While there, a real editor bug: a toolbar button took focus on mousedown and TipTap gave it back
+only on the next animation frame, so the first characters typed straight after clicking **Bold**
+landed on the button and vanished. `onMouseDown={preventDefault}` on the toolbar buttons keeps the
+caret where it was.
+
 ## Explicitly out of scope for now
 
 Captured here so it isn't silently forgotten, not because it's undesirable:

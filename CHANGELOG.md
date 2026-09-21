@@ -36,6 +36,20 @@ number, on purpose — an installation must never render history for a version t
 - **Chat integrations and MCP tiles say when they were last used**, and the MCP tool list shows
   each tool's first sentence with the rest folded — twelve paragraphs were the tab's height.
 
+### 🔒 Zero open advisories, and an editor that keeps your caret
+
+- **The rich-text editor is TipTap 3.** The last open advisory that reached a deployed
+  installation (`mergeAttributes()` and a `__proto__` attribute — already blocked by the allowlist
+  sanitisers on both sides) is closed by the upgrade. Comments, descriptions, pasted code and
+  `@mentions` behave as they did; the mention still stores as the same `<span data-mention-id>`.
+- **Clicking a toolbar button no longer eats what you type next.** The button used to take focus
+  for one animation frame, and the first characters typed after clicking Bold went to the button.
+  The caret now stays in the editor.
+- **For maintainers:** `npm audit` reports nothing, dev dependencies included. `deepmerge-ts`
+  (Prisma's CLI config loader) and `image-size` (the pitch-deck exporter, which never actually
+  loads it) are pinned to their patched lines by root overrides, each proven by running the tool
+  that depends on it. docs/ROADMAP.md has the table.
+
 ### 🧾 The projects page exports one file, the workbook
 
 - **Export CSV is gone from the projects page; Export Excel stays.** The workbook's second sheet —
