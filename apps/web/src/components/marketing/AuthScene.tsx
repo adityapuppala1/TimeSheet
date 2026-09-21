@@ -32,6 +32,7 @@
  * `/login` is a route people re-enter.
  */
 import { useEffect, useRef, useState } from "react";
+import { isSoftwareWebGl } from "../../lib/webgl";
 
 /** Points on the sphere. Modest on purpose: this runs behind a form, not as a demo reel. */
 const NODE_COUNT = 150;
@@ -93,6 +94,9 @@ export function AuthScene({ className, tone = "primary" }: { className?: string;
     if (!shouldRun) return;
     const host = hostRef.current;
     if (!host) return;
+    // A CPU rasteriser (no GPU) makes an antialiased lattice a per-frame tax on the page it sits
+    // behind; the page reads the same without it. See lib/webgl.ts.
+    if (isSoftwareWebGl()) return;
 
     // `cancelled` guards the async gap: the import below takes a moment, and a visitor who signs in
     // or resizes during it would otherwise get a scene attached to a unmounted node.

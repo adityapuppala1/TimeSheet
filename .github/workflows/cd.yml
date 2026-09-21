@@ -43,8 +43,12 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ matrix.component == 'api' && env.IMAGE_API || env.IMAGE_WEB }}
+          # Two tags, not three. A `sha-<commit>` tag used to be added on every push to `main`,
+          # which on a private registry meant every merge left two more image versions (api and
+          # web, a few hundred MB together) that nothing referenced and nothing ever removed —
+          # the package storage bill, in full. `latest` moves with `main`; a version tag gets its
+          # semver. A deployment that wants to pin a commit pins the semver, which IS a commit.
           tags: |
-            type=sha,format=long
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
 
@@ -62,5 +66,32 @@ jobs:
           build-args: |
             GIT_SHA=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp || github.event.created_at }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Layer cache: READ from wherever it is, WRITE only from `main`. GitHub's cache is scoped
+          # to the ref that wrote it, so a build on a version tag that also wrote its layers left
+          # ~600 MB under a ref that will never build again — three releases in one afternoon
+          # filled the 10 GB cache with dead layers and evicted the Playwright browsers CI relies
+          # on. Tag builds still restore from `main`'s layers, which is where they came from.
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: ${{ github.ref == 'refs/heads/main' && format('type=gha,mode=max,scope={0}', matrix.component) || '' }}
+
+  # When `latest` moves, the version it moved off becomes an untagged manifest that still holds its
+  # layers and still counts against package storage. Remove those after every publish, keeping a
+  # few so a `latest` pulled minutes ago can still finish. Tagged versions (semver) are never
+  # touched: a release image stays pullable for as long as the tag exists.
+  prune-untagged:
+    name: Prune untagged image versions (${{ matrix.component }})
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      packages: write
+    strategy:
+      matrix:
+        component: [api, web]
+    steps:
+      - uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ github.event.repository.name }}-${{ matrix.component }}
+          package-type: container
+          delete-only-untagged-versions: "true"
+          min-versions-to-keep: 3
+          token: ${{ secrets.GITHUB_TOKEN }}

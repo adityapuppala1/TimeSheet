@@ -139,21 +139,22 @@ test.describe("planning layer", () => {
     await page.waitForLoadState("networkidle");
 
     // The two original views must still be there and still work — this is the regression that
-    // matters most, since the switcher was extended in place rather than replaced.
-    await expect(page.getByRole("button", { name: /^list$/i })).toBeVisible();
-    await expect(page.getByRole("button", { name: /^board$/i })).toBeVisible();
-    await page.getByRole("button", { name: /^board$/i }).click();
+    // matters most, since the switcher was extended in place rather than replaced. They are real
+    // `role="tab"`s since the Views Bar landed (a tablist with arrow-key movement), not buttons.
+    await expect(page.getByRole("tab", { name: /^list$/i })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /^board$/i })).toBeVisible();
+    await page.getByRole("tab", { name: /^board$/i }).click();
     await expect(page.getByText(/in progress/i).first()).toBeVisible();
-    await page.getByRole("button", { name: /^list$/i }).click();
+    await page.getByRole("tab", { name: /^list$/i }).click();
 
-    const timelineTab = page.getByRole("button", { name: /^timeline$/i });
+    const timelineTab = page.getByRole("tab", { name: /^timeline$/i });
     if (await timelineTab.count()) {
       await timelineTab.click();
       await page.waitForLoadState("networkidle");
       await expect(page.getByRole("button", { name: /critical path/i })).toBeVisible();
     }
 
-    const calendarTab = page.getByRole("button", { name: /^calendar$/i });
+    const calendarTab = page.getByRole("tab", { name: /^calendar$/i });
     if (await calendarTab.count()) {
       await calendarTab.click();
       await page.waitForLoadState("networkidle");
@@ -169,7 +170,7 @@ test.describe("planning layer", () => {
     test.skip(!config.effective.planning, "planning is off in this workspace");
 
     await page.goto("/app/tickets");
-    await page.getByRole("button", { name: /^calendar$/i }).click();
+    await page.getByRole("tab", { name: /^calendar$/i }).click();
     await page.waitForLoadState("networkidle");
 
     // The header names the month and its full range — a printed or screenshotted calendar must

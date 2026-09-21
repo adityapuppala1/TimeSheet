@@ -6,8 +6,32 @@
  * Signs in per test (see auth.setup.ts on why a shared snapshot is not used by multi-test specs).
  */
 import { expect, test, type Page } from "@playwright/test";
+import { createTicket, deleteTicket, demoProject, withAdminRequest } from "./helpers/admin-request";
 
-const PROJECT = "f8f76597-5aca-46aa-88df-cae91a514749";
+/**
+ * Fixtures resolved at run time, never pinned: the demo project by its code, and one ticket of
+ * this spec's own so the list, the pill and the sheet always have a row to reach — a fresh CI
+ * database seeds the project but not a single ticket. Planning-gated views skip honestly when
+ * the workspace has them off, the same way v12-workflow does.
+ */
+let PROJECT = "";
+let ticketId: string | null = null;
+let planningOn = false;
+let resourcesOn = false;
+
+test.beforeAll(async () => {
+  await withAdminRequest(async (ctx, headers) => {
+    PROJECT = (await demoProject(ctx, headers)).id;
+    const settings = await (await ctx.get("/api/planning/settings", { headers })).json();
+    planningOn = Boolean(settings.effective?.planning);
+    resourcesOn = Boolean(settings.effective?.resourceManagement);
+    ticketId = (await createTicket(ctx, headers, { projectId: PROJECT, title: `V12 keyboard probe ${Date.now()}` })).id;
+  });
+});
+
+test.afterAll(async () => {
+  if (ticketId) await deleteTicket(ticketId);
+});
 
 async function signIn(page: Page) {
   await page.goto("/login");
@@ -112,6 +136,7 @@ test.describe("Ticket sheet", () => {
 
 test.describe("Calendar", () => {
   test("Month | Week is a radiogroup you can reach and change with the keyboard", async ({ page }) => {
+    test.skip(!planningOn, "planning is off for this workspace");
     await signIn(page);
     await page.goto(`/app/tickets?project=${PROJECT}`);
     await expect(page.locator("[data-views-bar]")).toBeVisible({ timeout: 20_000 });
@@ -128,6 +153,7 @@ test.describe("Calendar", () => {
 
 test.describe("Workload", () => {
   test("the Measure select opens and changes with the keyboard", async ({ page }) => {
+    test.skip(!resourcesOn, "resource management is off for this workspace");
     await signIn(page);
     await page.goto("/app/workload");
     const trigger = page.locator("[data-workload-measure]");

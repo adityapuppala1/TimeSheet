@@ -115,3 +115,30 @@ export async function sweepLeftoverTimesheetDrafts(userEmail: string, marker: st
     return stale.length;
   });
 }
+
+/**
+ * The seeded demo project, resolved by its CODE rather than pinned by id.
+ *
+ * WHY: `prisma/seed.ts` upserts "HICS-OPS" by code and lets the database mint the id, so the id
+ * differs between every fresh database — the local dev one, each CI shard's, a customer's. Two V12
+ * specs had hard-coded the local id, which made them green here and quietly empty in CI (a
+ * `?project=<unknown>` filter lists nothing, and every "first row" assertion then timed out).
+ */
+export async function demoProject(ctx: APIRequestContext, headers: Record<string, string>): Promise<{ id: string; code: string }> {
+  const projects = (await (await ctx.get("/api/projects", { headers })).json()) as Array<{ id: string; code: string }>;
+  const found = projects.find((p) => p.code === "HICS-OPS") ?? projects[0];
+  if (!found) throw new Error("no project in the workspace — was prisma/seed.ts run?");
+  return { id: found.id, code: found.code };
+}
+
+/** Creates a ticket as superadmin and asserts the create, so a failed fixture fails here — not
+ *  three assertions later as a mysteriously empty list. */
+export async function createTicket(
+  ctx: APIRequestContext,
+  headers: Record<string, string>,
+  data: { projectId: string; title: string; type?: string; priority?: string }
+): Promise<{ id: string }> {
+  const res = await ctx.post("/api/tickets", { headers, data: { type: "BUG", priority: "LOW", ...data } });
+  expect(res.status(), `ticket fixture should be created: ${await res.text()}`).toBe(201);
+  return res.json();
+}

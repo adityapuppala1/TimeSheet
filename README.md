@@ -535,8 +535,10 @@ walkthrough, including a first-install ordering caveat with the chart's own MySQ
 
 Images for the chart are built and published by `.github/workflows/cd.yml` to
 `ghcr.io/<owner>/<repo>-api` / `-web` on every push to `main` and version tag — swap the
-registry by editing that workflow's `env.REGISTRY`. `.github/workflows/ci.yml` runs typecheck,
-build, and the full Playwright suite (against a real MySQL service container) on every push/PR.
+registry by editing that workflow's `env.REGISTRY`. `.github/workflows/ci.yml` runs lint, typecheck,
+build, unit and integration tests (against a real MySQL service container) on every push, and the
+full Playwright suite, the installer run and a Windows build on `main`, tags and PRs — or on any
+branch with `[full-ci]` in the commit message (see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#cicd)).
 
 ## Multi-tenancy
 

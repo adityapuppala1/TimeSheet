@@ -10,6 +10,33 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🧾 The projects page exports one file, the workbook
+
+- **Export CSV is gone from the projects page; Export Excel stays.** The workbook's second sheet —
+  every module and submodule, one row each — is the reason to export at all, and the CSV beside it
+  was a second thing to choose for no gain. The CSV route itself remains for scripts. The people
+  page's CSV is unchanged.
+
+### 🛠️ CI on a budget, and the pages that behave without a GPU
+
+- **The marketing pages leave their two WebGL scenes off on a machine with no GPU** — a VM, a remote
+  desktop, a headless browser — where the software rasteriser turned a full-screen shader into a
+  stutter behind the whole page. Both scenes were decoration by contract; the page is complete
+  without them, exactly as it is for a reader who asked for less motion. On a real GPU nothing
+  changes.
+- **The Playwright suite no longer depends on what the local database happened to contain.** Two
+  specs addressed the demo project by an id only the developer's database had; one needed a second
+  AI provider that a fresh database does not seed; two addressed controls by roles they stopped
+  having on 2026-09-16. Each now resolves its fixtures at run time or seeds and removes its own.
+- **For maintainers: the CI bill.** One push cost ~104 billed minutes and each failing e2e shard
+  stored 25–32 MB of video for two weeks; every merge to `main` also left two more Docker image
+  versions on a private registry, forever. Now: a newer push cancels the run it supersedes; the
+  cheap tier (lint, build, unit, integration, manifests) runs on every push and the full tier
+  (four e2e shards, the installer run, the Windows build) on `main`, tags, pull requests, or on
+  request (`[full-ci]` in the commit message, or a manual run); failure reports keep traces, not
+  videos, for three days; images are tagged `latest` and by version only, and the versions
+  `latest` moves off are pruned. See docs/DEPLOYMENT.md → CI/CD.
+
 ### 🔗 A ticket built from a document remembers where it came from
 
 - **Accept the Studio's proposed tickets and the relationship is already there.** Each ticket the

@@ -289,8 +289,10 @@ test.describe("user management — filtering and bulk actions", () => {
     // The empty state is rendered twice by the shared table component — once as a table cell and
     // once for the card layout it switches to at narrow widths, with CSS hiding whichever does not
     // apply. This spec runs at desktop width, so the cell is the one on screen; matching by text
-    // alone picks the hidden copy and waits forever.
-    const emptyState = page.getByRole("cell", { name: /nobody matches these filters/i });
+    // alone picks the hidden copy and waits forever. Matched by CONTENT rather than accessible
+    // name: the shared EmptyState is a `role="status"` live region, and a cell's computed name
+    // does not include a live region's text, so `{ name }` found nothing once it was adopted.
+    const emptyState = page.getByRole("cell").filter({ hasText: /nobody matches these filters/i });
     await expect(emptyState).toBeVisible({ timeout: 15_000 });
 
     await page.getByRole("button", { name: /^clear$/i }).click();

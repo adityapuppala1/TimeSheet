@@ -8,9 +8,9 @@
  * spec is idempotent against the shared dev database. Skips honestly when a feature is off.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { deleteTicket, withAdminRequest } from "./helpers/admin-request";
+import { deleteTicket, demoProject, withAdminRequest } from "./helpers/admin-request";
 
-const PROJECT = "f8f76597-5aca-46aa-88df-cae91a514749"; // HICS Operations Platform in the seed
+let PROJECT = ""; // HICS Operations Platform in the seed, resolved by code in beforeAll
 const SPRINT_NAME = "V12 smoke sprint";
 const MARKER = `V12 smoke ${Date.now()}`;
 
@@ -25,6 +25,7 @@ test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
   await withAdminRequest(async (ctx, headers) => {
+    PROJECT = (await demoProject(ctx, headers)).id;
     const settings = await (await ctx.get("/api/planning/settings", { headers })).json();
     sprintsOn = Boolean(settings.effective?.sprints);
     planningOn = Boolean(settings.effective?.planning);

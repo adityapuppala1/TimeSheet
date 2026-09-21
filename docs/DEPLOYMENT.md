@@ -763,20 +763,36 @@ guaranteed to be serving over TLS.
 
 ## CI/CD
 
-`.github/workflows/ci.yml` runs on every push/PR: typecheck + build both packages, then (on
-`ubuntu-latest`, since GitHub Actions' `services:` containers only run on Linux runners) spins up
-a real MySQL service container, migrates + seeds both schemas, and runs the full Playwright
-suite. A separate `windows-latest` job typechecks + builds only (no MySQL service available
-there) — this codebase is developed on Windows day-to-day (see this doc's own history), so that
-job exists to catch anything that happens to build on Linux but not Windows. Two more jobs
-syntax-check `install.sh` (`bash -n`, on Linux) and `install.ps1` (the PowerShell parser, on
-Windows) without executing either.
+`.github/workflows/ci.yml` runs in two tiers, because the repository is private and every job
+minute is billed (Windows minutes twice over):
+
+- **Every push to every branch — the cheap tier (~11 minutes).** On `ubuntu-latest` (GitHub
+  Actions' `services:` containers only run on Linux runners): lint + typecheck, the production
+  dependency audit, the build of all three packages, both unit suites, then a real MySQL service
+  container, both schemas migrated and seeded, and the integration suite against it. Alongside:
+  the changelog-tag check, the Helm/compose manifest validation, and the syntax checks of
+  `install.sh` (`bash -n`) and `install.ps1` (the PowerShell parser, on Windows, seconds).
+- **`main`, version tags and pull requests — the full tier (~90 more minutes).** The Playwright
+  suite in four shards, each on its own runner with its own MySQL and seed; `install.sh` executed
+  end to end (a real Docker build of both images); and a `windows-latest` typecheck + build,
+  because this codebase is developed on Windows day-to-day (see this doc's own history) and that
+  job catches anything that happens to build on Linux but not Windows. To run the full tier on
+  any other branch, put `[full-ci]` in the commit message or start the workflow by hand from the
+  Actions tab (`workflow_dispatch`).
+
+A newer push to the same branch cancels the run still in flight (`concurrency`); `main` and tags
+are exempt. A failing e2e shard uploads its Playwright report for three days, traces rather than
+videos — the trace carries the DOM, network and a screenshot per action at a tenth of the size.
 
 `.github/workflows/cd.yml` builds and pushes `apps/api`/`apps/web`'s Docker images to GHCR
-(`ghcr.io/<owner>/<repo>-api` / `-web`) on every push to `main` and on version tags, using the
-repo's own `GITHUB_TOKEN` — no external registry account needed to get started. Swap to another
-registry (ECR/GCR/ACR/Docker Hub) by changing `cd.yml`'s `env.REGISTRY` and its login step's
-credentials; nothing else in the workflow assumes GHCR specifically.
+(`ghcr.io/<owner>/<repo>-api` / `-web`) on every push to `main` (as `latest`) and on version
+tags (as their semver), using the repo's own `GITHUB_TOKEN` — no external registry account needed
+to get started. There is deliberately no per-commit `sha-…` tag: on a private registry every one
+of those was an image version nothing referenced and nothing removed, and the storage bill was
+the sum of them. After each publish the workflow prunes the untagged versions `latest` has moved
+off (keeping the last three); release images are never touched. Swap to another registry
+(ECR/GCR/ACR/Docker Hub) by changing `cd.yml`'s `env.REGISTRY` and its login step's credentials;
+nothing else in the workflow assumes GHCR specifically.
 
 No repo secrets are required for either workflow as written — `cd.yml`'s GHCR push uses the
 automatically-provided `GITHUB_TOKEN`, and `ci.yml`'s test secrets are fixed placeholder strings

@@ -46,7 +46,11 @@ export default defineConfig({
     ignoreHTTPSErrors: true,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
-    video: "retain-on-failure"
+    // Video only where a person is watching. In CI the trace above already carries every frame
+    // that matters (DOM snapshots, network, console, a screenshot per action) at a tenth of the
+    // size, and a .webm per failed attempt was what made a failing shard's report 25–32 MB of
+    // billed artifact storage. Locally, a video is the fastest way to see what a flake looked like.
+    video: process.env.CI ? "off" : "retain-on-failure"
   },
   projects: [
     { name: "setup", testMatch: /.*\.setup\.ts/ },

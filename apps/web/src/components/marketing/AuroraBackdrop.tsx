@@ -28,6 +28,7 @@
 import { Color, Mesh, Program, Renderer, Triangle } from "ogl";
 import { useEffect, useRef } from "react";
 import { usePrefersReducedMotion } from "../../lib/use-motion";
+import { isSoftwareWebGl } from "../../lib/webgl";
 
 const VERT = `#version 300 es
 in vec2 position;
@@ -158,7 +159,9 @@ export function AuroraBackdrop({ className, intensity = 1 }: { className?: strin
 
   useEffect(() => {
     const container = containerRef.current;
-    if (reduced || !container) return;
+    // Software GL (no GPU: a VM, a remote desktop, a CI runner) would turn this shader into a
+    // stutter behind the whole hero; the hero is complete without it. See lib/webgl.ts.
+    if (reduced || !container || isSoftwareWebGl()) return;
 
     let renderer: Renderer;
     try {

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { signIn } from "./helpers/sign-in";
 
 /**
@@ -16,6 +16,37 @@ import { signIn } from "./helpers/sign-in";
  */
 test.use({ storageState: { cookies: [], origins: [] } });
 
+/** Adds a provider through the dialog. Defaults to Anthropic, which needs no base URL and picks
+ *  its model from a fixed dropdown, so this exercises the dialog without depending on any live
+ *  provider endpoint. */
+async function addProvider(page: Page, label: string) {
+  await page.getByRole("button", { name: "Add provider" }).click();
+  const dialog = page.getByRole("dialog", { name: "Add provider" });
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+
+  await dialog.getByPlaceholder("e.g. Groq (fast, cheap)").fill(label);
+  await dialog.getByRole("combobox").nth(1).click(); // 0 = Provider, 1 = Model
+  await page.getByRole("option").first().click();
+
+  const created = page.waitForResponse(
+    (res) => res.url().includes("/api/settings/ai/providers") && res.request().method() === "POST" && res.status() === 201
+  );
+  await dialog.getByRole("button", { name: "Add" }).click();
+  expect((await created).ok(), `creating ${label} was rejected`).toBe(true);
+  await expect(dialog).not.toBeVisible({ timeout: 10_000 });
+}
+
+/** Removes a provider by its row button. The button uses a native confirm(); accept it. */
+async function removeProvider(page: Page, label: string) {
+  page.once("dialog", (d) => d.accept());
+  const removed = page.waitForResponse(
+    (res) => res.url().includes("/api/settings/ai/providers/") && res.request().method() === "DELETE" && res.status() === 204
+  );
+  await page.getByRole("button", { name: `Remove ${label}` }).click();
+  expect((await removed).ok(), `deleting ${label} was rejected`).toBe(true);
+  await expect(page.getByText(label)).not.toBeVisible({ timeout: 10_000 });
+}
+
 test.describe("AI provider list", () => {
   test("adds a provider, reorders it above an existing one, then removes it", async ({ page }) => {
     await signIn(page, "superadmin");
@@ -23,25 +54,20 @@ test.describe("AI provider list", () => {
     await page.getByRole("tab", { name: /^AI$/ }).click();
     await expect(page.getByText("AI providers")).toBeVisible({ timeout: 15_000 });
 
+    // "Above an existing one" needs one to exist. A fresh database (every CI shard) seeds no
+    // provider, so the new row would be the ONLY row, its move-up button rightly disabled, and the
+    // click would wait on it forever — then pass on retry, because the failed attempt's row had
+    // leaked and become the "existing one". Seed the anchor here and remove it at the end instead.
+    let anchor: string | null = null;
+    if ((await page.getByRole("button", { name: /^Move .+ up in priority$/ }).count()) === 0) {
+      anchor = `E2E anchor provider ${Date.now()}`;
+      await addProvider(page, anchor);
+      await expect(page.getByRole("button", { name: `Move ${anchor} down in priority` })).toBeVisible({ timeout: 10_000 });
+    }
     const rowsBefore = await page.getByRole("button", { name: /^Move .+ up in priority$/ }).count();
 
-    // Add — defaults to Anthropic, which needs no base URL and picks its model from a fixed
-    // dropdown, so this exercises the dialog without depending on any live provider endpoint.
     const label = `E2E test provider ${Date.now()}`;
-    await page.getByRole("button", { name: "Add provider" }).click();
-    const dialog = page.getByRole("dialog", { name: "Add provider" });
-    await expect(dialog).toBeVisible({ timeout: 10_000 });
-
-    await dialog.getByPlaceholder("e.g. Groq (fast, cheap)").fill(label);
-    await dialog.getByRole("combobox").nth(1).click(); // 0 = Provider, 1 = Model
-    await page.getByRole("option").first().click();
-
-    const created = page.waitForResponse(
-      (res) => res.url().includes("/api/settings/ai/providers") && res.request().method() === "POST" && res.status() === 201
-    );
-    await dialog.getByRole("button", { name: "Add" }).click();
-    expect((await created).ok(), "creating the provider was rejected").toBe(true);
-    await expect(dialog).not.toBeVisible({ timeout: 10_000 });
+    await addProvider(page, label);
 
     const moveUp = page.getByRole("button", { name: `Move ${label} up in priority` });
     await expect(moveUp).toBeVisible({ timeout: 10_000 });
@@ -61,13 +87,8 @@ test.describe("AI provider list", () => {
     await expect(page.getByText("AI providers")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(label)).toBeVisible({ timeout: 10_000 });
 
-    // Remove — cleans up after itself. The button uses a native confirm(); accept it.
-    page.once("dialog", (d) => d.accept());
-    const removed = page.waitForResponse(
-      (res) => res.url().includes("/api/settings/ai/providers/") && res.request().method() === "DELETE" && res.status() === 204
-    );
-    await page.getByRole("button", { name: `Remove ${label}` }).click();
-    expect((await removed).ok(), "deleting the provider was rejected").toBe(true);
-    await expect(page.getByText(label)).not.toBeVisible({ timeout: 10_000 });
+    // Remove — cleans up after itself, the anchor included when this run had to seed one.
+    await removeProvider(page, label);
+    if (anchor) await removeProvider(page, anchor);
   });
 });

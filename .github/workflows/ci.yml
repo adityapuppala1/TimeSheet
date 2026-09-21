@@ -12,11 +12,42 @@ name: CI
 on:
   push:
     branches: ["**"]
+    tags: ["v*.*.*"]
   pull_request:
     branches: ["**"]
+  # A hand-triggered run on any branch gets the FULL tier (e2e, installer, Windows) — the way to
+  # ask for the expensive jobs on a branch without a `[full-ci]` commit message.
+  workflow_dispatch:
+
+# A newer push to the same branch supersedes the run in flight. Three pushes ten minutes apart used
+# to mean three complete runs; the first two answered a question nobody was still asking, at ~100
+# billed minutes each. `main` and tags are exempt: a release run is never cancelled by the next.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   NODE_VERSION: "22"
+
+# ── The minutes budget, and where it goes ───────────────────────────────────────────────────────
+#
+# This repo is private, so every job minute is billed against a monthly allowance, and Windows
+# minutes count double. Measured on 2026-09-21, one push cost ~104 billed minutes: four e2e shards
+# (14–25 min each), the installer run (4), the Windows build (9 → 18 billed), the ubuntu
+# build+unit+integration job (10) and a second ubuntu typecheck+build (5) that repeated the first.
+# Three pushes a day spent the month's free allowance in ten days.
+#
+# So the jobs are in two tiers. The CHEAP tier — build, lint, unit, integration, and the
+# syntax/manifest checks — runs on every push to every branch, because that is what catches the
+# mistakes that matter most, and it costs ~11 minutes. The FULL tier — the e2e shards, the
+# installer run and the Windows build — runs where a wrong answer is expensive: pushes to `main`,
+# version tags, and pull requests. On any other branch it runs when asked: a commit message
+# containing `[full-ci]`, or a manual run from the Actions tab (`workflow_dispatch`). The local
+# gates (`npm run lint`, both unit suites, the Playwright suite against the dev stack) remain the
+# developer's own check before a push.
+#
+# A job-level `if:` cannot read `env`, so the gate expression is written out on each full-tier job
+# (marked "FULL TIER"); keep the copies identical.
 
 jobs:
   build-test-ubuntu:
@@ -211,6 +242,9 @@ jobs:
   e2e:
     name: e2e ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
+    # FULL TIER — see the budget note at the top.
+    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full-ci]') }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -305,6 +339,11 @@ jobs:
         env:
           CI: "true"
 
+      # Artifact storage is billed too, and this was most of that bill: a failing shard's report
+      # weighed 25–32 MB, almost all of it failure VIDEOS (a .webm per attempt), kept for 14 days,
+      # three shards at a time. The config now records no video in CI — the retry's trace carries
+      # the DOM, network and per-action screenshots a video cannot, at a tenth of the size (see
+      # playwright.config.ts) — and three days is longer than anyone has waited to look at one.
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v7
@@ -312,7 +351,8 @@ jobs:
           # Per-shard name: four jobs uploading one artifact name is a 409 on the second.
           name: playwright-report-shard-${{ matrix.shard }}
           path: playwright-report/
-          retention-days: 14
+          retention-days: 3
+          compression-level: 9
 
   # Exists solely to answer "is ingestion configured?" as a job OUTPUT, because a job-level `if:`
   # is the one place that question cannot be asked directly — `secrets` is unavailable there, and
@@ -437,12 +477,19 @@ jobs:
               --data @sbom.json || echo "::warning::Failed to post SBOM to TimeSphere (non-fatal)"
           fi
 
+  # Windows only, and FULL TIER only. The matrix used to include ubuntu-latest as well, which
+  # repeated the lint and build the job at the top of this file had already run on the same
+  # commit — five minutes per push proving what was proven. Windows is the platform this codebase
+  # is developed on (see the header comment) and the one that can differ, so it stays; at
+  # double-billed minutes it runs on the full tier, and a branch push relies on the developer's
+  # own Windows build, which is where the branch was built in the first place.
   build-cross-platform:
     name: Typecheck + build (${{ matrix.os }})
+    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full-ci]') }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     # `prisma generate` (below) doesn't connect to a database, but it does validate that the
     # schema's referenced env vars are at least defined — this job never touches a real MySQL
@@ -650,6 +697,8 @@ jobs:
   install-e2e:
     name: Execute install.sh end-to-end
     runs-on: ubuntu-latest
+    # FULL TIER — a real Docker build of both images per run; see the budget note at the top.
+    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full-ci]') }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
