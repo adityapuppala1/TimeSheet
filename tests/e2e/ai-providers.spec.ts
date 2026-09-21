@@ -37,6 +37,11 @@ async function addProvider(page: Page, label: string) {
   await expect(dialog).not.toBeVisible({ timeout: 10_000 });
 }
 
+/** The Providers section's body — everything below its heading, and not the board above it. */
+function providersSection(page: Page) {
+  return page.locator("[data-settings-section='providers']");
+}
+
 /** Removes a provider by its row button. The button uses a native confirm(); accept it. */
 async function removeProvider(page: Page, label: string) {
   page.once("dialog", (d) => d.accept());
@@ -45,7 +50,7 @@ async function removeProvider(page: Page, label: string) {
   );
   await page.getByRole("button", { name: `Remove ${label}` }).click();
   expect((await removed).ok(), `deleting ${label} was rejected`).toBe(true);
-  await expect(page.getByText(label)).not.toBeVisible({ timeout: 10_000 });
+  await expect(providersSection(page).getByText(label)).not.toBeVisible({ timeout: 10_000 });
 }
 
 test.describe("AI provider list", () => {
@@ -86,7 +91,11 @@ test.describe("AI provider list", () => {
     await page.reload();
     await page.getByRole("tab", { name: /^AI$/ }).click();
     await openSettingsSection(page, "Providers");
-    await expect(page.getByText(label)).toBeVisible({ timeout: 10_000 });
+    // Scoped to the section: since the tab gained its board, the TOP enabled provider's label also
+    // appears on the Providers tile ("1 of 5 enabled · <label> first"), and an unscoped text match
+    // resolves to two elements the moment this test's provider is promoted — which is the very
+    // thing the line above it just did.
+    await expect(providersSection(page).getByText(label)).toBeVisible({ timeout: 10_000 });
 
     // Remove — cleans up after itself, the anchor included when this run had to seed one.
     await removeProvider(page, label);

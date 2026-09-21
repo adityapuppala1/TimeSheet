@@ -65,7 +65,13 @@ export default defineConfig({
     },
     {
       name: "webkit",
-      use: { ...devices["Desktop Safari"], viewport: VIEWPORTS.laptop },
+      // REDUCED MOTION, and only here. This project exists to prove the app WORKS on another
+      // engine, not to exercise its animation; and Linux WebKit is where an overlay's entrance
+      // animation stopped settling within Playwright's actionability timeout about half the time
+      // (see ui/select.tsx). The overlays honour the preference, so under `reduce` the menu is
+      // simply there — which is what this project actually wants to click on. Chromium and Firefox
+      // still run with motion on, so the animated path is covered.
+      use: { ...devices["Desktop Safari"], viewport: VIEWPORTS.laptop, reducedMotion: "reduce" },
       dependencies: ["setup"],
       testMatch: /(auth|tickets|timesheet|dashboard|settings|user-management)\.spec\.ts/
     },

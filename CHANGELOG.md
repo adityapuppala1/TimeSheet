@@ -38,6 +38,10 @@ number, on purpose — an installation must never render history for a version t
 
 ### 🔒 Zero open advisories, and an editor that keeps your caret
 
+- **Menus, dialogs, sheets, popovers and tooltips honour "reduce motion".** Their entrance and exit
+  animations were the last unguarded ones in the app: somebody who asked their system for less
+  motion still got a menu that zoomed at them. Now they simply appear.
+
 - **The rich-text editor is TipTap 3.** The last open advisory that reached a deployed
   installation (`mergeAttributes()` and a `__proto__` attribute — already blocked by the allowlist
   sanitisers on both sides) is closed by the upgrade. Comments, descriptions, pasted code and
