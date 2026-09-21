@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openSettingsSection } from "./helpers/settings-sections";
 import { signIn } from "./helpers/sign-in";
 
 /**
@@ -52,7 +53,7 @@ test.describe("AI provider list", () => {
     await signIn(page, "superadmin");
     await page.goto("/app/settings");
     await page.getByRole("tab", { name: /^AI$/ }).click();
-    await expect(page.getByText("AI providers")).toBeVisible({ timeout: 15_000 });
+    await openSettingsSection(page, "Providers");
 
     // "Above an existing one" needs one to exist. A fresh database (every CI shard) seeds no
     // provider, so the new row would be the ONLY row, its move-up button rightly disabled, and the
@@ -84,7 +85,7 @@ test.describe("AI provider list", () => {
     // Survives a reload — proves the order actually persisted server-side, not just local state.
     await page.reload();
     await page.getByRole("tab", { name: /^AI$/ }).click();
-    await expect(page.getByText("AI providers")).toBeVisible({ timeout: 15_000 });
+    await openSettingsSection(page, "Providers");
     await expect(page.getByText(label)).toBeVisible({ timeout: 10_000 });
 
     // Remove — cleans up after itself, the anchor included when this run had to seed one.

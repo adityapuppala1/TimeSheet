@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { openSettingsSection } from "./helpers/settings-sections";
 import { accessToken, signIn } from "./helpers/sign-in";
 
 /**
@@ -224,7 +225,7 @@ test.describe("face verification review log", () => {
     await page.getByRole("tab", { name: /face verification/i }).click();
     // The heading role, not bare text: the insecure-bypass toggle's description also says
     // "verification log", and a text locator matching both is a strict-mode violation.
-    await expect(page.getByRole("heading", { name: "Verification log" })).toBeVisible({ timeout: 15_000 });
+    await openSettingsSection(page, "Verification log");
 
     // Only attempts that stored an image carry the eye button, and a fresh CI database has no
     // attempts at all — absence is a data condition here, not a failure.

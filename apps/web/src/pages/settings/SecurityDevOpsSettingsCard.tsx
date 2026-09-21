@@ -8,11 +8,19 @@
  * WHY the token is only ever shown once: same write-only-secret convention as every other
  * generated credential in this app (see settings.controller.ts's POST /rotate-token comment) —
  * copy it into your CI config now, or rotate again if you lose it.
+ *
+ * THE SHAPE (2026-09-21): twelve cards became six folding sections behind a board — ingestion;
+ * tickets from findings (auto-create, CI failures, CODEOWNERS, and the routing rules, which are
+ * the else-branch of the fallback project and belong beside it); remediation and regressions
+ * (the two rungs, adjacent and in order); the VAPT upload; the two digests; the git providers.
+ * Every card is the card it was, rendered without its frame inside its section; the tiles read
+ * their figures from the same queries the cards run.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, FileUp, GitBranch, KeyRound, ShieldAlert, ShieldCheck, ShieldOff, ShieldQuestion, Sparkles, Ticket, Unlink, Wrench } from "lucide-react";
+import { Check, Copy, FileUp, GitBranch, KeyRound, Mail, ShieldAlert, ShieldCheck, ShieldOff, ShieldQuestion, Sparkles, Ticket, Unlink, Webhook, Wrench } from "lucide-react";
 import { useState } from "react";
 import { notificationPreferenceKeys } from "@timesheet/shared";
+import { SectionBoard, SectionGroup, SettingsSection, useOpenSections, type BoardEntry } from "../../components/settings/settings-sections";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -25,9 +33,13 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
-import { projectApi, SERVER_ORIGIN, settingsApi } from "../../services/api";
+import { countOf, devopsGitVerdict, liveOrOff, onOff } from "../../lib/settings-state";
+import { findingRoutingApi, projectApi, SERVER_ORIGIN, settingsApi } from "../../services/api";
 import { copyText } from "../../lib/clipboard";
 import { FindingRoutingCard } from "./FindingRoutingCard";
+
+const PREFIX = "devops";
+const OPEN_KEY = "ts.settings.devops.open";
 
 const VAPT_SAMPLE_JSON = `[
   {
@@ -221,8 +233,53 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
   const digestKeySupported = notificationPreferenceKeys.includes("emailTicketClosedDigest");
   const securityWeeklyDigestKeySupported = notificationPreferenceKeys.includes("emailSecurityWeeklyDigest");
 
+  // ── The board. Every figure comes from a query this tab (or the routing card inside it) already
+  // runs under the same key, so the tiles cost nothing and cannot disagree with their sections.
+  const repoRules = useQuery({ queryKey: ["finding-routing", "repository-maps"], queryFn: findingRoutingApi.repositoryMaps.list });
+  const pathRules = useQuery({ queryKey: ["finding-routing", "module-path-rules"], queryFn: findingRoutingApi.modulePathRules.list });
+  const sections = useOpenSections(OPEN_KEY, ["ingestion"]);
+  const ing = ingestion.data;
+  const repoCount = repoRules.data?.length ?? 0;
+  const pathCount = pathRules.data?.length ?? 0;
+  const autoCreate = Boolean(ing?.fallbackProjectId) || repoCount > 0;
+  const digestOn = Boolean(notifications.data?.emailTicketClosedDigest);
+  const weeklyOn = Boolean(notifications.data?.emailSecurityWeeklyDigest);
+  let tokenFigure: string | undefined;
+  if (ing) tokenFigure = ing.tokenSet ? "Token issued" : "No token";
+  const ingestionV = liveOrOff(Boolean(ing?.tokenSet), "Accepting posts", "Not accepting posts", tokenFigure);
+  const ticketsV = liveOrOff(autoCreate, "Opening tickets", "Store only", ing ? `${repoCount} repo · ${countOf(pathCount, "path rule")}` : undefined);
+  const remediationOn = Boolean(ing?.verifyResolutionEnabled || ing?.autoReopenEnabled);
+  const remediationV = liveOrOff(remediationOn, "In force", "Off", ing ? `Verify ${onOff(ing.verifyResolutionEnabled)} · reopen ${onOff(ing.autoReopenEnabled)}` : undefined);
+  const digestsV = liveOrOff(digestOn || weeklyOn, "Sending", "Off — set in Email channels", notifications.data ? `Close ${onOff(digestOn)} · weekly ${onOff(weeklyOn)}` : undefined);
+  const gitV = devopsGitVerdict(git.data);
+  const tile = (id: string, name: string, blurb: string, Icon: BoardEntry["Icon"], v: { state: BoardEntry["state"]; label?: string; value?: string }): BoardEntry => ({ id, name, blurb, Icon, value: v.value, state: v.state, stateLabel: v.label });
+  const board: BoardEntry[] = [
+    tile("ingestion", "Ingestion", "Eight webhook URLs and the bearer token your pipeline posts with.", Webhook, ingestionV),
+    tile("tickets", "Tickets from findings", "Auto-create, CI failures, CODEOWNERS assignment, and routing by repository and path.", Ticket, ticketsV),
+    tile("remediation", "Remediation & regressions", "Hold resolved findings until a scan proves the fix; reopen on regression.", ShieldCheck, remediationV),
+    tile("vapt", "VAPT report upload", "A human-led assessment's findings, uploaded as JSON.", ShieldQuestion, { state: "ready", label: "Upload when a report arrives" }),
+    tile("digests", "Digests & emails", "The ticket-close summary and the Monday AI recap.", Mail, digestsV),
+    tile("git", "Git providers", "GitHub by OAuth; GitLab, Bitbucket, Gitea, Forgejo and Azure DevOps by webhook.", GitHubMark, gitV)
+  ];
+  const shell = (id: string) => {
+    const e = board.find((b) => b.id === id)!;
+    return { id, prefix: PREFIX, name: e.name, blurb: e.blurb, state: e.state, stateLabel: e.stateLabel, Icon: e.Icon, open: sections.isOpen(id), onToggle: () => sections.toggle(id) };
+  };
+
   return (
-    <div className="grid gap-5">
+    <div className="grid gap-4">
+      <SectionBoard
+        title="Security & DevOps"
+        summary={
+          ingestion.data?.tokenSet
+            ? "Your pipeline can post findings and test runs here. Pick an area to open it."
+            : "Nothing is ingesting yet — generate a token under Ingestion to start accepting findings and test runs."
+        }
+        entries={board}
+        onPick={(id) => sections.reveal(id, PREFIX)}
+      />
+
+      <SettingsSection {...shell("ingestion")}>
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Security & CI ingestion</CardTitle>
@@ -244,6 +301,8 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                 )}
               </div>
 
+              {/* Two columns where they fit: eight URLs at full width were a screen on their own. */}
+              <div className="grid gap-3 lg:grid-cols-2">
               <CopyableUrl label="Findings webhook (SAST / DAST / SSAT / SSCT)" url={webhookUrl(ingestion.data.findingsWebhookPath)} />
               <CopyableUrl label="SARIF findings webhook (GitHub Code Scanning / CodeQL / Azure DevOps)" url={webhookUrl(ingestion.data.sarifFindingsWebhookPath)} />
               <CopyableUrl label="Test-run webhook" url={webhookUrl(ingestion.data.testRunsWebhookPath)} />
@@ -252,7 +311,9 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
               <CopyableUrl label="SonarQube issues webhook (/api/issues/search response)" url={webhookUrl(ingestion.data.sonarFindingsWebhookPath)} />
               <CopyableUrl label="ESLint findings webhook (eslint --format json)" url={webhookUrl(ingestion.data.eslintFindingsWebhookPath)} />
               <CopyableUrl label="SonarQube quality-gate webhook (paste into Sonar → Webhooks)" url={webhookUrl(ingestion.data.qualityGateWebhookPath)} />
+              </div>
 
+              <div className="grid gap-3 xl:grid-cols-2">
               <Alert>
                 <AlertTitle className="text-sm">Authenticate every POST with a bearer token</AlertTitle>
                 <AlertDescription className="text-xs">
@@ -313,6 +374,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                   on, same as every other regression trigger on this page.
                 </AlertDescription>
               </Alert>
+              </div>
 
               {revealedToken && (
                 <Alert>
@@ -352,7 +414,10 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           )}
         </CardContent>
       </Card>
+      </SettingsSection>
 
+      <SettingsSection {...shell("tickets")}>
+        <SectionGroup>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -392,12 +457,81 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           )}
         </CardContent>
       </Card>
-
       {/* Directly under the fallback project on purpose — that select is literally the else-branch
           of the repository rules in here, and reading one without the other is how an admin ends up
           believing findings are routed when they are only falling through. */}
       <FindingRoutingCard readOnly={readOnly} />
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Create a ticket from an untracked CI failure</CardTitle>
+          <CardDescription>
+            A FAILED test run reported with no <code>ticketKey</code> at all today just sits in the log — this opens one, the same way
+            an untracked CRITICAL/HIGH finding does. It goes to whichever project the repository rules above match against the
+            repository named in the run's pull-request URL, and to the fallback project when nothing matches or the run has no PR. It
+            opens <strong>unassigned</strong>: a failed run names no file, so there is no module to attribute it to and guessing an
+            owner only makes it look handled. Guarded against flaky-test spam: a repeat
+            failure on the same provider/branch within 24h gets a comment on the existing ticket instead of a duplicate, and (when AI
+            CI-failure triage is on and a failure log was supplied) a failure already flagged as likely-flaky skips ticket creation
+            entirely on its first sighting.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {ingestion.isLoading && <Skeleton className="h-10 w-full" />}
+          {!ingestion.isLoading && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">Auto-create a ticket for untracked CI failures</p>
+                <p className="text-xs text-muted-foreground">
+                  Off by default — needs somewhere to put the ticket: a repository rule that matches, or the fallback project above.
+                </p>
+              </div>
+              <Switch
+                checked={Boolean(ingestion.data?.autoCreateTicketOnCiFailureEnabled)}
+                onCheckedChange={(value) => toggleAutoCreateTicketOnCiFailure.mutate(value)}
+                disabled={readOnly || toggleAutoCreateTicketOnCiFailure.isPending}
+              />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <GitBranch className="h-4 w-4 text-primary" />
+            CODEOWNERS-based auto-assignment
+          </CardTitle>
+          <CardDescription>
+            When an auto-created security ticket (above) has no module-assignee-rule match, resolve an assignee from the finding's
+            repo <code>CODEOWNERS</code> file for its file path, or failing that the last GitHub committer on that file — matched to a
+            TimeSphere user via their <strong>GitHub username</strong> (set per user on the Users page). When a <code>CODEOWNERS</code>{" "}
+            line lists several people, the one who has historically resolved security tickets fastest is picked. Requires a connected
+            GitHub account below.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {ingestion.isLoading && <Skeleton className="h-10 w-full" />}
+          {!ingestion.isLoading && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">Assign via CODEOWNERS / last committer</p>
+                <p className="text-xs text-muted-foreground">
+                  Off by default — needs a connected GitHub account and at least one user's GitHub username set to do anything.
+                </p>
+              </div>
+              <Switch
+                checked={Boolean(ingestion.data?.codeownersAssignEnabled)}
+                onCheckedChange={(value) => toggleCodeownersAssign.mutate(value)}
+                disabled={readOnly || toggleCodeownersAssign.isPending}
+              />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+        </SectionGroup>
+      </SettingsSection>
 
+      <SettingsSection {...shell("remediation")}>
+        <SectionGroup>
       {/* The two rungs are rendered adjacent and in order on purpose: verification is what you turn
           on first, and auto-reopen below is the separate decision to let it move your tickets. */}
       <Card>
@@ -458,7 +592,6 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           )}
         </CardContent>
       </Card>
-
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Auto-reopen on regression</CardTitle>
@@ -487,75 +620,10 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           )}
         </CardContent>
       </Card>
+        </SectionGroup>
+      </SettingsSection>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Create a ticket from an untracked CI failure</CardTitle>
-          <CardDescription>
-            A FAILED test run reported with no <code>ticketKey</code> at all today just sits in the log — this opens one, the same way
-            an untracked CRITICAL/HIGH finding does. It goes to whichever project the repository rules above match against the
-            repository named in the run's pull-request URL, and to the fallback project when nothing matches or the run has no PR. It
-            opens <strong>unassigned</strong>: a failed run names no file, so there is no module to attribute it to and guessing an
-            owner only makes it look handled. Guarded against flaky-test spam: a repeat
-            failure on the same provider/branch within 24h gets a comment on the existing ticket instead of a duplicate, and (when AI
-            CI-failure triage is on and a failure log was supplied) a failure already flagged as likely-flaky skips ticket creation
-            entirely on its first sighting.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {ingestion.isLoading && <Skeleton className="h-10 w-full" />}
-          {!ingestion.isLoading && (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
-              <div className="min-w-0">
-                <p className="text-sm font-medium">Auto-create a ticket for untracked CI failures</p>
-                <p className="text-xs text-muted-foreground">
-                  Off by default — needs somewhere to put the ticket: a repository rule that matches, or the fallback project above.
-                </p>
-              </div>
-              <Switch
-                checked={Boolean(ingestion.data?.autoCreateTicketOnCiFailureEnabled)}
-                onCheckedChange={(value) => toggleAutoCreateTicketOnCiFailure.mutate(value)}
-                disabled={readOnly || toggleAutoCreateTicketOnCiFailure.isPending}
-              />
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <GitBranch className="h-4 w-4 text-primary" />
-            CODEOWNERS-based auto-assignment
-          </CardTitle>
-          <CardDescription>
-            When an auto-created security ticket (above) has no module-assignee-rule match, resolve an assignee from the finding's
-            repo <code>CODEOWNERS</code> file for its file path, or failing that the last GitHub committer on that file — matched to a
-            TimeSphere user via their <strong>GitHub username</strong> (set per user on the Users page). When a <code>CODEOWNERS</code>{" "}
-            line lists several people, the one who has historically resolved security tickets fastest is picked. Requires a connected
-            GitHub account below.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {ingestion.isLoading && <Skeleton className="h-10 w-full" />}
-          {!ingestion.isLoading && (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
-              <div className="min-w-0">
-                <p className="text-sm font-medium">Assign via CODEOWNERS / last committer</p>
-                <p className="text-xs text-muted-foreground">
-                  Off by default — needs a connected GitHub account and at least one user's GitHub username set to do anything.
-                </p>
-              </div>
-              <Switch
-                checked={Boolean(ingestion.data?.codeownersAssignEnabled)}
-                onCheckedChange={(value) => toggleCodeownersAssign.mutate(value)}
-                disabled={readOnly || toggleCodeownersAssign.isPending}
-              />
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
+      <SettingsSection {...shell("vapt")}>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -625,7 +693,10 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           )}
         </CardContent>
       </Card>
+      </SettingsSection>
 
+      <SettingsSection {...shell("digests")}>
+        <SectionGroup>
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Ticket-close security digest</CardTitle>
@@ -654,7 +725,6 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           )}
         </CardContent>
       </Card>
-
       <Card>
         <CardHeader>
           <CardTitle className="text-base">AI weekly security digest</CardTitle>
@@ -684,7 +754,11 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           )}
         </CardContent>
       </Card>
+        </SectionGroup>
+      </SettingsSection>
 
+      <SettingsSection {...shell("git")}>
+        <SectionGroup>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -785,7 +859,6 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           )}
         </CardContent>
       </Card>
-
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -847,6 +920,8 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           )}
         </CardContent>
       </Card>
+        </SectionGroup>
+      </SettingsSection>
     </div>
   );
 }

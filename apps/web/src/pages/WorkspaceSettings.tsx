@@ -23,14 +23,12 @@
  * `chat-integrations.controller.ts` — this page is the one UI surface for all three.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ColumnDef } from "@tanstack/react-table";
 import {
   emailMatchTypes,
   isEmailRoleMuted,
   notificationPreferenceKeys,
   type EmailMatchType,
   type EmailRoleMutes,
-  type GlobalAISettings,
   type GlobalSettings,
   type GlobalTicketSettings,
   type NotificationPreferences,
@@ -63,20 +61,16 @@ import {
   Trash2,
   Wrench,
   X,
-  Zap, Bot, Target, Workflow, Download
+  Zap, Bot, Target, Workflow, Tag, Tags
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
-import { AiFeatureUsagePanel } from "../components/AiFeatureUsagePanel";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
-import { DataTable } from "../components/ui/data-table";
-import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
@@ -93,7 +87,6 @@ import {
   settingsApi,
   ticketTypeApi,
   userApi,
-  type AIUsageRow,
   type TicketRuleInput
 } from "../services/api";
 import { useAuthStore } from "../store/auth";
@@ -105,11 +98,6 @@ import { BillingSettingsCard } from "./settings/BillingSettingsCard";
 import { ImapMark } from "../components/ui/connector-marks";
 import { IntegrationsSettingsCard } from "./settings/IntegrationsSettingsCard";
 import { SsoSettingsCard } from "./settings/SsoSettingsCard";
-import { AIDatasetsCard } from "./settings/AIDatasetsCard";
-import { AIEvalsCard } from "./settings/AIEvalsCard";
-import { AIPromptsCard } from "./settings/AIPromptsCard";
-import { AIAutonomyCard } from "./settings/AIAutonomyCard";
-import { AgentRunsCard } from "./settings/AgentRunsCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
 import { BrandingSettingsCard } from "./settings/BrandingSettingsCard";
@@ -117,69 +105,10 @@ import { MaintenanceSettingsCard } from "./settings/MaintenanceSettingsCard";
 import { ChangeManagementSettingsCard } from "./settings/ChangeManagementSettingsCard";
 import { PlanningSettingsCard } from "./settings/PlanningSettingsCard";
 import { StorageAndLogsCard } from "./settings/StorageAndLogsCard";
-import { AIProviderListCard } from "./settings/AIProviderListCard";
-import { NativeModelRunnerCard } from "./settings/NativeModelRunnerCard";
+import { AISettingsTab } from "./settings/AISettingsTab";
 import { PageHeader } from "../components/PageHeader";
-
-// Matches the exact chart styling convention used in Insights.tsx (this repo's `dataviz`
-// skill): CSS-variable colors only, fixed categorical order never re-cycled by rank.
-const AXIS_STYLE = { stroke: "hsl(var(--muted-foreground))", fontSize: 12 };
-const TOOLTIP_STYLE = {
-  contentStyle: { background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }
-};
-const GRID_STYLE = { strokeDasharray: "3 3", stroke: "hsl(var(--border))" };
-const MODEL_COLORS = ["hsl(var(--primary))", "hsl(var(--info))", "hsl(var(--accent))", "hsl(var(--warning))", "hsl(var(--success))"];
-
-function formatWeek(iso: string) {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-/** yyyy-mm-dd in LOCAL time, matching DateRangePicker's own ISO shape — `toISOString()` would
- *  shift near midnight for any timezone ahead of UTC. */
-function localIso(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-/** Columns for the AI usage table — one row per provider×model combination actually used in the
- *  picked range. Module-level, matching Tickets.tsx's ticketColumns convention. */
-const usageColumns: ColumnDef<AIUsageRow, unknown>[] = [
-  { accessorKey: "provider", header: "Provider" },
-  { accessorKey: "model", header: "Model" },
-  { accessorKey: "calls", header: "Calls", cell: ({ row }) => row.original.calls.toLocaleString() },
-  {
-    accessorKey: "successRatePct",
-    header: "Success rate",
-    cell: ({ row }) => {
-      const pct = row.original.successRatePct;
-      if (pct === null) return <span className="text-muted-foreground">n/a</span>;
-      // Amber/red only below a real reliability concern — a single stray timeout in a busy month
-      // shouldn't paint an otherwise-solid provider as troubled.
-      const tone = pct >= 95 ? "text-success" : pct >= 80 ? "text-warning" : "text-destructive";
-      return (
-        <span className={tone} title={`${row.original.successCount} succeeded, ${row.original.failureCount} failed`}>
-          {pct}%
-        </span>
-      );
-    }
-  },
-  { accessorKey: "inputTokens", header: "Input tokens", cell: ({ row }) => row.original.inputTokens.toLocaleString() },
-  { accessorKey: "outputTokens", header: "Output tokens", cell: ({ row }) => row.original.outputTokens.toLocaleString() },
-  { accessorKey: "totalTokens", header: "Total tokens", cell: ({ row }) => row.original.totalTokens.toLocaleString() },
-  {
-    accessorKey: "avgLatencyMs",
-    header: "Avg latency",
-    cell: ({ row }) =>
-      row.original.avgLatencyMs === null ? (
-        <span className="text-muted-foreground">not measured</span>
-      ) : (
-        <span title={`measured on ${row.original.latencyMeasuredCalls} of ${row.original.calls} calls`}>
-          {row.original.avgLatencyMs.toLocaleString()} ms
-        </span>
-      )
-  },
-  { accessorKey: "costUsd", header: "Cost", cell: ({ row }) => `$${row.original.costUsd.toFixed(2)}` },
-  { accessorKey: "costSharePct", header: "% of total", cell: ({ row }) => `${row.original.costSharePct}%` }
-];
+import { SectionBoard, SettingsSection, useOpenSections, type BoardEntry } from "../components/settings/settings-sections";
+import { countOf, liveOrOff } from "../lib/settings-state";
 
 interface ToggleRow {
   key: keyof NotificationPreferences;
@@ -398,7 +327,7 @@ export function WorkspaceSettingsPage() {
         </TabsContent>
 
         <TabsContent value="ai">
-          <AISettingsCard readOnly={!isSuperAdmin} />
+          <AISettingsTab readOnly={!isSuperAdmin} />
         </TabsContent>
 
         <TabsContent value="email-intake">
@@ -1048,8 +977,47 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
     onError: (err: any) => toast.error("Could not remove label", { description: err?.response?.data?.message ?? "Try again." })
   });
 
+  // ── The board's figures: the queries this tab already runs, plus the rules list under the key
+  // TicketRulesCard fetches, so nothing is requested twice.
+  const rules = useQuery({ queryKey: ["settings", "ticket-rules"], queryFn: settingsApi.listTicketRules });
+  const sections = useOpenSections("ts.settings.ticketing.open", ["sla"]);
+  const slaHours = settings.data;
+  const activeTypes = (types.data ?? []).filter((t: { isActive?: boolean }) => t.isActive !== false).length;
+  const ruleCount = rules.data?.length ?? 0;
+  const typesV = liveOrOff(activeTypes > 0, "Offered on the form", "None active", types.data ? `${activeTypes} active` : undefined);
+  const labelCount = labels.data?.length ?? 0;
+  const labelsV = liveOrOff(labelCount > 0, "In use", "None yet", labels.data ? countOf(labelCount, "label") : undefined);
+  const rulesV = liveOrOff(ruleCount > 0, "Running on new tickets", "None yet", rules.data ? countOf(ruleCount, "rule") : undefined);
+  const board: BoardEntry[] = [
+    {
+      id: "sla",
+      name: "SLA & policies",
+      blurb: "Hours to resolve by priority, cost analytics, the leaderboard, CI gates, malware scanning, attestations.",
+      Icon: Timer,
+      value: slaHours ? `${slaHours.slaCriticalHours}h critical · ${slaHours.slaHighHours}h high · ${slaHours.slaMediumHours}h medium · ${slaHours.slaLowHours}h low` : undefined,
+      state: "live",
+      stateLabel: "In force"
+    },
+    { id: "types", name: "Ticket types", blurb: "Bug, task, improvement — and your own.", Icon: Tag, value: typesV.value, state: typesV.state, stateLabel: typesV.label },
+    { id: "labels", name: "Labels", blurb: "Cross-cutting tags: regression, customer-reported…", Icon: Tags, value: labelsV.value, state: labelsV.state, stateLabel: labelsV.label },
+    { id: "rules", name: "Automation rules", blurb: "The first matching rule assigns, labels and notifies a new ticket.", Icon: Workflow, value: rulesV.value, state: rulesV.state, stateLabel: rulesV.label }
+  ];
+  const shell = (id: string) => {
+    const e = board.find((b) => b.id === id)!;
+    return { id, prefix: "ticketing", name: e.name, blurb: e.blurb, state: e.state, stateLabel: e.stateLabel, Icon: e.Icon, open: sections.isOpen(id), onToggle: () => sections.toggle(id) };
+  };
+
   return (
-    <div className="grid gap-5">
+    <div className="grid gap-4">
+      <SectionBoard
+        title="Ticketing"
+        summary="How tickets are timed, typed, labelled and routed. Pick an area to open it."
+        entries={board}
+        onPick={(id) => sections.reveal(id, "ticketing")}
+        columns={4}
+      />
+
+      <SettingsSection {...shell("sla")}>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -1204,7 +1172,9 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
           )}
         </CardContent>
       </Card>
+      </SettingsSection>
 
+      <SettingsSection {...shell("types")}>
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Ticket types</CardTitle>
@@ -1239,7 +1209,9 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
           </div>
         </CardContent>
       </Card>
+      </SettingsSection>
 
+      <SettingsSection {...shell("labels")}>
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Labels</CardTitle>
@@ -1277,8 +1249,11 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
           </div>
         </CardContent>
       </Card>
+      </SettingsSection>
 
-      <TicketRulesCard readOnly={readOnly} />
+      <SettingsSection {...shell("rules")}>
+        <TicketRulesCard readOnly={readOnly} />
+      </SettingsSection>
     </div>
   );
 }
@@ -1493,561 +1468,6 @@ function TicketRulesCard({ readOnly }: { readOnly: boolean }) {
                 )}
               </div>
             </div>
-          </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-/** A single Excel-export button for the AI usage table — one format, not the 3-way CSV/XLSX/PDF
- *  menu Change Management's register export has, since only Excel was asked for here. Downloads
- *  via an authenticated blob GET (settingsApi.downloadAiUsageExcel), never a bare `<a href>` —
- *  this app keeps its access token in memory, so a plain link would 401. Same dance as Changes.tsx's
- *  ExportMenu: createObjectURL, a programmatic click, then revokeObjectURL. */
-function AiUsageExportButton({ range, feature }: { range: DateRangeValue; feature: string }) {
-  const [busy, setBusy] = useState(false);
-  const run = async () => {
-    setBusy(true);
-    try {
-      const { blob } = await settingsApi.downloadAiUsageExcel({ from: range.from, to: range.to, feature: feature || undefined });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `ai-usage-${range.from}-to-${range.to}.xlsx`;
-      anchor.click();
-      URL.revokeObjectURL(url);
-    } catch (err: any) {
-      toast.error("Could not export", { description: err?.response?.data?.message ?? "Try again." });
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Button variant="outline" size="sm" disabled={busy} onClick={run}>
-      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-      Export .xlsx
-    </Button>
-  );
-}
-
-function AISettingsCard({ readOnly }: { readOnly: boolean }) {
-  const queryClient = useQueryClient();
-  const settings = useQuery({ queryKey: ["settings", "ai"], queryFn: settingsApi.getAI });
-
-  // Defaults to the current calendar month — same window the card always showed before it could
-  // be changed at all. `allowAllTime={false}` on the picker below keeps the range bounded: a spend
-  // report over "all time" isn't a period anyone can act on.
-  const [usageRange, setUsageRange] = useState<DateRangeValue>(() => {
-    const now = new Date();
-    return { from: localIso(new Date(now.getFullYear(), now.getMonth(), 1)), to: localIso(now) };
-  });
-  const [usageFeature, setUsageFeature] = useState<string>("");
-
-  const usage = useQuery({
-    queryKey: ["settings", "ai", "usage", usageRange.from, usageRange.to, usageFeature],
-    queryFn: () => settingsApi.getAIUsageSummary({ from: usageRange.from, to: usageRange.to, feature: usageFeature || undefined }),
-    enabled: Boolean(settings.data?.aiEnabled && usageRange.from && usageRange.to)
-  });
-  const usageTrend = useQuery({
-    queryKey: ["settings", "ai", "usage-trend", usageRange.from, usageRange.to],
-    queryFn: () => settingsApi.getAIUsageTrend({ from: usageRange.from, to: usageRange.to }),
-    enabled: Boolean(settings.data?.aiEnabled && usageRange.from && usageRange.to)
-  });
-
-  const update = useMutation({
-    mutationFn: (payload: Partial<GlobalAISettings> & { apiKey?: string }) => settingsApi.updateAI(payload),
-    onMutate: async (payload) => {
-      await queryClient.cancelQueries({ queryKey: ["settings", "ai"] });
-      const previous = queryClient.getQueryData<GlobalAISettings>(["settings", "ai"]);
-      // apiKey is write-only and not part of the cached settings shape — don't spread it into
-      // the optimistic cache update, or GlobalAISettings would gain a field it never actually has.
-      // eslint-disable-next-line sonarjs/no-unused-vars -- rest-sibling omit pattern
-      const { apiKey: _apiKey, ...optimistic } = payload;
-      if (previous) queryClient.setQueryData(["settings", "ai"], { ...previous, ...optimistic });
-      return { previous };
-    },
-    onError: (err: any, _payload, context) => {
-      if (context?.previous) queryClient.setQueryData(["settings", "ai"], context.previous);
-      toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." });
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings", "ai"] })
-  });
-
-  const [budgetDraft, setBudgetDraft] = useState("");
-  useEffect(() => {
-    if (settings.data) setBudgetDraft(settings.data.monthlyBudgetUsd != null ? String(settings.data.monthlyBudgetUsd) : "");
-  }, [settings.data?.monthlyBudgetUsd]);
-
-  const toggles: Array<{ key: keyof GlobalAISettings; label: string; description: string }> = [
-    // ONLY the settings that are NOT a capability. Every per-capability switch moved into
-    // AIAutonomyCard, where it sits beside that capability's autonomy level — the two answer
-    // different questions about the same thing, and listing them separately made this tab look
-    // like it held two copies of everything.
-    //
-    // What is left is data retention, which is genuinely a different subject: it governs what is
-    // KEPT about an AI call, not what the call is allowed to do.
-    { key: "autoTriageAutoApply", label: "Auto-apply triage suggestions (legacy)", description: "Pre-fills the suggestion instead of showing an accept/dismiss chip. This predates the autonomy ladder and means the same thing as setting Ticket triage to “Apply, reversible” above — leaving it on holds triage at that level. Prefer the capability setting; this stays so workspaces that already use it keep working." },
-    { key: "aiCaptureEnabled", label: "Record AI quality metrics", description: "Logs one row per AI call — which feature, which model, whether the response parsed, and how long it took. No prompt text, no user content, just a hash. Without this there is no way to answer \"is our AI actually any good?\" — cost is the only AI signal the system otherwise keeps." },
-    { key: "aiCaptureContentEnabled", label: "Also store prompts and responses", description: "Additionally keeps the prompt text, the model's answer, and the inputs it was given. This retains real user content (ticket descriptions, timesheet notes, PR diffs), so it's a deliberate privacy decision — but it's required before you can build a test set from real failures or compare one prompt against another. Face-verification prompts are never stored regardless of this setting." },
-  ];
-
-  return (
-    <div className="grid gap-5">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Sparkles className="h-4 w-4 text-primary" />
-            AI features
-          </CardTitle>
-          <CardDescription>
-            Every AI feature stays off until you enable it here — nothing calls out to Anthropic otherwise.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          {settings.isLoading && <Skeleton className="h-40 w-full" />}
-          {!settings.isLoading && settings.data && (
-            <>
-              {!settings.data.apiKeyConfigured && (
-                <Alert variant="warning">
-                  <ShieldAlert />
-                  <AlertTitle>No API key configured</AlertTitle>
-                  <AlertDescription>
-                    Set <code className="rounded bg-background/60 px-1">ANTHROPIC_API_KEY</code> in{" "}
-                    <code className="rounded bg-background/60 px-1">apps/api/.env</code>, or add a provider below —
-                    toggles will save either way, but nothing will actually run until a key is available.
-                  </AlertDescription>
-                </Alert>
-              )}
-              <div className="flex items-start gap-4 rounded-lg border border-primary/40 bg-primary/5 p-4">
-                <div className="flex-1">
-                  <Label>Enable AI features</Label>
-                  <p className="mt-0.5 text-xs text-muted-foreground">Master switch for everything below.</p>
-                </div>
-                <Switch checked={settings.data.aiEnabled} disabled={readOnly} onCheckedChange={(v) => update.mutate({ aiEnabled: v })} />
-              </div>
-
-              <div className="divide-y divide-border rounded-lg border border-border">
-                {toggles.map((t) => (
-                  <div key={t.key} className="flex items-start gap-4 p-4">
-                    <div className="min-w-0 flex-1">
-                      <Label className={readOnly ? "" : "cursor-pointer"}>{t.label}</Label>
-                      <p className="mt-0.5 text-xs text-muted-foreground">{t.description}</p>
-                    </div>
-                    <Switch
-                      checked={Boolean(settings.data?.[t.key])}
-                      disabled={readOnly || !settings.data?.aiEnabled}
-                      onCheckedChange={(v) => update.mutate({ [t.key]: v } as Partial<GlobalAISettings>)}
-                    />
-                  </div>
-                ))}
-              </div>
-
-              <AIProviderListCard readOnly={readOnly} />
-
-              {/* Below the provider list on purpose: this card's whole payoff is the button that
-                  puts a locally-run model at the TOP of that list, and reading it in that order is
-                  what makes "native is primary, the cloud key is the fallback" obvious. */}
-              <NativeModelRunnerCard readOnly={readOnly} />
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="grid gap-1.5">
-                  <Label>Confidence threshold</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={settings.data.confidenceThreshold}
-                    disabled={readOnly}
-                    onChange={(e) => update.mutate({ confidenceThreshold: Number(e.target.value) })}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Below this, AI-classified tickets are flagged "needs review" instead of auto-assigned.
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid gap-1.5">
-                <Label>Monthly budget (USD, optional)</Label>
-                <div className="flex gap-2">
-                  <Input
-                    type="number"
-                    min={0}
-                    step={1}
-                    placeholder="No cap"
-                    value={budgetDraft}
-                    disabled={readOnly}
-                    onChange={(e) => setBudgetDraft(e.target.value)}
-                  />
-                  <Button
-                    size="sm"
-                    disabled={readOnly}
-                    onClick={() => update.mutate({ monthlyBudgetUsd: budgetDraft ? Number(budgetDraft) : null })}
-                  >
-                    <Save className="h-4 w-4" />Save
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  AI features pause gracefully once this month's estimated spend hits the cap.
-                </p>
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      {settings.data?.aiEnabled && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">AI usage</CardTitle>
-            <CardDescription>
-              Estimated cost and token consumption{usage.data ? ` from ${usage.data.from} to ${usage.data.to}` : ""}.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-5">
-            {usage.isLoading && <Skeleton className="h-20 w-full" />}
-            {!usage.isLoading && usage.data && (
-              <>
-                <div className="grid gap-4 grid-cols-2 lg:grid-cols-5">
-                  <div className="rounded-lg border border-border bg-muted/30 p-4">
-                    <p className="text-xs uppercase text-muted-foreground">Estimated spend</p>
-                    <p className="mt-1 text-2xl font-black">${usage.data.totalCostUsd.toFixed(2)}</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-muted/30 p-4">
-                    <p className="text-xs uppercase text-muted-foreground">AI calls</p>
-                    <p className="mt-1 text-2xl font-black">{usage.data.totalCalls}</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-muted/30 p-4">
-                    <p className="text-xs uppercase text-muted-foreground">Success rate</p>
-                    <p className="mt-1 text-2xl font-black">
-                      {usage.data.overallSuccessRatePct === null ? (
-                        <span className="text-base font-normal text-muted-foreground">n/a</span>
-                      ) : (
-                        `${usage.data.overallSuccessRatePct}%`
-                      )}
-                    </p>
-                    {usage.data.totalFailures > 0 && (
-                      <p className="text-xs text-muted-foreground">{usage.data.totalFailures} failed attempt{usage.data.totalFailures === 1 ? "" : "s"}</p>
-                    )}
-                  </div>
-                  <div className="rounded-lg border border-border bg-muted/30 p-4">
-                    <p className="text-xs uppercase text-muted-foreground">Input tokens</p>
-                    <p className="mt-1 text-2xl font-black">{usage.data.totalInputTokens.toLocaleString()}</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-muted/30 p-4">
-                    <p className="text-xs uppercase text-muted-foreground">Output tokens</p>
-                    <p className="mt-1 text-2xl font-black">{usage.data.totalOutputTokens.toLocaleString()}</p>
-                  </div>
-                </div>
-
-                {/* The agent-driven share. Shown as "X of the total", never as its own total, because
-                    it is a subset — presenting it as a separate figure would invite adding the two. */}
-                <div className="rounded-lg border border-border bg-muted/20 p-4">
-                  <p className="text-xs uppercase text-muted-foreground">Driven by AI teammates</p>
-                  {usage.data.agentDriven.calls === 0 ? (
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      None this month — every call above was made by a person using an AI feature directly.
-                    </p>
-                  ) : (
-                    <p className="mt-1 text-sm">
-                      <span className="text-2xl font-black">${usage.data.agentDriven.costUsd.toFixed(2)}</span>{" "}
-                      <span className="text-muted-foreground">
-                        of the ${usage.data.totalCostUsd.toFixed(2)} above, across {usage.data.agentDriven.calls} call
-                        {usage.data.agentDriven.calls === 1 ? "" : "s"} and{" "}
-                        {(usage.data.agentDriven.inputTokens + usage.data.agentDriven.outputTokens).toLocaleString()} tokens —
-                        see <a className="underline" href="/app/agents">Agents</a> for which teammate.
-                      </span>
-                    </p>
-                  )}
-                </div>
-
-                {/* Per-workflow spend. Read from the agent runs each flow queued rather than from the
-                    usage log, which records what was asked of a model and not who composed the
-                    question — said on its face, because it is a view from a different table and the
-                    two will not add up to the penny. */}
-                {usage.data.byFlow.length > 0 && (
-                  <div className="rounded-lg border border-border bg-muted/20 p-4">
-                    <p className="text-xs uppercase text-muted-foreground">Spent by workflows</p>
-                    <ul className="mt-2 space-y-1">
-                      {usage.data.byFlow.map((flow) => (
-                        <li key={flow.flowId} className="flex flex-wrap items-baseline gap-2 text-sm">
-                          <span aria-hidden>{flow.emoji}</span>
-                          <span className="font-medium">{flow.name}</span>
-                          <span className="tabular-nums">${flow.costUsd.toFixed(2)}</span>
-                          <span className="text-xs text-muted-foreground">
-                            across {flow.runs} run{flow.runs === 1 ? "" : "s"}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      Part of the teammate figure above, attributed through the runs each workflow queued — see{" "}
-                      <a className="underline" href="/app/studio">
-                        Workflows
-                      </a>{" "}
-                      for what they did.
-                    </p>
-                  </div>
-                )}
-
-                {usageTrend.data && usageTrend.data.providerNames.length > 0 && (
-                  <div>
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Spend trend, by provider</p>
-                    <div className="h-48">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={usageTrend.data.weeks} margin={{ left: -20, right: 8 }}>
-                          <CartesianGrid {...GRID_STYLE} vertical={false} />
-                          <XAxis dataKey="weekStart" tickFormatter={formatWeek} tick={AXIS_STYLE} axisLine={false} tickLine={false} />
-                          <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} width={56} tickFormatter={(v) => `$${v}`} />
-                          <RTooltip {...TOOLTIP_STYLE} formatter={(v: number, name) => [`$${Number(v).toFixed(2)}`, name]} labelFormatter={formatWeek} />
-                          {usageTrend.data.providerNames.map((provider, index) => (
-                            <Bar key={provider} dataKey={provider} stackId="cost" fill={MODEL_COLORS[index % MODEL_COLORS.length]} radius={index === usageTrend.data.providerNames.length - 1 ? [4, 4, 0, 0] : undefined} />
-                          ))}
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-                )}
-
-                <div>
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Provider &amp; model breakdown</p>
-                  </div>
-                  <DataTable
-                    columns={usageColumns}
-                    data={usage.data.rows}
-                    isLoading={usage.isLoading}
-                    searchPlaceholder="Search provider or model..."
-                    emptyMessage="No AI calls in this range."
-                    toolbar={
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Select value={usageFeature || "__all"} onValueChange={(v) => setUsageFeature(v === "__all" ? "" : v)}>
-                          <SelectTrigger className="w-[180px]"><SelectValue placeholder="All features" /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__all">All features</SelectItem>
-                            {usage.data.features.map((f) => (
-                              <SelectItem key={f.feature} value={f.feature}>
-                                {f.feature} ({f.calls})
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <DateRangePicker value={usageRange} onChange={setUsageRange} allowAllTime={false} className="w-auto" />
-                        <AiUsageExportButton range={usageRange} feature={usageFeature} />
-                      </div>
-                    }
-                  />
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Sits directly under the monthly total it explains: that card answers "what did we spend",
-          this one answers "what is spending it". */}
-      {settings.data?.aiEnabled && <AiFeatureUsagePanel />}
-
-      {/* Placed above the quality/prompt/dataset cards because it answers the question people
-          arrive at this tab asking once AI is on: not "how well is it doing" but "what is it
-          allowed to do without me". */}
-      <AIAutonomyCard
-        readOnly={readOnly}
-        aiEnabled={Boolean(settings.data?.aiEnabled)}
-        settings={settings.data}
-        onToggleFeature={(key, value) => update.mutate({ [key]: value } as never)}
-      />
-
-      {/* Directly under the ladder on purpose: you set how much authority a capability holds up
-          there, and watch it actually used down here. Only when AI is on — with the master switch
-          off nothing can be queued, and an empty panel would just raise questions. */}
-      {settings.data?.aiEnabled && !readOnly && <AgentRunsCard />}
-
-      <AIQualityCard enabled={Boolean(settings.data?.aiEnabled)} captureOn={Boolean(settings.data?.aiCaptureEnabled)} />
-
-      <AIPromptsCard readOnly={readOnly} />
-
-      <AIDatasetsCard readOnly={readOnly} contentCaptureOn={Boolean(settings.data?.aiCaptureContentEnabled)} />
-
-      <AIEvalsCard />
-    </div>
-  );
-}
-
-/** Formats a 0–1 rate as a percentage, or an em dash when there's honestly nothing to report. */
-function pct(value: number | null | undefined): string {
-  return value == null ? "—" : `${Math.round(value * 100)}%`;
-}
-
-/**
- * AI QUALITY — deliberately separate from the spend card above, because cost and correctness are
- * different questions and this product could previously only answer the first one.
- *
- * The ordering here is the point: parse-failure rate leads because it's objective and covers every
- * structured call, and every human-derived number is shown next to its coverage so nobody reads
- * "80% positive" from eight ratings as if it meant something.
- */
-function AIQualityCard({ enabled, captureOn }: { enabled: boolean; captureOn: boolean }) {
-  const quality = useQuery({
-    queryKey: ["settings", "ai", "quality"],
-    queryFn: () => settingsApi.getAIQualitySummary(30),
-    enabled: enabled && captureOn
-  });
-
-  if (!enabled) return null;
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Sparkles className="h-4 w-4 text-primary" />
-          AI quality
-        </CardTitle>
-        <CardDescription>
-          How well the AI is actually performing, as opposed to what it costs. Last 30 days.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        {!captureOn && (
-          <p className="rounded-md border border-dashed border-border bg-muted/30 p-3 text-sm text-muted-foreground">
-            Turn on <strong>Record AI quality metrics</strong> above to start measuring this. Until then the only thing recorded
-            about your AI is what it costs.
-          </p>
-        )}
-
-        {captureOn && quality.isLoading && <Skeleton className="h-32 w-full" />}
-
-        {captureOn && quality.data && (
-          <>
-            {quality.data.totalInteractions === 0 && (
-              <p className="text-sm text-muted-foreground">No AI calls recorded yet in this window.</p>
-            )}
-
-            {quality.data.totalInteractions > 0 && (
-              <>
-                <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3">
-                  <div className="rounded-lg border border-border bg-muted/30 p-4">
-                    <p className="text-xs uppercase text-muted-foreground">Unusable responses</p>
-                    <p className="mt-1 text-2xl font-black">{pct(quality.data.overallParseFailureRate)}</p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">Failed to match the expected format</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-muted/30 p-4">
-                    <p className="text-xs uppercase text-muted-foreground">AI calls</p>
-                    <p className="mt-1 text-2xl font-black">{quality.data.totalInteractions}</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-muted/30 p-4">
-                    <p className="text-xs uppercase text-muted-foreground">Legacy ticket ratings</p>
-                    <p className="mt-1 text-2xl font-black">
-                      {quality.data.legacyTicketFeedback.up}/{quality.data.legacyTicketFeedback.up + quality.data.legacyTicketFeedback.down}
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">Older per-ticket thumbs, counted separately</p>
-                  </div>
-                </div>
-
-                {/*
-                  What people did with AI-authored change sets. This is a better signal than the
-                  thumbs beside it and worth showing next to them: a rating only happens when
-                  somebody chooses to leave one, whereas every reviewed proposal produces a decision
-                  on every row as a by-product of ordinary work.
-
-                  Undone is shown apart from rejected on purpose. Rejecting is "I read this and
-                  disagreed"; undoing is "I let it happen and then took it back", which is worse and
-                  should not be hidden inside the same number.
-                */}
-                {quality.data.proposalDecisions.length > 0 && (
-                  <div className="rounded-lg border border-border p-4">
-                    <p className="text-xs uppercase text-muted-foreground">What people did with AI suggestions</p>
-                    <p className="mb-3 mt-0.5 text-[11px] text-muted-foreground">
-                      Per change row, not per AI call — so these are not comparable with the numbers above. Refused means the
-                      row was left alone because somebody had already changed it, which is the safeguard working rather than a
-                      bad suggestion.
-                    </p>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {quality.data.proposalDecisions.map((d) => (
-                        <div key={d.kind} className="rounded-md border border-border bg-muted/20 p-3">
-                          <p className="text-xs font-medium">{d.kind.replaceAll("_", " ").toLowerCase()}</p>
-                          <p className="mt-1 text-sm">
-                            <span className="font-semibold text-success">{d.accepted}</span> kept ·{" "}
-                            <span className="font-semibold">{d.rejected}</span> rejected ·{" "}
-                            <span className="font-semibold text-warning-foreground">{d.undone}</span> undone
-                            {d.refused > 0 && <span className="text-muted-foreground"> · {d.refused} refused</span>}
-                          </p>
-                          <p className="mt-0.5 text-[11px] text-muted-foreground">
-                            {d.acceptRate === null
-                              ? "Too few decisions to read a rate into yet"
-                              : `${Math.round(d.acceptRate * 100)}% of decided rows were kept`}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* The honesty note. Without it, the thumbs column below invites exactly the wrong
-                    conclusion. */}
-                <p className="rounded-md border border-dashed border-border bg-muted/20 p-3 text-xs text-muted-foreground">
-                  <strong>Unusable-response rate is the number to trust.</strong> It's measured automatically on every structured
-                  call. Thumbs ratings only come from people who chose to leave one — check the coverage column before reading
-                  anything into them, and note that a bad result is far likelier to get rated than a good one.
-                </p>
-
-                <div className="grid gap-1.5">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">By feature — worst first</p>
-                  {/* Stacked cards below sm, table above — the same fallback DataTable uses. */}
-                  <div className="grid gap-1.5 sm:hidden">
-                    {quality.data.features.map((f) => (
-                      <div key={f.feature} className="grid gap-1 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
-                        <span className="font-medium">{f.feature}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {f.interactions} calls · unusable {pct(f.parseFailureRate)} · rated {f.rated} ({pct(f.coverage)} coverage)
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="hidden overflow-x-auto rounded-lg border border-border sm:block">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
-                          <th className="p-2.5 font-semibold">Feature</th>
-                          <th className="p-2.5 font-semibold">Calls</th>
-                          <th className="p-2.5 font-semibold">Unusable</th>
-                          <th className="p-2.5 font-semibold">Rated (coverage)</th>
-                          <th className="p-2.5 font-semibold">Thumbs up</th>
-                          <th className="p-2.5 font-semibold">Avg latency</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {quality.data.features.map((f) => (
-                          <tr key={f.feature}>
-                            <td className="p-2.5 font-medium">{f.feature}</td>
-                            <td className="p-2.5 text-muted-foreground">{f.interactions}</td>
-                            <td className="p-2.5">
-                              {f.parseFailureRate == null ? (
-                                <span className="text-muted-foreground">n/a</span>
-                              ) : (
-                                <span className={f.parseFailureRate > 0.05 ? "font-semibold text-destructive" : "text-success"}>
-                                  {pct(f.parseFailureRate)}
-                                </span>
-                              )}
-                            </td>
-                            <td className="p-2.5 text-muted-foreground">
-                              {f.rated} ({pct(f.coverage)})
-                            </td>
-                            <td className="p-2.5 text-muted-foreground">
-                              {/* Suppressed below 10 ratings rather than shown as a confident-looking
-                                  percentage derived from a handful of clicks. */}
-                              {f.thumbsUpRate == null ? <span title="Too few ratings to be meaningful">—</span> : pct(f.thumbsUpRate)}
-                            </td>
-                            <td className="p-2.5 text-muted-foreground">{f.avgLatencyMs != null ? `${f.avgLatencyMs}ms` : "—"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </>
-            )}
           </>
         )}
       </CardContent>

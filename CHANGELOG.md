@@ -10,6 +10,32 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🗂️ Workspace settings that answer first and ask second
+
+- **Eight settings tabs open with a board.** AI, Chat integrations, MCP server, Security & DevOps,
+  Face verification, Change management, Ticketing and Single sign-on now start with one tile per
+  area — its state and its one figure: "$0.64 of $20 this month", "1 of 5 providers enabled ·
+  Groq first", "12 of 13 capabilities on", "94 flagged pending", "GitHub as you". Click a tile and
+  its section opens in place; the rest stay folded, and the tab remembers what you left open.
+- **Nothing was removed and no setting moved.** Every card is the card it was, drawn without its
+  own frame inside its section. The AI tab measured 13,871 px tall on a laptop and 27,374 on a
+  phone; it is 2,185 and 3,651 now, with every section one click away. Security & DevOps went from
+  5,221 to 2,053, Change management from 4,981 to 1,715, Face verification from 4,114 to 1,791.
+- **Switches that matter are in the header.** A chat platform's Enabled switch and the MCP
+  endpoint's master switch sit on the section header, so a platform can be paused or the server
+  stopped without opening a form — and the form's own copy of that switch is gone, because two
+  switches for one fact is how they end up disagreeing.
+- **"Run a model on this server" reads across, not down.** The engine and the runtime sit side by
+  side; tuning is three columns with each explanation folded under a "Why"; the models are a grid
+  of cards with the verdict, the memory bar, the arithmetic and the speed figure on the face, and
+  what each model is good and weak at one click below. The running model sorts first.
+- **Security & DevOps grouped by question.** Ingestion; tickets from findings (auto-create, CI
+  failures, CODEOWNERS and the routing rules, which are the fallback project's else-branch and now
+  sit beside it); remediation and regressions; the VAPT upload; the digests; the git providers.
+  The eight webhook URLs and their five explainers lay out in two columns where they fit.
+- **Chat integrations and MCP tiles say when they were last used**, and the MCP tool list shows
+  each tool's first sentence with the rest folded — twelve paragraphs were the tab's height.
+
 ### 🧾 The projects page exports one file, the workbook
 
 - **Export CSV is gone from the projects page; Export Excel stays.** The workbook's second sheet —

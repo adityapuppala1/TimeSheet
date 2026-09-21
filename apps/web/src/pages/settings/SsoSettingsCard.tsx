@@ -26,7 +26,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Check,
-  ChevronDown,
   Circle,
   Copy,
   KeyRound,
@@ -36,13 +35,13 @@ import {
   ShieldOff
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { SectionBoard, SettingsSection, ToggleRow, type BoardEntry, type SectionState } from "../../components/settings/settings-sections";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardTitle } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Skeleton } from "../../components/ui/skeleton";
-import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
 import { GoogleMark, LdapMark, MicrosoftMark, SamlMark, ScimMark } from "../../components/ui/provider-marks";
@@ -52,105 +51,25 @@ import { apiUrl, SERVER_ORIGIN, settingsApi, type SsoProviderConfig, type SsoTes
 const SSO_PROVIDER_LABEL: Record<"GOOGLE" | "MICROSOFT", string> = { GOOGLE: "Google", MICROSOFT: "Microsoft / Azure AD" };
 
 /* ── Status ───────────────────────────────────────────────────────────────────────────────────
-   Four states, and the distinction that matters is between the middle two. "Ready" means every
-   credential is saved but the switch is off — a deliberate staging state an admin uses while
-   setting up. "Partial" means they started and stopped, which is the state that silently breaks a
-   sign-in button. Collapsing those two into one "not enabled" would hide a mistake behind a
-   choice. */
-type ProviderState = "live" | "ready" | "partial" | "off";
+   The chip, the board and the folding shell are the shared ones in components/settings/
+   settings-sections.tsx — this tab was where that shape was first built, and every long settings
+   tab now uses it. What stays here is the one SSO-specific rule: "ready" means every credential is
+   saved but the switch is off (a staging state), and "attention" means an admin started and
+   stopped — the state that silently breaks a sign-in button. Folding those two into one "not
+   enabled" would hide a mistake behind a choice. */
+type ProviderState = SectionState;
 
 /** Every mark in provider-marks.tsx takes exactly this, so a card, a tile and a button can share one. */
 type ProviderMark = ComponentType<{ className?: string }>;
 
-const STATE_META: Record<ProviderState, { label: string; className: string; dot: string }> = {
-  live: { label: "Live", className: "bg-success/10 text-success ring-success/20", dot: "bg-success" },
-  ready: { label: "Ready — not switched on", className: "bg-warning/10 text-warning ring-warning/20", dot: "bg-warning" },
-  partial: { label: "Half configured", className: "bg-warning/10 text-warning ring-warning/20", dot: "bg-warning" },
-  off: { label: "Not set up", className: "bg-muted text-muted-foreground ring-border", dot: "bg-muted-foreground/50" }
-};
-
 function stateFrom(complete: boolean, started: boolean, enabled: boolean): ProviderState {
   if (complete) return enabled ? "live" : "ready";
-  return started ? "partial" : "off";
+  return started ? "attention" : "off";
 }
 
-/** The dot pulses only when something is actually live — an animation that is always running says
- *  nothing, and here it is the one piece of state worth catching from across a room. */
-function StatusChip({ state, className = "" }: { state: ProviderState; className?: string }) {
-  const meta = STATE_META[state];
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${meta.className} ${className}`}
-    >
-      <span className="relative flex h-1.5 w-1.5">
-        {state === "live" && (
-          <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 motion-reduce:hidden ${meta.dot}`} />
-        )}
-        <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${meta.dot}`} />
-      </span>
-      {meta.label}
-    </span>
-  );
-}
+const STATE_LABEL: Partial<Record<ProviderState, string>> = { attention: "Half configured" };
 
-/* ── The board ────────────────────────────────────────────────────────────────────────────────
-   The summary an admin came for, above the forms they didn't. Each tile is a real button that
-   opens its card and scrolls to it, so the board is navigation rather than decoration — the thing
-   that stops this tab from being five long forms in a trench coat. */
-type BoardEntry = { id: string; name: string; blurb: string; state: ProviderState; Mark: ProviderMark };
-
-function ConnectionBoard({ entries, onPick }: { entries: BoardEntry[]; onPick: (id: string) => void }) {
-  const liveCount = entries.filter((e) => e.state === "live").length;
-
-  return (
-    <Card className="overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/30 px-5 py-4">
-        <div>
-          <CardTitle className="text-base">Connections</CardTitle>
-          <CardDescription className="mt-0.5">
-            {liveCount === 0
-              ? "Nothing is switched on yet — everyone signs in with a password."
-              : `${liveCount} ${liveCount === 1 ? "connection is" : "connections are"} live.`}
-          </CardDescription>
-        </div>
-        {/* No chip here on purpose — the line above already says how many are live, and a second
-            badge saying the same thing in a different shape reads as a control. */}
-        <span className="text-xs font-medium tabular-nums text-muted-foreground">
-          {liveCount} / {entries.length}
-        </span>
-      </div>
-      <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-3">
-        {entries.map((entry, i) => (
-          <button
-            key={entry.id}
-            type="button"
-            onClick={() => onPick(entry.id)}
-            style={{ animationDelay: `${i * 45}ms` }}
-            className="group flex animate-fade-in items-start gap-3 rounded-xl border border-border bg-card p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transform-none motion-reduce:animate-none motion-reduce:transition-none"
-          >
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
-              <entry.Mark className="h-[18px] w-[18px]" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="flex items-center justify-between gap-2">
-                <span className="truncate text-sm font-semibold">{entry.name}</span>
-                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATE_META[entry.state].dot}`} aria-hidden />
-              </span>
-              <span className="mt-0.5 block text-xs text-muted-foreground">{entry.blurb}</span>
-              <span className="mt-2 block text-xs font-medium text-muted-foreground group-hover:text-primary">
-                {STATE_META[entry.state].label}
-              </span>
-            </span>
-          </button>
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-/* ── The card shell ───────────────────────────────────────────────────────────────────────────
-   One shell for all five, so a provider cannot end up with a different icon treatment, a
-   differently-worded status, or a header that behaves differently from its neighbours. */
+/** The shell every provider card renders through — the shared section with SSO's ids and labels. */
 function ProviderShell({
   id,
   name,
@@ -171,69 +90,9 @@ function ProviderShell({
   children: React.ReactNode;
 }) {
   return (
-    <Card id={`sso-card-${id}`} className="overflow-hidden scroll-mt-24 transition-shadow duration-200 hover:shadow-soft">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        aria-controls={`sso-body-${id}`}
-        className="flex w-full items-start gap-3 p-5 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-      >
-        <span
-          className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg transition-colors ${
-            state === "live" ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
-          }`}
-        >
-          <Mark className="h-5 w-5" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex flex-wrap items-center gap-2">
-            <span className="text-base font-semibold">{name}</span>
-            <StatusChip state={state} />
-          </span>
-          <span className="mt-1 block text-sm leading-6 text-muted-foreground">{blurb}</span>
-        </span>
-        <ChevronDown
-          className={`mt-1 h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none ${open ? "rotate-180" : ""}`}
-        />
-      </button>
-      {/* 0fr → 1fr is the one way to transition to a content-derived height without measuring it
-          in JS. The inner element owns the overflow; the outer one owns the animation. */}
-      <div
-        id={`sso-body-${id}`}
-        className={`grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
-      >
-        <div className="overflow-hidden">
-          <CardContent className="grid gap-4 border-t border-border pt-5">{children}</CardContent>
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-/** The switch rows repeated across every provider, made one component so the wording, spacing and
- *  disabled treatment cannot drift apart between cards. */
-function ToggleRow({
-  label,
-  hint,
-  checked,
-  disabled,
-  onChange
-}: {
-  label: string;
-  hint: string;
-  checked: boolean;
-  disabled: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <div className="flex items-start gap-4 rounded-lg border border-border bg-muted/20 p-4 transition-colors hover:border-primary/30">
-      <div className="min-w-0 flex-1">
-        <Label>{label}</Label>
-        <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{hint}</p>
-      </div>
-      <Switch checked={checked} disabled={disabled} onCheckedChange={onChange} />
-    </div>
+    <SettingsSection id={id} prefix="sso" name={name} blurb={blurb} state={state} stateLabel={STATE_LABEL[state]} Icon={Mark} open={open} onToggle={onToggle}>
+      {children}
+    </SettingsSection>
   );
 }
 
@@ -887,23 +746,32 @@ export function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
   const pick = (id: string) => {
     setOpenId(id);
     requestAnimationFrame(() => {
-      document.getElementById(`sso-card-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      document.getElementById(`sso-section-${id}`)?.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
     });
   };
 
   const anyProviderConfigured = states.google === "live" || states.microsoft === "live" || states.saml === "live" || states.ldap === "live";
 
+  const tile = (id: string, name: string, blurb: string, state: ProviderState, Icon: ProviderMark): BoardEntry => ({ id, name, blurb, state, stateLabel: STATE_LABEL[state], Icon });
   const board: BoardEntry[] = [
-    { id: "google", name: "Google", blurb: "Workspace accounts, one click", state: states.google, Mark: GoogleMark },
-    { id: "microsoft", name: "Microsoft / Entra", blurb: "Azure AD app registration", state: states.microsoft, Mark: MicrosoftMark },
-    { id: "saml", name: "SAML 2.0", blurb: "Okta, OneLogin, ADFS, anything", state: states.saml, Mark: SamlMark },
-    { id: "ldap", name: "LDAP / AD", blurb: "Direct bind against your directory", state: states.ldap, Mark: LdapMark },
-    { id: "scim", name: "SCIM provisioning", blurb: "Accounts created and closed by your IdP", state: states.scim, Mark: ScimMark }
+    tile("google", "Google", "Workspace accounts, one click", states.google, GoogleMark),
+    tile("microsoft", "Microsoft / Entra", "Azure AD app registration", states.microsoft, MicrosoftMark),
+    tile("saml", "SAML 2.0", "Okta, OneLogin, ADFS, anything", states.saml, SamlMark),
+    tile("ldap", "LDAP / AD", "Direct bind against your directory", states.ldap, LdapMark),
+    tile("scim", "SCIM provisioning", "Accounts created and closed by your IdP", states.scim, ScimMark)
   ];
+  const liveCount = board.filter((e) => e.state === "live").length;
 
   return (
     <div className="grid gap-5">
-      <ConnectionBoard entries={board} onPick={pick} />
+      <SectionBoard
+        title="Connections"
+        summary={liveCount === 0 ? "Nothing is switched on yet — everyone signs in with a password." : `${liveCount} ${liveCount === 1 ? "connection is" : "connections are"} live.`}
+        entries={board}
+        onPick={pick}
+        aside={<span className="text-xs font-medium tabular-nums text-muted-foreground">{liveCount} / {board.length}</span>}
+      />
 
       <Card>
         <CardContent className="grid gap-4 pt-6">

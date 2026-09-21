@@ -123,12 +123,16 @@ export function ChangeCatalogueEditor({
   kind,
   title,
   description,
-  readOnly
+  readOnly,
+  frameless = false
 }: {
   kind: ChangeCatalogueKind;
   title: string;
   description: string;
   readOnly: boolean;
+  /** Inside a settings section the section's header already says the title, the count and the
+   *  description; the editor then draws neither its box nor its heading. */
+  frameless?: boolean;
 }) {
   const fields = CATALOGUE_FIELDS[kind];
   const qc = useQueryClient();
@@ -187,14 +191,16 @@ export function ChangeCatalogueEditor({
   const list = rows.data ?? [];
 
   return (
-    <section className="grid gap-3 rounded-lg border border-border p-3">
-      <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <h4 className="text-sm font-semibold text-foreground">{title}</h4>
-          <Badge variant="muted">{list.length}</Badge>
-        </div>
-        <p className="max-w-xl text-xs text-muted-foreground">{description}</p>
-      </header>
+    <section className={frameless ? "grid gap-3" : "grid gap-3 rounded-lg border border-border p-3"} data-catalogue={kind}>
+      {!frameless && (
+        <header className="flex flex-wrap items-baseline justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <h4 className="text-sm font-semibold text-foreground">{title}</h4>
+            <Badge variant="muted">{list.length}</Badge>
+          </div>
+          <p className="max-w-xl text-xs text-muted-foreground">{description}</p>
+        </header>
+      )}
 
       {rows.isLoading ? (
         <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>

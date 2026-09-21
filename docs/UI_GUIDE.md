@@ -266,6 +266,47 @@ tooltip carries the tickets and points under every measure.
 
 Engineering: `apps/api/src/services/workload.service.ts` (`ticketLoadForBucket`), `apps/web/src/pages/Workload.tsx`.
 
+## 13. Workspace settings — a board, then sections that fold
+
+Every long settings tab — AI, Chat integrations, MCP server, Security & DevOps, Face verification,
+Change management, Ticketing and Single sign-on — has one shape, from
+`apps/web/src/components/settings/settings-sections.tsx`:
+
+- **The board** (`SectionBoard`): one tile per section with an icon, its state (Live / Ready — not
+  switched on / Needs attention / Not set up, or a label the tab chose), and its ONE figure ("$0.64
+  of $20", "12 of 13 on", "3 datasets", "GitHub as adityapuppala1"). A tile is a button: it opens
+  its section and scrolls to it. The figures come from the same React Query keys the sections
+  fetch under, so the board costs no request and cannot disagree with what it points at.
+- **The sections** (`SettingsSection`): a real `<h3>` with the toggle button inside it (so a
+  screen reader and a test can find the heading), a status chip, a one-line blurb, and an optional
+  `actions` slot in the header for a control that must work without opening the section — a
+  platform's Enabled switch, the MCP endpoint's master switch. Bodies stay mounted while folded
+  (a `grid-template-rows` transition), so a half-typed secret survives folding. Which sections are
+  open is remembered per tab in `localStorage` (`ts.settings.<tab>.open`).
+- **The cards inside are the cards they were.** A component that renders `<Card><CardHeader>…`
+  renders *frameless* inside a section (`CardFrameContext` in `ui/card.tsx`): the section's header
+  is its title, its description stays as the lead paragraph, its border and padding drop. A
+  section holding several cards wraps them in `SectionGroup`, where each keeps its title as an
+  `<h4>`. A card nested inside a card keeps its frame; a card anywhere else is untouched.
+- **Verdicts are pure functions** in `apps/web/src/lib/settings-state.ts` (`chatPlatformState`,
+  `mcpToolsVerdict`, `facePolicyVerdict`, `catalogueVerdict`…), tested in
+  `tests/unit/settings-state.test.ts`, so a tile's colour is a decision with a test rather than a
+  ternary in a component.
+
+Measured on 2026-09-21 at 1366 px: AI 13,871 → 2,185 px; Security & DevOps 5,221 → 2,053; Change
+management 4,981 → 1,715; Face verification 4,114 → 1,791; Chat integrations 2,298 → 1,015; MCP
+2,197 → 977; Ticketing 2,496 → 2,006. Nothing was removed. Email channels (a matrix that already
+folds by group) and Maintenance (a monitoring dashboard) keep their own shapes on purpose.
+
+The native model runner inside the AI tab was laid out across rather than down: the engine and the
+runtime side by side, tuning as three columns with each explanation folded under a "Why", and the
+models as a grid of cards. What stays on each card's face is the rule the file documents — the
+verdict and its sentence, the memory bar, the split arithmetic, the speed figure with its
+estimated/measured treatment, any warning; the prose folds.
+
+e2e: a folded section's controls are genuinely not visible. `tests/e2e/helpers/settings-sections.ts`
+`openSettingsSection(page, "Providers")` opens one by its heading.
+
 ## Verifying a change to any of this
 
 Colour first: `npm run check:contrast` measures every pair listed in `scripts/contrast-check.mjs`

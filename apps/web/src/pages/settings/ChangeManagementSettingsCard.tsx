@@ -14,10 +14,18 @@
  * removal and went on calling `GET /changes/config/policies`, which has never existed — a 404 on
  * every visit to this tab. Removed rather than implemented, because the simpler rule is the one
  * that was asked for.
+ *
+ * THE SHAPE (2026-09-21): a board — the switch and seven catalogues, each tile carrying its row
+ * count — over folding sections. The tab was 4,981 px of catalogue rows for a page whose first
+ * question is "is it on, and how long may an approval sit". The catalogue editors are the same
+ * components, rendered without their own box inside their section; their counts on the board come
+ * from the query each editor already runs under `["change-config", kind]`.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Lock, ShieldCheck } from "lucide-react";
-import { changeApi } from "../../services/api";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AppWindow, CalendarClock, CalendarOff, GitPullRequestArrow, Lock, Scale, ShieldCheck, Tags, Timer } from "lucide-react";
+import { SectionBoard, SettingsSection, useOpenSections, type BoardEntry } from "../../components/settings/settings-sections";
+import { catalogueVerdict, changeSettingsVerdict } from "../../lib/settings-state";
+import { changeApi, type ChangeCatalogueKind } from "../../services/api";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { ChangeCatalogueEditor } from "../../components/change/ChangeCatalogueEditor";
@@ -29,6 +37,21 @@ import { toast } from "../../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
+
+const PREFIX = "changes";
+const OPEN_KEY = "ts.settings.changes.open";
+
+/** The seven catalogues, in the order a change's form meets them. `description` is what the
+ *  editor used to say in its own header and now says in the section's. */
+const CATALOGUES: Array<{ kind: ChangeCatalogueKind; title: string; description: string; Icon: typeof Tags }> = [
+  { kind: "categories", title: "Categories", description: "What kind of thing is being changed. A category can also force a security approver onto the chain.", Icon: Tags },
+  { kind: "sources", title: "Sources", description: "What prompted the change — an incident, a project, routine maintenance.", Icon: GitPullRequestArrow },
+  { kind: "applications", title: "Applications", description: "The systems changes are raised against. Used to suggest a technical owner and to spot two changes booked on the same application at once.", Icon: AppWindow },
+  { kind: "risk-parameters", title: "Risk parameters", description: "The weighted questions behind every risk score. Scores normalise against the sum of ACTIVE weights, so adding a parameter does not deflate the scale — but a complete assessment is required to submit, so each one you add is one more question every requester must answer.", Icon: Scale },
+  { kind: "sla", title: "SLA stages", description: "How long each stage gets, and when it starts warning rather than breaching. A disabled stage has no clock at all rather than a zero-hour one.", Icon: Timer },
+  { kind: "maintenance-windows", title: "Maintenance windows", description: "When change is welcome. Times are UTC minutes past midnight, so a window may cross midnight without needing a second row.", Icon: CalendarClock },
+  { kind: "blackouts", title: "Blackout periods", description: "When change is refused. Drawn under the change calendar rather than filtering it, because a change scheduled inside a freeze is exactly what somebody needs to see.", Icon: CalendarOff }
+];
 
 export function ChangeManagementSettingsCard({ readOnly }: { readOnly: boolean }) {
   const queryClient = useQueryClient();
@@ -43,13 +66,41 @@ export function ChangeManagementSettingsCard({ readOnly }: { readOnly: boolean }
     onError: (err: any) => toast.error("Could not save", { description: serverMessage(err, "Try again.") })
   });
 
+  // The same keys the editors fetch under, so the board's counts are theirs and cost nothing.
+  const counts = useQueries({
+    queries: CATALOGUES.map((c) => ({ queryKey: ["change-config", c.kind], queryFn: () => changeApi.configList(c.kind, true) }))
+  });
+  const sections = useOpenSections(OPEN_KEY, ["settings"]);
+
   if (config.isLoading) return <Skeleton className="h-64 w-full" />;
   if (!config.data) return null;
-
   const { settings, entitlements } = config.data;
+  const on = settings.enableChangeManagement && entitlements.changeManagementEnabled;
+
+  const settingsV = changeSettingsVerdict(entitlements.changeManagementEnabled, settings.enableChangeManagement, settings.approvalSlaHours);
+  const board: BoardEntry[] = [
+    { id: "settings", name: "Change management", blurb: "The switch, the approval SLA and the face check on sign-off.", Icon: ShieldCheck, value: settingsV.value, state: settingsV.state, stateLabel: settingsV.label },
+    ...CATALOGUES.map((c, i) => {
+      const v = catalogueVerdict(counts[i].data);
+      return { id: c.kind, name: c.title, blurb: c.description, Icon: c.Icon, value: v.value, state: v.state, stateLabel: v.label };
+    })
+  ];
+  const shell = (id: string) => {
+    const e = board.find((b) => b.id === id)!;
+    return { id, prefix: PREFIX, name: e.name, blurb: e.blurb, state: e.state, stateLabel: e.stateLabel, Icon: e.Icon, open: sections.isOpen(id), onToggle: () => sections.toggle(id) };
+  };
 
   return (
     <div className="grid gap-4">
+      <SectionBoard
+        title="Change management"
+        summary={on ? "Changes need sign-off before they ship. Pick a catalogue to edit what the form offers." : "Off — nobody can raise a change until the switch is on."}
+        entries={board}
+        onPick={(id) => sections.reveal(id, PREFIX)}
+        columns={4}
+      />
+
+      <SettingsSection {...shell("settings")}>
       <Card>
         <CardHeader>
           <CardTitle className="flex flex-wrap items-center gap-2 text-base">
@@ -91,6 +142,7 @@ export function ChangeManagementSettingsCard({ readOnly }: { readOnly: boolean }
             />
           </div>
 
+          <div className="grid gap-3 lg:grid-cols-2">
           <div className="grid gap-1.5">
             <Label htmlFor="approval-sla">Approval SLA (hours)</Label>
             <Input
@@ -124,63 +176,19 @@ export function ChangeManagementSettingsCard({ readOnly }: { readOnly: boolean }
               onCheckedChange={(v) => update.mutate({ requireFaceOnApproval: v })}
             />
           </div>
+          </div>
         </CardContent>
       </Card>
+      </SettingsSection>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Dropdowns &amp; scoring</CardTitle>
-          <CardDescription>
-            Everything a change's form offers, and the two things that score it. Disabling a row takes it out of the
-            form and leaves every change already filed under it readable — which is why deleting one is refused when
-            anything still points at it.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <ChangeCatalogueEditor
-            kind="categories"
-            title="Categories"
-            description="What kind of thing is being changed. A category can also force a security approver onto the chain."
-            readOnly={readOnly}
-          />
-          <ChangeCatalogueEditor
-            kind="sources"
-            title="Sources"
-            description="What prompted the change — an incident, a project, routine maintenance."
-            readOnly={readOnly}
-          />
-          <ChangeCatalogueEditor
-            kind="applications"
-            title="Applications"
-            description="The systems changes are raised against. Used to suggest a technical owner and to spot two changes booked on the same application at once."
-            readOnly={readOnly}
-          />
-          <ChangeCatalogueEditor
-            kind="risk-parameters"
-            title="Risk parameters"
-            description="The weighted questions behind every risk score. Scores normalise against the sum of ACTIVE weights, so adding a parameter does not deflate the scale — but a complete assessment is required to submit, so each one you add is one more question every requester must answer."
-            readOnly={readOnly}
-          />
-          <ChangeCatalogueEditor
-            kind="sla"
-            title="SLA stages"
-            description="How long each stage gets, and when it starts warning rather than breaching. A disabled stage has no clock at all rather than a zero-hour one."
-            readOnly={readOnly}
-          />
-          <ChangeCatalogueEditor
-            kind="maintenance-windows"
-            title="Maintenance windows"
-            description="When change is welcome. Times are UTC minutes past midnight, so a window may cross midnight without needing a second row."
-            readOnly={readOnly}
-          />
-          <ChangeCatalogueEditor
-            kind="blackouts"
-            title="Blackout periods"
-            description="When change is refused. Drawn under the change calendar rather than filtering it, because a change scheduled inside a freeze is exactly what somebody needs to see."
-            readOnly={readOnly}
-          />
-        </CardContent>
-      </Card>
+      {/* Everything a change's form offers, and the two things that score it. Disabling a row takes
+          it out of the form and leaves every change already filed under it readable — which is why
+          deleting one is refused when anything still points at it. */}
+      {CATALOGUES.map((c) => (
+        <SettingsSection key={c.kind} {...shell(c.kind)}>
+          <ChangeCatalogueEditor kind={c.kind} title={c.title} description={c.description} readOnly={readOnly} frameless />
+        </SettingsSection>
+      ))}
     </div>
   );
 }

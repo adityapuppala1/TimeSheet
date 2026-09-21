@@ -10,10 +10,18 @@
  * into tickets. An admin switching on a write tool is accepting that an instruction hidden in one
  * of those messages could reach it. That trade-off has to be visible at the moment of the click,
  * not buried in documentation.
+ *
+ * THE SHAPE (2026-09-21): a board of three — the endpoint, the tools, the credentials — each tile
+ * carrying its figure ("9 of 12 on · writes blocked", "2 active"), above three folding sections.
+ * The endpoint's master switch sits in its section header so the server can be stopped without
+ * opening anything. Tool descriptions are a paragraph each and there are twelve; each row shows
+ * its first line and folds the rest, because the row is read once when deciding and the switch is
+ * what is used after.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Copy, Eye, KeyRound, Plus, ShieldAlert, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, Copy, Eye, KeyRound, Plus, ShieldAlert, Trash2, Wrench } from "lucide-react";
 import { useState } from "react";
+import { SectionBoard, SettingsSection, useOpenSections, type BoardEntry } from "../../components/settings/settings-sections";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
@@ -28,6 +36,10 @@ import { SERVER_ORIGIN, settingsApi, userApi, type McpToolRow } from "../../serv
 import { copyText } from "../../lib/clipboard";
 import { cn } from "../../lib/utils";
 import { EmptyState } from "../../components/ui/empty-state";
+import { agoLabel, mcpCredentialsVerdict, mcpEndpointVerdict, mcpToolsVerdict } from "../../lib/settings-state";
+
+const PREFIX = "mcp";
+const OPEN_KEY = "ts.settings.mcp.open";
 
 function CopyableSecret({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
@@ -95,13 +107,36 @@ function ToolRow({
           )}
           {tool.permission && <code className="text-[11px] text-muted-foreground">needs {tool.permission}</code>}
         </div>
-        <p className="text-xs text-muted-foreground">{tool.description}</p>
+        <ToolDescription text={tool.description} />
         {blockedByReadOnly && (
           <p className="text-xs text-warning">Turn on "Allow write tools" above before enabling this.</p>
         )}
       </div>
     </div>
   );
+}
+
+/** The first sentence on the face of the row, the rest behind a fold. Twelve paragraphs of tool
+ *  guidance were the tab's height; the first sentence is what tells the rows apart. */
+function ToolDescription({ text }: { text: string }) {
+  const split = text.search(/(?<=[.!?])\s+(?=[A-Z])/);
+  const first = split === -1 ? text : text.slice(0, split);
+  const rest = split === -1 ? "" : text.slice(split).trim();
+  if (!rest) return <p className="text-xs text-muted-foreground">{text}</p>;
+  return (
+    <details className="group text-xs text-muted-foreground">
+      <summary className="flex cursor-pointer list-none items-start gap-1 [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden />
+        <span>{first}</span>
+      </summary>
+      <p className="mt-1 pl-[1.125rem]">{rest}</p>
+    </details>
+  );
+}
+
+function mcpSummary(enabled: boolean, allowWrites: boolean): string {
+  if (!enabled) return "Off. No client can connect until the endpoint is switched on — including one holding a valid credential.";
+  return `An AI client can ${allowWrites ? "read and act on" : "read"} this workspace as the person its credential names.`;
 }
 
 export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
@@ -168,8 +203,58 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
     update.mutate({ toolOverrides: overrides });
   };
 
+  // ── The board's figures, from the one query the tab already runs.
+  const enabled = settings?.enabled ?? false;
+  const allowWrites = settings?.allowWrites ?? false;
+  const toolsOn = (settings?.tools ?? []).filter((t) => (t.override ?? t.defaultEnabled) && (!t.mutating || allowWrites)).length;
+  const liveCredentials = (settings?.credentials ?? []).filter((c) => !c.expiresAt || new Date(c.expiresAt) > new Date());
+  const lastUse = liveCredentials.map((c) => c.lastUsedAt).filter((v): v is string => Boolean(v)).sort().at(-1) ?? null;
+  const sections = useOpenSections(OPEN_KEY, ["endpoint"]);
+
+  const endpoint = mcpEndpointVerdict(enabled, allowWrites);
+  const tools = mcpToolsVerdict(enabled, toolsOn, settings?.tools.length);
+  const credentials = mcpCredentialsVerdict(enabled, liveCredentials.length, Boolean(settings));
+  const board: BoardEntry[] = [
+    { id: "endpoint", name: "Endpoint", blurb: "The switch, the write latch and the URL a client connects to.", Icon: McpMark, value: endpoint.value, state: endpoint.state, stateLabel: endpoint.label },
+    { id: "tools", name: "Tools", blurb: "Which tools a client is offered; each still needs the acting person's permission.", Icon: Wrench, value: tools.value, state: tools.state, stateLabel: tools.label },
+    {
+      id: "credentials",
+      name: "Credentials",
+      blurb: lastUse ? `Last used ${agoLabel(lastUse)}.` : "Bearer tokens, each bound to one person.",
+      Icon: KeyRound,
+      value: credentials.value,
+      state: credentials.state,
+      stateLabel: credentials.label
+    }
+  ];
+  const shell = (id: string) => {
+    const e = board.find((b) => b.id === id)!;
+    return { id, prefix: PREFIX, name: e.name, blurb: e.blurb, state: e.state, stateLabel: e.stateLabel, Icon: e.Icon, open: sections.isOpen(id), onToggle: () => sections.toggle(id) };
+  };
+
+  if (mcp.isLoading) return <Skeleton className="h-40 w-full" />;
+
   return (
-    <div className="grid gap-5">
+    <div className="grid gap-4">
+      <SectionBoard
+        title="MCP server"
+        summary={mcpSummary(enabled, allowWrites)}
+        entries={board}
+        onPick={(id) => sections.reveal(id, PREFIX)}
+      />
+
+      <SettingsSection
+        {...shell("endpoint")}
+        actions={
+          <Switch
+            id="mcp-enabled"
+            aria-label={enabled ? "Switch the MCP endpoint off" : "Switch the MCP endpoint on"}
+            checked={enabled}
+            disabled={readOnly || update.isPending}
+            onCheckedChange={(v) => update.mutate({ enabled: v })}
+          />
+        }
+      >
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -182,7 +267,7 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
             Lets an external AI client — Claude Desktop, Claude Code, the Anthropic MCP connector, a
             managed agent — read and act on this workspace over the Model Context Protocol. Every
             call runs as the specific person its credential was issued to and is refused anything
-            that person could not do in the app. Off by default.
+            that person could not do in the app. Off by default; the switch is in the header above.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
@@ -201,23 +286,7 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
                 </p>
               </div>
 
-              <div className="flex items-center gap-3 rounded-md border border-border px-3 py-2.5">
-                <Switch
-                  id="mcp-enabled"
-                  checked={settings?.enabled ?? false}
-                  disabled={readOnly || update.isPending}
-                  onCheckedChange={(enabled) => update.mutate({ enabled })}
-                />
-                <div className="grid gap-0.5">
-                  <Label htmlFor="mcp-enabled" className={readOnly ? "" : "cursor-pointer"}>
-                    Enable the MCP endpoint
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    While this is off, the endpoint refuses every caller — including a valid credential.
-                  </p>
-                </div>
-              </div>
-
+              <div className="grid gap-4 lg:grid-cols-2">
               <div className="flex items-center gap-3 rounded-md border border-border px-3 py-2.5">
                 <Switch
                   id="mcp-writes"
@@ -236,7 +305,7 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
                 </div>
               </div>
 
-              <div className="grid gap-1.5">
+              <div className="grid content-start gap-1.5">
                 <Label>Connection URL</Label>
                 <CopyableSecret value={connectionUrl} />
                 <p className="text-xs text-muted-foreground">
@@ -244,12 +313,15 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
                   token.
                 </p>
               </div>
+              </div>
             </>
           )}
         </CardContent>
       </Card>
+      </SettingsSection>
 
       {!mcp.isLoading && (
+        <SettingsSection {...shell("tools")}>
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Tools</CardTitle>
@@ -259,8 +331,8 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
               arrives switched off.
             </CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4">
-            <div className="grid gap-1.5">
+          <CardContent className="grid gap-4 xl:grid-cols-2">
+            <div className="grid content-start gap-1.5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Read</p>
               {readTools.map((tool) => (
                 <ToolRow
@@ -272,7 +344,7 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
                 />
               ))}
             </div>
-            <div className="grid gap-1.5">
+            <div className="grid content-start gap-1.5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Write</p>
               {writeTools.map((tool) => (
                 <ToolRow
@@ -286,9 +358,11 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
             </div>
           </CardContent>
         </Card>
+        </SettingsSection>
       )}
 
       {!mcp.isLoading && (
+        <SettingsSection {...shell("credentials")}>
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -429,6 +503,7 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
             )}
           </CardContent>
         </Card>
+        </SettingsSection>
       )}
     </div>
   );

@@ -7,11 +7,19 @@
  * already very large — a fifth settings domain (after reminders/email/ticketing/AI/email-intake/
  * SSO) was the point where a new tab got its own file instead of growing the monolith further.
  * WHO calls the backing API: `controllers/chat-integrations.controller.ts`, via `chatIntegrationsApi`.
+ *
+ * THE SHAPE (2026-09-21, the one Single sign-on established): a board of the four platforms and
+ * the rules, each tile carrying its state and its last event, above one folding section per
+ * platform. The Enabled switch sits in the section HEADER, so a platform can be paused without
+ * opening its form — and the form's own copy of it is gone, because two switches for one fact is
+ * the kind of thing that ends with them disagreeing. Sections whose platform is set up open by
+ * default; the rest stay folded, which is the whole point on a workspace that uses one of four.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { GitBranch, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import type { ChatIntegrationRow, ChatMatchType, ChatPlatform } from "@timesheet/shared";
+import { SectionBoard, SettingsSection, useOpenSections, type BoardEntry } from "../../components/settings/settings-sections";
 import { Badge } from "../../components/ui/badge";
 import { CHAT_PLATFORM_MARKS } from "../../components/ui/connector-marks";
 import { Button } from "../../components/ui/button";
@@ -22,53 +30,127 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Skeleton } from "../../components/ui/skeleton";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toaster";
+import { agoLabel, CHAT_PLATFORM_LABEL as PLATFORM_LABEL, chatFormLead, chatPlatformConfigured, chatPlatformState, chatSwitchTitle, countOf, liveOrOff } from "../../lib/settings-state";
 import { apiUrl, chatIntegrationsApi, projectApi } from "../../services/api";
 
-const PLATFORM_LABEL: Record<ChatPlatform, string> = {
-  SLACK: "Slack",
-  MICROSOFT_TEAMS: "Microsoft Teams",
-  GOOGLE_CHAT: "Google Chat",
-  TELEGRAM: "Telegram"
-};
+const PREFIX = "chat";
+const OPEN_KEY = "ts.settings.chat.open";
+const RULES_ID = "routing-rules";
+
+function chatSummary(liveCount: number): string {
+  if (liveCount === 0) return "No chat platform is switched on yet — messages sent to a bot go nowhere.";
+  return `${liveCount} ${liveCount === 1 ? "platform is" : "platforms are"} turning messages into tickets.`;
+}
 
 const CHAT_MATCH_TYPES: ChatMatchType[] = ["CHANNEL_ID", "COMMAND_PREFIX"];
 
 export function ChatIntegrationsSettingsCard({ readOnly }: { readOnly: boolean }) {
+  const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: ["settings", "chat-integrations"], queryFn: chatIntegrationsApi.getSettings });
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const routingRules = useQuery({ queryKey: ["chat-integrations", "routing-rules"], queryFn: chatIntegrationsApi.routingRules.list });
 
-  return (
-    <div className="grid gap-5">
-      {settings.isLoading && <Skeleton className="h-40 w-full" />}
-      {!settings.isLoading &&
-        settings.data?.integrations.map((row) => (
-          <PlatformCard
-            key={row.platform}
-            row={row}
-            allowed={settings.data!.allowedPlatforms.includes(row.platform)}
-            projects={projects.data ?? []}
-            readOnly={readOnly}
-          />
-        ))}
+  const rows = useMemo(() => settings.data?.integrations ?? [], [settings.data]);
+  const allowedPlatforms = useMemo(() => settings.data?.allowedPlatforms ?? [], [settings.data]);
+  const allowed = (platform: ChatPlatform) => allowedPlatforms.includes(platform);
+  const ruleCount = routingRules.data?.length ?? 0;
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Routing rules</CardTitle>
-          <CardDescription>First active match (in creation order) wins. No match falls back to that platform's default project above.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3">
-          {!readOnly && <NewRoutingRuleRow projects={projects.data ?? []} />}
-          <div className="divide-y divide-border rounded-lg border border-border">
-            {(routingRules.data ?? []).map((rule) => (
-              <RoutingRuleRow key={rule.id} rule={rule} readOnly={readOnly} />
-            ))}
-            {(routingRules.data ?? []).length === 0 && (
-              <p className="p-3 text-sm text-muted-foreground">No routing rules yet — messages land in each platform's default project.</p>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+  // Open by default: whatever is set up. On a workspace that uses one platform of four, that is one
+  // form on screen and three folded — the reason the tab has this shape.
+  const defaults = useMemo(
+    () => rows.filter((row) => chatPlatformState(row, allowedPlatforms.includes(row.platform)).state !== "off").map((row) => row.platform),
+    [rows, allowedPlatforms]
+  );
+  const sections = useOpenSections(OPEN_KEY, defaults);
+
+  // The header switch — the one Enabled control per platform. Same mutation the form's Save runs.
+  const toggle = useMutation({
+    mutationFn: ({ platform, isEnabled }: { platform: ChatPlatform; isEnabled: boolean }) => chatIntegrationsApi.updateSettings(platform, { isEnabled }),
+    onSuccess: (_data, vars) => {
+      toast.success(vars.isEnabled ? `${PLATFORM_LABEL[vars.platform]} is on` : `${PLATFORM_LABEL[vars.platform]} is paused`);
+      queryClient.invalidateQueries({ queryKey: ["settings", "chat-integrations"] });
+    },
+    onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
+  });
+
+  const board = useMemo<BoardEntry[]>(() => {
+    const entries: BoardEntry[] = rows.map((row) => {
+      const verdict = chatPlatformState(row, allowedPlatforms.includes(row.platform));
+      const last = agoLabel(row.lastEventAt);
+      return {
+        id: row.platform,
+        name: PLATFORM_LABEL[row.platform],
+        blurb: last ? `Last message ${last}.` : "No message received yet.",
+        Icon: CHAT_PLATFORM_MARKS[row.platform],
+        state: verdict.state,
+        stateLabel: verdict.label
+      };
+    });
+    const rulesV = liveOrOff(ruleCount > 0, "In force", "Defaults only", routingRules.data ? countOf(ruleCount, "rule") : undefined);
+    entries.push({ id: RULES_ID, name: "Routing rules", blurb: "Which channel or command lands in which project.", Icon: GitBranch, value: rulesV.value, state: rulesV.state, stateLabel: rulesV.label });
+    return entries;
+  }, [rows, allowedPlatforms, routingRules.data, ruleCount]);
+
+  const liveCount = board.filter((b) => b.id !== RULES_ID && b.state === "live").length;
+  const entry = (id: string) => board.find((b) => b.id === id)!;
+  const shell = (id: string) => {
+    const e = entry(id);
+    return { id, prefix: PREFIX, name: e.name, blurb: e.blurb, state: e.state, stateLabel: e.stateLabel, Icon: e.Icon, open: sections.isOpen(id), onToggle: () => sections.toggle(id) };
+  };
+
+  if (settings.isLoading) return <Skeleton className="h-40 w-full" />;
+
+  return (
+    <div className="grid gap-4">
+      <SectionBoard
+        title="Connections"
+        summary={chatSummary(liveCount)}
+        entries={board}
+        onPick={(id) => sections.reveal(id, PREFIX)}
+        aside={<span className="text-xs font-medium tabular-nums text-muted-foreground">{liveCount} / {rows.length}</span>}
+      />
+
+      {rows.map((row) => {
+        const isAllowed = allowed(row.platform);
+        const configured = chatPlatformConfigured(row);
+        return (
+          <SettingsSection
+            key={row.platform}
+            {...shell(row.platform)}
+            actions={
+              <Switch
+                aria-label={`${row.isEnabled ? "Pause" : "Enable"} ${PLATFORM_LABEL[row.platform]}`}
+                title={chatSwitchTitle(isAllowed, configured, row.isEnabled)}
+                checked={row.isEnabled}
+                disabled={readOnly || !isAllowed || !configured || toggle.isPending}
+                onCheckedChange={(v) => toggle.mutate({ platform: row.platform, isEnabled: v })}
+              />
+            }
+          >
+            <PlatformCard row={row} allowed={isAllowed} projects={projects.data ?? []} readOnly={readOnly} />
+          </SettingsSection>
+        );
+      })}
+
+      <SettingsSection {...shell(RULES_ID)}>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Routing rules</CardTitle>
+            <CardDescription>First active match (in creation order) wins. No match falls back to that platform's default project above.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            {!readOnly && <NewRoutingRuleRow projects={projects.data ?? []} />}
+            <div className="divide-y divide-border rounded-lg border border-border">
+              {(routingRules.data ?? []).map((rule) => (
+                <RoutingRuleRow key={rule.id} rule={rule} readOnly={readOnly} />
+              ))}
+              {(routingRules.data ?? []).length === 0 && (
+                <p className="p-3 text-sm text-muted-foreground">No routing rules yet — messages land in each platform's default project.</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </SettingsSection>
     </div>
   );
 }
@@ -110,13 +192,7 @@ function PlatformCard({
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });
 
-  const CONFIGURED_CHECK: Record<ChatPlatform, () => boolean> = {
-    GOOGLE_CHAT: () => Boolean(row.googleChatWebhookUrl && row.signingSecretSet),
-    MICROSOFT_TEAMS: () => Boolean(row.teamsAppId && row.teamsAppPasswordSet),
-    SLACK: () => Boolean(row.botTokenSet),
-    TELEGRAM: () => Boolean(row.botTokenSet)
-  };
-  const fullyConfigured = CONFIGURED_CHECK[row.platform]();
+  const fullyConfigured = chatPlatformConfigured(row);
 
   const WEBHOOK_PATH: Partial<Record<ChatPlatform, string>> = {
     SLACK: "/chat/slack/events/<your-workspace-slug>",
@@ -129,31 +205,11 @@ function PlatformCard({
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <CardTitle className="flex items-center gap-2 text-base">
-              {/* The platform's own mark, not a shared speech bubble — with four of these cards on
-                  screen the icon was the one thing that could tell them apart at a glance and it
-                  was identical on all four. CHAT_PLATFORM_MARKS is keyed by the same enum the row
-                  carries, so the card, the picker and the rule badge below cannot disagree. */}
-              {(() => {
-                const Mark = CHAT_PLATFORM_MARKS[row.platform];
-                return <Mark className="h-4 w-4" />;
-              })()}
-              {PLATFORM_LABEL[row.platform]}
-            </CardTitle>
-            <CardDescription>
-              {!allowed
-                ? "Not available on this workspace's current plan."
-                : "Messages sent to your bot are AI-triaged into tickets automatically."}
-            </CardDescription>
-          </div>
-          {fullyConfigured && row.isEnabled && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
-              <Check className="h-3 w-3" />Active
-            </span>
-          )}
-        </div>
+        {/* The platform's mark and name are the section header's (CHAT_PLATFORM_MARKS, keyed by the
+            same enum the row carries, so the tile, the header and the rule badge cannot disagree);
+            in frameless mode this title does not render, and only the sentence below does. */}
+        <CardTitle className="text-base">{PLATFORM_LABEL[row.platform]}</CardTitle>
+        <CardDescription>{chatFormLead(allowed, fullyConfigured)}</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
         {webhookUrlHint && (
@@ -164,18 +220,7 @@ function PlatformCard({
           </div>
         )}
 
-        <div className="flex items-start gap-4 rounded-lg border border-border p-4">
-          <div className="flex-1">
-            <Label>Enabled</Label>
-            <p className="mt-0.5 text-xs text-muted-foreground">Start turning {PLATFORM_LABEL[row.platform]} messages into tickets.</p>
-          </div>
-          <Switch
-            checked={row.isEnabled}
-            disabled={readOnly || !allowed || !fullyConfigured}
-            onCheckedChange={(v) => save.mutate({ isEnabled: v })}
-          />
-        </div>
-
+        <div className="grid gap-4 lg:grid-cols-2">
         {(row.platform === "SLACK" || row.platform === "TELEGRAM") && (
           <div className="grid gap-1.5">
             <Label>Bot token {row.botTokenSet && <span className="font-normal text-muted-foreground">(saved)</span>}</Label>
@@ -203,7 +248,7 @@ function PlatformCard({
         )}
 
         {row.platform === "MICROSOFT_TEAMS" && (
-          <div className="grid gap-4 sm:grid-cols-2">
+          <>
             <div className="grid gap-1.5">
               <Label>Bot Framework app ID</Label>
               <Input value={teamsAppId} disabled={readOnly} onChange={(e) => setTeamsAppId(e.target.value)} placeholder="Azure Bot app registration ID" />
@@ -218,11 +263,11 @@ function PlatformCard({
                 placeholder={row.teamsAppPasswordSet ? "•••••••••••••••• (unchanged)" : "Client secret"}
               />
             </div>
-          </div>
+          </>
         )}
 
         {row.platform === "GOOGLE_CHAT" && (
-          <div className="grid gap-4 sm:grid-cols-2">
+          <>
             <div className="grid gap-1.5">
               <Label>Incoming webhook URL</Label>
               <Input
@@ -242,10 +287,10 @@ function PlatformCard({
                 placeholder={row.signingSecretSet ? "•••••••••••••••• (unchanged)" : "Set in Google Cloud console's Chat app config"}
               />
             </div>
-          </div>
+          </>
         )}
 
-        <div className="grid gap-1.5 sm:w-1/2">
+        <div className="grid gap-1.5">
           <Label>Default project</Label>
           <Select value={defaultProjectId || "none"} onValueChange={(v) => setDefaultProjectId(v === "none" ? "" : v)} disabled={readOnly}>
             <SelectTrigger><SelectValue /></SelectTrigger>
@@ -254,6 +299,7 @@ function PlatformCard({
               {projects.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
             </SelectContent>
           </Select>
+        </div>
         </div>
 
         {row.lastError && <p className="text-xs text-destructive">Last error: {row.lastError}</p>}

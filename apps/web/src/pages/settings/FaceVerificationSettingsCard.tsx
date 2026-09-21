@@ -5,9 +5,17 @@
  * Follows this app's established settings-card conventions: switches save immediately (no Save
  * button), numeric/text groups keep local state behind an explicit Save, non-super-admins see
  * the card read-only rather than not at all.
+ *
+ * THE SHAPE (2026-09-21): a board of four — the policy, the match-score distribution, the outcome
+ * analytics, the verification log — with the figures that matter on the tiles (flagged pending,
+ * checks in 90 days), over folding sections. The tab was 4,114 px; the policy is what an admin
+ * comes for and the log is what a reviewer comes for, and neither had to scroll past the other
+ * before. Every card below is unchanged and renders frameless inside its section.
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { SectionBoard, SettingsSection, useOpenSections, type BoardEntry } from "../../components/settings/settings-sections";
+import { faceLogVerdict, facePolicyVerdict, liveOrOff } from "../../lib/settings-state";
 import {
   AlertTriangle,
   ArrowDown,
@@ -106,6 +114,15 @@ const OUTCOME_TONE: Record<FaceOutcome, string> = {
 
 /** The fields the calibration form owns. Used to decide whether a save should re-seed those
  *  inputs — a toggle save must never clobber a number somebody is midway through typing. */
+function faceSummary(enabled: boolean, flagged: number): string {
+  if (!enabled) return "Off. Nobody is asked for a camera check until the policy is switched on.";
+  if (flagged === 0) return "Live checks are on.";
+  return `Live checks are on — ${flagged} flagged ${flagged === 1 ? "attempt is" : "attempts are"} waiting for review.`;
+}
+
+const FACE_PREFIX = "face";
+const FACE_OPEN_KEY = "ts.settings.face.open";
+
 const TUNING_KEYS = [
   "matchThreshold",
   "antispoofThreshold",
@@ -185,13 +202,42 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
     setConsentText(s.consentText ?? "");
   }, [settings.data]);
 
+  // The same key FaceStatsCard fetches under, so the board's figures are its figures.
+  const stats = useQuery({ queryKey: ["face", "stats"], queryFn: faceApi.stats, enabled: Boolean(settings.data?.enabled) });
+  const sections = useOpenSections(FACE_OPEN_KEY, ["policy"]);
+
   if (settings.isLoading) return <Skeleton className="h-64 w-full" />;
   const s = settings.data;
   const enabled = s?.enabled ?? false;
   const allowedByPlan = s?.allowedByPlan ?? false;
+  const flagged = stats.data?.flaggedPending ?? 0;
+
+  const policyV = facePolicyVerdict(allowedByPlan, enabled, s?.enforcementMode === "ALL");
+  const measuring = liveOrOff(enabled, "Measuring", "Needs the policy on");
+  const logV = faceLogVerdict(flagged, enabled, Boolean(stats.data));
+  const tile = (id: string, name: string, blurb: string, Icon: BoardEntry["Icon"], v: { state: BoardEntry["state"]; label?: string; value?: string }): BoardEntry => ({ id, name, blurb, Icon, value: v.value, state: v.state, stateLabel: v.label });
+  const board: BoardEntry[] = [
+    tile("policy", "Policy", "When a check is required, the thresholds, retention and the consent wording.", ScanFace, policyV),
+    tile("distribution", "Match-score distribution", "Where rejected and passed checks sit, so the threshold can be tuned into the gap.", BarChart3, { ...measuring, value: stats.data ? `${stats.data.total.toLocaleString()} checks in 90 days` : undefined }),
+    tile("outcomes", "Outcome analytics", "What checks decided, how it trends, and who still has to enroll.", Sparkles, measuring),
+    tile("log", "Verification log", "Every recent check with its scores; the flagged ones wait for a reviewer.", ShieldCheck, logV)
+  ];
+  const shell = (id: string) => {
+    const e = board.find((b) => b.id === id)!;
+    return { id, prefix: FACE_PREFIX, name: e.name, blurb: e.blurb, state: e.state, stateLabel: e.stateLabel, Icon: e.Icon, open: sections.isOpen(id), onToggle: () => sections.toggle(id) };
+  };
 
   return (
     <div className="space-y-4">
+      <SectionBoard
+        title="Face verification"
+        summary={faceSummary(enabled, flagged)}
+        entries={board}
+        onPick={(id) => sections.reveal(id, FACE_PREFIX)}
+        columns={4}
+      />
+
+      <SettingsSection {...shell("policy")}>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -424,10 +470,17 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
           </div>
         </CardContent>
       </Card>
+      </SettingsSection>
 
-      {enabled && <FaceStatsCard />}
-      {enabled && <FaceOutcomeAnalyticsCard readOnly={readOnly} />}
-      <FaceReviewLog readOnly={readOnly} />
+      <SettingsSection {...shell("distribution")}>
+        {enabled ? <FaceStatsCard /> : <p className="text-sm text-muted-foreground">Switch the policy on to start measuring match scores.</p>}
+      </SettingsSection>
+      <SettingsSection {...shell("outcomes")}>
+        {enabled ? <FaceOutcomeAnalyticsCard readOnly={readOnly} /> : <p className="text-sm text-muted-foreground">Switch the policy on to see what checks decide.</p>}
+      </SettingsSection>
+      <SettingsSection {...shell("log")}>
+        <FaceReviewLog readOnly={readOnly} />
+      </SettingsSection>
     </div>
   );
 }

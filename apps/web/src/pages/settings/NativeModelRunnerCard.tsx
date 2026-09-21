@@ -41,6 +41,16 @@
  * AgentRunsCard. There is no SSE and no WebSocket anywhere in this repo and this card is not the
  * place to introduce one; an idle workspace must not issue a request every two seconds forever.
  *
+ * ── THE LAYOUT (2026-09-21): THE ORDER OF OPERATIONS ACROSS, NOT DOWN ────────────────────────
+ *
+ * The machine, then the engine and the runtime SIDE BY SIDE (each is the other's precondition
+ * and both are short), then tuning as three columns with the long explanation folded under each
+ * control, then the models as a GRID of cards rather than six full-width rows. What stays on the
+ * face of every model card, per the rule above: the verdict and its sentence, the memory bar, the
+ * split arithmetic, the speed figure with its estimated/measured treatment, and any warning. What
+ * folds behind "Good at, weak at, and the basis" is prose a person reads once when choosing and
+ * never again when operating. Nothing was removed; the card was 1,100 px per model and is ~300.
+ *
  * ── IT HAS TO BE HONEST WHEN NOTHING IS SET UP ───────────────────────────────────────────────
  *
  * The whole panel renders, and is useful, with no model downloaded, no llama-server binary
@@ -48,7 +58,7 @@
  * card is opened, so an empty state that looks broken is an empty state that gets a support ticket.
  * Each one names the next step instead.
  */
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   nativeContextLadder,
@@ -71,6 +81,9 @@ import {
 import {
   AlertTriangle,
   ArrowUpToLine,
+  Boxes,
+  ChevronRight,
+  SlidersHorizontal,
   CheckCircle2,
   Cpu,
   Download,
@@ -429,38 +442,45 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
 
             {/* THE ENGINE COMES BEFORE THE MODEL LIST, because nothing below it works without one.
                 The old order let an operator download 940 MB and only then discover the panel's last
-                word was "install llama.cpp yourself". */}
-            <EngineStrip
-              report={engine.data ?? null}
-              loading={engine.isLoading}
-              readOnly={readOnly}
-              installing={installEngine.isPending}
-              onInstall={() => installEngine.mutate()}
-              onCancel={(id) => cancelEngineInstall.mutate(id)}
-            />
+                word was "install llama.cpp yourself". Beside the runtime rather than above it: the
+                two are short, each is read against the other, and stacked they cost a screen. */}
+            <div className="grid min-w-0 gap-3 xl:grid-cols-2">
+              <EngineStrip
+                report={engine.data ?? null}
+                loading={engine.isLoading}
+                readOnly={readOnly}
+                installing={installEngine.isPending}
+                onInstall={() => installEngine.mutate()}
+                onCancel={(id) => cancelEngineInstall.mutate(id)}
+              />
 
-            <RuntimeStrip
-              status={runtime.data ?? null}
-              loading={runtime.isLoading}
-              readOnly={readOnly}
-              busy={busy}
-              benchmarking={benchmark.isPending}
-              promoting={makePrimary.isPending}
-              nativeProviderRow={nativeProviderRow}
-              onStop={() => stopRuntime.mutate()}
-              onRestart={() => restartRuntime.mutate()}
-              onBenchmark={(modelId) => benchmark.mutate(modelId)}
-              onMakePrimary={() => makePrimary.mutate()}
-            />
+              <RuntimeStrip
+                status={runtime.data ?? null}
+                loading={runtime.isLoading}
+                readOnly={readOnly}
+                busy={busy}
+                benchmarking={benchmark.isPending}
+                promoting={makePrimary.isPending}
+                nativeProviderRow={nativeProviderRow}
+                onStop={() => stopRuntime.mutate()}
+                onRestart={() => restartRuntime.mutate()}
+                onBenchmark={(modelId) => benchmark.mutate(modelId)}
+                onMakePrimary={() => makePrimary.mutate()}
+              />
+            </div>
 
             <div className="min-w-0 rounded-lg border border-border p-3">
-              <p className="text-sm font-medium">Tuning</p>
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <SlidersHorizontal className="h-4 w-4 text-primary" aria-hidden />
+                Tuning
+              </p>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 Pre-filled with what the estimator recommends for this machine. Both numbers change the memory figures on every
                 model below as you move them — that is the trade-off, made visible.
               </p>
               <NativeRuntimeTuningControls
                 className="mt-3"
+                layout="row"
                 idPrefix="native-runner"
                 disabled={readOnly}
                 hardware={hardware}
@@ -478,12 +498,18 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
 
             <div className="grid min-w-0 gap-3">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className="text-sm font-medium">Models this deployment will run</p>
+                <p className="flex items-center gap-2 text-sm font-medium">
+                  <Boxes className="h-4 w-4 text-primary" aria-hidden />
+                  Models this deployment will run
+                </p>
                 <p className="text-xs text-muted-foreground">
                   A curated list, not a mirror of Hugging Face — every entry is picked for closing its JSON braces on a CPU.
                 </p>
               </div>
-              {nativeModelCatalogue.map((entry) => (
+              {/* A grid, not a column: six rows of prose was a screen and a half per model. The
+                  running model, when there is one, is sorted first so it is never below the fold. */}
+              <div className="grid min-w-0 gap-3 md:grid-cols-2 2xl:grid-cols-3">
+              {[...nativeModelCatalogue].sort((a, b) => Number(runtime.data?.modelId === b.id) - Number(runtime.data?.modelId === a.id)).map((entry) => (
                 <ModelRow
                   key={entry.id}
                   entry={entry}
@@ -507,6 +533,7 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
                   onBenchmark={() => benchmark.mutate(entry.id)}
                 />
               ))}
+              </div>
             </div>
           </>
         )}
@@ -1019,15 +1046,16 @@ function ModelRow({
   const progress = download ? downloadProgressPercent(download) : null;
 
   return (
-    <div className={cn("min-w-0 rounded-lg border p-3", isRunning ? "border-primary/50 bg-primary/[0.03]" : "border-border")}>
-      {/* basis-72 on the description column rather than a bare min-w-0: with only min-w-0 the
-          column shrinks to whatever is left and the action buttons wrap under a long "good at"
-          sentence on one row and not the next, so six otherwise identical cards line their buttons
-          up in six different places. A basis makes the wrap happen at one width for all of them —
-          which on a phone is every one of them. */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 basis-72">
-          <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+    <div
+      className={cn("flex min-w-0 flex-col rounded-lg border p-3 transition-shadow hover:shadow-soft", isRunning ? "border-primary/50 bg-primary/[0.03]" : "border-border")}
+      data-native-model={entry.id}
+    >
+      {/* Title and badges on the left, the actions on the right; `basis-40` on the title keeps the
+          action buttons wrapping at ONE width across the six cards rather than under whichever
+          title happens to be longest. */}
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 flex-1 basis-40">
+          <p className="flex flex-wrap items-center gap-1.5 text-sm font-semibold">
             {entry.displayName}
             <Badge variant="outline" className="text-xs font-normal tabular-nums">
               {entry.parameterCountB}B · {entry.quantisation}
@@ -1055,14 +1083,8 @@ function ModelRow({
               </Badge>
             )}
           </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">Good at</span> {entry.goodAt}
-          </p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">Weak at</span> {entry.weakAt}
-          </p>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
           {!ready && !inFlight && (
             <Button size="sm" variant="outline" disabled={readOnly} onClick={onDownload}>
               <Download className="mr-1 h-3.5 w-3.5" />
@@ -1169,7 +1191,6 @@ function ModelRow({
             · {speed.suggestedMaxOutputTokens} output tokens — what this machine can emit inside the 90-second call ceiling
           </span>
         )}
-        <span className={cn("basis-full text-muted-foreground", speed.source === "estimated" && "italic")}>{speed.basis}</span>
       </div>
 
       {modelWarnings.map((warning) => (
@@ -1180,6 +1201,25 @@ function ModelRow({
       ))}
 
       {download && <DownloadProgress download={download} progress={progress} />}
+
+      {/* The prose, folded: read once when choosing, never again when operating. A native
+          <details> so it needs no state, works with the keyboard, and prints open. The verdict,
+          the arithmetic and the speed figure above are NOT in here — those are the rule. */}
+      <details className="group mt-auto pt-2 text-xs">
+        <summary className="flex cursor-pointer list-none items-center gap-1 font-medium text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+          <ChevronRight className="h-3.5 w-3.5 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden />
+          Good at, weak at, and the basis
+        </summary>
+        <div className="mt-2 grid gap-1.5 text-muted-foreground">
+          <p>
+            <span className="font-medium text-foreground">Good at</span> {entry.goodAt}
+          </p>
+          <p>
+            <span className="font-medium text-foreground">Weak at</span> {entry.weakAt}
+          </p>
+          <p className={cn(speed.source === "estimated" && "italic")}>{speed.basis}</p>
+        </div>
+      </details>
     </div>
   );
 }
@@ -1263,7 +1303,8 @@ export function NativeRuntimeTuningControls({
   onContextChange,
   kvCacheType,
   onKvCacheTypeChange,
-  model
+  model,
+  layout = "stack"
 }: {
   className?: string;
   idPrefix: string;
@@ -1281,13 +1322,18 @@ export function NativeRuntimeTuningControls({
   /** When a specific model is in play, its own maximum caps the steps offered. Omitted on the card
    *  itself, where the steps apply to every row and each row clamps its own figures. */
   model?: NativeModelEntry | null;
+  /** "row": the three controls side by side with each explanation folded under a "Why" — the
+   *  card's layout, where the same three paragraphs used to cost a screen. "stack" (default): the
+   *  dialog's layout, where there is room and the explanation is the point. */
+  layout?: "stack" | "row";
 }) {
   const ceiling = nativeThreadCeiling(hardware);
   const steps = model ? contextStepsForModel(model) : [4096, 8192, 16384, 32768];
+  const row = layout === "row";
 
   return (
-    <div className={cn("grid gap-4", className)}>
-      <div className="grid gap-1.5">
+    <div className={cn("grid gap-4", row && "sm:grid-cols-3", className)}>
+      <div className="grid content-start gap-1.5">
         <Label htmlFor={`${idPrefix}-threads`}>Inference threads</Label>
         <Input
           id={`${idPrefix}-threads`}
@@ -1299,7 +1345,18 @@ export function NativeRuntimeTuningControls({
           disabled={disabled}
           onChange={(event) => onThreadsChange(event.target.value)}
         />
-        <p className="text-xs text-muted-foreground">
+        <TuningHint
+          folded={row}
+          lead={
+            recommendedThreads !== null ? (
+              <>
+                Recommended <span className="font-medium tabular-nums text-foreground">{recommendedThreads}</span>, ceiling {ceiling.max}.
+              </>
+            ) : (
+              <>No core count reported — llama.cpp's default unless you type one.</>
+            )
+          }
+        >
           {recommendedThreads !== null ? (
             <>
               Recommended <span className="font-medium tabular-nums text-foreground">{recommendedThreads}</span> — {threadsBasis}. The
@@ -1310,10 +1367,10 @@ export function NativeRuntimeTuningControls({
             <>This machine would not report a core count, so llama.cpp's own default is used unless you type one.</>
           )}{" "}
           Ceiling {ceiling.max} — {ceiling.basis}.
-        </p>
+        </TuningHint>
       </div>
 
-      <div className="grid gap-1.5">
+      <div className="grid content-start gap-1.5">
         <Label>Context window</Label>
         <div className="flex flex-wrap gap-2">
           {steps.map((step) => (
@@ -1330,15 +1387,22 @@ export function NativeRuntimeTuningControls({
             </Button>
           ))}
         </div>
-        <p className="text-xs text-muted-foreground">
+        <TuningHint
+          folded={row}
+          lead={
+            <>
+              Recommended <span className="font-medium text-foreground">{formatContextTokens(recommendedContext)}</span>; each step doubles the KV cache.
+            </>
+          }
+        >
           Steps rather than a free number, because every value between two powers of two buys cache nobody fills. Recommended{" "}
           <span className="font-medium text-foreground">{formatContextTokens(recommendedContext)}</span> for this machine — the
           recommendation never goes above 16k on purpose, since this app's own truncation caps mean its callers never send more.
           Each step doubles the KV cache; watch the memory line on each model move as you press these.
-        </p>
+        </TuningHint>
       </div>
 
-      <div className="grid gap-1.5">
+      <div className="grid content-start gap-1.5">
         <Label htmlFor={`${idPrefix}-kv`}>KV cache precision</Label>
         <Select value={kvCacheType} disabled={disabled} onValueChange={(value) => onKvCacheTypeChange(value as NativeKvCacheType)}>
           <SelectTrigger id={`${idPrefix}-kv`} className="max-w-[16rem]">
@@ -1349,12 +1413,27 @@ export function NativeRuntimeTuningControls({
             <SelectItem value="q8_0">8-bit (q8_0) — half the cache</SelectItem>
           </SelectContent>
         </Select>
-        <p className="text-xs text-muted-foreground">
+        <TuningHint folded={row} lead={<>8-bit halves what the context costs in memory.</>}>
           An 8-bit cache roughly halves the memory the context costs, for a small quality cost that is hard to see on the
           classification work this app sends a local model. It is the first thing to reach for when a model you want is one step
           of context away from fitting.
-        </p>
+        </TuningHint>
       </div>
     </div>
+  );
+}
+
+/** A control's explanation: the whole paragraph where there is room (the dialog), or one line with
+ *  the rest behind "Why" where there is not (the card). The full text is identical in both. */
+function TuningHint({ folded, lead, children }: { folded: boolean; lead: ReactNode; children: ReactNode }) {
+  if (!folded) return <p className="text-xs text-muted-foreground">{children}</p>;
+  return (
+    <details className="group text-xs text-muted-foreground">
+      <summary className="flex cursor-pointer list-none items-start gap-1 [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden />
+        <span>{lead}</span>
+      </summary>
+      <p className="mt-1.5 pl-[1.125rem]">{children}</p>
+    </details>
   );
 }

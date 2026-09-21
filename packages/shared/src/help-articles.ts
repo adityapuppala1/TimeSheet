@@ -494,7 +494,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
     where: "Workspace settings → AI",
     when: "Every AI capability is off until you switch it on here, and every call runs on YOUR provider key under YOUR budget.",
     steps: [
-      "Add providers under AI providers — Anthropic, or any OpenAI-compatible endpoint (OpenAI, Groq, Mistral, Ollama…), each with its own key and model.",
+      "The board at the top answers the tab's questions before you open anything: is AI on, which provider is first, is a local model running, what this period cost against the budget, how many capabilities are on, how many prompts are customised, how many datasets exist. Each tile opens its section.",
+      "Add providers under Providers — Anthropic, or any OpenAI-compatible endpoint (OpenAI, Groq, Mistral, Ollama…), each with its own key and model.",
       "Order them: every call tries the top enabled provider and falls through on failure. Test fires a real tiny request.",
       "Set the monthly budget ceiling — enforced live, per call.",
       "Flip each capability's own switch; nothing calls out until you do.",
@@ -512,7 +513,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     when: "No per-call cost, nothing sent to a vendor, and it works with no internet at all — paid for in memory and speed.",
     steps: [
       "Read \"Your system\" first. It shows the CPU, the RAM this process may actually use, free disk, and how it worked out whether it is on bare metal, in Docker or in Kubernetes. If it warns that the memory figures are the HOST's, set a memory limit on the container before trusting anything below it.",
-      "Pick a model from the list. Each one states what it is good and bad at, and whether it fits — with the arithmetic: weights, plus the KV cache at the chosen context, plus llama.cpp's own working set, against what is left after 1.5 GB is reserved for the database and the API. Models that will not fit are shown anyway, with the reason.",
+      "Pick a model from the grid. Each card shows whether it fits — with the arithmetic on its face: weights, plus the KV cache at the chosen context, plus llama.cpp's own working set, against what is left after 1.5 GB is reserved for the database and the API — and its speed figure, estimated or measured. What it is good and weak at, and how the figure was reached, are one click away under the card. Models that will not fit are shown anyway, with the reason.",
       "Move the context steps and the KV precision and watch every model's memory line change. An 8-bit KV cache roughly halves what the context costs, and is the first thing to try when the model you want is one step away from fitting.",
       "Download it (the transfer runs on the server; verification is its own step), then Run it, then Measure it — the benchmark replaces the speed ESTIMATE with a real tokens/sec, a time-to-first-token, and the output-token ceiling this machine can meet inside the 90-second call limit.",
       "Press \"Make it the primary provider\". That adds a llama.cpp row at the TOP of the provider list, carrying the running context and the measured ceiling. Reorder, disable or delete it from the provider list like any other."
@@ -529,6 +530,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     where: "Sidebar → Workspace settings",
     when: "The map, so you open the right tab first time.",
     steps: [
+      "The long tabs (AI, Chat integrations, MCP server, Security & DevOps, Face verification, Change management, Ticketing, Single sign-on) open with a BOARD: one tile per area with its state and its one figure. Click a tile to open that section; the rest stay folded, and the tab remembers which you left open.",
       "Branding — name, logo, colours. Reminders & schedule — nudge times and working days.",
       "Email channels / Mail server / Email intake — what sends, how it sends (SMTP), what arrives (IMAP → tickets).",
       "Ticketing / Planning / Change management — types, workflows, rules, matrices.",
@@ -546,7 +548,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     where: "Workspace settings → Single sign-on",
     when: "Connecting Google, Microsoft/Entra, any SAML IdP or LDAP — and letting the IdP create and close accounts (SCIM).",
     steps: [
-      "The connection board shows all five at a glance: Live, Ready (saved but off), Half configured, or Not set up.",
+      "The connection board shows all five at a glance: Live, Ready (saved but off), Half configured, or Not set up — the same board and folding sections every long settings tab now uses.",
       "Open a provider's card and enter YOUR OWN app registration — there is no shared client.",
       "Use Test connection, then prove it: “Require SSO only” stays locked until a real person has signed in that way — the only check that cannot lock everyone out.",
       "SCIM lives on the same tab: generate the bearer token (shown once), give it and the base URL to your IdP."

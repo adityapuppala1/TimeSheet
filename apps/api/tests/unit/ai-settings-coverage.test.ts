@@ -4,7 +4,7 @@
  * `GlobalAISettings` carries a boolean per AI capability, and every one of them is supposed to be
  * reachable by an administrator: either through the autonomy ladder (a registry entry whose
  * `featureToggle` names the column, rendered as a switch by AIAutonomyCard) or through one of the
- * handful of switches WorkspaceSettings' AI tab drives directly.
+ * handful of switches the AI tab (AISettingsTab.tsx) drives directly.
  *
  * `practiceUpdateEnabled` was neither. No registry entry, no switch, and — the part that made it
  * unfixable — no key in the `.strict()` AI settings schema, so no route on this server would accept
@@ -36,7 +36,9 @@ const SCHEMA_PATH = "apps/api/prisma/schema.prisma";
  * have found it and called this bug covered.
  */
 const UI_SOURCES = [
-  "apps/web/src/pages/WorkspaceSettings.tsx",
+  // The AI tab moved out of WorkspaceSettings.tsx into its own file on 2026-09-21; the retention
+  // switches (`aiCaptureEnabled`, `aiCaptureContentEnabled`) live there.
+  "apps/web/src/pages/settings/AISettingsTab.tsx",
   "apps/web/src/pages/settings/AIAutonomyCard.tsx",
   "apps/web/src/pages/settings/AIProviderListCard.tsx"
 ];
