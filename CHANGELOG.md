@@ -36,6 +36,26 @@ number, on purpose — an installation must never render history for a version t
 - **Chat integrations and MCP tiles say when they were last used**, and the MCP tool list shows
   each tool's first sentence with the rest folded — twelve paragraphs were the tab's height.
 
+### 🏔️ A landing page that shows the product, and stops burning the machine
+
+- **The front page is a third of the words it was** - 5,232 down to 1,864 - without dropping a
+  single claim. The capability grid printed forty-five paragraphs at once, which was sixty per cent
+  of the page; it is now five groups of scannable tiles beside a real screenshot of that part of
+  the product, with each full explanation one press away. The same treatment on the pitch deck's
+  densest slide.
+- **The hero shows the software.** Five real screens, generated from the running app, standing in
+  3D space and turning with the pointer - with a plain responsive image in their place on a phone,
+  under reduced motion, or on a machine without a GPU.
+- **And it idles at nothing.** Measured: an idle page was making 598 WebGL draw calls and forcing
+  120 layouts every second, for scenery you had already scrolled past. Both are now zero. A
+  full-screen background scene that could never pause itself was removed, an SVG drawing that
+  forced a layout on every frame was rebuilt to animate something the compositor can take, and
+  every canvas in the app now pauses off screen, pauses in a background tab, holds a frame budget,
+  and stops entirely once it has nothing new to draw.
+- **The sign-in page's lattice costs a quarter of what it did**, for the same picture.
+- **A heading that had quietly become wrong**: "Six things the category does not do" sat above
+  eight of them. The number is derived from the list now.
+
 ### 🔒 Zero open advisories, and an editor that keeps your caret
 
 - **Menus, dialogs, sheets, popovers and tooltips honour "reduce motion".** Their entrance and exit

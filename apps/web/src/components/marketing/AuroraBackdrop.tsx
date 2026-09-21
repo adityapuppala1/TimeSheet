@@ -165,7 +165,11 @@ export function AuroraBackdrop({ className, intensity = 1 }: { className?: strin
 
     let renderer: Renderer;
     try {
-      renderer = new Renderer({ alpha: true, antialias: false, dpr: Math.min(window.devicePixelRatio || 1, 2) });
+      // dpr 1, not 2. This is a soft gradient with no edges to alias, and a full-screen fragment
+      // shader costs its pixel count directly: at dpr 2 a retina hero fills four times the pixels
+      // every frame to render something deliberately out of focus. Measured on an idle page, the
+      // aurora and the lattice together were most of 32% of a CPU.
+      renderer = new Renderer({ alpha: true, antialias: false, dpr: 1 });
     } catch {
       // No WebGL, a blocked context, a headless browser. The hero is fully readable without this.
       return;
@@ -230,13 +234,35 @@ export function AuroraBackdrop({ className, intensity = 1 }: { className?: strin
 
     let frame = 0;
     const start = performance.now();
+    /** How long the shader keeps drifting after mount before it holds its last frame. */
+    const INTRO_MS = 2600;
+    // 30 frames a second, not the display's 120. This is an out-of-focus gradient drifting across a
+    // hero; nobody can see the difference between 30 and 120, and on a 120Hz panel the naive loop
+    // was filling the viewport with a fragment shader four times more often than anything here
+    // needs. Still driven by requestAnimationFrame so the browser can stop it in a background tab.
+    const MIN_FRAME_MS = 1000 / 30;
+    let lastDraw = 0;
     const loop = () => {
       frame = requestAnimationFrame(loop);
       if (!visible || document.hidden) return;
+      const now = performance.now();
+      if (now - lastDraw < MIN_FRAME_MS) return;
+
+      /* IT COMES TO REST, and this is the difference between atmosphere and a space heater. A
+         full-viewport fragment shader costs its pixel count on every frame it draws, so the honest
+         question is not "how cheap can each frame be" but "how many frames does this actually
+         need". The answer: the ones after load while it settles into place, and the ones while a
+         pointer is moving over it. A visitor reading the page gets a still gradient — which is what
+         they were looking at anyway, because the drift is deliberately too slow to notice. */
+      const settling = now - start < INTRO_MS;
+      const chasing = Math.abs(target.x - current.x) > 0.002 || Math.abs(target.y - current.y) > 0.002;
+      if (!settling && !chasing) return;
+
+      lastDraw = now;
       current.x += (target.x - current.x) * 0.035;
       current.y += (target.y - current.y) * 0.035;
       program.uniforms.uPointer.value = [current.x, current.y];
-      program.uniforms.uTime.value = (performance.now() - start) / 1000;
+      program.uniforms.uTime.value = (now - start) / 1000;
       renderer.render({ scene: mesh });
     };
     frame = requestAnimationFrame(loop);

@@ -65,20 +65,15 @@ export default defineConfig({
     },
     {
       name: "webkit",
-      // VIDEO STAYS ON FOR THIS ENGINE, against the `video: off` the CI budget sets above — and it
-      // is not about keeping the recording. Turning video off is what made this project start
-      // failing: `tickets.spec.ts` began reporting "element is not stable" on a Select option that
-      // does not move (measured in the Playwright Linux image at this exact viewport: sixty
-      // consecutive animation frames, one distinct bounding box, click fine), in the very next run
-      // after that setting landed, then in two of the three runs after it. Playwright's stability
-      // check needs two consecutive animation frames; headless WebKit throttles them when nothing
-      // is forcing the page to composite, and a video capture is exactly such a force.
-      //
-      // So this is a deliberate, narrow exception: one project of seven, `retain-on-failure`, so a
-      // passing run still stores nothing. What was measured and what remains unexplained is
-      // written down rather than dressed up — the mechanism above is the best-supported
-      // explanation, not a proven one, and the next person to touch it should read this first.
-      use: { ...devices["Desktop Safari"], viewport: VIEWPORTS.laptop, video: "retain-on-failure" },
+      // NO SPECIAL VIDEO SETTING HERE ANY MORE. One was added on the theory that turning CI video
+      // off had stopped headless WebKit compositing and so starved Playwright's stability check of
+      // animation frames; the next run failed identically, so that theory is dead too. It was the
+      // third guess about this test, and all three were made without evidence for one reason: every
+      // report upload had been failing on "artifact storage quota has been hit", so no trace for
+      // the failure was ever stored. The quota is cleared and the upload can no longer fail the
+      // job (see ci.yml), so the next failure finally arrives with its trace attached. Guessing
+      // again before reading it would be the fourth mistake.
+      use: { ...devices["Desktop Safari"], viewport: VIEWPORTS.laptop },
       dependencies: ["setup"],
       testMatch: /(auth|tickets|timesheet|dashboard|settings|user-management)\.spec\.ts/
     },

@@ -346,6 +346,13 @@ jobs:
       # playwright.config.ts) — and three days is longer than anyone has waited to look at one.
       - name: Upload Playwright report
         if: failure()
+        # NEVER fails the job. When the account's artifact storage is full the upload errors with
+        # "Artifact storage quota has been hit", and because that step ran inside the e2e job it
+        # turned into a second, louder red X on a job that had already reported exactly which test
+        # failed. Worse, it meant the trace for that failure was never stored — so the only record
+        # of WHY a test failed was the one thing the quota had just thrown away. A diagnostic that
+        # can break the diagnosis is worse than no diagnostic.
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           # Per-shard name: four jobs uploading one artifact name is a 409 on the second.

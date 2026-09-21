@@ -181,24 +181,30 @@ test.describe("marketing pages", () => {
     // navigable. It is also the one control here that changes what a visitor believes ships:
     // a chip that silently matches nothing would read as "that capability doesn't exist".
     await page.goto("/#features");
-    // The route is lazy-loaded, so counting before the chunk resolves measures an empty document.
-    const allChip = page.getByRole("button", { name: /^Everything/ });
-    await expect(allChip).toBeVisible();
+    // The grid shows ONE group at a time now (it was a single wall of 45 cards behind an
+    // "Everything" chip, which measured 3,119 words — sixty per cent of the whole page). So the
+    // check that matters changed shape with it: every group tile states a count, and the grid it
+    // opens must show exactly that many capabilities. A tile promising eleven and rendering none
+    // is the failure this test exists to catch, and it is now caught per group rather than once.
+    const tiles = page.locator("[data-feature-group]");
+    await expect(tiles.first()).toBeVisible();
+    const groups = await tiles.count();
+    expect(groups).toBeGreaterThan(2);
 
     // Every capability card titles itself with an h3; the section's own heading is an h2.
     const cards = page.locator("#features h3");
-    const total = await cards.count();
-    expect(total).toBeGreaterThan(10);
-
-    const aiChip = page.getByRole("button", { name: /^AI, governed/ });
-    await aiChip.click();
-    await expect(aiChip).toHaveAttribute("aria-pressed", "true");
-    const filtered = await cards.count();
-    expect(filtered).toBeGreaterThan(0);
-    expect(filtered).toBeLessThan(total);
-
-    await allChip.click();
-    await expect(cards).toHaveCount(total);
+    let seen = 0;
+    for (let i = 0; i < groups; i++) {
+      const tile = tiles.nth(i);
+      await tile.click();
+      await expect(tile).toHaveAttribute("aria-pressed", "true");
+      const claimed = Number((await tile.innerText()).match(/(\d+)/)?.[1] ?? "0");
+      expect(claimed, "a group tile must state how many capabilities it holds").toBeGreaterThan(0);
+      await expect(cards).toHaveCount(claimed);
+      seen += claimed;
+    }
+    // Together the groups account for the whole catalogue the heading advertises.
+    expect(seen).toBeGreaterThan(10);
   });
 
   test("the phone menu opens, navigates, and closes behind it", async ({ page }) => {

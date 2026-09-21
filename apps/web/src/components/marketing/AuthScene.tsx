@@ -32,6 +32,7 @@
  * `/login` is a route people re-enter.
  */
 import { useEffect, useRef, useState } from "react";
+import { createRenderLoop } from "../../lib/render-loop";
 import { isSoftwareWebGl } from "../../lib/webgl";
 
 /** Points on the sphere. Modest on purpose: this runs behind a form, not as a demo reel. */
@@ -123,7 +124,9 @@ export function AuthScene({ className, tone = "primary" }: { className?: string;
       } catch {
         return;
       }
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      // 1.5, not 2. Thin lines over a gradient; the extra pixels of a retina buffer buy nothing
+      // here and cost the fill rate on every frame.
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
       renderer.setSize(width, height);
       renderer.domElement.style.width = "100%";
       renderer.domElement.style.height = "100%";
@@ -225,38 +228,36 @@ export function AuthScene({ className, tone = "primary" }: { className?: string;
       const resizeObserver = new ResizeObserver(resize);
       resizeObserver.observe(host);
 
-      // A GPU loop behind a tab nobody is looking at is a battery cost with no viewer.
-      let visible = true;
-      const visibility = new IntersectionObserver(([entry]) => {
-        visible = entry.isIntersecting;
-      });
-      visibility.observe(host);
-
-      let frame = 0;
+      /* THROUGH THE SHARED LOOP, at 24 frames a second. This lattice drifts continuously by
+         design — it has no rest state to reach — so the only lever is how often it draws, and it
+         was drawing at whatever the display offered. Measured on /login with a 120Hz panel: 362
+         WebGL draw calls a second, for a slow turn authored to be barely perceptible. At 24fps it
+         is the same picture at a fifth of the cost, and the shared loop adds the two pauses this
+         scene already had plus a background-tab check that it did not. See lib/render-loop.ts. */
       const start = performance.now();
-      const loop = () => {
-        frame = requestAnimationFrame(loop);
-        if (!visible || document.hidden) return;
-        const t = (performance.now() - start) / 1000;
+      const loop = createRenderLoop({
+        host,
+        fps: 24,
+        render: () => {
+          const t = (performance.now() - start) / 1000;
 
-        current.x += (target.x - current.x) * 0.03;
-        current.y += (target.y - current.y) * 0.03;
+          current.x += (target.x - current.x) * 0.03;
+          current.y += (target.y - current.y) * 0.03;
 
-        group.rotation.y = t * 0.09 + current.x * 0.35;
-        group.rotation.x = Math.sin(t * 0.06) * 0.12 + current.y * 0.22;
-        rings.forEach((ring, i) => {
-          ring.rotation.z = t * (0.05 + i * 0.02);
-        });
+          group.rotation.y = t * 0.09 + current.x * 0.35;
+          group.rotation.x = Math.sin(t * 0.06) * 0.12 + current.y * 0.22;
+          rings.forEach((ring, i) => {
+            ring.rotation.z = t * (0.05 + i * 0.02);
+          });
 
-        renderer.render(scene, camera);
-      };
-      frame = requestAnimationFrame(loop);
+          renderer.render(scene, camera);
+        }
+      });
 
       teardown = () => {
-        cancelAnimationFrame(frame);
+        loop.stop();
         window.removeEventListener("pointermove", onPointerMove);
         resizeObserver.disconnect();
-        visibility.disconnect();
         nodeGeometry.dispose();
         nodeMaterial.dispose();
         linkGeometry.dispose();

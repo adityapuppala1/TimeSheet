@@ -29,6 +29,40 @@ statements on the same page.
 widen as the tier goes up. A failure there is not a bug — it means someone changed what a plan
 includes, and the pricing page, the docs and any signed contracts need to agree.
 
+## The second rule: nothing animates that nobody is looking at
+
+Added 2026-09-21, after the landing page was measured burning a third of a CPU while idle. The
+numbers, from CDP on a production build at 1440x900:
+
+| | before | after |
+|---|---|---|
+| WebGL draw calls, idle | 598/s | **0/s** |
+| Layouts, idle | 120/s | **0/s** |
+| Style recalcs, idle | 120/s | 120/s (one per frame, no layout) |
+
+Three things caused it, and each is a trap worth naming:
+
+1. **A `position: fixed` WebGL scene.** Every scene in `components/marketing/` pauses when it
+   scrolls out of view - but a fixed one never scrolls out of view, so that safeguard could never
+   fire. It rendered at the display's refresh rate for the entire visit, at ten per cent opacity,
+   behind the text. It was removed; `MarketingBackdrop.tsx` remains, unused, carrying the note.
+2. **Transforms animated on SVG nodes.** `ProductLoop`'s five nodes used to breathe by scaling.
+   Blink cannot composite a transform on an SVG node - it lays the subtree out again every frame -
+   so one small drawing cost 119 layouts a second, forever. They animate `opacity` now, which was
+   measured at zero layouts. `stroke-dashoffset` was measured and is *not* the expensive part.
+3. **No rest state.** A scene that has stopped changing must stop drawing. Both remaining scenes
+   return early once their easing has converged, and wake on pointer movement.
+
+The policy now lives in `apps/web/src/lib/render-loop.ts` and every canvas in the app goes through
+it: paused off screen, paused in a background tab, a frame budget (24-30fps, not the display's
+120), and a rest state. Before adding a scene, read that file. Verify with a draw-call counter -
+patch `WebGLRenderingContext.prototype.drawArrays` in an init script and count; an idle page must
+report zero.
+
+The no-GPU path matters as much: `lib/webgl.ts` detects a software rasteriser and every scene
+declines to start, so the page falls back to plain images. Verified with
+`chromium --disable-gpu --use-gl=swiftshader`: zero canvases, 2.5% CPU, 6.9MB heap.
+
 ## The one rule: every claim maps to shipped code
 
 This is not a style preference. These pages have overpromised before — the Enterprise tier once

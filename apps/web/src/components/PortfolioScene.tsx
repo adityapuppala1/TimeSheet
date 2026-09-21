@@ -13,6 +13,7 @@
  * WHY THE NUMBERS ARE THE TABLE'S: the spheres read `openCount` from the same rollup rows the
  * table renders, so the two can never disagree about a project.
  */
+import { createRenderLoop, type RenderLoopHandle } from "../lib/render-loop";
 import { useEffect, useRef, useState } from "react";
 import { resolveIdentityColor } from "../lib/identity-colors";
 import { currentTheme, subscribeTheme } from "../lib/theme";
@@ -84,6 +85,7 @@ export function PortfolioScene({ projects, onOpen }: Readonly<{ projects: SceneP
     if (!host) return;
     let cancelled = false;
     let teardown: (() => void) | undefined;
+    let loop: RenderLoopHandle | undefined;
 
     void (async () => {
       let THREE: typeof import("three");
@@ -103,7 +105,9 @@ export function PortfolioScene({ projects, onOpen }: Readonly<{ projects: SceneP
         setStatus("unavailable");
         return;
       }
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      // 1.5: this is a slowly turning diagram, and a retina panel would otherwise have it filling
+      // four times the pixels every frame.
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
       renderer.setSize(width, height);
       renderer.domElement.style.width = "100%";
       renderer.domElement.style.height = "100%";
@@ -172,24 +176,26 @@ export function PortfolioScene({ projects, onOpen }: Readonly<{ projects: SceneP
       renderer.domElement.addEventListener("click", onClick);
 
       const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      let frame = 0;
       let last = performance.now();
-      const render = (now: number) => {
-        if (!reduced) {
-          const dt = Math.min(0.05, (now - last) / 1000);
-          group.rotation.y += dt * 0.12;
-        }
-        last = now;
-        renderer.render(scene, camera);
-        frame = requestAnimationFrame(render);
-      };
-      // Under reduced motion one frame per interaction is enough; otherwise a slow turn.
       const renderOnce = () => renderer.render(scene, camera);
+      // Under reduced motion one frame per interaction is enough; otherwise a slow turn through the
+      // shared render loop, which pauses this scene off screen and in a background tab and holds it
+      // to 30fps. It used to do none of those three — see lib/render-loop.ts for what that cost.
       if (reduced) {
         renderOnce();
         renderer.domElement.addEventListener("pointermove", renderOnce);
       } else {
-        frame = requestAnimationFrame(render);
+        loop = createRenderLoop({
+          host,
+          fps: 30,
+          render: () => {
+            const now = performance.now();
+            const dt = Math.min(0.05, (now - last) / 1000);
+            last = now;
+            group.rotation.y += dt * 0.12;
+            renderer.render(scene, camera);
+          }
+        });
       }
 
       const onResize = () => {
@@ -205,7 +211,7 @@ export function PortfolioScene({ projects, onOpen }: Readonly<{ projects: SceneP
       setStatus("ready");
 
       teardown = () => {
-        cancelAnimationFrame(frame);
+        loop?.stop();
         window.removeEventListener("resize", onResize);
         renderer.domElement.removeEventListener("pointermove", onMove);
         renderer.domElement.removeEventListener("pointerleave", onLeave);

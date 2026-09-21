@@ -28,6 +28,7 @@ import {
   CircleDollarSign,
   FlaskConical,
   Layers,
+  ChevronRight,
   Lock,
   ServerCog,
   PieChart,
@@ -42,13 +43,13 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Reveal, useScrollProgress, useSectionSpy } from "../components/marketing/Reveal";
-import { MarketingBackdrop } from "../components/marketing/MarketingBackdrop";
 import { MarketSizing } from "../components/marketing/MarketSizing";
 import { ScreenshotFrame } from "../components/marketing/ScreenshotFrame";
 import { AuthorityLadder } from "../components/marketing/AuthorityLadder";
 import { AuroraBackdrop } from "../components/marketing/AuroraBackdrop";
-import { MOATS } from "../components/marketing/moats";
+import { firstSentence, MOATS } from "../components/marketing/moats";
 import { ProductLoop } from "../components/marketing/ProductLoop";
+import { ProductStack } from "../components/marketing/ProductStack";
 import { handleSpotlight } from "../components/marketing/spotlight";
 
 /**
@@ -186,6 +187,14 @@ const NEXT = [
   }
 ];
 
+/** Four screens this deck argues about: the loop closing, the governed AI surface, the evidence. */
+const DECK_SHOTS = [
+  { src: "/product/dashboard-800.webp", alt: "The dashboard: hours by state and the day's timeline." },
+  { src: "/product/settings-ai-800.webp", alt: "The AI control surface: providers, spend against budget, capabilities." },
+  { src: "/product/insights-800.webp", alt: "Insights: utilisation and velocity over a chosen range." },
+  { src: "/product/security-800.webp", alt: "Security insights: findings by severity, and the tickets they attach to." }
+];
+
 export function PitchDeck() {
   const active = useSectionSpy(SLIDES.map((slide) => slide.id));
   const progress = useScrollProgress();
@@ -194,7 +203,15 @@ export function PitchDeck() {
     <div className="relative min-h-screen overflow-x-clip bg-background">
       {/* The three.js lattice, standing behind the whole page. z-0 and not a negative index — see
           MarketingBackdrop.tsx for why that distinction has already cost this repo a day. */}
-      <MarketingBackdrop />
+      {/* THE FULL-PAGE three.js LATTICE WAS REMOVED HERE, 2026-09-21, and this note is the reason
+          it should not come back. Measured with CDP on an idle landing page: the page burned 32% of
+          a CPU doing nothing, and this scene was the largest single contributor — a full-viewport
+          WebGL context, `position: fixed`, rendering at the display's refresh rate for the entire
+          visit. Every other scene in this folder pauses when it scrolls out of view; a fixed one
+          never scrolls out of view, so that safeguard could never fire. What it bought was a
+          drifting lattice at ten per cent opacity behind the text. That is not a trade a visitor's
+          fan should be making. The page keeps its depth from CSS gradients, the hero's aurora and
+          the product deck — see docs/MARKETING_PAGES.md. */}
       <header className="sticky top-0 z-30 border-b border-border bg-background/85 backdrop-blur-xl print:hidden">
         <nav aria-label="Primary" className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-5 sm:py-4">
           <Link to="/" className="focus-ring flex min-w-0 items-center gap-3 rounded-md font-bold">
@@ -253,10 +270,11 @@ export function PitchDeck() {
               {/* Two-stop ramp for the same reason as Landing's hero — see the comment there. */}
               The work happened. <span className="bg-gradient-to-r from-primary to-info bg-clip-text text-transparent">Prove it.</span>
             </h1>
-            <p className="mt-5 max-w-2xl text-base leading-8 text-muted-foreground">
-              TimeSphere is one system for the hours a team logs, the tickets that work belongs to, and the evidence a
-              client or auditor asks for afterwards — with an AI layer that runs on your own key, under your own budget,
-              and can be measured rather than trusted.
+            {/* One sentence. The three cards under it already carry the rest, and a cover slide
+                that argues before it has shown anything is the slide people talk over. */}
+            <p className="mt-5 max-w-xl text-base leading-8 text-muted-foreground">
+              One system for the hours a team logs, the tickets that work belongs to, and the evidence an auditor asks
+              for afterwards — with an AI layer that can be measured rather than trusted.
             </p>
             <div className="mt-8 grid gap-3 sm:grid-cols-3">
               {[
@@ -275,8 +293,15 @@ export function PitchDeck() {
               ))}
             </div>
           </div>
-          {/* 11.1 — the same drawing the landing hero opens with: the loop this deck is about. */}
-          <ProductLoop className="mx-auto hidden lg:block" compact />
+          {/* The product, in space, turning with the pointer — with the loop drawing underneath as
+              the fallback, which is what a phone, a reduced-motion reader and a printed deck get.
+              Both are original: the shots are generated from the running app, the loop is
+              hand-authored SVG. See marketing/ProductStack.tsx. */}
+          <ProductStack
+            className="mx-auto hidden aspect-[4/3] w-full max-w-md lg:block"
+            shots={DECK_SHOTS}
+            fallback={<ProductLoop className="mx-auto" compact />}
+          />
           </div>
         </Slide>
 
@@ -440,23 +465,35 @@ export function PitchDeck() {
           <Reveal>
             <SlideTitle icon={Lock} title={`${MOATS.length} things that aren't a weekend's work`} />
           </Reveal>
-          <div className="mt-8 grid gap-4 lg:grid-cols-2">
+          {/* THE DECK'S DENSEST SLIDE, measured: 814 words of the deck's 3,432, because eight moats
+              each printed a claim AND the argument behind it at once. Both are still here and
+              neither is abbreviated — the claim and its first sentence lead, and "Why it holds",
+              which is the part a reader only wants for the one or two moats they doubt, opens on a
+              press. Same reasoning as marketing/FeatureExplorer.tsx; a slide nobody finishes makes
+              its own argument badly. */}
+          <div className="mt-8 grid gap-3 lg:grid-cols-2">
             {MOATS.map((item, index) => (
-              <Reveal key={item.title} delay={index * 70} className="h-full">
-                <Card className="h-full transition hover:border-primary/40 hover:shadow-lg motion-safe:hover:-translate-y-1">
-                  <CardHeader className="pb-3">
-                    <span className="grid h-9 w-9 place-items-center rounded-lg bg-primary/10 text-primary">
+              <Reveal key={item.title} delay={index * 60} className="h-full">
+                <Card className="h-full p-4 transition hover:border-primary/40 hover:shadow-lg motion-safe:hover:-translate-y-1">
+                  <div className="flex items-start gap-3">
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
                       <item.icon className="h-5 w-5" aria-hidden />
                     </span>
-                    <CardTitle className="mt-3 text-base">{item.title}</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-sm leading-6 text-muted-foreground">{item.body}</p>
-                    <p className="mt-3 border-l-2 border-primary/40 pl-3 text-sm leading-6">
-                      <span className="font-semibold">Why it holds: </span>
-                      <span className="text-muted-foreground">{item.why}</span>
-                    </p>
-                  </CardContent>
+                    <div className="min-w-0">
+                      <p className="text-base font-bold leading-snug">{item.title}</p>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">{firstSentence(item.body)}</p>
+                    </div>
+                  </div>
+                  <details className="group mt-3">
+                    <summary className="focus-ring flex cursor-pointer list-none items-center gap-1 rounded-md text-xs font-semibold text-primary [&::-webkit-details-marker]:hidden">
+                      <ChevronRight className="h-3.5 w-3.5 transition-transform motion-safe:duration-200 group-open:rotate-90 motion-reduce:transition-none" aria-hidden />
+                      Why it holds
+                    </summary>
+                    <div className="mt-2 grid gap-2 border-l-2 border-primary/40 pl-3 text-sm leading-6 text-muted-foreground">
+                      <p>{item.body}</p>
+                      <p>{item.why}</p>
+                    </div>
+                  </details>
                 </Card>
               </Reveal>
             ))}
