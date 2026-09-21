@@ -436,6 +436,23 @@
   }
 }
 
+/* V12 11.1 — the differentiator cards' depth. The tilt and the following light exist only for a
+   fine pointer AND a reader who has not asked for less motion; under either, the card is a card. */
+@media (prefers-reduced-motion: no-preference) and (pointer: fine) {
+  .tilt-card {
+    transform: perspective(900px) rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg));
+    transition: transform 160ms ease, box-shadow 200ms ease;
+    transform-style: preserve-3d;
+    will-change: transform;
+  }
+  .tilt-card:hover {
+    box-shadow: 0 24px 60px -24px hsl(var(--primary) / 0.35), 0 0 0 1px hsl(var(--primary) / 0.25);
+  }
+  .tilt-light {
+    background: radial-gradient(240px circle at var(--light-x, 50%) var(--light-y, 50%), hsl(var(--primary) / 0.16), transparent 60%);
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   /* V12 10.2 — press feedback and staggered entry.
      DEFINED ONLY IN THIS BLOCK on purpose: for somebody who asked for less motion the rule simply

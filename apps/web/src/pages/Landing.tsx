@@ -90,6 +90,9 @@ import { Reveal, useScrollProgress, useSectionSpy } from "../components/marketin
 import { ScreenshotFrame } from "../components/marketing/ScreenshotFrame";
 import { AuthorityLadder } from "../components/marketing/AuthorityLadder";
 import { AuroraBackdrop } from "../components/marketing/AuroraBackdrop";
+import { Differentiators } from "../components/marketing/Differentiators";
+import { firstSentence, MOATS } from "../components/marketing/moats";
+import { ProductLoop } from "../components/marketing/ProductLoop";
 import { MarketingBackdrop } from "../components/marketing/MarketingBackdrop";
 import { CONNECTOR_COUNT } from "../components/marketing/connectors";
 import { ConnectorConstellation } from "../components/marketing/ConnectorConstellation";
@@ -675,6 +678,7 @@ const PRICING = [
    rendered below exactly as before. */
 
 const NAV_SECTIONS = [
+  { id: "why", label: "Why us" },
   { id: "tour", label: "Tour" },
   { id: "features", label: "Features" },
   { id: "ai", label: "AI" },
@@ -910,6 +914,36 @@ export function Landing() {
               )}
             </ul>
 
+            {/* 11.1 — the product's idea, drawn and moving, before the first screenshot. Five
+                stages that are usually five tools, on one loop that closes: the plan is compared
+                against approved hours, and the approval becomes a signed record. */}
+            <Reveal className="mt-12" delay={40}>
+              <div className="mx-auto grid max-w-4xl items-center gap-8 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] md:text-left">
+                <ProductLoop className="mx-auto md:mx-0" />
+                <div className="grid gap-3">
+                  <p className="text-xs font-bold uppercase tracking-wider text-primary">One record, five stages</p>
+                  <h2 className="text-xl font-black tracking-tight sm:text-2xl">The loop that most stacks never close.</h2>
+                  <p className="text-sm leading-7 text-muted-foreground">
+                    A plan is an estimate until somebody logs the hours, and hours are a claim until somebody approves them. Here
+                    the plan, the ticket, the timesheet, the approval and the signed attestation are one system — so the plan can
+                    be measured against what was actually approved, not against another estimate.
+                  </p>
+                  <ul className="grid gap-1.5 text-sm text-muted-foreground">
+                    {[
+                      "Burn and forecast computed from approved, rate-snapshotted hours",
+                      "A resolved security fix proven by the next scan, or reopened",
+                      "Proof as an output: a signed, page-numbered attestation"
+                    ].map((line) => (
+                      <li key={line} className="inline-flex items-start gap-2">
+                        <CheckCircle2 className="mt-1 h-3.5 w-3.5 shrink-0 text-success" aria-hidden />
+                        <span>{line}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </Reveal>
+
             <Reveal className="mt-12" delay={80}>
               {/* A slight lift on hover so the shot reads as a live surface rather than a poster. */}
               <div className="transition-transform duration-500 motion-safe:hover:-translate-y-1">
@@ -1002,6 +1036,22 @@ export function Landing() {
               ]}
             />
           </Reveal>
+        </Section>
+
+        {/* ----------------------------------------------------------- Why us */}
+        {/* 11.1 — the six claims the pitch deck is built on, on the front page. Same list, one
+            source (components/marketing/moats.ts), so nothing can be claimed here that has not been
+            written against shipped code for the deck. */}
+        <Section id="why" className="border-y border-border bg-muted/30">
+          <Reveal>
+            <SectionHeading
+              center
+              eyebrow="Why it stands out"
+              title="Six things the category does not do"
+              subtitle="Each one exists because the plan, the tickets, the hours, the approvals and the proof are one system rather than five integrations."
+            />
+          </Reveal>
+          <Differentiators className="mt-10" items={MOATS.map(({ icon, title, body }) => ({ icon, title, body: firstSentence(body) }))} />
         </Section>
 
         {/* ----------------------------------------------------------- Tour */}

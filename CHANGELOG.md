@@ -23,6 +23,19 @@ number, on purpose — an installation must never render history for a version t
 - **Storage.** One nullable column on `AiProposal`, added by an idempotent migration. Proposals
   that did not come from a document carry NULL and link nothing, which is every existing row.
 
+### 🎬 The landing page draws the idea, and says why it stands out
+
+- **An original animated illustration in the hero** of both the landing page and the pitch deck:
+  the five stages that are usually five tools — plan, tickets, hours, approval, proof — on one loop
+  with a pulse travelling it and a verified mark at the centre. Hand-authored SVG, coloured from the
+  theme so it is right in both modes, animated only for readers who have not asked for less motion.
+- **A "Why it stands out" band** on the front page carrying the pitch deck's eight vetted claims, one
+  source for both pages. Each card tilts toward a fine pointer with a light that follows it — CSS,
+  no library — and stays a plain card on touch or under reduced motion.
+- **Nothing was removed and the page cost did not grow.** The three.js lattice, the aurora, the
+  twelve-screen tour, the feature grid, pricing and deployment dialogs are all as they were; three.js
+  is still a separate chunk that a phone never downloads.
+
 ### 📊 A two-sheet project workbook, incidents by month, and a live performance panel
 
 - **Export projects as Excel.** Beside the CSV, an Export Excel button downloads one workbook with
