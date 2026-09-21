@@ -144,17 +144,17 @@ CAB tool holds none of that.
 
 ## By the numbers
 
-Counted from the tree at v5.5.0, not estimated — regenerate any of these with the one-liners in
+Counted from the tree after v5.5.0 (recounted 2026-09-21), not estimated — regenerate any of these with the one-liners in
 [CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
 that looks stale.
 
 | | |
 |---|---|
-| REST routes | **554** across 59 controllers |
-| Prisma models / enums | **135** / 47, plus **122** tenant migrations and 22 control-plane migrations |
-| Services / cron workers | **148** / 32 |
-| Web pages | **99** |
-| Unit tests | **3,233** across 217 files (`npm test -w apps/api`), plus **290** in `apps/web` |
+| REST routes | **560** across 59 controllers |
+| Prisma models / enums | **135** / 47, plus **123** tenant migrations and 22 control-plane migrations |
+| Services / cron workers | **150** / 32 |
+| Web pages | **100** |
+| Unit tests | **3,282** across 223 files (`npm test -w apps/api`), plus **329** in `apps/web` |
 | End-to-end specs | **31** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
 | Editable email templates | **41**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **20**, over 5 roles — plus **5** platform-console capabilities over 5 operator roles |
@@ -168,7 +168,7 @@ the operator console in the control plane, and which no workspace user holds at 
 **38** for four releases; the figure was never counted, and the one-liner meant to check it scanned
 the whole file rather than the object, so it agreed with nothing. Both are counted now, separately.
 
-**On the lint number.** The repo runs ESLint with `sonarjs` and sits at 701 warnings and
+**On the lint number.** The repo runs ESLint with `sonarjs` and sits at 699 warnings and
 zero errors. That is the healthy state, not a backlog: the warnings are overwhelmingly
 `no-nested-conditional` and `cognitive-complexity` on code where the nesting is the clearest form,
 and "fixing" the count by mechanically extracting ternaries has previously made the code worse.
@@ -186,7 +186,7 @@ fixture. Anything needing a real database is an e2e spec instead.
 
 ## Stack
 
-- **Frontend**: React 19, TypeScript, Vite, TailwindCSS, shadcn-style Radix components, `react-aria-components` + `@internationalized/date` (accessible calendar / date-picker / date-range / time-field primitives, styled with the app's own theme tokens), Zustand, TanStack Query, React Hook Form, Framer Motion, Recharts, `@dnd-kit` (Kanban drag-and-drop), Tiptap (rich text)
+- **Frontend**: React 19, TypeScript, Vite, TailwindCSS, shadcn-style Radix components, `react-aria-components` + `@internationalized/date` (accessible calendar / date-picker / date-range / time-field primitives, styled with the app's own theme tokens), Zustand, TanStack Query, React Hook Form, Framer Motion, Recharts, `@dnd-kit` (Kanban drag-and-drop), Tiptap 3 (rich text), and — on the public pages and the portfolio only — `three` and `ogl`, both dynamically imported behind capability gates and governed by the render-loop policy in `apps/web/src/lib/render-loop.ts`
 - **Backend**: Node.js, Express 5, TypeScript, JWT access/refresh auth (httpOnly-cookie rotation, session revocation), RBAC, Prisma ORM, MySQL (database-per-tenant multi-tenancy — a separate control-plane Prisma schema/client alongside the tenant one), `openid-client` + `@node-saml/node-saml` + `ldapts` (Google/Microsoft/SAML/LDAP SSO), `@anthropic-ai/sdk` + `openai` (BYOK multi-provider adapter), `@modelcontextprotocol/sdk` (TimeSphere *as* an MCP server — the opposite direction from the two above), `imapflow` + `mailparser` (email intake), `jwks-rsa` (Bot Framework JWT verification for Teams), `node-cron` (background workers), `@vladmandic/human` + pure-JS TensorFlow.js (server-side face matching / anti-spoof / liveness — no native build step), Nodemailer
 - **Infra**: Docker Compose or Kubernetes (Helm chart with HPA/VPA autoscaling — see [Deploy](#deploy)), GitHub Actions CI/CD, environment config validation (Zod) with production-safety boot checks, secure headers (Helmet), rate limiting + per-account login lockout, request logging, centralized error middleware, AES-256-GCM encryption at rest for stored secrets
 - **Testing**: Playwright across **seven projects** — Chromium at five viewport sizes (phone → 4K) plus **Firefox (Gecko) and WebKit (Safari/iOS)** engine projects — for end-to-end auth, tickets, timesheet, settings, reports, and responsive-layout coverage, including computed-style contrast checks in both color themes; Vitest (`apps/api/tests`) for unit tests of the AI/billing/SCIM/face-verification services plus integration tests against a real throwaway MySQL database
@@ -962,7 +962,7 @@ See `.env.example` for all supported variables. Remember: the actual file the AP
 - [reports/quality-load-report.html](reports/quality-load-report.html) — the interactive quality &amp; load report: all three deployment shapes run and load-tested for real, the measured before/after for every optimization, the security posture inventory, and — labeled as such — what still needs an external engagement (VAPT, SonarQube server, DAST). Open it in a browser; charts are hoverable, dark mode follows the OS.
 - [docs/ONBOARDING_AND_TOUR.md](docs/ONBOARDING_AND_TOUR.md) — the first-run gate and the role-aware product tour: why the gate's "already onboarded" flag is stored rather than derived (and how the migration's backfill stops it locking out existing users), how the tour derives its itinerary from the sidebar's own permission rules, and the session-rotation trap that makes multi-test specs sign in per test.
 - [docs/UI_GUIDE.md](docs/UI_GUIDE.md) — the everyday-user guide to the V12 line: appearance (theme, accents, density), the command palette and record search, keyboard shortcuts including Inbox triage, the sidebar project tree and breadcrumb, tickets grouping/columns/saved views, custom fields on a ticket, and the empty-state design — each with the file it lives in.
-- [docs/MARKETING_PAGES.md](docs/MARKETING_PAGES.md) — the public pages (`/`, `/pitch`, `/login`): the "every claim maps to shipped code" rule that governs them, how the product screenshots are regenerated from the running app, and the layout constraints (tab order, reduced-motion, gradient ramps) that are easy to undo by accident.
+- [docs/MARKETING_PAGES.md](docs/MARKETING_PAGES.md) — the public pages (`/`, `/pitch`, `/login`): the "every claim maps to shipped code" rule that governs them, the animation budget that governs them just as strictly (an idle page must make **zero** WebGL draw calls and force **zero** layouts — with the three traps that had it doing 598 and 120 a second, and how to measure it), how the product screenshots are regenerated from the running app, and the layout constraints (tab order, reduced-motion, gradient ramps) that are easy to undo by accident.
 
 ### A note on code comments in this repo
 

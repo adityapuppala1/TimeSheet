@@ -244,6 +244,12 @@ for more open work, in each project's colour. Hover one for its name and numbers
 tickets. It is off until you switch it on, remembered in this browser, still under reduced motion,
 and absent without WebGL — the table always has everything.
 
+It also stops drawing the moment it is not being looked at: scrolled out of view, or in a background
+tab, and it holds 30 frames a second rather than whatever the display offers. That is the rule every
+canvas in this app follows now (`apps/web/src/lib/render-loop.ts`) — this panel used to follow none
+of it, which on a 120Hz screen meant a scene turning at full rate behind a page you had scrolled
+past.
+
 ## 11. Timeline zoom
 
 The Timeline (Plan → Timeline) zooms Day, Week, Month, **Quarter** and **Year**. Quarter shows month
