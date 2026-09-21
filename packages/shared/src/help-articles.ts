@@ -455,6 +455,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
       // control of any kind until a customer reported it. The manual now names the real one.
       "Switch \"Weekly practice update\" on under Workspace settings → AI → AI capabilities if you want the written sections drafted; without it the figures still go out, the prose is just yours to write.",
       "Generate the week — figures are counted, prose is drafted; the two are kept apart so a model outage still yields a complete update.",
+      "Each initiative's \"This period\" cell names up to three things that actually happened — tickets closed and by whom, tickets raised, and what people logged — pulled from the records, not written by the model.",
+      "Key Metrics is the ten-row headline block; every other measure is in the appendix at the end, after Decisions, so the sections asking something of the reader come first.",
       "Edit the written sections in the rich-text editor; Refine with AI keeps formatting.",
       "Your draft survives navigation and refreshes — only Regenerate or Discard clears it.",
       "Send. The exact HTML that went out is archived under History, with preview.",

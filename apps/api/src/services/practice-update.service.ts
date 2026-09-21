@@ -31,6 +31,7 @@ import { securityDisciplineFindingTypes } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { isChangeManagementOn } from "./change.service.js";
 import { buildPracticeAnalytics, type PracticeAnalytics } from "./practice-analytics.service.js";
+import { htmlToText } from "../utils/sanitize.js";
 
 export type PracticeCategory = "PRODUCT" | "POC" | "BUGS" | "SECURITY" | "TRAINING";
 
@@ -71,6 +72,23 @@ export interface PracticeInitiative {
    *  All three are optional for the same reason `analytics` is: a stored draft written before this
    *  release carries none of them, and the cast that replays it checks nothing. */
   nextDueDate?: string | null;
+  /**
+   * WHAT happened, named — as opposed to how much, which is every field above.
+   *
+   * A count tells a reader that four things closed; it cannot tell them that one of the four was
+   * the payment bug the CEO asked about on Monday. These are the handful of concrete facts the
+   * narrative is allowed to reach for, capped hard because this is a digest and not a log.
+   * Optional for the same reason the fields above it are: a draft stored before this release
+   * carries none of them and must still render.
+   */
+  highlights?: {
+    /** Work that reached a closed state inside the window. */
+    closed: Array<{ key: string; title: string; by: string | null }>;
+    /** Raised inside the window and still open — the new load, not the backlog. */
+    opened: Array<{ key: string; title: string; priority: string }>;
+    /** What people actually logged against it, in their own words. */
+    work: Array<{ who: string; hours: number; what: string }>;
+  };
   /** One line of what actually moved, assembled from the counts above. */
   progress: string;
   /** One line of what is in the way, or empty when nothing is. */
@@ -134,6 +152,13 @@ export interface PracticeUpdateData {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** How many rows the three "what actually happened" reads scan across the WHOLE update before each
+ *  project takes its own few off the top. A digest that scanned without a bound would turn one
+ *  weekly email into the slowest query in the app on the workspace with the most work in it. */
+const HIGHLIGHT_SCAN_CAP = 400;
+/** Per initiative, per kind. Three is a digest; ten is a log, and nobody reads the log. */
+const HIGHLIGHTS_PER_INITIATIVE = 3;
 // NOT `as const`: Prisma's generated `in`/`notIn` want a mutable TicketStatus[], and a readonly
 // tuple is rejected. Typed through the generated enum so a renamed status is a compile error
 // here rather than a silently-zero count.
@@ -328,7 +353,7 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
   });
   const ids = projects.map((p) => p.id);
 
-  const [metrics, previousMetrics, createdRows, closedRows, openRows, overdueRows, slaRows, hourRows, activityRows, bugRows, ownerRows, assigneeRows, releaseRows, priorityRows, dueRows] =
+  const [metrics, previousMetrics, createdRows, closedRows, openRows, overdueRows, slaRows, hourRows, activityRows, bugRows, ownerRows, assigneeRows, releaseRows, priorityRows, dueRows, closedTicketRows, openedTicketRows, workRows] =
     await Promise.all([
       metricsFor(from, to),
       metricsFor(prevFrom, prevTo),
@@ -380,6 +405,26 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
         where: { projectId: { in: ids }, deletedAt: null, status: { notIn: CLOSED_TICKET }, dueAt: { not: null } },
         select: { projectId: true, dueAt: true },
         orderBy: { dueAt: "asc" }
+      }),
+      // ── The NAMED half of each initiative. Three capped reads for the whole update rather than
+      // three per project: the caps are global, and each project takes its own few off the top.
+      prisma.ticket.findMany({
+        where: { projectId: { in: ids }, deletedAt: null, status: { in: CLOSED_TICKET }, resolvedAt: { gte: start, lt: endExclusive } },
+        select: { projectId: true, key: true, title: true, assignee: { select: { name: true } } },
+        orderBy: { resolvedAt: "desc" },
+        take: HIGHLIGHT_SCAN_CAP
+      }),
+      prisma.ticket.findMany({
+        where: { projectId: { in: ids }, deletedAt: null, status: { notIn: CLOSED_TICKET }, createdAt: { gte: start, lt: endExclusive } },
+        select: { projectId: true, key: true, title: true, priority: true },
+        orderBy: [{ priority: "asc" }, { createdAt: "desc" }],
+        take: HIGHLIGHT_SCAN_CAP
+      }),
+      prisma.timesheet.findMany({
+        where: { projectId: { in: ids }, deletedAt: null, workDate: { gte: start, lte: end } },
+        select: { projectId: true, totalHours: true, taskDescription: true, user: { select: { name: true } } },
+        orderBy: { totalHours: "desc" },
+        take: HIGHLIGHT_SCAN_CAP
       })
     ]);
 
@@ -390,6 +435,23 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
   const sla = countMap(slaRows);
   const bugs = countMap(bugRows);
   const hours = new Map(hourRows.filter((r) => r.projectId).map((r) => [r.projectId as string, Number(r._sum.totalHours ?? 0)]));
+
+  // ── The named half, bucketed per project and capped. Built here rather than inside the map below
+  // so the three scans are walked once each instead of once per initiative.
+  function bucket<T extends { projectId: string | null }>(rows: T[]): Map<string, T[]> {
+    const byProject = new Map<string, T[]>();
+    for (const row of rows) {
+      if (!row.projectId) continue;
+      const list = byProject.get(row.projectId);
+      if (list) {
+        if (list.length < HIGHLIGHTS_PER_INITIATIVE) list.push(row);
+      } else byProject.set(row.projectId, [row]);
+    }
+    return byProject;
+  }
+  const closedByProject = bucket(closedTicketRows);
+  const openedByProject = bucket(openedTicketRows);
+  const workByProject = bucket(workRows);
 
   const criticalOpen = new Map<string, number>();
   const highOpen = new Map<string, number>();
@@ -484,6 +546,17 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
         criticalOpen: criticals,
         highOpen: highs,
         nextDueDate: nextDue.has(project.id) ? iso(nextDue.get(project.id)!) : null,
+        highlights: {
+          closed: (closedByProject.get(project.id) ?? []).map((t) => ({ key: t.key, title: t.title, by: t.assignee?.name ?? null })),
+          opened: (openedByProject.get(project.id) ?? []).map((t) => ({ key: t.key, title: t.title, priority: t.priority })),
+          work: (workByProject.get(project.id) ?? []).map((w) => ({
+            who: w.user?.name ?? "somebody",
+            hours: Number(w.totalHours ?? 0),
+            // Logged descriptions are rich text written by whoever filled the timesheet — stripped
+            // and clipped, because this goes into a prompt and then into an email.
+            what: htmlToText(String(w.taskDescription ?? "")).replace(/\s+/g, " ").trim().slice(0, 120)
+          }))
+        },
         progress: progressParts.join(" · ") || "No activity recorded this period",
         risks: riskParts.join(" · ")
       };

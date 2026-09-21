@@ -306,6 +306,33 @@ interface OrgChartUser {
   role: { name: string };
 }
 
+/**
+ * WHOSE TREE a person sees.
+ *
+ * THE BUG THIS REPLACED: a non-privileged caller was rooted at THEMSELVES, so the chart showed
+ * them their own reports and nothing else — an employee with no reports saw a diagram containing
+ * one box, themselves, which answers no question anybody has. It could not show you your own
+ * manager, and it could not show you the people you sit next to.
+ *
+ * Now a non-privileged caller is rooted at their MANAGER, which is the smallest tree that answers
+ * the two questions actually asked of an org chart: who do I report to, and who else is on my
+ * team. Their own subtree still hangs off it, so a team lead keeps seeing their reports. Somebody
+ * with no manager set is rooted at themselves, as before — there is nothing above them to show.
+ *
+ * Pure, and exported, so the rule is testable without standing up a request.
+ */
+export function orgChartRoots<T extends { id: string; managerId: string | null }>(
+  users: T[],
+  viewerId: string,
+  privileged: boolean
+): T[] {
+  if (privileged) return users.filter((u) => u.managerId === null);
+  const self = users.find((u) => u.id === viewerId);
+  if (!self) return [];
+  const manager = self.managerId ? users.find((u) => u.id === self.managerId) : undefined;
+  return [manager ?? self];
+}
+
 teamRouter.get("/org-chart", async (req, res) => {
   const allUsers: OrgChartUser[] = await prisma.user.findMany({
     where: { deletedAt: null, status: "ACTIVE" },
@@ -344,9 +371,7 @@ teamRouter.get("/org-chart", async (req, res) => {
   }
 
   const privileged = ["SUPER_ADMIN", "ADMIN"].includes(req.user!.role);
-  const roots = privileged ? byManager.get(null) ?? [] : users.filter((u) => u.id === req.user!.id);
-
-  res.json(roots.map(buildNode));
+  res.json(orgChartRoots(users, req.user!.id, privileged).map(buildNode));
 });
 
 /**

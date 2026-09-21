@@ -262,7 +262,7 @@ Respond with ONLY the recap paragraph — no preamble, no subject line.`
       {
         name: "initiatives",
         description:
-          "Every active initiative with its category, owner, RAG status, progress, open count by severity, nearest deadline and risks.",
+          "Every active initiative with its category, owner, RAG status, progress, open count by severity, nearest deadline and risks — and, indented beneath each one, the NAMED work from the period: tickets closed, tickets raised, and what people logged in their own words.",
         sample: "[PRODUCT] Apollo (id …) — owner Mira Kapoor — GREEN — 12 closed · 38 h logged — 9 open — 2 critical — next deadline 2026-09-15"
       },
       { name: "releases", description: "Releases that shipped in the week.", sample: "v2.4.0 — TimeSphere — closed 2026-08-21" }
@@ -273,11 +273,11 @@ Respond with ONLY the recap paragraph — no preamble, no subject line.`
 THE WEEK'S FIGURES (counted — never contradict these, never invent one that is not here):
 {{metrics}}
 
-HOW TO READ THEM. The blocks above carry ratios, ages and directions, not only counts. Those are
-what you have to offer that the tables underneath do not: the reader can already see that 42 tickets
-closed. They cannot see that the backlog grew for the second week, that the oldest open security
-finding is 63 days old, or that utilisation ran over capacity. Prefer a sentence built on a rate, a
-trend or an age over one that restates a count.
+HOW TO READ THEM. The blocks above carry ratios, ages and directions, not only counts. The reader
+can already see that 42 tickets closed — the tables are printed right under your words. What they
+cannot see is that the backlog grew for a second week, that the oldest open security finding is 63
+days old, or that utilisation ran over capacity. So: a rate, an age or a direction is worth writing;
+a bare count is not.
 
 "not measured" means the figure has no denominator — nothing had a due date, nobody has contracted
 hours on file. It does NOT mean zero, and it is never a failure to report. Say nothing about it, or
@@ -287,20 +287,30 @@ A block that is absent means that subsystem is not configured in this workspace.
 its absence and never infer from it — an update that reports a testing collapse because no CI is
 connected is worse than one that says nothing about testing.
 
-INITIATIVES:
+INITIATIVES — and, indented under each, what actually happened on it this period:
 {{initiatives}}
+
+USE THE INDENTED LINES. They are the closed tickets, the newly raised ones and the work people
+logged, in their own words, and they are the only thing here a reader cannot already see in the
+tables under this text. A sentence naming a ticket by its key and saying what it was — "the payment
+retry bug (WEB-412) closed on Thursday" — is worth five sentences of movement described in
+aggregate. When an initiative has no indented lines, say what the counts support and nothing more.
 
 RELEASES:
 {{releases}}
 
 Reply with ONLY a JSON object, no preamble and no code fence:
 {
-  "executiveSummary": "3-5 sentences on ONE line. What actually happened and what changed. Lead with the thing a busy reader must not miss.",
+  "executiveSummary": "AT MOST 4 sentences, on ONE line. Lead with the thing a busy reader must not miss. Name the work, not the arithmetic: the tables below already carry every count, so a summary that restates them has spent the reader's attention on something they can already see.",
   "risks": ["one short sentence per real blocker, drawn from the RED and AMBER initiatives and the overdue/SLA figures above"],
   "nextWeekPriorities": ["one short sentence per focus area for the coming week"],
   "decisionsRequired": ["one short sentence per decision or support being asked for, naming who it is being asked of"],
-  "nextSteps": [{ "id": "<the initiative id, copied exactly>", "text": "One short sentence of what happens next on it." }]
+  "nextSteps": [{ "id": "<the initiative id, copied exactly>", "text": "One short sentence of what happens next on it, tied to the named work above where there is any." }]
 }
+
+KEEP IT SHORT ENOUGH TO BE READ. At most four risks, four priorities and three decisions — the
+strongest ones, not every one you can justify. A list of twelve items is a list nobody finishes,
+and the twelfth item is never the one that mattered. If a section has one real entry, send one.
 
 The initiative ids exist ONLY so "nextSteps" can be keyed to the right initiative. Never write an
 id into any prose — name the initiative, not its id. A CEO reading
@@ -313,9 +323,15 @@ do nothing this week. An invented item wastes the one section they will definite
 
 Write plainly, for someone outside the team. No jargon, no filler, no congratulation. Be specific: name the initiative, quote the number. Where a figure got worse, say so — an update that only reports good news stops being read.
 
-Two habits worth more than the rest:
-- QUOTE THE FIGURE THAT MAKES THE POINT, not a rounder one nearby. "Closure rate fell to 78%" beats
-  "we closed fewer than we raised", because the second is an opinion and the first is checkable.
+Three habits worth more than the rest:
+- NAME THE WORK. This is the one that matters, and the one an update usually fails at. Every section
+  is better for a ticket key, a person and a thing that happened: "the retry bug (WEB-412) closed
+  after Priya spent two days on it" is a report; "throughput improved" is a mood. The indented lines
+  under each initiative exist precisely so you can do this. The tables under your text already carry
+  every count, so a paragraph built only out of counts has told the reader nothing new.
+- A FIGURE EARNS ITS PLACE WHEN IT IS A RATE, AN AGE OR A DIRECTION — "closure rate fell to 78%",
+  "the oldest finding is 63 days old", "the backlog grew for a second week". A bare total that is
+  already sitting in a table below does not; prefer the named work to it every time.
 - DISTINGUISH EFFORT FROM DECISIONS. "risks" is what is going wrong; "decisionsRequired" is only for
   what a person with authority must settle — an owner to name, an approval to give, a priority to
   choose, a headcount to fund. Work that is merely in progress belongs in neither.`

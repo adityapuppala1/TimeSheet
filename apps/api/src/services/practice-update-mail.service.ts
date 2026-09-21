@@ -202,6 +202,44 @@ function pctDelta(current: number | null, previous: number | null, note?: string
  * rather than as an absent integration. The blocks that are always present are the ones every
  * workspace has data for by virtue of using the product at all.
  */
+/**
+ * THE METRICS A CEO READS, in one block of ten rows.
+ *
+ * The full measure set (`metricsTable`, eight blocks, ~45 rows) still goes out — as an appendix
+ * after the decisions, where somebody who wants a number can find it. It used to sit HERE, between
+ * the initiatives and the risks, which meant a reader working top-down hit forty-five rows of
+ * arithmetic before reaching the three sections that ask something of them. The requested format
+ * has one "metrics" section; this is it.
+ */
+function headlineMetricsTable(data: PracticeUpdateData): string {
+  const m = data.metrics;
+  const p = data.previousMetrics;
+  const a = analyticsOf(data, "analytics");
+  const pa = analyticsOf(data, "previousAnalytics");
+  const rows: Array<[string, string]> = [
+    ["Tickets closed / raised", `${withDelta(m.ticketsClosed, p.ticketsClosed)} / ${m.ticketsCreated}`],
+    ["Closure rate (closed ÷ raised)", pctDelta(a.delivery.closureRatePct, pa.delivery.closureRatePct)],
+    ["Open backlog", withDelta(a.delivery.backlogOpen, pa.delivery.backlogOpen)],
+    ["Past SLA", withDelta(m.overdue, p.overdue)],
+    // The denominator travels with the rate, here as in the appendix: "— (0 had a due date)" is
+    // a fact, and "—" on its own is a question the reader cannot answer.
+    ["Delivered on time", pctDelta(a.delivery.onTimeClosurePct, pa.delivery.onTimeClosurePct, `${a.delivery.closedWithDueDate} had a due date`)],
+    ["Critical open", String(a.priority.criticalOpen)],
+    ["Security findings open (critical / high)", `${m.securityOpenCritical} / ${m.securityOpenHigh}`],
+    ["Hours logged", `${withDelta(m.hours, p.hours, " h")} by ${m.contributors}`],
+    [
+      "Utilisation against capacity",
+      pctDelta(
+        a.people.utilisationPct,
+        pa.people.utilisationPct,
+        a.people.capacityHours === null ? "no capacity on file" : `${a.people.capacityHours} h capacity`
+      )
+    ],
+    ["Releases shipped", withDelta(m.releases, p.releases)]
+  ];
+  return dataTable({ head: ["Measure", "This period"], rows: rows.map(([k, v]) => [escape(k), escape(v)]), align: ["l", "r"] });
+}
+
 function metricsTable(data: PracticeUpdateData): string {
   const m = data.metrics;
   const p = data.previousMetrics;
@@ -350,6 +388,48 @@ function contributorTable(data: PracticeUpdateData): string {
 }
 
 /**
+ * "This period", as what happened rather than only how much.
+ *
+ * The counts line stays — it is the summary — but under it go up to three NAMED facts from the
+ * window: work that closed, work that arrived, and what somebody logged in their own words. This is
+ * rendered FROM DATA rather than asked of the model, which is this file's existing doctrine applied
+ * one level down: figures counted, prose drafted, and the two kept apart. A reader should be able
+ * to see which ticket moved even in the week the model is switched off or answers badly.
+ *
+ * Three lines, hard. The complaint this answers was that the update carried too much to read, so an
+ * uncapped list of everything that moved would have solved the wrong half of it.
+ */
+const NAMED_LINES_PER_INITIATIVE = 3;
+
+function clip(text: string, max = 64): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+}
+
+function progressCell(i: PracticeInitiative): string {
+  const named: string[] = [];
+  for (const t of i.highlights?.closed ?? []) {
+    const by = t.by ? ` — ${escape(t.by)}` : "";
+    named.push(`✓ ${escape(t.key)} ${escape(clip(t.title))}${by}`);
+  }
+  for (const t of i.highlights?.opened ?? []) {
+    named.push(`+ ${escape(t.key)} ${escape(clip(t.title))}`);
+  }
+  for (const w of i.highlights?.work ?? []) {
+    if (w.what) named.push(`⏱ ${escape(w.who)} ${w.hours}h — ${escape(clip(w.what, 52))}`);
+  }
+
+  const head = `<span>${escape(i.progress)}</span>`;
+  if (named.length === 0) return head;
+  return (
+    head +
+    `<br><span style="color:${MUTED};font-size:11px;line-height:1.6;">` +
+    named.slice(0, NAMED_LINES_PER_INITIATIVE).join("<br>") +
+    "</span>"
+  );
+}
+
+/**
  * The per-initiative table the request asked for: Owner, Status, This Week's Progress, Next Steps,
  * Risks / Dependencies.
  */
@@ -381,7 +461,7 @@ function initiativeTable(data: PracticeUpdateData, nextStepById: Map<string, str
         "</span>",
       escape(i.owner ?? "—"),
       RAG_EMOJI[i.status],
-      escape(i.progress),
+      progressCell(i),
       // The model writes a next step when it can; when it cannot, the nearest real deadline on the
       // initiative is a better answer than a dash, and it is a fact rather than a guess.
       escape(nextStepById.get(i.id) ?? derivedNextStep(i)),
@@ -532,9 +612,7 @@ export function buildPracticeUpdateEmail(data: PracticeUpdateData, narrative: Pr
         ]
       : []),
     sectionHeading("Key Metrics"),
-    metricsTable(data),
-    sectionHeading("Where the effort went"),
-    contributorTable(data),
+    headlineMetricsTable(data),
     sectionHeading("Risks / Blockers"),
     bulletList(narrative?.risks, risksFallback),
     sectionHeading("Next Week Priorities"),
@@ -547,7 +625,13 @@ export function buildPracticeUpdateEmail(data: PracticeUpdateData, narrative: Pr
       ...red.map((i) => `Clear the backlog on ${i.name} (${i.risks || "overdue work"})`)
     ]),
     sectionHeading("Decisions / Support Required"),
-    bulletList(narrative?.decisionsRequired, decisionsFallback(data))
+    bulletList(narrative?.decisionsRequired, decisionsFallback(data)),
+    // ── Appendix. Everything counted, for whoever wants a number — AFTER the three sections that
+    // ask something of the reader, so those are never buried under it again.
+    sectionHeading("Appendix — every measure"),
+    metricsTable(data),
+    sectionHeading("Where the effort went"),
+    contributorTable(data)
   ];
 
   return {
@@ -675,7 +759,20 @@ export function narrativeInputs(data: PracticeUpdateData): { metrics: string; in
           ]
             .filter(Boolean)
             .join(" — ");
-          return `[${i.category}] ${i.name} (id ${i.id}) — ${detail}`;
+          // The NAMED half, indented under its initiative. The counts above say how much moved;
+          // these say WHAT moved, and they are the only thing in this prompt a reader could not
+          // already get from the tables in the email itself.
+          const named: string[] = [];
+          for (const t of i.highlights?.closed ?? []) {
+            const by = t.by ? ` (${t.by})` : "";
+            named.push(`    closed [${t.key}] ${t.title}${by}`);
+          }
+          for (const t of i.highlights?.opened ?? []) named.push(`    raised [${t.key}] ${t.title} (${t.priority.toLowerCase()})`);
+          for (const w of i.highlights?.work ?? []) {
+            if (w.what) named.push(`    logged ${w.hours}h — ${w.who}: ${w.what}`);
+          }
+          const head = `[${i.category}] ${i.name} (id ${i.id}) — ${detail}`;
+          return named.length ? `${head}\n${named.join("\n")}` : head;
         })
         .join("\n") || "(no active initiatives with activity this period)",
     releases: data.releases.map((r2) => `${r2.version} — ${r2.product ?? "—"} — closed ${r2.closedAt ?? "—"}`).join("\n")

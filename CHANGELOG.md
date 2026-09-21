@@ -23,6 +23,22 @@ number, on purpose — an installation must never render history for a version t
 - **Storage.** One nullable column on `AiProposal`, added by an idempotent migration. Proposals
   that did not come from a document carry NULL and link nothing, which is every existing row.
 
+### 📨 The practice update says what happened, in the order leadership asked for
+
+- **Each project now names its work.** Under every initiative's "This period", up to three concrete
+  lines: the tickets that closed and who closed them, the tickets raised, and what people logged in
+  their own words. These come from the database, not the model, so they are there even in a week the
+  model is switched off. The counts line stays above them as the summary.
+- **One metrics block where the format asks for one.** The ten figures a CEO reads sit between the
+  initiatives and the risks; the other forty-odd rows moved to a labelled appendix after the
+  decisions. Nothing was removed — but risks, priorities and decisions are no longer buried under
+  eight tables of arithmetic.
+- **The narrative is asked to name the work, not restate the arithmetic.** The summary is capped at
+  four sentences, each list at four items, and the model is told plainly that every count is already
+  printed beneath its words. Rates, ages and directions still earn a sentence; bare totals do not.
+- **The org chart shows an employee their team.** A person is now rooted at their manager, so the
+  manager and every peer are in the picture; before, someone with no reports saw a single box.
+
 ### 📥 Export the people and project lists, and a rail that stays usable
 
 - **Download the user list and the project list as CSV.** Both files contain exactly what the page
