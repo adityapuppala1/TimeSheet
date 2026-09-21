@@ -450,6 +450,13 @@ worth doing carefully.
 | `deepmerge-ts` | A root **override to `^8.0.2`**. The re-check the row above asked for: `@prisma/config` still pins 7.1.5, `deepmerge-ts` 8 keeps the `deepmerge` API the CLI's config loader calls, and 8.0.2 is out. `npm update deepmerge-ts` was needed for npm to honour the override against the existing lock. | `prisma validate` on both schemas, `prisma migrate status`, `prisma generate` for the control client — all through the overridden loader. |
 | `image-size` ×2 | A root **override to `^2.0.4`** (the patched line exists now). Safe because `pptxgenjs` never actually loads it: its Node branch does `require('sizeof')` — a misspelling in the library — so the dependency is declared and never executed. | `npm run pitch:pptx` rebuilt the deck (3.0 MB). |
 
+`scripts/audit-gate.mjs`'s allowlist is now EMPTY — and the gate is what insisted on that. Its rule
+that an accepted advisory which no longer matches anything is itself a failure turned the first CI
+run red after these fixes, which is exactly the behaviour it was written for. The `deepmerge-ts`
+entry's own reasoning had concluded "no fix is takeable"; the override proved otherwise, and the
+entry's history is kept in the file so the next person weighing "unreachable, no patch" reaches for
+an override before an exception.
+
 One regression the upgrade DID introduce, caught by a single Playwright test: under React's
 strict-mode double mount TipTap 3 destroys the first editor instance, and the `[value]` effect's
 `editor.getHTML()` on it threw from inside ProseMirror's serializer — which sent the whole

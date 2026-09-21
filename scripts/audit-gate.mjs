@@ -32,38 +32,22 @@ const BLOCKING = new Set(["high", "critical"]);
  * read. Delete the entry the moment an upstream fix exists; the gate below will insist.
  */
 const ACCEPTED = [
-  {
-    id: "GHSA-ggr8-5vv4-36mx",
-    package: "deepmerge-ts",
-    reviewed: "2026-08-21",
-    why: [
-      "Stack exhaustion when deep-merging a deliberately recursive object graph. Reached two ways",
-      "here, and neither carries attacker input:",
-      "  - @prisma/config merges prisma.config.ts with defaults (dist/index.js, `merger: deepmerge`).",
-      "    First-party config read at CLI time, never a request.",
-      "  - html-to-text merges CALLER OPTIONS with defaults (html-to-text.cjs:1470,",
-      "    `deepMergeWithOptionsComposeRules(defaultOptions, userOptions)`). The email body itself is",
-      "    parsed by htmlparser2 and never passes through deepmerge, so inbound mail — the one",
-      "    attacker-controlled input in this dependency path (workers/inbound-email.worker.ts) —",
-      "    cannot reach it.",
-      "No upstream fix is takeable yet, and the reason CHANGED at the 2026-08-21 re-check, so the",
-      "state of each path is recorded separately rather than as one sentence that ages badly:",
-      "  - html-to-text HAS shipped the fix. 10.0.1 requires deepmerge-ts ^8.0.1 (10.0.0 required",
-      "    ^7.1.5). It is still not reachable from here: mailparser — the only thing that pulls it —",
-      "    pins `html-to-text: \"10.0.0\"` EXACTLY, in 3.9.14 and in the latest 3.9.15 alike. Taking it",
-      "    would mean an `overrides` forcing mailparser onto a patch its author pinned away from, to",
-      "    close a path this entry already establishes attacker input cannot reach. RE-CHECK when",
-      "    mailparser publishes a release taking html-to-text >= 10.0.1; at that point this bullet",
-      "    goes away on a plain dependency bump.",
-      "  - @prisma/config has NOT. 6.19.3 (what this repo resolves) and the latest 7.9.1 both pin",
-      "    deepmerge-ts 7.1.5 exactly, so 7.1.5 stays in the tree and this advisory keeps firing even",
-      "    once the bullet above clears. An `overrides` to 8.x would force Prisma's config loader off",
-      "    a pinned version that every migration and every `prisma generate` depends on — a real risk",
-      "    taken to remove an unreachable one.",
-      "DELETE this entry when @prisma/config accepts deepmerge-ts 8; until then it cannot be, and the",
-      "gate will keep insisting the entry still matches something real."
-    ]
-  }
+  // EMPTY, and that is the healthy state. The one long-lived entry here was `deepmerge-ts`
+  // (GHSA-ggr8-5vv4-36mx), accepted through 2026-08-21 with the reasoning that neither path to it
+  // — @prisma/config reading prisma.config.ts, html-to-text merging caller options — carries
+  // attacker input, and that no fix was takeable because @prisma/config pins 7.1.5 exactly.
+  //
+  // Closed 2026-09-21, and NOT the way the entry predicted. Prisma still pins 7.1.5; what changed
+  // is that a root `overrides` to `deepmerge-ts ^8.0.2` was tried and then PROVEN rather than
+  // assumed: `prisma validate` on both schemas, `prisma migrate status` and `prisma generate`
+  // through the overridden config loader. The risk the entry weighed ("forcing Prisma's loader off
+  // a pinned version") is the right risk to weigh; it is just answerable by running the loader.
+  // `image-size` went the same way (pptxgenjs declares it and never loads it — its Node branch
+  // requires a misspelled `sizeof` — and the PPTX export was rebuilt to prove it).
+  //
+  // The bar for adding an entry back: say which call site you read, and why the input that reaches
+  // it cannot be attacker-controlled. "No fix available" on its own is a reason to look harder at
+  // an override first.
 ];
 
 const includeDev = process.argv.includes("--dev");
