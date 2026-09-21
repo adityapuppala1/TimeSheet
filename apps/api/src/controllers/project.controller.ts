@@ -17,6 +17,7 @@ import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
+import { csvCell, CSV_EOL, UTF8_BOM } from "../utils/csv.js";
 
 const PRIVILEGED_ROLES = new Set(["SUPER_ADMIN", "ADMIN"]);
 
@@ -63,6 +64,63 @@ projectRouter.get("/", async (req, res) => {
     orderBy: { name: "asc" }
   });
   res.json(projects);
+});
+
+/**
+ * GET /projects/export.csv — the project list, as a file.
+ *
+ * Under the SAME visibility scope the list itself uses, and honouring `includeArchived` the same
+ * way: an export that showed more than the page it was downloaded from would be a quiet privilege
+ * escalation, and one that silently dropped the archived rows an admin was looking at would be a
+ * wrong answer to the question they asked.
+ *
+ * Team members are flattened into one cell rather than one row per person: this file answers "what
+ * projects exist and who is on them", and a row per membership answers a different question.
+ */
+projectRouter.get("/export.csv", async (req, res) => {
+  const scope = await visibilityScope(req);
+  const includeArchived = req.query.includeArchived === "1" || req.query.includeArchived === "true";
+  const search = String(req.query.search ?? "").trim();
+
+  const projects = await prisma.project.findMany({
+    where: {
+      deletedAt: null,
+      ...(includeArchived ? {} : { status: "ACTIVE" }),
+      ...(scope.unrestricted ? {} : { assignments: { some: { userId: { in: scope.userIds } } } }),
+      ...(search ? { OR: [{ code: { contains: search } }, { name: { contains: search } }] } : {})
+    },
+    include: {
+      modules: { select: { id: true, submodules: { select: { id: true } } } },
+      assignments: { include: { user: { select: { name: true, email: true } } } }
+    },
+    orderBy: { name: "asc" }
+  });
+
+  const header = ["Code", "Name", "Status", "Modules", "Submodules", "Team size", "Team", "Description", "Created"];
+  const lines = [header.map(csvCell).join(",")];
+  for (const p of projects) {
+    lines.push(
+      [
+        p.code,
+        p.name,
+        p.status,
+        p.modules.length,
+        p.modules.reduce((sum, m) => sum + m.submodules.length, 0),
+        p.assignments.length,
+        p.assignments.map((a) => a.user.name).join("; "),
+        p.description ?? "",
+        p.createdAt.toISOString().slice(0, 10)
+      ]
+        .map(csvCell)
+        .join(",")
+    );
+  }
+
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="projects-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.setHeader("X-Export-Rows-Included", String(projects.length));
+  res.setHeader("Access-Control-Expose-Headers", "X-Export-Rows-Included, Content-Disposition");
+  res.send(UTF8_BOM + lines.join(CSV_EOL) + CSV_EOL);
 });
 
 projectRouter.post(

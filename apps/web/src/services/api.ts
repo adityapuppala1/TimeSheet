@@ -654,6 +654,14 @@ export const projectApi = {
    *  The admin management page passes includeArchived to see (and reactivate) everything. */
   list: async (opts?: { includeArchived?: boolean }) =>
     (await api.get("/projects", { params: opts?.includeArchived ? { includeArchived: 1 } : {} })).data,
+  /** The project list as a CSV, under the same visibility scope and archive choice as the page. */
+  exportCsv: async (opts?: { includeArchived?: boolean; search?: string }) => {
+    const res = await api.get("/projects/export.csv", {
+      params: { ...(opts?.includeArchived ? { includeArchived: 1 } : {}), ...(opts?.search ? { search: opts.search } : {}) },
+      responseType: "blob"
+    });
+    return { blob: res.data as Blob, rows: Number(res.headers["x-export-rows-included"] ?? 0) };
+  },
   create: async (payload: unknown) => (await api.post("/projects", payload)).data,
   update: async (id: string, payload: unknown) => (await api.patch(`/projects/${id}`, payload)).data,
   remove: async (id: string) => api.delete(`/projects/${id}`),
@@ -1448,6 +1456,15 @@ export const userApi = {
    *  `list` because that one feeds assignee/manager pickers, which want everybody rather than a
    *  page — two different questions, deliberately two endpoints. */
   paged: async (query: UserPageQuery) => (await api.get<UserPage>("/users/paged", { params: query })).data,
+  /** The people table as a CSV, under the SAME filters the table is showing. */
+  exportCsv: async (query: Partial<UserPageQuery>) => {
+    const res = await api.get("/users/export.csv", { params: query, responseType: "blob" });
+    return {
+      blob: res.data as Blob,
+      rows: Number(res.headers["x-export-rows-included"] ?? 0),
+      truncated: res.headers["x-export-truncated"] === "true"
+    };
+  },
   /** One action across many users. Pass `userIds` for an explicit selection, or `filter` for
    *  "everything matching what I'm looking at" — the server re-derives that set with the same
    *  query the table used, so the two can never select different people. */

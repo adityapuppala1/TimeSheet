@@ -23,6 +23,23 @@ number, on purpose — an installation must never render history for a version t
 - **Storage.** One nullable column on `AiProposal`, added by an idempotent migration. Proposals
   that did not come from a document carry NULL and link nothing, which is every existing row.
 
+### 📥 Export the people and project lists, and a rail that stays usable
+
+- **Download the user list and the project list as CSV.** Both files contain exactly what the page
+  is showing: the users export runs the same filters and search the table does, and the projects
+  export uses the same visibility scope and archive choice. A file that quietly held more or fewer
+  rows than the screen would answer a different question than the one being asked.
+- **The people page leads with the people.** The invite form is now collapsed behind one button, so
+  the table it used to push below the fold is the first thing on the page.
+- **The sidebar's sections fold, and remember.** A super admin's rail holds roughly twenty-five
+  destinations plus the project tree, which was more than twice a laptop screen — so Analytics or
+  Configuration can now be folded away and stays folded. The project tree shows six with a count and
+  offers the rest, and the rail can no longer produce a horizontal scrollbar at all.
+- **The status page covers four more areas** — automations, requirements documents, AI teammates and
+  search. API latency needed no change: every route is measured automatically, including ones added
+  last week, because request telemetry sits in front of every router rather than being registered
+  per endpoint.
+
 ### ⚡ Watch, labels and assignee answer instantly too
 
 - **Watch, a label and the assignee now change the moment you click**, joining the board drop, the

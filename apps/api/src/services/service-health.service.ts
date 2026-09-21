@@ -215,6 +215,56 @@ export const SERVICES: ServiceDefinition[] = [
       await withTimeout(prisma.outboundWebhook.count());
       return { ok: true };
     }
+  },
+
+  // ── Areas built after the original thirteen. THIS LIST IS CURATED, NOT DERIVED: a new ROUTE is
+  // measured automatically (request telemetry is one `app.use("/api", …)` in front of every
+  // router), but a new PRODUCT AREA only appears on the status page when somebody adds a probe for
+  // it. That is the trade — a derived list would be a row per endpoint, which is a latency table,
+  // not a status page. When you ship an area a customer would notice losing, add it here.
+  {
+    key: "automations",
+    label: "Automations & workflows",
+    description: "Studio flows and the runs they produce",
+    degradedMs: 1_000,
+    probe: async () => {
+      await withTimeout(prisma.automationFlow.count());
+      return { ok: true };
+    }
+  },
+  {
+    key: "documents",
+    label: "Requirements documents",
+    description: "The Studio's PRD/BRD documents and their related tickets",
+    degradedMs: 1_000,
+    probe: async () => {
+      await withTimeout(prisma.requirementsDocument.count());
+      return { ok: true };
+    }
+  },
+  {
+    key: "agents",
+    label: "AI teammates",
+    description: "The agent roster and its run queue",
+    degradedMs: 1_000,
+    probe: async () => {
+      await withTimeout(prisma.agentRun.count());
+      return { ok: true };
+    }
+  },
+  {
+    key: "search",
+    label: "Search",
+    description: "The command palette's record search",
+    // The palette fires this on every pause in typing, so it is held to the tightest bar here:
+    // search that is merely "not down" is still a search nobody waits for.
+    degradedMs: 600,
+    probe: async () => {
+      // Deliberately a CONTAINS query rather than a count: it exercises the same scan the palette
+      // does, so an index that stops helping shows up here instead of staying invisible.
+      await withTimeout(prisma.ticket.findFirst({ where: { deletedAt: null, key: { contains: "-" } }, select: { id: true } }));
+      return { ok: true };
+    }
   }
 ];
 

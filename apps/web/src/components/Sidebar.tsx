@@ -250,7 +250,28 @@ function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavig
 
 /** Which projects a person has expanded, per browser — like the collapse control, a remembered
  *  preference rather than a nag. */
+const NAV_FOLDED_KEY = "ts.sidebar.sections.folded";
+
+function readFoldedSections(): Set<string> {
+  try {
+    const raw = localStorage.getItem(NAV_FOLDED_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
 const PROJECT_TREE_OPEN_KEY = "ts.sidebar.projects.open";
+const PROJECT_TREE_SHOW_ALL_KEY = "ts.sidebar.projects.showAll";
+/** How many projects the rail shows before it offers the rest. Chosen so the sections BELOW the
+ *  tree stay on screen at a laptop height — which is the whole point of capping it. */
+const PROJECT_TREE_VISIBLE = 6;
+
+/** "Show 3 more projects" / "Show 1 more project" — its own function so the plural does not have to
+ *  be a ternary nested inside another one. */
+function moreProjectsLabel(hidden: number): string {
+  return `Show ${hidden} more project${hidden === 1 ? "" : "s"}`;
+}
 
 function readOpenProjects(): Set<string> {
   try {
@@ -301,6 +322,13 @@ function ProjectTree({ onNavigate }: { onNavigate?: () => void }) {
   const location = useLocation();
   const selection = location.pathname === "/app/tickets" ? readProjectSelection(location.search) : {};
   const [open, setOpen] = useState<Set<string>>(readOpenProjects);
+  const [showAllProjects, setShowAllProjects] = useState(() => {
+    try {
+      return localStorage.getItem(PROJECT_TREE_SHOW_ALL_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
   const toggle = (id: string) =>
     setOpen((current) => {
       const next = new Set(current);
@@ -316,6 +344,13 @@ function ProjectTree({ onNavigate }: { onNavigate?: () => void }) {
 
   if (!canSeeTickets || !projects.data?.length) return null;
 
+  // WHY A CAP: this tree is the only part of the nav that grows with the workspace, and with every
+  // project listed the rail was 1,750px of content in a 765px viewport — a permanent scrollbar, and
+  // the sections BELOW projects (Plan, Analytics, Administration) pushed off screen on every visit.
+  // Nothing is hidden: the count is on the heading and one click shows the rest.
+  const shownProjects = showAllProjects ? projects.data : projects.data.slice(0, PROJECT_TREE_VISIBLE);
+  const hiddenCount = projects.data.length - shownProjects.length;
+
   const rowClass = (active: boolean) =>
     cn(
       "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground",
@@ -324,9 +359,12 @@ function ProjectTree({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <div className="grid gap-0.5" data-tour="project-tree">
-      <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Projects</p>
+      <p className="flex items-center gap-1.5 px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+        Projects
+        <span className="rounded bg-muted px-1 text-[10px] font-bold text-muted-foreground">{projects.data.length}</span>
+      </p>
       <ul className="grid gap-0.5">
-        {projects.data.map((project) => {
+        {shownProjects.map((project) => {
           const modules = [...(project.modules ?? [])].sort((a, b) => a.name.localeCompare(b.name));
           const expanded = open.has(project.id);
           const projectActive = selection.projectId === project.id && !selection.moduleId;
@@ -372,6 +410,24 @@ function ProjectTree({ onNavigate }: { onNavigate?: () => void }) {
           );
         })}
       </ul>
+      {(hiddenCount > 0 || showAllProjects) && (
+        <button
+          type="button"
+          data-projects-show-all
+          onClick={() => {
+            const next = !showAllProjects;
+            setShowAllProjects(next);
+            try {
+              localStorage.setItem(PROJECT_TREE_SHOW_ALL_KEY, next ? "1" : "0");
+            } catch {
+              /* private mode — the choice just does not persist */
+            }
+          }}
+          className="focus-ring mx-1 rounded-md px-2 py-1.5 text-left text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        >
+          {showAllProjects ? "Show fewer projects" : moreProjectsLabel(hiddenCount)}
+        </button>
+      )}
     </div>
   );
 }
@@ -386,6 +442,24 @@ function ProjectTree({ onNavigate }: { onNavigate?: () => void }) {
  */
 function NavList({ items, onNavigate, slim = false }: { items: NavItem[]; onNavigate?: () => void; slim?: boolean }) {
   const ungrouped = items.filter((item) => !item.section);
+  const location = useLocation();
+  // Folded sections, remembered. A super admin's rail holds roughly twenty-five destinations plus
+  // the project tree — more than twice a laptop's height — so the sections a given person never
+  // opens were pushing the ones they use below the fold on every single visit. Everything starts
+  // open (nothing moves for somebody who liked it as it was) and a fold survives a reload.
+  const [folded, setFolded] = useState<Set<string>>(readFoldedSections);
+  const toggleSection = (section: string) =>
+    setFolded((current) => {
+      const next = new Set(current);
+      if (next.has(section)) next.delete(section);
+      else next.add(section);
+      try {
+        localStorage.setItem(NAV_FOLDED_KEY, JSON.stringify([...next]));
+      } catch {
+        /* private mode — the fold state just does not persist */
+      }
+      return next;
+    });
 
   return (
     <nav className="grid gap-0.5">
@@ -396,19 +470,37 @@ function NavList({ items, onNavigate, slim = false }: { items: NavItem[]; onNavi
       {SECTION_ORDER.map((section) => {
         const sectionItems = items.filter((item) => item.section === section);
         if (sectionItems.length === 0) return null;
+        // A folded section still opens itself when the page you are on lives inside it — otherwise
+        // the nav would be unable to show you where you are.
+        const holdsCurrent = sectionItems.some((item) => location.pathname.startsWith(item.to));
+        const isFolded = !slim && folded.has(section) && !holdsCurrent;
         return (
           <div key={section} className="grid gap-0.5">
             {slim ? (
               // Headings have no room at 68px; a hairline keeps the grouping legible without text.
               <div aria-hidden className="mx-2 mb-1 mt-3 border-t border-border" />
             ) : (
-              <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{section}</p>
+              <button
+                type="button"
+                onClick={() => toggleSection(section)}
+                aria-expanded={!isFolded}
+                data-nav-section={section}
+                className="focus-ring flex items-center gap-1 rounded-md px-3 pb-1 pt-4 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 transition hover:text-foreground"
+              >
+                <ChevronRight
+                  aria-hidden="true"
+                  className={cn("h-3 w-3 transition-transform", !isFolded && "rotate-90")}
+                />
+                {section}
+                {isFolded && <span className="ml-1 normal-case tracking-normal opacity-70">({sectionItems.length})</span>}
+              </button>
             )}
-            {sectionItems.map((item) => (
-              <NavLinkRow key={item.to} item={item} onNavigate={onNavigate} slim={slim} />
-            ))}
+            {!isFolded &&
+              sectionItems.map((item) => (
+                <NavLinkRow key={item.to} item={item} onNavigate={onNavigate} slim={slim} />
+              ))}
             {/* The hierarchy sits directly under the Work pages it filters. */}
-            {section === "Work" && !slim && <ProjectTree onNavigate={onNavigate} />}
+            {section === "Work" && !slim && !isFolded && <ProjectTree onNavigate={onNavigate} />}
           </div>
         );
       })}
@@ -510,7 +602,9 @@ export function Sidebar() {
           </TooltipContent>
         </Tooltip>
       </div>
-      <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
+      {/* overflow-x HIDDEN, not auto: every row in here truncates by design, so a horizontal bar in a
+          207px rail can only ever be a rendering artefact somebody has to scroll past. */}
+      <div className="-mx-1 min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1">
         <NavList items={visible} slim={collapsed} />
       </div>
 

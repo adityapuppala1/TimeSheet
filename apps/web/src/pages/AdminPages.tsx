@@ -16,6 +16,7 @@ import {
   Check,
   Clock,
   DollarSign,
+  ChevronUp,
   Download,
   Eye,
   EyeOff,
@@ -132,6 +133,7 @@ import { PageHeader } from "../components/PageHeader";
 import { ProjectMark } from "../components/ProjectMark";
 import { IDENTITY_COLORS } from "../lib/identity-colors";
 import { cn } from "../lib/utils";
+import { exportStamp, saveBlob } from "../lib/download";
 
 const roles = ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEAM_LEAD", "EMPLOYEE"];
 
@@ -254,6 +256,7 @@ export function UsersPage() {
   const [pageSize, setPageSize] = useState(25);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [allMatchingSelected, setAllMatchingSelected] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   // Typing shouldn't fire a request per keystroke.
   const [debouncedSearch, setDebouncedSearch] = useState(filters.search);
@@ -280,6 +283,28 @@ export function UsersPage() {
     setSelected(new Set());
     setAllMatchingSelected(false);
   }, [debouncedSearch, filters.roleId, filters.designation, filters.status, filters.online, page, pageSize]);
+
+  /** Downloads the CURRENT view: the same query the table asked for, minus its paging — a file
+   *  that held a different set of rows than the screen would be a wrong answer to the question the
+   *  person thought they were asking. */
+  const exportUsers = useMutation({
+    mutationFn: async () => {
+      // Paging is the table's business, not the file's: the export carries every matching row.
+      const rest: Record<string, unknown> = { ...query };
+      delete rest.page;
+      delete rest.pageSize;
+      return userApi.exportCsv(rest as never);
+    },
+    onSuccess: ({ blob, rows, truncated }) => {
+      saveBlob(blob, `users-${exportStamp()}.csv`);
+      if (truncated) {
+        toast.warning(`Downloaded the first ${rows} people`, { description: "Narrow the filters to export the rest." });
+      } else {
+        toast.success(`Exported ${rows} ${rows === 1 ? "person" : "people"}`);
+      }
+    },
+    onError: () => toast.error("Could not export", { description: "Try again in a moment." })
+  });
 
   const bulk = useMutation({
     mutationFn: (payload: { action: any; password?: string }) =>
@@ -650,20 +675,38 @@ export function UsersPage() {
 
   return (
     <Workspace title="User Management" subtitle="Create, edit, deactivate, reset, and map users into the manager hierarchy." icon={<Users2 className="h-5 w-5" />}>
+      {/* Collapsed by default. This page's JOB is managing the people who are already here; adding
+          one is an action taken occasionally, and a hundred lines of form above the table pushed
+          the actual subject below the fold on every visit. */}
       <Card data-tour="invite-user">
         <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
           <div className="min-w-0">
             <CardTitle>Invite a teammate</CardTitle>
             <CardDescription>
-              Leave the password blank and a random one-time password is generated and shown to you once. Either way the
-              person is prompted to choose their own at first sign-in.
+              {inviteOpen
+                ? "Leave the password blank and a random one-time password is generated and shown to you once. Either way the person is prompted to choose their own at first sign-in."
+                : "Add one person, or upload a list."}
             </CardDescription>
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={() => setBulkUploadOpen(true)}>
-            <UploadCloud className="h-3.5 w-3.5" />Bulk upload
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => setBulkUploadOpen(true)}>
+              <UploadCloud className="h-3.5 w-3.5" />Bulk upload
+            </Button>
+            <Button
+              type="button"
+              variant={inviteOpen ? "ghost" : "default"}
+              size="sm"
+              onClick={() => setInviteOpen((open) => !open)}
+              aria-expanded={inviteOpen}
+              data-invite-toggle
+            >
+              {inviteOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+              {inviteOpen ? "Close" : "Invite someone"}
+            </Button>
+          </div>
         </CardHeader>
-        <CardContent>
+        {inviteOpen && (
+        <CardContent className="motion-safe:animate-fade-in">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
             <FieldShell label="Full name">
               <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Aanya Sharma" />
@@ -753,6 +796,7 @@ export function UsersPage() {
             </div>
           )}
         </CardContent>
+        )}
       </Card>
 
       <Card>
@@ -766,6 +810,8 @@ export function UsersPage() {
             roles={rolesQuery.data ?? []}
             designations={users.data?.designations ?? []}
             total={total}
+            exporting={exportUsers.isPending}
+            onExport={() => exportUsers.mutate()}
           />
 
           {(selected.size > 0 || allMatchingSelected) && (
@@ -1178,6 +1224,15 @@ export function ProjectsPage() {
   // active-only pickers would let one response masquerade as the other. Invalidations use the
   // ["projects"] prefix, which matches both.
   const projects = useQuery({ queryKey: ["projects", "admin"], queryFn: () => projectApi.list({ includeArchived: true }) });
+  /** The same list this page asked for — archived included, because that is what is on screen. */
+  const exportProjects = useMutation({
+    mutationFn: () => projectApi.exportCsv({ includeArchived: true }),
+    onSuccess: ({ blob, rows }) => {
+      saveBlob(blob, `projects-${exportStamp()}.csv`);
+      toast.success(`Exported ${rows} ${rows === 1 ? "project" : "projects"}`);
+    },
+    onError: () => toast.error("Could not export", { description: "Try again in a moment." })
+  });
   const [draft, setDraft] = useState({ code: "", name: "", description: "" });
   // Requirements Studio's "Create project from this document" hands off here rather than adding
   // a second project-creation endpoint — it just seeds this same form's own draft, once, from
@@ -1484,6 +1539,19 @@ export function ProjectsPage() {
             searchPlaceholder="Search projects..."
             emptyMessage="No projects yet."
             pageSize={20}
+            toolbar={
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9"
+                disabled={exportProjects.isPending || (projects.data ?? []).length === 0}
+                onClick={() => exportProjects.mutate()}
+                title="Download these projects as CSV"
+              >
+                <Download className={cn("h-3.5 w-3.5", exportProjects.isPending && "motion-safe:animate-pulse")} />
+                {exportProjects.isPending ? "Preparing…" : "Export CSV"}
+              </Button>
+            }
           />
         </CardContent>
       </Card>

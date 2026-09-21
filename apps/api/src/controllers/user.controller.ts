@@ -19,6 +19,7 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
+import { csvCell, CSV_EOL, UTF8_BOM } from "../utils/csv.js";
 import { findCoveredUnenrolledUserIds, notifyEnrollmentRequired } from "../services/face.service.js";
 import { getOnlineSeenByUser } from "../services/maintenance.service.js";
 import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
@@ -28,6 +29,10 @@ import { generateTempPassword, hashPassword } from "../utils/security.js";
 
 export const userRouter = Router();
 userRouter.use(requireAuth, requirePermission(permissions.USERS_MANAGE));
+
+/** A real ceiling rather than a page size: past this the answer is a filtered export, not a bigger
+ *  file. The response says whether it truncated, in a header a script can read. */
+const USER_EXPORT_ROW_CAP = 10_000;
 
 async function sendWelcomeEmail(user: { id: string; name: string; email: string }) {
   const result = await dispatchTransactional({
@@ -119,6 +124,88 @@ userRouter.get("/", async (req, res) => {
       lastSeenAt: onlineSeen.get(user.id) ?? null
     }))
   );
+});
+
+
+/**
+ * GET /users/export.csv — the people table, as a file.
+ *
+ * IT TAKES THE SAME QUERY THE TABLE DOES, through the same `whereFromQuery`. "Download the current
+ * list" has to mean the list actually on screen: an export that quietly ignored the filters would
+ * hand somebody a different answer to the question they thought they were asking, and they would
+ * not find out until they acted on it.
+ *
+ * `online` is applied here rather than in SQL for the same reason the paged route does it — it is
+ * derived from live sessions, not a column.
+ */
+userRouter.get("/export.csv", async (req, res) => {
+  const q = req.query as Record<string, unknown>;
+  const where = whereFromQuery(q);
+
+  const [rows, onlineSeen] = await Promise.all([
+    prisma.user.findMany({
+      where,
+      include: {
+        role: true,
+        manager: { select: { name: true, email: true } },
+        userRoles: { select: { role: { select: { name: true } } } }
+      },
+      orderBy: { name: "asc" },
+      take: USER_EXPORT_ROW_CAP
+    }),
+    getOnlineSeenByUser()
+  ]);
+
+  let people = rows;
+  if (q.online === "online") people = people.filter((u) => onlineSeen.has(u.id));
+  if (q.online === "offline") people = people.filter((u) => !onlineSeen.has(u.id));
+
+  const header = [
+    "Name",
+    "Email",
+    "Role",
+    "Also grants",
+    "Job title",
+    "Manager",
+    "Manager email",
+    "Status",
+    "Online",
+    "First login",
+    "Last login",
+    "Face verification"
+  ];
+  const lines = [header.map(csvCell).join(",")];
+  for (const u of people) {
+    const held = resolveHeldRoles(u.role.name as RoleName, u.userRoles.map((ur) => ur.role.name as RoleName))
+      .filter((r) => r !== u.role.name)
+      .join(" / ");
+    lines.push(
+      [
+        u.name,
+        u.email,
+        u.role.name,
+        held,
+        u.designation ?? "",
+        u.manager?.name ?? "",
+        u.manager?.email ?? "",
+        u.status,
+        onlineSeen.has(u.id) ? "Online" : "Offline",
+        u.firstLoginAt ? u.firstLoginAt.toISOString() : "",
+        u.lastLoginAt ? u.lastLoginAt.toISOString() : "",
+        u.faceVerificationRequired ? "Required" : "Workspace default"
+      ]
+        .map(csvCell)
+        .join(",")
+    );
+  }
+
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="users-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.setHeader("X-Export-Rows-Included", String(people.length));
+  res.setHeader("X-Export-Truncated", rows.length >= USER_EXPORT_ROW_CAP ? "true" : "false");
+  res.setHeader("Access-Control-Expose-Headers", "X-Export-Rows-Included, X-Export-Truncated, Content-Disposition");
+  await audit(req.user!.id, "user.exported", "User", req.user!.id, { rows: people.length });
+  res.send(UTF8_BOM + lines.join(CSV_EOL) + CSV_EOL);
 });
 
 /**

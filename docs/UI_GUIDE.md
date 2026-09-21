@@ -127,6 +127,12 @@ reading through the same project scope as the Tickets page.
 each one comes back already related to that document — see it on the document's **Related tickets**
 card and on the ticket's **Linked** tab.
 
+**Exports.** The people table and the project table each have an **Export CSV** button that
+downloads exactly the rows on screen, filters included.
+
+**The sidebar.** Section headings fold, and your choice is remembered per browser. The project tree
+shows the first six with a count, and offers the rest on one click.
+
 **Motion.** Board columns arrive with a short staggered rise and controls give way under the
 pointer. If your system asks for reduced motion you get none of it — the effects are not defined at
 all in that case.

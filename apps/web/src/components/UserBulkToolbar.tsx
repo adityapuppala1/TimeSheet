@@ -15,7 +15,7 @@
  * a toolbar. Typing the number is a deliberate re-reading of it.
  */
 import { useState } from "react";
-import { AlertTriangle, ChevronDown, Loader2, X } from "lucide-react";
+import { AlertTriangle, ChevronDown, Download, Loader2, X } from "lucide-react";
 
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
@@ -71,13 +71,19 @@ export function UserFilterBar({
   onChange,
   roles,
   designations,
-  total
+  total,
+  onExport,
+  exporting = false
 }: {
   filters: UserFilters;
   onChange: (next: UserFilters) => void;
   roles: Array<{ id: string; name: string }>;
   designations: string[];
   total: number;
+  /** Downloads exactly what these filters are showing. Optional so the bar still renders for a
+   *  caller that has nothing to export. */
+  onExport?: () => void;
+  exporting?: boolean;
 }) {
   const set = <K extends keyof UserFilters>(key: K, value: UserFilters[K]) => onChange({ ...filters, [key]: value });
 
@@ -140,6 +146,22 @@ export function UserFilterBar({
       <span className="ml-auto shrink-0 text-xs text-muted-foreground">
         {total} {total === 1 ? "person" : "people"}
       </span>
+
+      {onExport && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 shrink-0"
+          onClick={onExport}
+          disabled={exporting || total === 0}
+          // Says what it will contain, because the button downloads the FILTERED list and a file
+          // that silently held more or fewer rows than the screen would be a quiet wrong answer.
+          title={`Download these ${total} ${total === 1 ? "person" : "people"} as CSV`}
+        >
+          <Download className={cn("h-3.5 w-3.5", exporting && "motion-safe:animate-pulse")} />
+          {exporting ? "Preparing…" : "Export CSV"}
+        </Button>
+      )}
     </div>
   );
 }

@@ -203,3 +203,36 @@ describe("runHealthChecks — the incident lifecycle", () => {
     );
   });
 });
+
+/**
+ * The status page's list is CURATED, and that is the point worth guarding: a new route is measured
+ * automatically by request telemetry, but a new product AREA is only on the status page because
+ * somebody put it there. These assertions make a malformed or duplicated entry fail loudly instead
+ * of rendering as a blank row, and they name the areas added after the original thirteen so a
+ * careless delete has to be deliberate.
+ */
+describe("the monitored service list", () => {
+  it("has a unique key, a readable label and a description for every entry", () => {
+    const keys = SERVICES.map((s) => s.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const service of SERVICES) {
+      expect(service.key).toMatch(/^[a-z][a-z-]*$/);
+      expect(service.label.trim().length).toBeGreaterThan(2);
+      expect(service.description.trim().length).toBeGreaterThan(8);
+      expect(typeof service.probe).toBe("function");
+    }
+  });
+
+  it("gives every service a degraded threshold that is tight enough to mean something", () => {
+    for (const service of SERVICES) {
+      expect(service.degradedMs).toBeGreaterThan(0);
+      // A five-second bar is the probe timeout itself — anything at or above it could never fire.
+      expect(service.degradedMs).toBeLessThan(5_000);
+    }
+  });
+
+  it("covers the areas built after the original thirteen", () => {
+    const keys = SERVICES.map((s) => s.key);
+    for (const key of ["automations", "documents", "agents", "search"]) expect(keys).toContain(key);
+  });
+});
