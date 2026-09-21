@@ -65,13 +65,20 @@ export default defineConfig({
     },
     {
       name: "webkit",
-      // REDUCED MOTION, and only here. This project exists to prove the app WORKS on another
-      // engine, not to exercise its animation; and Linux WebKit is where an overlay's entrance
-      // animation stopped settling within Playwright's actionability timeout about half the time
-      // (see ui/select.tsx). The overlays honour the preference, so under `reduce` the menu is
-      // simply there — which is what this project actually wants to click on. Chromium and Firefox
-      // still run with motion on, so the animated path is covered.
-      use: { ...devices["Desktop Safari"], viewport: VIEWPORTS.laptop, reducedMotion: "reduce" },
+      // VIDEO STAYS ON FOR THIS ENGINE, against the `video: off` the CI budget sets above — and it
+      // is not about keeping the recording. Turning video off is what made this project start
+      // failing: `tickets.spec.ts` began reporting "element is not stable" on a Select option that
+      // does not move (measured in the Playwright Linux image at this exact viewport: sixty
+      // consecutive animation frames, one distinct bounding box, click fine), in the very next run
+      // after that setting landed, then in two of the three runs after it. Playwright's stability
+      // check needs two consecutive animation frames; headless WebKit throttles them when nothing
+      // is forcing the page to composite, and a video capture is exactly such a force.
+      //
+      // So this is a deliberate, narrow exception: one project of seven, `retain-on-failure`, so a
+      // passing run still stores nothing. What was measured and what remains unexplained is
+      // written down rather than dressed up — the mechanism above is the best-supported
+      // explanation, not a proven one, and the next person to touch it should read this first.
+      use: { ...devices["Desktop Safari"], viewport: VIEWPORTS.laptop, video: "retain-on-failure" },
       dependencies: ["setup"],
       testMatch: /(auth|tickets|timesheet|dashboard|settings|user-management)\.spec\.ts/
     },

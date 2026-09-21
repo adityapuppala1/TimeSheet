@@ -41,6 +41,11 @@ number, on purpose — an installation must never render history for a version t
 - **Menus, dialogs, sheets, popovers and tooltips honour "reduce motion".** Their entrance and exit
   animations were the last unguarded ones in the app: somebody who asked their system for less
   motion still got a menu that zoomed at them. Now they simply appear.
+- **For maintainers:** the Safari/WebKit end-to-end project keeps its video recording, against the
+  budget rule the rest of the suite follows. Turning it off is what made that project start
+  failing — headless WebKit stops producing animation frames when nothing forces it to draw, and
+  the test harness waits on exactly those frames before it will click. playwright.config.ts
+  records what was measured, and what is still only the best explanation.
 
 - **The rich-text editor is TipTap 3.** The last open advisory that reached a deployed
   installation (`mergeAttributes()` and a `__proto__` attribute — already blocked by the allowlist

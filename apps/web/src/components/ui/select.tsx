@@ -56,11 +56,14 @@ export const SelectContent = React.forwardRef<
       ref={ref}
       position={position}
       // MOTION-SAFE, like every other overlay in this folder (dialog, sheet, popover, dropdown,
-      // tooltip, alert-dialog). Two reasons, and the second is the one that bit: a reader who asked
-      // their system for less motion should not get a menu that zooms at them; and an entrance
-      // animation moves the element's box, which is precisely what Playwright's actionability check
-      // waits to settle before clicking an option. On Linux WebKit that settle did not happen
-      // inside 30s about half the time — "element is not stable", on a menu plainly on screen.
+      // tooltip, alert-dialog): a reader who asked their system for less motion should not get a
+      // menu that zooms at them. These were the last unguarded animations in the app.
+      //
+      // NOT, as a first guess had it, the cause of a WebKit e2e failure. That guess was testable
+      // and was tested: with the preference emulated the shard failed exactly as before, and in
+      // the Playwright Linux image this menu's option holds one bounding box across sixty
+      // consecutive frames. The cause was elsewhere — see the `webkit` project in
+      // playwright.config.ts.
       className={cn(
         "relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg",
         "motion-safe:data-[state=open]:animate-in motion-safe:data-[state=closed]:animate-out motion-safe:data-[state=closed]:fade-out-0 motion-safe:data-[state=open]:fade-in-0 motion-safe:data-[state=closed]:zoom-out-95 motion-safe:data-[state=open]:zoom-in-95",
