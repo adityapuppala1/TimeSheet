@@ -220,7 +220,7 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
   RECOMMENDATION: build that view, or decide the proposal flow is enough. Do NOT build a scenario
   ENGINE — the solver is one, and a second would be a second answer to the same question. This
   needs the user's call on whether the view is wanted before it is worth the surface.
-- [ ] C13 Relevant digests: investigate first. Reuse Inbox, reminder schedules and notification
+- [x] C13 Relevant digests: investigate first. Reuse Inbox, reminder schedules and notification
   preferences; evaluate explainable prioritization, snoozing and notification deduplication.
   Do not create a parallel alert engine or enable new outbound messaging automatically.
   INVESTIGATED 2026-09-24. Taking the row's three proposals one at a time, against the code:
@@ -233,14 +233,39 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
       `Notification` row unconditionally; dedupe exists only inside particular producers (devops
       findings, face enrolment reminders), not at dispatch. On this dev database: 1,916
       notifications, of which 706 (37%) repeat an existing row's user + title + category on the
-      same day. The worst single group is 489 `face.verification_flagged` rows for one person on
-      one day — and those 489 share ONE link between them, with 75 distinct bodies. So they are
-      not 489 destinations a reader needs; they are one destination, said 489 times.
+      same day; the unhandled queues across every user are 1,916 rows that amount to 1,000 distinct
+      notices; and the largest single notice is 205 rows for ONE person, all pointing at the same
+      page. (An earlier note here said 489 sharing one link — that figure counted a whole day's
+      `face.verification_flagged` rows ACROSS users, not one person's queue. 205 is the per-person
+      number and is the one that matters, because a queue belongs to a person.)
   RECOMMENDATION, and the shape matters: collapse at READ time in the Inbox — group rows sharing
   title + category + link into one entry carrying a count and the latest timestamp — rather than
   dropping rows at dispatch. Nothing is lost, no migration is needed, no producer changes, and a
   genuinely new event can never be suppressed by a dedupe window that guessed wrong. Dedupe at
   dispatch is the version that can silently swallow something somebody needed.
+  SHIPPED 2026-09-24, as that recommendation. `rollUpInbox` (pure, exported, unit-tested) groups by
+  title + category + link; the body is deliberately NOT part of the key, because two hundred rows
+  differing only in which attempt they name are one thing to go and look at — and every distinct
+  wording is carried in `bodies` so the collapse hides nothing. An entry stays unread while ANY row
+  behind it is unread and unhandled while any is unhandled, or one glance would bury a burst. The
+  scan widened to 1,000 rows before collapsing, because the whole point is that one repeated notice
+  must not be able to fill the window. `PATCH /inbox/:id` takes the entry's `ids`, still filtered on
+  the owner, so marking one row done cannot leave 204 behind; capped at 500 per request.
+  `counts` stays a count of ROWS: the tab badge means the same thing it always did.
+  THE OTHER HALF OF THE ROW: snoozing was already shipped and needed nothing. Explainable
+  prioritization is still open — the daily brief says which section a thing is in, not why that row
+  in particular is there.
+  VERIFIED live against the real queue: an entry standing for 8 rows marked done took the queue
+  415→407 and the entry left the list; undo restored 415; an id that is not the caller's returns
+  404 and changes nothing; the dev queue was left exactly as found. Both widths reach every wording
+  (desktop via the detail pane, phone via the open row) — and the detail pane itself was
+  `hidden lg:block`, so it is now gated in JS and a phone no longer builds a pane it cannot show.
+  Mutation-tested: breaking the unread rule and breaking the ordering each turn a test red — the
+  ordering test only became honest after the first version passed a deliberately broken build,
+  because its titles happened to sort in the order it expected.
+  Gates: lint 699/0 with the ratchet passing, API 3302/3302 (+10 — three of them rewritten where
+  this changed the `where` shape), web 358/358, diff-check clean, contrast 108/110 no gating
+  failures.
 
 #### Phase D: Visual Quality and Performance
 
@@ -829,7 +854,9 @@ The matrix covers every requested area. Remaining Unverified details are explici
 - Verification: every Playwright project green — desktop (all specs) + responsive phone/tablet in one 410-test run, laptop 128, 4k 68. New guard "builds one list layout for this width, not both" runs in all five and found the sidebar.
 - C11: the answer style moved from localStorage to `User.aiPreferences`. Proved cross-device with a second browser context holding no localStorage. Reset writes NULL, not the word "default".
 - C12 and C13 INVESTIGATED, not built — both rows say "investigate first" and the investigation is the deliverable. C12 is mostly already built as proposals; the gap is a read-only "what if" view and it needs the user's call. C13's dedupe gap is measured: 706 of 1,916 notifications repeat, worst group 489 rows sharing ONE link.
-- Left off at: C13 (read-time roll-up in the Inbox) is the next implementable unit; D02's remaining half and B05's keyboard checks want one matrix spec. Main untouched; branch not pushed yet this session beyond f27990b.
+- C13 SHIPPED after that: read-time roll-up in the Inbox, entry actions reaching every row behind them, and the detail pane no longer built on phones. Mutation-tested; one of the two mutations passed first time and exposed a weak test, which is the only reason the ordering test is worth anything now.
+- CORRECTION worth carrying forward: the "489 rows sharing one link" figure in the C13 investigation counted a whole day ACROSS users. Per person — which is what a queue is — the largest is 205. Fixed in this file, the service comment and the test header.
+- Left off at: C12 needs the user's call (read-only "what if" view, or leave the proposal flow as the answer). D02's remaining half and B05's keyboard checks want ONE matrix spec — light/dark, accent variants, touch, keyboard, reduced motion — and that is the next unit I would take unprompted. D03 stays unticked on purpose: its acceptance is FIELD p75 INP and this app collects no field metric, which is a feature with privacy questions rather than a tuning change. Main untouched.
 
 ### 2026-09-21 — Claude Code (Opus 5), Phase 13: the landing page, and the performance regression I shipped into it
 - 13.1–13.3: measured before touching anything, which is the only reason the edit was the right one — `#features` alone held 3,119 of the page's 5,232 words. Progressive disclosure (native `<details>`), not deletion, because docs/MARKETING_PAGES.md makes those sentences an audit trail. 1,864 words after, every claim still present.

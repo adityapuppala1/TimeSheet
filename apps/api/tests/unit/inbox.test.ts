@@ -65,8 +65,28 @@ describe("ownership is the authorisation", () => {
   it("scopes every write to the caller, so a guessed id matches nothing", async () => {
     await request(app()).patch("/inbox/someone-elses-id").send({ handled: true });
     expect(updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "someone-elses-id", userId: "u-1" } })
+      expect.objectContaining({ where: { id: { in: ["someone-elses-id"] }, userId: "u-1" } })
     );
+  });
+
+  it("scopes a WHOLE ENTRY's write to the caller too", async () => {
+    // The queue collapses repeats of one notice into a single entry, so a single "mark done" now
+    // carries every row behind it. The ids come from the client, which is only safe because the
+    // owner filter is still there — this is the test that says so.
+    await request(app())
+      .patch("/inbox/mine")
+      .send({ handled: true, ids: ["mine", "also-mine", "someone-elses"] });
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: { in: ["mine", "also-mine", "someone-elses"] }, userId: "u-1" } })
+    );
+  });
+
+  it("refuses an unbounded list of ids rather than building an unbounded query", () => {
+    // 500 is the cap; the request is rejected at validation rather than reaching Prisma.
+    return request(app())
+      .patch("/inbox/mine")
+      .send({ handled: true, ids: Array.from({ length: 501 }, (_, i) => `n${i}`) })
+      .expect(422);
   });
 
   it("404s rather than silently succeeding when the row is not the caller's", async () => {

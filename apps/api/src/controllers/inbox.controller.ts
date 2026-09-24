@@ -43,7 +43,17 @@ const patchSchema = z.object({
       read: z.boolean().optional(),
       /** ISO instant, or null to un-snooze. Bounded to a year out: a five-year snooze is a delete
        *  wearing a friendlier label, and the row should not silently outlive the work. */
-      snoozeUntil: z.string().datetime().nullable().optional()
+      snoozeUntil: z.string().datetime().nullable().optional(),
+      /**
+       * Every row the entry on screen stands for. The queue collapses repeats of one notice into a
+       * single entry (see inbox.service.ts's rollUpInbox), so "mark done" has to reach all of them
+       * or the other 488 would reappear the moment the list refreshed.
+       *
+       * Safe to take from the client because the update is still filtered on the owner: an id
+       * belonging to somebody else matches nothing. The only thing a caller can do with a bad id is
+       * change nothing. Bounded so one request cannot ask for an unbounded IN clause.
+       */
+      ids: z.array(z.string().min(1).max(64)).max(500).optional()
     })
     .strict()
 });
@@ -67,7 +77,9 @@ inboxRouter.patch("/:id", validate(patchSchema), async (req, res) => {
   }
 
   // updateMany + the owner filter: a guessed id belonging to somebody else matches zero rows.
-  const result = await prisma.notification.updateMany({ where: { id: String(req.params.id), userId: req.user!.id }, data });
+  // The path id stays the entry's own row, so a caller that knows nothing about grouping still works.
+  const ids = body.ids?.length ? body.ids : [String(req.params.id)];
+  const result = await prisma.notification.updateMany({ where: { id: { in: ids }, userId: req.user!.id }, data });
   if (result.count === 0) {
     res.status(404).json({ message: "Notification not found." });
     return;

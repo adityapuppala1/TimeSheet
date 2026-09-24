@@ -135,9 +135,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
     steps: [
       "Click the bell to open the panel; unread items are marked.",
       "Click a notification to jump to the thing it is about.",
-      "Release announcements appear here once per upgrade — What's new in the profile menu keeps the full history."
+      "Release announcements appear here once per upgrade — What's new in the profile menu keeps the full history.",
+      "In the Inbox (sidebar → Inbox), notices that say the same thing about the same place are shown as one row with a ×N beside it, so a run of a hundred alerts cannot bury everything else. Nothing is lost: marking that row done marks all of them, the count beside the tab still counts every notice, and opening the row lists each different message it stands for."
     ],
-    keywords: ["notifications", "bell", "alerts", "unread", "mentions"]
+    keywords: ["notifications", "bell", "alerts", "unread", "mentions", "inbox", "duplicate", "repeated", "grouped"]
   },
 
   /* ── Timesheets ──────────────────────────────────────────────────────────────────────────── */

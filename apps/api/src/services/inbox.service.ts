@@ -191,6 +191,96 @@ export type InboxFilter = "unhandled" | "snoozed" | "handled" | "all";
  * anybody re-filing it: that is the only behaviour that makes snoozing safe to use. A snooze that
  * has to be remembered is a delete.
  */
+/**
+ * One entry in the queue, which is usually one notification and sometimes many.
+ *
+ * WHY THIS EXISTS: `dispatchNotification` writes a row every time something happens, and several
+ * producers legitimately fire for a run of similar events. Measured on this workspace: 706 of 1,916
+ * notifications repeat an existing row's recipient, title and category on the same day; the
+ * unhandled queues across every user hold 1,916 rows that are 1,000 distinct notices; and the
+ * largest single notice is 205 rows for ONE person, all pointing at the same page. The queue reads
+ * newest first and stops at a couple of hundred rows, so a burst like that does not merely look
+ * untidy — it pushes every other kind of notice out of the list. The reader's own approvals become
+ * invisible behind it.
+ *
+ * WHY IT COLLAPSES AT READ TIME AND NOT AT DISPATCH: a dedupe window at the point of writing has to
+ * guess, and when it guesses wrong it silently swallows something somebody needed, with no record
+ * that it did. Nothing is dropped here. Every row is still written, still counted in the badge, and
+ * still reachable — `ids` carries all of them, so acting on the entry acts on every row behind it,
+ * and `bodies` carries the distinct wordings so no message is hidden by the collapse.
+ */
+export interface InboxEntry {
+  id: string;
+  title: string;
+  body: string;
+  category: string | null;
+  link: string | null;
+  createdAt: Date;
+  readAt: Date | null;
+  handledAt: Date | null;
+  snoozedUntil: Date | null;
+  /** Rows this entry stands for, itself included. 1 for an ordinary notification. */
+  repeats: number;
+  /** Every row it covers, newest first. Acting on the entry acts on all of them. */
+  ids: string[];
+  /** The DISTINCT wordings among them, newest first — `body` is the first of these. Capped, because
+   *  a detail pane listing four hundred variations is its own kind of unreadable. */
+  bodies: string[];
+}
+
+/** Two rows are the same NOTICE when they say the same thing about the same place. The body is not
+ *  part of the key on purpose: two hundred rows differing only in which attempt they name are still
+ *  one thing to go and look at, and every distinct wording survives in `bodies`. */
+const noticeKey = (row: { title: string; category: string | null; link: string | null }) =>
+  JSON.stringify([row.title, row.category ?? "", row.link ?? ""]);
+
+const MAX_BODIES_PER_ENTRY = 20;
+const MAX_IDS_PER_ENTRY = 500;
+
+/** Pure, and ORDER-PRESERVING: the caller hands rows newest first and the entries come back in the
+ *  order their newest row appeared, so collapsing can never promote an old notice up the queue. */
+export function rollUpInbox<T extends {
+  id: string; title: string; body: string; category: string | null; link: string | null;
+  createdAt: Date; readAt: Date | null; handledAt: Date | null; snoozedUntil: Date | null;
+}>(rows: readonly T[]): InboxEntry[] {
+  const byKey = new Map<string, InboxEntry>();
+  for (const row of rows) {
+    const key = noticeKey(row);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, {
+        id: row.id,
+        title: row.title,
+        body: row.body,
+        category: row.category,
+        link: row.link,
+        createdAt: row.createdAt,
+        readAt: row.readAt,
+        handledAt: row.handledAt,
+        snoozedUntil: row.snoozedUntil,
+        repeats: 1,
+        ids: [row.id],
+        bodies: [row.body]
+      });
+      continue;
+    }
+    existing.repeats += 1;
+    if (existing.ids.length < MAX_IDS_PER_ENTRY) existing.ids.push(row.id);
+    if (existing.bodies.length < MAX_BODIES_PER_ENTRY && !existing.bodies.includes(row.body)) existing.bodies.push(row.body);
+    // An entry counts as unread while ANY row behind it is unread, and as not-yet-handled while any
+    // row is unhandled. The other way round, one glance at the newest would mark the whole burst
+    // read and the rest would never be seen again.
+    if (!row.readAt) existing.readAt = null;
+    if (!row.handledAt) existing.handledAt = null;
+  }
+  return [...byKey.values()];
+}
+
+/** How many rows are scanned before collapsing. Wider than the page it produces, because the whole
+ *  point is that one repeated notice must not be able to fill the window. */
+const SCAN_LIMIT = 1000;
+const PAGE_LIMIT = 200;
+
 export async function listInbox(userId: string, filter: InboxFilter, now: Date = new Date()) {
   const base = { userId };
   const where =
@@ -203,10 +293,15 @@ export async function listInbox(userId: string, filter: InboxFilter, now: Date =
           : base;
 
   const [rows, counts] = await Promise.all([
-    prisma.notification.findMany({ where, orderBy: { createdAt: "desc" }, take: 200 }),
+    prisma.notification.findMany({ where, orderBy: { createdAt: "desc" }, take: SCAN_LIMIT }),
     inboxCounts(userId, now)
   ]);
-  return { items: rows, counts };
+  // `counts` stays a count of ROWS, not of entries, because that is what the bell and every other
+  // place in the app means by "how many notifications". The entries' `repeats` therefore add up to
+  // the rows THESE ENTRIES COVER, which is the whole queue only when it fits inside PAGE_LIMIT —
+  // exactly as the old row-capped list was only ever the newest 200. Each entry says how many it
+  // stands for, so the arithmetic the reader can see is honest either way.
+  return { items: rollUpInbox(rows).slice(0, PAGE_LIMIT), counts };
 }
 
 export async function inboxCounts(userId: string, now: Date = new Date()) {

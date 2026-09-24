@@ -43,7 +43,8 @@ import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { cn } from "../lib/utils";
-import { inboxApi, type InboxFilterValue, type Notification } from "../services/api";
+import { useMediaQuery } from "../lib/use-media-query";
+import { inboxApi, type InboxEntry, type InboxFilterValue } from "../services/api";
 
 const FILTERS: Array<{ value: InboxFilterValue; label: string; countKey: "unhandled" | "snoozed" | "handled" | null }> = [
   { value: "unhandled", label: "To do", countKey: "unhandled" },
@@ -132,6 +133,8 @@ const categoryLabel = (category?: string | null) => {
 export function InboxPage() {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<InboxFilterValue>("unhandled");
+  // The two-pane layout starts at `lg`; below it the row carries its own detail.
+  const widePane = useMediaQuery("(min-width: 1024px)");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   /** The API returns up to 200 rows; the page renders a page-worth at a time. Without this the
       first render of a busy workspace was 24,000 pixels tall, which is not a queue — it is a log,
@@ -171,17 +174,17 @@ export function InboxPage() {
     const next = shown[Math.min(shown.length - 1, Math.max(0, at + delta))];
     if (!next || next.id === selectedId) return;
     setSelectedId(next.id);
-    if (!next.readAt) update.mutate({ id: next.id, patch: { read: true } });
+    if (!next.readAt) update.mutate({ id: next.id, patch: { read: true, ids: next.ids } });
     document.getElementById(`inbox-row-${next.id}`)?.scrollIntoView({ block: "nearest" });
   };
   useScopedShortcuts("/app/inbox", {
     "inbox-next": () => moveSelection(1),
     "inbox-prev": () => moveSelection(-1),
     "inbox-done": () => {
-      if (selected && selectedVisible) update.mutate({ id: selected.id, patch: { handled: !selected.handledAt } });
+      if (selected && selectedVisible) update.mutate({ id: selected.id, patch: { handled: !selected.handledAt, ids: selected.ids } });
     },
     "inbox-snooze": () => {
-      if (selected && selectedVisible) update.mutate({ id: selected.id, patch: { snoozeUntil: SNOOZES[0].at().toISOString() } });
+      if (selected && selectedVisible) update.mutate({ id: selected.id, patch: { snoozeUntil: SNOOZES[0].at().toISOString(), ids: selected.ids } });
     }
   });
 
@@ -192,7 +195,7 @@ export function InboxPage() {
   };
 
   const update = useMutation({
-    mutationFn: ({ id, patch }: { id: string; patch: { handled?: boolean; read?: boolean; snoozeUntil?: string | null } }) =>
+    mutationFn: ({ id, patch }: { id: string; patch: { handled?: boolean; read?: boolean; snoozeUntil?: string | null; ids?: string[] } }) =>
       inboxApi.update(id, patch),
     onSuccess: refresh,
     onError: (err: any) => toast.error("Could not update", { description: err?.response?.data?.message ?? "Try again." })
@@ -285,13 +288,14 @@ export function InboxPage() {
                 item={item}
                 selected={item.id === selectedId}
                 busy={update.isPending}
+                carriesDetail={!widePane}
                 onSelect={() => {
                   setSelectedId(item.id);
-                  if (!item.readAt) update.mutate({ id: item.id, patch: { read: true } });
+                  if (!item.readAt) update.mutate({ id: item.id, patch: { read: true, ids: item.ids } });
                 }}
-                onHandle={() => update.mutate({ id: item.id, patch: { handled: !item.handledAt } })}
-                onSnooze={(at) => update.mutate({ id: item.id, patch: { snoozeUntil: at.toISOString() } })}
-                onUnsnooze={() => update.mutate({ id: item.id, patch: { snoozeUntil: null } })}
+                onHandle={() => update.mutate({ id: item.id, patch: { handled: !item.handledAt, ids: item.ids } })}
+                onSnooze={(at) => update.mutate({ id: item.id, patch: { snoozeUntil: at.toISOString(), ids: item.ids } })}
+                onUnsnooze={() => update.mutate({ id: item.id, patch: { snoozeUntil: null, ids: item.ids } })}
               />
             ))}
 
@@ -303,12 +307,16 @@ export function InboxPage() {
             )}
           </div>
 
-          {/* The detail pane, desktop only — below lg the row itself carries everything. */}
-          <div className="hidden lg:block">
-            <div className="sticky top-4">
-              {selected && selectedVisible ? <DetailPane item={selected} /> : <EmptyPanel title="Select an item" description="Its details open here." />}
+          {/* The detail pane, desktop only — below lg the row itself carries everything. Gated in JS
+              rather than with `hidden lg:block`, so a phone does not BUILD a pane it will never
+              show: see useCardLayout's header for what that costs when it is a whole subtree. */}
+          {widePane && (
+            <div>
+              <div className="sticky top-4">
+                {selected && selectedVisible ? <DetailPane item={selected} /> : <EmptyPanel title="Select an item" description="Its details open here." />}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>
@@ -383,14 +391,17 @@ function InboxRow({
   item,
   selected,
   busy,
+  carriesDetail,
   onSelect,
   onHandle,
   onSnooze,
   onUnsnooze
 }: Readonly<{
-  item: Notification;
+  item: InboxEntry;
   selected: boolean;
   busy: boolean;
+  /** True where there is no detail pane beside the list, so the row has to carry the detail. */
+  carriesDetail: boolean;
   onSelect: () => void;
   onHandle: () => void;
   onSnooze: (at: Date) => void;
@@ -425,6 +436,16 @@ function InboxRow({
               <Badge variant="secondary" className="shrink-0 text-[10px]">
                 {categoryLabel(item.category)}
               </Badge>
+              {item.repeats > 1 && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline" className="shrink-0 text-[10px]">×{item.repeats}</Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {item.repeats} notices saying this, about the same place. Marking this done marks all of them.
+                  </TooltipContent>
+                </Tooltip>
+              )}
               {snoozed && (
                 <Badge variant="outline" className="shrink-0 gap-1 text-[10px]">
                   <Clock className="h-2.5 w-2.5" />
@@ -437,6 +458,15 @@ function InboxRow({
           </span>
         </div>
       </button>
+
+      {/* Below `lg` there is no detail pane — the row carries everything — so the entry's other
+          wordings belong here, on the row that is open. Above `lg` the pane shows them, and
+          rendering this as well would be the same list twice, one of them invisible. */}
+      {selected && carriesDetail && (
+        <div className="px-2 pb-2">
+          <OtherMessages item={item} />
+        </div>
+      )}
 
       {/* Actions live in the row, not behind a menu: triage is a two-click loop and a menu makes
           it three. */}
@@ -490,7 +520,33 @@ function InboxRow({
   );
 }
 
-function DetailPane({ item }: Readonly<{ item: Notification }>) {
+/**
+ * The rest of what one entry stands for.
+ *
+ * The queue collapses repeats of a notice so a burst cannot evict everything else from a list that
+ * reads newest-first — and this is what keeps that collapse honest: every distinct wording behind
+ * the entry is still here to read. Shared by the desktop detail pane and the phone row, because a
+ * phone reader must not be the one who cannot see what was hidden.
+ */
+function OtherMessages({ item }: Readonly<{ item: InboxEntry }>) {
+  if (item.bodies.length <= 1) return null;
+  return (
+    <details className="rounded-md border border-border bg-muted/30 p-2.5">
+      <summary className="cursor-pointer text-xs font-medium">
+        {item.repeats} notices in this entry · {item.bodies.length} different messages
+      </summary>
+      <ul className="mt-2 space-y-1.5">
+        {item.bodies.slice(1).map((body) => (
+          <li key={body} className="whitespace-pre-line border-l-2 border-border pl-2 text-xs text-muted-foreground">
+            {body}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function DetailPane({ item }: Readonly<{ item: InboxEntry }>) {
   return (
     <Card className="animate-fade-in">
       <CardHeader className="pb-3">
@@ -515,6 +571,7 @@ function DetailPane({ item }: Readonly<{ item: Notification }>) {
         {/* whitespace-pre-line: several producers write multi-line bodies, and collapsing them
             turns a readable summary into a paragraph. */}
         <p className="whitespace-pre-line text-sm text-muted-foreground">{item.body}</p>
+        <OtherMessages item={item} />
         {item.link && (
           <Button asChild size="sm">
             <Link to={item.link}>

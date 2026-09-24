@@ -10,6 +10,23 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 📥 One notice, said once
+
+- **The Inbox collapses repeats of a notice into one row.** Same title, same kind, same
+  destination — shown once, with a ×N beside it. Measured on this workspace: 1,916 unhandled
+  notifications across everyone are 1,000 distinct notices, 706 of them repeat an existing row's
+  recipient, title and kind on the same day, and one person's queue held 205 copies of a single
+  notice all pointing at the same page. Since the queue reads newest first and stops at a couple
+  of hundred, a run like that did not merely look untidy — it pushed every other kind of notice out
+  of the list, so approvals waiting on you became invisible behind it.
+- **Nothing is dropped, and nothing is hidden.** Every notification is still written and still
+  counted — the number on the tab counts notices, not rows on screen. Marking the row done marks
+  every one behind it, and un-doing puts them all back. Opening the row lists each different
+  message it stands for, on a phone as well as a desktop.
+- **Collapsed when read, not when sent.** A de-duplicating rule at the point of sending has to
+  guess, and when it guesses wrong it silently swallows something you needed with no record that it
+  did. This only changes how the queue is presented.
+
 ### 🧭 Your answer style follows you
 
 - **Ask AI's answer style is saved to your profile, not to one browser.** Default, Concise,

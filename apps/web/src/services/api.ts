@@ -584,6 +584,23 @@ export interface Notification {
   snoozedUntil?: string | null;
 }
 
+/**
+ * One row in the Inbox queue, which is usually one notification and sometimes many.
+ *
+ * The queue collapses repeats of a single notice — same title, same category, same destination —
+ * into one entry, because a burst of several hundred otherwise evicts every other kind of notice
+ * from a list that reads newest-first. Nothing is dropped: `ids` reaches every row behind the
+ * entry, so acting on it acts on all of them, and `bodies` carries every distinct wording.
+ * See apps/api/src/services/inbox.service.ts.
+ */
+export interface InboxEntry extends Notification {
+  /** Rows this entry stands for, itself included. 1 for an ordinary notification. */
+  repeats: number;
+  ids: string[];
+  /** Distinct wordings, newest first. `body` is the first of these. */
+  bodies: string[];
+}
+
 /* ---- Inbox and the daily brief (V8 phase 2) ----------------------------------------------- */
 
 export type InboxFilterValue = "unhandled" | "snoozed" | "handled" | "all";
@@ -612,11 +629,11 @@ export interface DailyBrief {
 
 export const inboxApi = {
   list: async (filter: InboxFilterValue) =>
-    (await api.get<{ items: Notification[]; counts: InboxCounts }>("/inbox", { params: { filter } })).data,
+    (await api.get<{ items: InboxEntry[]; counts: InboxCounts }>("/inbox", { params: { filter } })).data,
   brief: async () => (await api.get<DailyBrief>("/inbox/brief")).data,
   /** Every field is optional and independent: handling, reading and snoozing are three different
    *  statements about one row. Returns the fresh counts so the tab badges cannot drift. */
-  update: async (id: string, patch: { handled?: boolean; read?: boolean; snoozeUntil?: string | null }) =>
+  update: async (id: string, patch: { handled?: boolean; read?: boolean; snoozeUntil?: string | null; ids?: string[] }) =>
     (await api.patch<InboxCounts>(`/inbox/${id}`, patch)).data,
   handleAll: async () => (await api.post<InboxCounts>("/inbox/handle-all")).data
 };
