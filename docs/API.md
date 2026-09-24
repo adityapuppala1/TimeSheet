@@ -837,25 +837,45 @@ No permission and no entitlement: this is the caller's own queue over notificati
 receive, and selling "your own inbox" as an upsell would be the wrong shape (the same reasoning that
 leaves `/plan/my-work` ungated).
 
-**Ownership IS the authorisation.** Every write is an `updateMany` filtered on `{ id, userId }`, so a
-guessed id belonging to somebody else updates zero rows and answers 404 — there is deliberately no
-id-based lookup that could be pointed at another person's inbox, and no admin view of one.
+**Ownership IS the authorisation.** Every write is an `updateMany` filtered on
+`{ id: { in: [...] }, userId }`, so a guessed id belonging to somebody else updates zero rows and
+answers 404 — there is deliberately no id-based lookup that could be pointed at another person's
+inbox, and no admin view of one.
 
 - `GET /inbox?filter=unhandled|snoozed|handled|all` — the queue plus `counts`. An unknown filter
-  falls back to `unhandled` rather than erroring. Returns at most 200 rows; the page reveals 25 at a
-  time.
+  falls back to `unhandled` rather than erroring. Returns at most 200 **entries**, collapsed from a
+  scan of the newest 1,000 rows; the page reveals 25 at a time.
 - `GET /inbox/brief` — today's brief (below).
-- `PATCH /inbox/:id` `{ handled?, read?, snoozeUntil? }` — three independent statements about one
-  row. **`handledAt` is not `readAt`**: opening the bell marks things read, which is about attention,
-  not about work; collapsing them would mean every glance empties the queue. Snoozing also marks the
-  row read, because the bell must stop insisting about work somebody has explicitly deferred, and a
-  `snoozeUntil` beyond a year is clamped — a five-year snooze is a delete wearing a friendlier label.
-  Returns fresh counts so tab badges cannot drift.
+- `PATCH /inbox/:id` `{ handled?, read?, snoozeUntil?, ids? }` — three independent statements about
+  one entry. **`handledAt` is not `readAt`**: opening the bell marks things read, which is about
+  attention, not about work; collapsing them would mean every glance empties the queue. Snoozing
+  also marks the row read, because the bell must stop insisting about work somebody has explicitly
+  deferred, and a `snoozeUntil` beyond a year is clamped — a five-year snooze is a delete wearing a
+  friendlier label. `ids` (at most 500) names every row the entry stands for, so acting on a
+  collapsed entry reaches all of them; it is safe to take from the client precisely because the
+  owner filter above still applies. Returns fresh counts so tab badges cannot drift.
 - `POST /inbox/handle-all` — clears the visible queue by marking handled. **Never deletes**: the row
   is the record that somebody was told, and a support question a month later is answered by it.
 
 A snoozed row is hidden from `unhandled` until its time passes and then **reappears on its own**,
 with nobody re-filing it. That is the only behaviour that makes snoozing safe to use.
+
+### The queue shows one entry per notice
+
+Rows that say the same thing about the same place — same `title`, same `category`, same `link` —
+are returned as ONE entry carrying `repeats`, the `ids` it covers and the distinct `bodies` among
+them. This matters because `dispatchNotification` writes a row per event and several producers
+legitimately fire in runs: measured on a development workspace, 1,916 unhandled rows were 1,000
+distinct notices, and one person's queue held 205 copies of a single notice all pointing at the same
+page. Since the queue reads newest-first, a run like that pushed every other kind of notice out of
+the list entirely.
+
+**Collapsed when read, never when sent.** A de-duplicating window at dispatch has to guess, and a
+wrong guess silently swallows something the recipient needed with no record that it did. Nothing is
+dropped here: every row is still written, `counts` still counts ROWS (so the badge means what it
+always meant), and `bodies` carries every distinct wording so the collapse hides no message. An
+entry reports itself unread while ANY row behind it is unread, and unhandled while any is unhandled
+— the other way round, one glance would bury a burst permanently.
 
 ### The brief is arithmetic, not a prompt
 

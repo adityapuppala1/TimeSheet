@@ -154,7 +154,7 @@ that looks stale.
 | Prisma models / enums | **135** / 47, plus **123** tenant migrations and 22 control-plane migrations |
 | Services / cron workers | **150** / 32 |
 | Web pages | **100** |
-| Unit tests | **3,282** across 223 files (`npm test -w apps/api`), plus **329** in `apps/web` |
+| Unit tests | **3,302** across 225 files (`npm test -w apps/api`), plus **358** in `apps/web` |
 | End-to-end specs | **31** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
 | Editable email templates | **41**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **20**, over 5 roles — plus **5** platform-console capabilities over 5 operator roles |
@@ -679,7 +679,7 @@ failure points at a rule rather than a fixture. **End-to-end specs** drive a rea
 real seeded database, and are where anything needing one belongs.
 
 ```bash
-npm test -w apps/api         # the unit suite (~35s): 1,758 tests across 153 files
+npm test -w apps/api         # the unit suite (~35s): 3,302 tests across 225 files
 npm run test:coverage -w apps/api
 npm run lint                 # typecheck both apps + eslint/sonarjs across the monorepo
 ```
