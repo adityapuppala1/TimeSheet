@@ -722,6 +722,13 @@ jobs:
   validate-installer-windows:
     name: Validate install.ps1 (PowerShell parser, no execution)
     runs-on: windows-latest
+    # FULL TIER, like every other Windows job — and this one was the outlier: it ran on EVERY push,
+    # on a runner billed at twice the Linux rate, to PARSE two files that change a few times a year.
+    # Measured over 2026-08-25..09-24: 922 Windows minutes, which count as 1,844 against the
+    # allowance — 17% of the month's total for a syntax check. It still runs before anything
+    # reaches main, a tag or a PR, which is every path by which an installer script can reach a
+    # customer; a broken `install.ps1` sitting on a feature branch for an hour harms nobody.
+    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full-ci]') }}
     steps:
       - uses: actions/checkout@v7
 
