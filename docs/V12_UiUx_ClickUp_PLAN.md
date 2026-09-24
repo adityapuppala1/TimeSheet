@@ -504,12 +504,31 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
       already claimed there. Adding rows for them would pad the page, not describe it.
 - [ ] E04 Release decision. Prepare upgrade notes and migration verification where applicable.
   Publishing, production deployment and merging require a separate explicit decision.
-  BLOCKED ON THE USER, by the rule's own words and by AGENTS.md's never-merge rule. What is ready
-  when that decision comes: the branch carries one additive migration
-  (`20260924120000_user_ai_preferences`, nullable column, idempotent guard, applied and recorded on
-  the dev database), no env var, no feature flag, and no breaking API change — `PATCH /inbox/:id`
-  gained an OPTIONAL `ids`, so an older client keeps working unchanged. VERSION and Helm appVersion
-  are untouched, which is correct: the work sits under Unreleased until somebody chooses a number.
+  THE PREPARATION HALF IS DONE (2026-09-24); PUBLISHING IS STILL THE USER'S, by this row's own
+  words and by AGENTS.md's never-merge rule. Verified rather than assumed:
+    - VERSION 5.5.0 and Chart.yaml `appVersion: "5.5.0"` agree, and CI asserts they do
+      (ci.yml's "Chart appVersion must match the repo VERSION file"). Chart `version: 0.9.3` is
+      NOT asserted — worth knowing before a release, since nothing will catch it drifting.
+    - `## Unreleased` holds 21 `###` sections. CI's changelog job deliberately skips Unreleased and
+      checks only that every `## X.Y.Z` heading has a matching `vX.Y.Z` tag.
+    - ONE migration since the last release: `20260924120000_user_ai_preferences`. Additive only, a
+      nullable column, guarded by the information_schema + PREPARE pattern so a replay is a no-op.
+      It carries no `@rerunnable` marker, so `doctor:heal` would not auto-clear a P3009 for it —
+      an accurate statement of the recovery path, not a defect.
+    - NO OPERATOR ACTION IS NEEDED for it on upgrade. The api container's own command runs
+      `prisma migrate deploy` on both schemas (docker-compose.yml, docker-compose.external-db.yml),
+      `update.sh`/`update.ps1` verify with `migrate status` afterwards and run `migrate:tenants` for
+      additional tenant databases, and Helm runs it as a `post-install,pre-upgrade` hook Job.
+    - NO NEW ENV VAR ships with this work. The audit did find two that were already missing from
+      every deployment surface — `CLAMAV_HOST`/`CLAMAV_PORT` — which is a pre-existing defect, now
+      fixed (see the D04 row and CHANGELOG).
+    - No breaking API change: `PATCH /inbox/:id` gained an OPTIONAL `ids`, so an older client is
+      unaffected.
+  WHAT REMAINS, and it is four commands from CONTRIBUTING.md § "Releasing a version", none of which
+  an agent should run unasked: bump VERSION, rename `## Unreleased` to a numbered heading and open a
+  fresh one, run the WHOLE suite AFTER that rename (two unit tests read the changelog and fail if
+  VERSION has no matching heading), tag, push, and create the GitHub Release. CD builds the images
+  from the tag.
 
 - [ ] E05 Field performance measurement — NEW, carved out of D03 rather than left implied.
   D03's acceptance is field p75 INP <=200ms on mobile and desktop separately, and this app collects
@@ -595,7 +614,7 @@ that matters is between work nobody has done and work nobody can do without a de
 
 | Row | State | What it is waiting for |
 |---|---|---|
-| 7.7b Which P3 product | Blocked | The user picking ONE of wikis, chat, whiteboards, MCP client, connected search, guests. Each is a product, not a UI pass. |
+| 7.7b Which P3 product | Blocked — but now with sizes | The user picking ONE. Sized against the codebase 2026-09-24 (see below); recommendation is the MCP client. |
 | E01 Live-provider evaluation | Blocked | Consented test data and a cost budget. It spends real money against a real provider; not something to start unasked. |
 | E04 Release decision | Blocked | The user. Publishing, deploying and merging to main each need an explicit say-so (AGENTS.md). |
 | E05 Field performance | Blocked | A privacy decision. D03's target is FIELD p75 INP and this app collects no field metric; making it measurable means collecting from real users. |
@@ -809,6 +828,26 @@ remains unavailable. No release, deployment or live-model evaluation was perform
 - [x] Phase 6 (post-plan hardening, from Open Questions; each unit still small, additive, verified, committed alone):
   - [x] 6.1 Sprint membership audited and replayed — DONE (audit event on create/PATCH; burndown replays membership; 6 new tests; live plumbing verified). PLAN was: FINDING (Open Questions): membership is not audited, so the burndown reads it as of now — a ticket moved out mid-sprint disappears from the whole series, one moved in late appears to have been there from day one. The generic `ticket.updated` audit carries the raw PATCH body, which is not a membership event. PLAN: (1) `ticket.sprint_changed` audit `{ from, to }` written by `POST /tickets` (from null) and `PATCH /tickets/:id` whenever `sprintId` actually changes; (2) `BurndownTicket.membership?: Array<{ at, joined }>` for THIS sprint; pure `memberAtEndOf(ticket, dayEnd)` — no events ⇒ member throughout (pre-audit sprints keep their series); with events, the state before the first is the opposite of that event; `burndown` counts a ticket on a day only if a member at that day's end; the ideal line stays over the current members' total; (3) controller: candidates = current members ∪ tickets with a `ticket.sprint_changed` row whose `to` or `from` is this sprint (Prisma JSON path filters), status rows for all candidates, membership rows mapped per ticket; (4) tests: pure (join late, leave early, no events, leave and rejoin) + route test asserting the audit on PATCH. No migration (audit rows), no flag. DoD: tests green; live: PATCH a ticket out of the smoke sprint and the burndown's later days drop it while earlier days keep it.
   - [x] 6.2 People in the command palette — DONE (Users `?search=` deep link; people group gated on users:manage; tests + live as admin and employee). PLAN was: FINDING (3.1, Open Questions): no page could be deep-linked to a person, so a people result would have been noise. PLAN: (1) the Users page (Administration → Users) reads `?search=` into its search box on load — the target; (2) `GET /api/search` gains a `people` group ONLY for callers who hold the users-management permission (the same gate the Users page has), ≤5 by name/email prefix, active users, no agents; everyone else gets an empty group, never a 403; (3) the palette renders a "People" group whose rows navigate to `/app/users?search=<name>`; (4) tests: search service ranking/gating unit test; a Users-page URL-seed unit test if the page has a testable helper, else the live probe. No migration, flag or dependency. DoD: live — an admin types a colleague's name in the palette, picks the person, lands on Users with the box pre-filled and the row shown; an employee sees no People group.
+#### 7.7b sized against the codebase (2026-09-24) — for whoever makes the pick
+
+Each row is what ALREADY exists, so the remaining gap can be judged rather than guessed. Ranked
+cheapest-meaningful-gap first.
+
+| Candidate | What exists today | What is actually missing | Size |
+|---|---|---|---|
+| **MCP client** | TimeSphere is already a complete MCP **server**: `mcp.controller.ts` (McpServer + StreamableHTTPServerTransport), a 31-tool catalogue in `mcp-tools.ts`, bearer auth, an admin card. `@modelcontextprotocol/sdk` is ALREADY a dependency — the same package ships the client. | The outbound direction only: a server-registry model (URL + credential), connect/discover code, and exposing discovered tools to the existing AI tool-dispatch loop. | small/medium |
+| **Connected search** | `GET /api/search` over tickets, projects and people; the command palette already does record hits, route/action search and an NL backlog search. | Coverage beyond three record types, a real index (today's queries are prefix-style, limit 5), a results page. Third-party sources would be a different, much larger thing. | small/medium |
+| **Wikis** | `RequirementsDocument` with sections, provenance and ticket links; Studio list + doc view; a real TipTap editor with @mentions; PDF export. | Free-form user-authored pages (today's docs are AI-generated JSON sections), a page tree, per-page permissions, version history, backlinks. | medium |
+| **Guests** | Three token-scoped external surfaces, all hash-stored and expiring: guest approval, shared attestation, public request forms. | A guest IDENTITY. `RoleName` has no GUEST; no guest users, invites, per-project membership, permission-matrix entry or seat treatment. | medium/large |
+| **Chat** | Full four-platform intake and outbound (Slack/Teams/Telegram/Google Chat), routing rules, an admin UI; in-app discussion is ticket comments with @mentions. | Everything that makes chat a product: channels not bound to a ticket, presence, unread state, DMs — and there is no realtime transport anywhere in either package.json. | large |
+| **Whiteboards** | `FlowCanvas` — a hand-built SVG node graph with drag, zoom and bezier connectors, rendered by the Studio. | It is a view of an ORDERED LIST by design. Free placement, shapes, ink, a persistence model for an arbitrary canvas, multi-user cursors — none of it exists or is reusable beyond the zoom/pan maths. | large |
+
+**Recommendation: the MCP client.** It is the only candidate whose hard infrastructure is already
+paid for here — the SDK, the transport, credential encryption, the egress allowlist and an AI
+tool-dispatch loop the discovered tools plug straight into — and it completes a story the product
+already half-tells, since the server is sold in settings while the client half does not exist.
+Still the user's pick: every row above is a product, and picking wrong costs days.
+
 - [ ] Phase 7 (2026-09-17, user direction: "make it look more colorful and initiative featuristic and use three.js somewhere for interactiveness", to be applied under SYSTEM_PROMPT_V12_UiUx_ClickUp.md's hard rules — the prompt itself asks for none of these beyond the colourful themes already shipped):
   - [x] 7.1 Calendar Day and 4-day periods — DONE (probe both widths; no page errors). PLAN was: the last Calendar gap vs "Intro to Calendar view" (Day: tasks scheduled all day or for a set time; 4 days; Week; Month). PLAN: `PlanCalendar` `period` gains `day` and `4days` — a single column / four columns of the week grid, chips listed in full; the segmented control reads Day · 4 days · Week · Month; prev/next step by 1 / 4 days; drag works the same. UI_GUIDE + CHANGELOG; probe both widths.
   - [x] 7.2 Timeline Year zoom — DONE (probe both widths). PLAN was: reconsidered against the user's ask (previously "deliberately absent"): PLAN: `year` at 0.6px/day with QUARTER ticks only, bars at the 4px floor, labels off; useful as a shape, honestly labelled "Year (overview)"; not the default.
