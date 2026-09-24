@@ -36,6 +36,13 @@ data:
   SMTP_USER: {{ .smtpUser | quote }}
   SMTP_SECURE: {{ .smtpSecure | quote }}
   {{- end }}
+  {{- with .Values.clamav }}
+  # Where clamd is, if attachment scanning is switched on in Ticketing settings. Forwarded even
+  # when empty so the variable EXISTS in the pod: an operator told to "set CLAMAV_HOST" by the
+  # settings page needs somewhere to set it.
+  CLAMAV_HOST: {{ .host | quote }}
+  CLAMAV_PORT: {{ .port | quote }}
+  {{- end }}
   {{- with .Values.sla }}
   # Approval + ticket SLA escalation. The cron values are scan frequency, the hours are deadlines.
   SLA_ENABLED: {{ .enabled | quote }}

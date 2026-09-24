@@ -168,6 +168,18 @@ mail:
   # false = STARTTLS on 587 (the common case, including Microsoft 365). true = implicit TLS on 465.
   smtpSecure: false
 
+# Attachment virus scanning. Off unless an admin turns it on under Ticketing settings — these
+# values only say WHERE clamd is, never whether to use it.
+#
+# They are here because the settings page's own failure message tells an operator to "Set
+# CLAMAV_HOST/CLAMAV_PORT", and until 2026-09-24 there was nowhere in a cluster to set them: the
+# variables existed in the API's env schema and in no deployment surface at all. An empty host
+# leaves the service pointing at 127.0.0.1, which is the pod itself — correct only if you run
+# clamd as a sidecar. Point it at a Service name to use a shared scanner.
+clamav:
+  host: ""
+  port: 3310
+
 # Approval and ticket SLA escalation. Also previously absent from the chart, which meant a
 # Kubernetes deployment could not turn escalation off or retune it without editing the ConfigMap by
 # hand — while both compose files exposed most of it. The cron schedules are how often the workers

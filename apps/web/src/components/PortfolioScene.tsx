@@ -13,6 +13,7 @@
  * WHY THE NUMBERS ARE THE TABLE'S: the spheres read `openCount` from the same rollup rows the
  * table renders, so the two can never disagree about a project.
  */
+import { isSoftwareWebGl } from "../lib/webgl";
 import { createRenderLoop, type RenderLoopHandle } from "../lib/render-loop";
 import { useEffect, useRef, useState } from "react";
 import { resolveIdentityColor } from "../lib/identity-colors";
@@ -86,6 +87,17 @@ export function PortfolioScene({ projects, onOpen }: Readonly<{ projects: SceneP
     let cancelled = false;
     let teardown: (() => void) | undefined;
     let loop: RenderLoopHandle | undefined;
+
+    // A CPU rasteriser (SwiftShader, llvmpipe, a VM, a remote desktop, CI) turns this scene into a
+    // per-frame tax and gives nothing back — and this repo has already paid for that twice: the
+    // marketing scenes starved the compositor badly enough to time Playwright out, and a software
+    // WebGL request once threw through the router boundary so /login never rendered at all. Every
+    // marketing scene has guarded this since; THIS one, the only 3D surface inside the app, never
+    // did. The table beneath it says everything the spheres do.
+    if (isSoftwareWebGl()) {
+      setStatus("unavailable");
+      return;
+    }
 
     void (async () => {
       let THREE: typeof import("three");

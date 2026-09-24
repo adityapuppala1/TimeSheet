@@ -415,9 +415,32 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
   prefetch, before it is worth doing. Recorded here rather than attempted late in a session.
   Also unconverted: `rich-text-editor` (138 kB gzipped) is the largest chunk on six app routes
   because AdminPages imports the timesheet dialog; measured, not yet acted on.
-- [ ] D04 Optional 3D agents: decision gate, not committed delivery. Prototype only on the existing
+- [x] D04 Optional 3D agents: decision gate, not committed delivery. Prototype only on the existing
   roster/run surface if it communicates real run state better than the 2D presentation. Require
   lazy loading, reduced-motion support, non-WebGL fallback and measured mobile overhead.
+  DECIDED 2026-09-24 — EVALUATED, NOT PURSUED. The row is a gate, and this is the gate closing.
+  WHAT THE 2D SURFACE ALREADY SAYS: the roster shows on/off plus "On, but idle", per-capability
+  resolved autonomy with its clamp reason, untrusted-input flags, spend against ceiling, and recent
+  runs with status, capability, trigger, taint, cost and error text (Agents.tsx). The run surface
+  adds outcome tiles, day grouping, server-side filters and a step-by-step trace with tool, args,
+  result, taint explanation and the ledger line (settings/AgentRunsCard.tsx). There is no state a
+  spatial view would carry that this does not already carry in words.
+  WHAT A SCENE COSTS HERE, from this repo's own measurements: 598 idle draw calls and 120 layouts
+  per second before 13.4 cleaned them up; and a software-WebGL request once threw through the
+  router boundary so /login never rendered on a GPU-less runner. Each scene has cost more than it
+  returned.
+  THE STRONGEST ARGUMENT THE OTHER WAY, recorded so this is not re-litigated from scratch:
+  PortfolioScene proves the safe pattern is cheap to reuse — opt-in toggle, dynamic import,
+  reduced-motion path, non-WebGL fallback, sr-only equivalent list, shared render loop — so D04's
+  four requirements are already satisfiable. And a multi-step agent trace, with branching and
+  refusals, is genuinely a graph that a flat list flattens. If any surface in this product earned a
+  spatial view it is that one. It is still a no, because the gap it would address is per-step
+  TIMING, and that is a table column, not a dimension.
+  THE EVALUATION FOUND A REAL BUG AND IT IS FIXED HERE: `PortfolioScene` was the only WebGL surface
+  in the codebase with no `isSoftwareWebGl()` guard — every marketing scene has had one since 13.4.
+  So the one 3D view inside the app was the one that would still run under SwiftShader, on exactly
+  the machines (VMs, remote desktops, CI) where that behaviour caused an outage. Guarded now, and
+  it falls back to the "unavailable" state the component already had.
 
 #### Phase E: Completion and Release Readiness
 
@@ -567,13 +590,12 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
 
 ### Where this stands (2026-09-24)
 
-**47 of 52 rows closed.** Everything still open is below, with WHY it is open — the distinction
+**48 of 52 rows closed.** Everything still open is below, with WHY it is open — the distinction
 that matters is between work nobody has done and work nobody can do without a decision.
 
 | Row | State | What it is waiting for |
 |---|---|---|
 | 7.7b Which P3 product | Blocked | The user picking ONE of wikis, chat, whiteboards, MCP client, connected search, guests. Each is a product, not a UI pass. |
-| D04 Optional 3D agents | Blocked | A decision gate by its own wording — it is explicitly "not committed delivery". |
 | E01 Live-provider evaluation | Blocked | Consented test data and a cost budget. It spends real money against a real provider; not something to start unasked. |
 | E04 Release decision | Blocked | The user. Publishing, deploying and merging to main each need an explicit say-so (AGENTS.md). |
 | E05 Field performance | Blocked | A privacy decision. D03's target is FIELD p75 INP and this app collects no field metric; making it measurable means collecting from real users. |

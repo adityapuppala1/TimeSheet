@@ -51,6 +51,14 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_SECURE: ${SMTP_SECURE:-false}
+      # Attachment virus scanning, off unless an admin switches it on in Ticketing settings. These
+      # two have to be forwarded even though both are optional: the failure message the settings
+      # page shows says "Set CLAMAV_HOST/CLAMAV_PORT", and until now there was nowhere in a
+      # container to set them — an operator following that instruction would edit .env and watch
+      # nothing change. Empty host leaves the service pointing at 127.0.0.1, which is the same
+      # behaviour as before for anyone who never turns scanning on.
+      CLAMAV_HOST: ${CLAMAV_HOST:-}
+      CLAMAV_PORT: ${CLAMAV_PORT:-3310}
       UPLOAD_DIR: /app/uploads
       # Reverse-proxy hop count — see docker-compose.yml's block of the same name for the full
       # reasoning. Short version: the `web` container's nginx already proxies /api here, so a

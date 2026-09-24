@@ -10,6 +10,19 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🛡️ Two fixes found by deciding not to build something
+
+- **The 3D portfolio view now steps aside on a machine with no GPU**, like every other scene in the
+  app already did. It was the only one missing that check — so the one 3D surface *inside* the
+  product was the one that would still run under a software rasteriser, on exactly the machines
+  (virtual desktops, CI) where that once stopped a page rendering at all. The table beneath it says
+  everything the spheres do.
+- **Attachment virus scanning can now actually be configured in a container.** `CLAMAV_HOST` and
+  `CLAMAV_PORT` were read by the API and forwarded by nothing — not compose, not the Helm chart,
+  not the example env file. The settings page's own error message told operators to "set
+  CLAMAV_HOST", and in Docker or Kubernetes there was nowhere to set it. All four surfaces carry
+  them now; scanning stays off until an admin switches it on.
+
 ### 🔤 Status badges you can actually read
 
 - **"HIGH" was 2.09:1.** Every status and priority badge in the app wrote its text in the same
