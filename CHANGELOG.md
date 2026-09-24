@@ -10,6 +10,16 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🎯 The phone's navigation bar is finally big enough to hit
+
+- **41px, where the minimum is 44.** The V12 touch pass raised every button, input and select in
+  the app to a 44px target and never reached the bottom bar itself — the one control a phone user
+  touches more than any other. It measures 44 now.
+- **And a matrix that would have caught it.** One spec now asks the appearance and input questions
+  together: every accent in both themes, reduced motion, keyboard, touch. It measures what the
+  browser actually painted rather than what the palette says, so a preference that saves correctly
+  and never reaches the screen fails here.
+
 ### 📥 One notice, said once
 
 - **The Inbox collapses repeats of a notice into one row.** Same title, same kind, same

@@ -122,6 +122,10 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
   connections and empty rules, with targeted retries. Live-checked Branding, Storage & logs and
   Chat Integrations; normal configuration controls rendered and no settings were saved. The
   Storage page also accurately showed this dev instance's existing console-only logging status.
+  KEYBOARD AND NESTED CONTROLS, the item's last open piece, are covered as of 2026-09-24 by
+  `tests/e2e/appearance-matrix.spec.ts`: a folded section opens with Enter and nothing else, the
+  tab strip behaves as a real tablist under the arrow keys, and every Tab stop on the settings page
+  must visibly show that it has focus (see D02 for the three ways that check was wrong first).
   Single sign-on now blocks its provider board and editors when the primary configuration has no
   loaded baseline, with an inline retry; SCIM initial failure is explicitly unknown and retryable
   rather than looking switched off. The live configured-provider view and existing sign-in safety
@@ -272,7 +276,7 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
 - [ ] D01 Visual consistency. Apply existing status/project colors consistently; improve
   hierarchy, spacing, icon alignment and compact panel headings. Reuse theme/accent/density
   preferences. No global rebrand, ornamental hero or competing design system.
-- [ ] D02 Responsive verification. Check 390px phone, 768px tablet, 1440px desktop and 1920px
+- [x] D02 Responsive verification. Check 390px phone, 768px tablet, 1440px desktop and 1920px
   wide desktop; add 320px and 200% zoom checks for changed controls. Cover light/dark, selected
   accent variants, touch, keyboard and reduced motion. Tables may scroll inside their container.
   THE TWO NEW SIZES ARE DONE AND ARE NOW TESTS (2026-09-24), not a one-off sweep: two cases in
@@ -294,9 +298,31 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
       breakpoint up, and the weekly practice update scrolled 7px sideways at 768px. The rule is
       not "phones are special" but "the ring may never exceed the gutter it sits in", so it now
       holds to `lg`.
-  STILL OPEN on this item: light/dark and accent variants, touch and keyboard, and reduced motion
-  are covered piecemeal by other specs rather than as one matrix — the box stays unticked until
-  that is true, per this file's own rule about not marking a phase done because one screen passed.
+  THE REST OF THE MATRIX IS DONE TOO (2026-09-24), in `tests/e2e/appearance-matrix.spec.ts`:
+  light/dark across all seven accents, reduced motion, keyboard and touch, asked together.
+    - Accents are measured on what the browser PAINTED, not on the palette — `check:contrast` reads
+      the tokens and is the right fast gate, but a token that never reaches a pixel passes it. All
+      fourteen combinations must paint a DISTINCT `--primary`, or a broken switch would pass seven
+      of them by leaving the default in place.
+    - Reduced motion: nothing may still be running after the page settles, on three routes.
+    - Keyboard: B05's last item — a folded settings section opens with Enter, the tabs are a real
+      tablist, and every Tab stop must LOOK focused.
+    - Touch found a real bug: the phone navigation bar was 41px against the 44px minimum. The V12
+      touch pass raised the primitives and never reached the bar itself. Fixed, and the test fails
+      without the fix.
+  THE FOCUS CHECK TOOK FOUR ATTEMPTS AND THE THREE FAILURES ARE THE USEFUL PART. (1) "has an
+  outline or a box-shadow" passes with the ring deleted, because half these controls carry a
+  resting shadow. (2) before/after around a programmatic `el.focus()` passes, because programmatic
+  focus does not reliably match `:focus-visible`, so the browser's own ring appears and masks the
+  missing one. (3) real keyboard focus but asking only whether the computed style CHANGED passes as
+  well, because a control with its ring removed still computes `outline: 2px solid transparent` —
+  different, and invisible. Only "is what appeared actually visible" goes red. Every version was
+  checked by deleting the ring from `.focus-ring` and re-running.
+  NOT ASSERTED, deliberately: a blanket 44px sweep. Measured at 390px, the controls under 44px are
+  the rich-text toolbar's 32px icon buttons and the compact table controls — both recorded as
+  deliberate by the V12 touch pass — and a few 1px native `select`/`input` elements hidden behind
+  custom controls, which are not touch targets at all. A test whose failures are already-decided
+  gets ignored.
 - [ ] D03 Interaction performance. Baseline route loading, tab changes, filtering and dialogs
   before optimization. Inspect large lazy chunks and long tasks; optimize measured bottlenecks.
   Target field p75 INP <=200ms separately for mobile/desktop; lab checks are not field proof.
@@ -856,6 +882,8 @@ The matrix covers every requested area. Remaining Unverified details are explici
 - C12 and C13 INVESTIGATED, not built — both rows say "investigate first" and the investigation is the deliverable. C12 is mostly already built as proposals; the gap is a read-only "what if" view and it needs the user's call. C13's dedupe gap is measured: 706 of 1,916 notifications repeat, worst group 489 rows sharing ONE link.
 - C13 SHIPPED after that: read-time roll-up in the Inbox, entry actions reaching every row behind them, and the detail pane no longer built on phones. Mutation-tested; one of the two mutations passed first time and exposed a weak test, which is the only reason the ordering test is worth anything now.
 - CORRECTION worth carrying forward: the "489 rows sharing one link" figure in the C13 investigation counted a whole day ACROSS users. Per person — which is what a queue is — the largest is 205. Fixed in this file, the service comment and the test header.
+- D02 CLOSED and B05's keyboard half with it: `tests/e2e/appearance-matrix.spec.ts` — 7 accents x 2 themes measured on the painted pixels, reduced motion, keyboard focus visibility, the settings tablist, and touch. Touch found a real one: the phone nav bar was 41px against the 44px minimum the V12 touch pass had applied everywhere else.
+- THE FOCUS CHECK WAS WRONG THREE TIMES and each wrong version passed a build with the focus ring deleted. Written up under D02. The lesson is the general one: a test that has never been red is not evidence, and for a VISIBILITY property "the style changed" is not the same question as "a person can see it".
 - Left off at: C12 needs the user's call (read-only "what if" view, or leave the proposal flow as the answer). D02's remaining half and B05's keyboard checks want ONE matrix spec — light/dark, accent variants, touch, keyboard, reduced motion — and that is the next unit I would take unprompted. D03 stays unticked on purpose: its acceptance is FIELD p75 INP and this app collects no field metric, which is a feature with privacy questions rather than a tuning change. Main untouched.
 
 ### 2026-09-21 — Claude Code (Opus 5), Phase 13: the landing page, and the performance regression I shipped into it

@@ -697,7 +697,11 @@ export function MobileNav() {
           key={item.to}
           to={item.to}
           end={item.end ?? false}
-          className={({ isActive }) => cn("grid justify-items-center gap-0.5 rounded-md px-1 py-1.5 text-[10px] font-semibold text-muted-foreground transition", isActive && "bg-primary/10 text-primary")}
+          /* min-h-[44px]: this is the navigation every phone user touches most, and it measured
+             41px — three short of the 44px minimum the rest of the app's controls were raised to
+             in the V12 touch pass, which never reached this bar. The padding alone cannot be
+             trusted to get there, because the label is 10px type and the icon 16px. */
+          className={({ isActive }) => cn("grid min-h-[44px] content-center justify-items-center gap-0.5 rounded-md px-1 py-1.5 text-[10px] font-semibold text-muted-foreground transition", isActive && "bg-primary/10 text-primary")}
         >
           <item.icon className="h-4 w-4" />
           <span className="max-w-full truncate">{item.label}</span>
