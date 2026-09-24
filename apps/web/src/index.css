@@ -208,6 +208,23 @@
     --chart-other: #6b6a65;
   }
 
+  /* Recharts sizes its legend in JavaScript from the chart's own width, and then never revisits
+     that number when the text inside it grows. A reader on 200% text zoom therefore gets a legend
+     measured for 14px type holding 28px type: it reported 1398px inside a 1366px viewport, which
+     is content pushed out of the window rather than wrapped — a WCAG SC 1.4.4 failure, caught by
+     the resize-text test in tests/e2e/responsive.spec.ts. Capping the wrapper at its container and
+     letting the list wrap costs nothing at normal size, because at normal size it already fits. */
+  .recharts-legend-wrapper {
+    max-width: 100%;
+  }
+
+  .recharts-default-legend {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0 0.75rem;
+  }
+
   * {
     @apply border-border;
     box-sizing: border-box;

@@ -139,6 +139,51 @@ test("no horizontal overflow on the public landing page", async ({ page }) => {
   await assertNoOverflow(page);
 });
 
+/* ── WCAG 2.1 AA: the two sizes nothing else in this suite covers ──────────────────────────────
+   The projects in playwright.config.ts run 390, 768, 1366, 1920 and 3840. Two required cases sat
+   outside all of them, and both were failing when these tests were written (2026-09-24):
+
+     - SC 1.4.10 Reflow — content at 320 CSS px with no two-dimensional scrolling. The views bar
+       handed its actions area 68px for 96px of content, so "Save view" hung 13px off the page.
+     - SC 1.4.4 Resize text — text to 200% without loss. The dashboard's 36-tick meters were built
+       from rem-wide ticks, so they doubled with the font and pushed the page 104px wider.
+
+   Both tests set their own viewport, so they cost one run inside whichever project executes this
+   file rather than two more projects in the matrix — the CI budget note at the top of ci.yml is
+   why that matters. `--important` on the root font is what a browser's text-zoom does; the app
+   pins `html { font-size: 14px }` (see index.css), so 200% is 28px, not 32px. */
+
+const REFLOW_PAGES = ["/app", "/app/tickets", "/app/timesheet", "/app/users", "/app/settings", "/app/insights"];
+
+test("SC 1.4.10 — reflows at 320px with no sideways scroll", async ({ page }) => {
+  test.slow();
+  await page.setViewportSize({ width: 320, height: 800 });
+  for (const path of REFLOW_PAGES) {
+    await page.goto(path);
+    await page.waitForLoadState("networkidle");
+    await assertNoOverflow(page);
+  }
+});
+
+test("SC 1.4.4 — survives text resized to 200%", async ({ page }) => {
+  test.slow();
+  await page.setViewportSize({ width: 1366, height: 768 });
+  // Re-applied after every navigation: a fresh document resets the inline style.
+  await page.addInitScript(() => {
+    const apply = () => document.documentElement.style.setProperty("font-size", "28px", "important");
+    apply();
+    document.addEventListener("DOMContentLoaded", apply);
+  });
+  for (const path of REFLOW_PAGES) {
+    await page.goto(path);
+    await page.waitForLoadState("networkidle");
+    await page.evaluate(() => document.documentElement.style.setProperty("font-size", "28px", "important"));
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)).toBe("28px");
+    await assertNoOverflow(page);
+  }
+});
+
+
 /**
  * The email templates screen hides its widest content — the analytics tables and charts — behind
  * a second tab, so the PAGES sweep above never exercised it. That is exactly where a real

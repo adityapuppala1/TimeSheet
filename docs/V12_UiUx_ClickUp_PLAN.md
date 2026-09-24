@@ -172,6 +172,28 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
 - [ ] D02 Responsive verification. Check 390px phone, 768px tablet, 1440px desktop and 1920px
   wide desktop; add 320px and 200% zoom checks for changed controls. Cover light/dark, selected
   accent variants, touch, keyboard and reduced motion. Tables may scroll inside their container.
+  THE TWO NEW SIZES ARE DONE AND ARE NOW TESTS (2026-09-24), not a one-off sweep: two cases in
+  `tests/e2e/responsive.spec.ts` set their own viewport, so they cost one run inside an existing
+  project rather than two more projects in the CI matrix. Both were FAILING when written, which
+  is the only reason to trust them:
+    - SC 1.4.10 reflow at 320px — the views bar handed its actions area 68px for 96px of content
+      (measured), so "Save view" hung 13px off the page. It wraps now: `flex-wrap` on the bar and
+      `shrink-0` on the actions, because the tablist can shrink and scroll, so a flex row would
+      always crush the actions rather than wrap. Both halves are needed.
+    - SC 1.4.4 resize text at 200% — the dashboard's meters were 36 ticks of `w-1`, a rem each, so
+      they measured 231px at the app's 14px root and 357px at 28px and pushed the page 104px wider
+      than the window. The ticks are `flex-1` now: the row fits what it is given, at any font size.
+    - Recharts sizes its legend in JS from the chart width and never revisits it when the text
+      inside grows: 1398px inside a 1366px viewport. Capped to its container in index.css.
+    - AND ONE THE SWEEP FOUND ON A PAGE NOBODY HAD CHANGED: the border-glow ring sits OUTSIDE its
+      card by `--glow-padding`, and an absolutely positioned box still counts toward page width.
+      A phone fix for exactly this existed at `max-width: 639px`; the bug was simply waiting one
+      breakpoint up, and the weekly practice update scrolled 7px sideways at 768px. The rule is
+      not "phones are special" but "the ring may never exceed the gutter it sits in", so it now
+      holds to `lg`.
+  STILL OPEN on this item: light/dark and accent variants, touch and keyboard, and reduced motion
+  are covered piecemeal by other specs rather than as one matrix — the box stays unticked until
+  that is true, per this file's own rule about not marking a phase done because one screen passed.
 - [ ] D03 Interaction performance. Baseline route loading, tab changes, filtering and dialogs
   before optimization. Inspect large lazy chunks and long tasks; optimize measured bottlenecks.
   Target field p75 INP <=200ms separately for mobile/desktop; lab checks are not field proof.

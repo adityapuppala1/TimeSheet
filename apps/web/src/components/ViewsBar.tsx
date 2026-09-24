@@ -42,7 +42,12 @@ export function ViewsBar<Id extends string>({
     }
   };
   return (
-    <div className={cn("flex min-w-0 max-w-full items-center gap-2 border-b border-border", className)} data-views-bar>
+    /* `flex-wrap`, and the trailing block below refuses to shrink — the two together are what
+       makes this survive a 320px viewport (WCAG SC 1.4.10 reflow). Measured before the change: the
+       actions area was handed 68px for 96px of content, so the "Save view" button simply hung 13px
+       past the edge of the page. The tablist can shrink and scroll, so a flex row will always
+       shrink IT rather than wrap — which is why the fix is on both elements, not just here. */
+    <div className={cn("flex min-w-0 max-w-full flex-wrap items-center gap-2 border-b border-border", className)} data-views-bar>
       <div role="tablist" aria-label="Views" onKeyDown={onKey} className="flex min-w-0 items-center gap-1 overflow-x-auto">
         {views.map((v) => {
           const selected = v.id === active;
@@ -67,7 +72,9 @@ export function ViewsBar<Id extends string>({
           );
         })}
       </div>
-      {trailing && <div className="ml-auto flex min-w-0 shrink items-center gap-1.5 pl-2">{trailing}</div>}
+      {/* `shrink-0`: an action the reader can no longer read is not a saved space. When there is
+          no room beside the tabs it takes its own line instead. */}
+      {trailing && <div className="ml-auto flex shrink-0 items-center gap-1.5 py-1 pl-2">{trailing}</div>}
     </div>
   );
 }

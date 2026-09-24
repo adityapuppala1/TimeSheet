@@ -168,8 +168,14 @@
  * absolutely positioned box still counts towards the page's scrollable width. On a phone, where a
  * card runs edge to edge inside a 16px gutter, a 32px ring reached 424px on a 390px screen and the
  * whole page scrolled sideways (Ask AI's composer). Below `sm` the ring shrinks to fit the gutter.
+ *
+ * 2026-09-24: raised from 639px to 1023px, because the same bug was simply waiting one breakpoint
+ * up. A tablet still lays cards out edge to edge inside a ~20px gutter, so a 32px ring overhangs
+ * it — measured on the weekly practice update at 768px: the ring was 792px wide and the page
+ * scrolled 7px sideways. The rule is not "phones are special", it is "the ring may never be wider
+ * than the gutter it sits in", and only from `lg` up is the content centred with room to spare.
  */
-@media (max-width: 639px) {
+@media (max-width: 1023px) {
   .border-glow-card {
     --glow-padding: 12px;
   }

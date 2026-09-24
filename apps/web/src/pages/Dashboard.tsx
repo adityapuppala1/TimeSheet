@@ -559,6 +559,14 @@ export function Dashboard() {
         }
       />
 
+      <FocusLane
+        hours={derived.rangeHours}
+        pendingCount={derived.pendingCount}
+        tickets={myTickets.data ?? []}
+        periodLabel={periodLabel}
+        loading={timesheets.isLoading || myTickets.isLoading}
+      />
+
       {/* First-run checklist — self-hides once complete (or dismissed, unless a REQUIRED face
           enrollment is pending, which blocks real submissions and so stays visible). */}
       <SetupChecklistCard />
@@ -692,6 +700,69 @@ export function Dashboard() {
       {/* ---- Per-project rollup — the Trackline "Project List", from data already loaded ---- */}
       <ProjectRollup rollup={myMonth.data} loading={myMonth.isLoading} periodLabel={periodLabel} />
     </div>
+  );
+}
+
+function FocusLane({
+  hours,
+  pendingCount,
+  tickets,
+  periodLabel,
+  loading
+}: {
+  hours: number;
+  pendingCount: number;
+  tickets: TicketRow[];
+  periodLabel: string;
+  loading: boolean;
+}) {
+  const urgent = tickets.filter((ticket) => ticket.priority === "CRITICAL" || ticket.priority === "HIGH").length;
+  const nextTicket = tickets.find((ticket) => ticket.status === "IN_PROGRESS") ?? tickets[0];
+
+  if (loading) return <Skeleton className="h-[112px] w-full rounded-md" />;
+
+  return (
+    <section aria-labelledby="focus-lane-title" className="overflow-hidden rounded-md border border-border bg-card shadow-sm">
+      <div className="grid lg:grid-cols-[minmax(0,1.25fr)_repeat(3,minmax(0,.72fr))]">
+        <div className="relative flex min-h-[108px] flex-col justify-between overflow-hidden border-b border-border p-4 lg:border-b-0 lg:border-r">
+          <div className="absolute inset-y-0 left-0 w-1 bg-primary" aria-hidden />
+          <div>
+            <p className="text-xs font-semibold uppercase text-primary">Focus lane</p>
+            <h2 id="focus-lane-title" className="mt-1 text-base font-semibold">Your clearest next move</h2>
+          </div>
+          {nextTicket ? (
+            <Link to={`/app/tickets?open=${nextTicket.id}`} className="group mt-3 flex min-w-0 items-center gap-2 text-sm font-medium hover:text-primary">
+              <TicketIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="truncate">Continue {nextTicket.key}: {nextTicket.title}</span>
+              <ArrowRight className="h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5" />
+            </Link>
+          ) : (
+            <Link to="/app/tickets?new=1" className="mt-3 flex items-center gap-2 text-sm font-medium text-primary">
+              Plan the next piece of work <ArrowRight className="h-4 w-4" />
+            </Link>
+          )}
+        </div>
+        <FocusSignal icon={Clock3} label={`Hours ${periodLabel}`} value={`${hours.toFixed(1)}h`} to="/app/history" tone="primary" />
+        <FocusSignal icon={TicketIcon} label="High-priority work" value={String(urgent)} to="/app/my-work" tone={urgent > 0 ? "warning" : "success"} />
+        <FocusSignal icon={CheckCircle2} label="Awaiting review" value={String(pendingCount)} to="/app/history" tone={pendingCount > 0 ? "warning" : "success"} />
+      </div>
+    </section>
+  );
+}
+
+function FocusSignal({ icon: Icon, label, value, to, tone }: { icon: typeof Clock3; label: string; value: string; to: string; tone: "primary" | "warning" | "success" }) {
+  let toneClass = "text-primary bg-primary/10";
+  if (tone === "warning") toneClass = "text-warning-foreground bg-warning/10";
+  if (tone === "success") toneClass = "text-success bg-success/10";
+  return (
+    <Link to={to} className="group flex min-h-[88px] items-center gap-3 border-b border-border p-4 transition hover:bg-muted/50 last:border-b-0 lg:min-h-[108px] lg:border-b-0 lg:border-r lg:last:border-r-0">
+      <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-md", toneClass)}><Icon className="h-4 w-4" /></span>
+      <span className="min-w-0">
+        <span className="block text-xl font-semibold tabular-nums">{value}</span>
+        <span className="block truncate text-xs text-muted-foreground">{label}</span>
+      </span>
+      <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
+    </Link>
   );
 }
 
@@ -1053,9 +1124,14 @@ function TickMeter({
         <p className="text-sm font-medium">{label}</p>
         <p className="text-lg font-black tabular-nums">{percent === null ? <span className="text-muted-foreground">—</span> : `${percent}%`}</p>
       </div>
-      <div className="flex items-end gap-[3px]" role="img" aria-label={`${label}: ${percent === null ? "not measurable yet" : `${percent}%`}`}>
+      {/* THE TICKS FILL THE ROW, they do not add up to it. Each was `w-1` — a quarter of a rem —
+          so thirty-six of them plus their gaps measured 231px at the app's 14px root and 357px at a
+          reader's 200% text zoom, which is how a meter inside a card pushed the whole dashboard
+          104px wider than the window (WCAG SC 1.4.4). `flex-1` makes the row fit whatever it is
+          given, at any font size and in any column, and the meter reads the same. */}
+      <div className="flex w-full items-end gap-[3px]" role="img" aria-label={`${label}: ${percent === null ? "not measurable yet" : `${percent}%`}`}>
         {Array.from({ length: TICKS }, (_, i) => (
-          <span key={i} className={`h-4 w-1 rounded-full ${i < filled ? fill : "bg-muted"}`} />
+          <span key={i} className={`h-4 min-w-0 flex-1 rounded-full ${i < filled ? fill : "bg-muted"}`} />
         ))}
       </div>
       <p className="text-xs text-muted-foreground">{detail}</p>
