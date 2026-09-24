@@ -74,24 +74,26 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: ${{ github.ref == 'refs/heads/main' && format('type=gha,mode=max,scope={0}', matrix.component) || '' }}
 
-  # When `latest` moves, the version it moved off becomes an untagged manifest that still holds its
-  # layers and still counts against package storage. Remove those after every publish, keeping a
-  # few so a `latest` pulled minutes ago can still finish. Tagged versions (semver) are never
-  # touched: a release image stays pullable for as long as the tag exists.
-  prune-untagged:
-    name: Prune untagged image versions (${{ matrix.component }})
-    runs-on: ubuntu-latest
-    needs: publish
-    permissions:
-      packages: write
-    strategy:
-      matrix:
-        component: [api, web]
-    steps:
-      - uses: actions/delete-package-versions@v5
-        with:
-          package-name: ${{ github.event.repository.name }}-${{ matrix.component }}
-          package-type: container
-          delete-only-untagged-versions: "true"
-          min-versions-to-keep: 3
-          token: ${{ secrets.GITHUB_TOKEN }}
+  # THERE IS NO PRUNE JOB HERE ANY MORE, AND THAT IS DELIBERATE. READ THIS BEFORE ADDING ONE BACK.
+  #
+  # A job using `actions/delete-package-versions` with `delete-only-untagged-versions: true` lived
+  # here from 2026-09-21. It never ran — no release was cut between then and 2026-09-24 — which is
+  # the only reason this repository still has its release images.
+  #
+  # "Untagged" does not mean "unreferenced". buildx pushes each release as an OCI *index*, and that
+  # index's children — the linux/amd64 image itself, and the provenance attestation buildx attaches
+  # by default — are separate package versions that carry NO tag of their own. They are indexed by
+  # digest from the tagged parent. Measured against this registry on 2026-09-24: of 675 untagged
+  # versions across the two packages, 558 were children of a tagged release. Deleting the untagged
+  # set would have destroyed every `docker pull ghcr.io/.../timesheet-api:<version>` from 2.0.0 to
+  # 5.5.0 while reporting success, because the tag would survive with nothing underneath it.
+  #
+  # The actual storage problem was never the untagged versions. It was `type=sha,format=long`
+  # tagging every commit as its own image — 193 of them, each with two children. That tag was
+  # removed from the metadata step above in the same change, so the growth has stopped at source,
+  # and the 696 historical residue versions were deleted by hand on 2026-09-24 after checking every
+  # tagged manifest to see which digests it referenced.
+  #
+  # If a prune is ever wanted again it must resolve each tagged index's children FIRST and exclude
+  # them — see the method in docs/DEPLOYMENT.md. An off-the-shelf "delete untagged" action cannot
+  # do that and must not be used here.

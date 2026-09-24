@@ -1,0 +1,73 @@
+name: GHCR retention
+
+# Keeps GHCR to the last two releases, so package storage cannot creep back to where it was.
+#
+# THE HISTORY THIS PREVENTS. On 2026-09-24 these two packages held 954 versions between them. Only
+# 86 were releases; the rest was build residue — `type=sha,format=long` had tagged every commit as
+# its own image (193 of them), each dragging two child manifests behind it. That filled the
+# account's shared storage quota, and because Actions artifacts share that quota, CI could no longer
+# upload a failure trace. Debugging four e2e failures blind for two sessions was the real cost.
+#
+# WHY THIS RUNS A SCRIPT AND NOT `actions/delete-package-versions`. That action's headline option is
+# "delete untagged versions", and on a buildx registry that is a loaded gun: a release is pushed as
+# an OCI index whose children (the platform image, and the provenance attestation buildx attaches by
+# default) are untagged versions of their own. Of the 675 untagged versions measured that day, 558
+# were children of a tagged release — deleting them would have broken `docker pull` for every
+# release from 2.0.0 to 5.5.0 while reporting success. `scripts/prune-ghcr.mjs` resolves what each
+# kept version references and protects those digests explicitly. Read its header before changing it.
+
+on:
+  # After a release is published, so the new image displaces the oldest kept one immediately.
+  workflow_run:
+    workflows: ["CD"]
+    types: [completed]
+  # And weekly, so a registry that drifts for any other reason still converges. Sunday 03:20 UTC,
+  # away from the nightly workers described in docs/DEPLOYMENT.md.
+  schedule:
+    - cron: "20 3 * * 0"
+  # Manual, with a dry run by default so anyone can SEE the plan before it runs.
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually delete (unchecked = dry run, prints the plan only)"
+        type: boolean
+        default: false
+      keep:
+        description: "How many releases to keep"
+        type: string
+        default: "2"
+
+# Never two prunes at once against the same registry.
+concurrency:
+  group: ghcr-retention
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Prune ${{ matrix.component }} to the last releases
+    runs-on: ubuntu-latest
+    # A failed CD run has nothing new to displace, and pruning after one would only add risk.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [api, web]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Prune
+        env:
+          # The default GITHUB_TOKEN can delete versions of packages owned by this repository.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/prune-ghcr.mjs \
+            --owner "${{ github.repository_owner }}" \
+            --package "${{ github.event.repository.name }}-${{ matrix.component }}" \
+            --keep "${{ github.event.inputs.keep || '2' }}" \
+            ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.apply != 'true') && '' || '--apply' }}

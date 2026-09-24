@@ -789,14 +789,73 @@ videos — the trace carries the DOM, network and a screenshot per action at a t
 tags (as their semver), using the repo's own `GITHUB_TOKEN` — no external registry account needed
 to get started. There is deliberately no per-commit `sha-…` tag: on a private registry every one
 of those was an image version nothing referenced and nothing removed, and the storage bill was
-the sum of them. After each publish the workflow prunes the untagged versions `latest` has moved
-off (keeping the last three); release images are never touched. Swap to another registry
+the sum of them. Swap to another registry
 (ECR/GCR/ACR/Docker Hub) by changing `cd.yml`'s `env.REGISTRY` and its login step's credentials;
 nothing else in the workflow assumes GHCR specifically.
 
 No repo secrets are required for either workflow as written — `cd.yml`'s GHCR push uses the
 automatically-provided `GITHUB_TOKEN`, and `ci.yml`'s test secrets are fixed placeholder strings
 scoped to the ephemeral CI database, never real credentials.
+
+### Never "delete untagged versions" on this registry
+
+There is no prune job in `cd.yml`, and adding one back without reading this will destroy every
+release image while reporting success.
+
+**"Untagged" does not mean "unreferenced".** buildx pushes each release as an OCI *index*. That
+index's children — the `linux/amd64` image itself, and the provenance attestation buildx attaches
+by default — are separate package versions that carry **no tag of their own**; the tagged parent
+points at them by digest. Every off-the-shelf "delete untagged versions" action, including
+`actions/delete-package-versions` with `delete-only-untagged-versions: true`, sees those children
+as garbage.
+
+Measured against this registry on 2026-09-24: of **675** untagged versions across the two packages,
+**558 were children of a tagged release**. Deleting the untagged set would have broken
+`docker pull ghcr.io/<owner>/timesheet-api:<version>` for everything from 2.0.0 to 5.5.0 — the tags
+would survive with nothing underneath them.
+
+If a prune is ever needed, resolve the references first:
+
+```bash
+# 1. every version, with its digest and its tags
+gh api "user/packages/container/<pkg>/versions?per_page=100" --paginate \
+  --jq '.[] | [.id, .name, ((.metadata.container.tags // []) | join(","))] | @tsv'
+
+# 2. for each TAGGED digest, the children it references — these are the untouchable ones
+TOK=$(gh auth token); B64=$(printf '%s' "$TOK" | base64 -w0)
+curl -s -H "Authorization: Bearer $B64" \
+     -H "Accept: application/vnd.oci.image.index.v1+json" \
+     "https://ghcr.io/v2/<owner>/<pkg>/manifests/<digest>" \
+  | jq -r '.manifests[].digest'
+```
+
+Anything untagged and absent from that set is genuinely orphaned. On 2026-09-24 that was 117
+versions out of 675.
+
+### The retention that keeps it that way
+
+`.github/workflows/ghcr-retention.yml` runs `scripts/prune-ghcr.mjs` after every successful CD run
+and weekly, keeping the **last two releases** plus whatever `latest` points at, plus every child
+manifest of those. Run it by hand from the Actions tab — it defaults to a DRY RUN that prints the
+plan and deletes nothing, so you can always see what a prune would do before it does it:
+
+```bash
+node scripts/prune-ghcr.mjs --owner <you> --package timesheet-api --keep 2
+node scripts/prune-ghcr.mjs --owner <you> --package timesheet-api --keep 2 --apply
+```
+
+`latest` is kept whatever its age for a specific reason: `deploy/helm/timesphere/values.yaml` ships
+`image.tag: latest`, so a default `helm install` pulls it. On 2026-09-24 `latest` pointed at 5.3.0
+rather than 5.5.0 — the main-branch build that set it was older than the release tags — so a naive
+"keep the two newest" would have deleted the tag every default install depends on.
+
+**What this costs you:** rolling back further than two releases means rebuilding that tag from its
+git tag rather than pulling it. That is the trade for not carrying a thousand versions.
+
+**What actually filled the quota** was never the untagged versions: it was `type=sha,format=long`
+tagging every commit as its own image — 193 of them, each with two children, 696 versions of pure
+build residue. That tag is gone from the metadata step, so the growth stopped at source, and the
+residue was removed by hand using the method above.
 
 ## Updating a running deployment
 
