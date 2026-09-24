@@ -10,6 +10,32 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### ⚡ Lists that only draw what you can actually see
+
+- **Every list in the app was drawing itself twice.** A table for the desktop, a card list for the
+  phone, and CSS hid whichever did not apply — but hiding is not the same as not rendering.
+  Measured on Tickets at 1366px: 9,267 elements on the page, 7,144 of them (77%) invisible. A phone
+  carried the mirror image, rendering the full table it would never show. Only the layout you are
+  actually looking at is built now, on the ticket list, every shared table (Users, Projects,
+  Reports and the rest), Team, Changes, Email templates, the dashboard's project roll-up, the
+  ticket metrics panel, the AI quality and evaluation cards, and the face review log.
+- **The phone list stopped rendering the whole workspace.** The desktop table pages at 20 rows;
+  the phone card list was rendering every ticket the query returned — 200 cards, on the weaker
+  device, for a "page" the laptop was showing 20 of. It shows 20 with **Show more** now, which
+  says how many are left.
+- **The desktop sidebar was doing the same thing.** It is `hidden lg:flex`, so every page a phone
+  ever opened built 323 elements of a rail that width will never show. Its contents are built only
+  where they are shown now; the panel itself stays, because one empty box costs nothing.
+- **What that is worth, measured.** Opening the New ticket dialog, as the browser's own interaction
+  metric counts it: 268ms → 180ms on a laptop and 288ms → 132ms on a phone (75th percentile
+  280→184 and 296→144). Closing it: 244ms → 172ms and 236ms → 96ms. Elements on a page: Tickets
+  9,267 → 2,122 on a laptop and → 1,434 on a phone; Users 2,888 → 1,578; the dashboard 1,510 → 998
+  and My work 584 → 262 on a phone. Both interactions are now inside the 200ms the web's
+  responsiveness target asks for, on both.
+- **Why a dialog cared about a list behind it at all:** opening one marks every other element in
+  the document as hidden from assistive technology, and undoes that on close. That walk, and every
+  style and layout pass after it, is over the tree that EXISTS, not the part that is painted.
+
 ### 🗂️ Workspace settings that answer first and ask second
 
 - **Eight settings tabs open with a board.** AI, Chat integrations, MCP server, Security & DevOps,

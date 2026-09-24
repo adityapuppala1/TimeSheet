@@ -157,12 +157,76 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
 - [ ] C11 Cross-device preferences. Extend existing user profile storage for explicit answer
   preferences with opt-in, reset and deletion. Define retention and access before persisting.
   Do not infer personal facts or create a second AI conversation-history store.
+  INVESTIGATED 2026-09-24 — the preference already exists; what it lacks is exactly the thing this
+  row is named after. `AI_ANSWER_STYLES` (default | concise | detailed | checklist) is a SHARED
+  definition with per-style guidance, chosen on Ask AI and sent with the request. It is stored in
+  `localStorage` keyed by user id (`apps/web/src/lib/ai-answer-style.ts`), which already gets the
+  hard parts right: opt-in (nothing is written until a non-default style is chosen), reset by
+  DELETION (saving "default" removes the key rather than storing the word), corrupt values ignored
+  against the shared list, and blocked storage handled rather than thrown. It is covered by
+  `apps/web/tests/unit/ai-answer-style.test.ts`. Nothing infers anything, and there is no second
+  conversation store — both prohibitions are already satisfied.
+  THE GAP IS PRECISELY "CROSS-DEVICE": the choice lives in one browser. The same person on a phone
+  gets the default, and clearing site data silently resets it.
+  THE PRECEDENT TO FOLLOW is `User.appearance` — a nullable JSON column, validated on write against
+  the SHARED definition rather than a local enum (auth.controller.ts's profile PATCH), written as
+  exactly the validated shape so a JSON column cannot accumulate stray keys, `null` clearing the
+  preference, an absent key leaving it untouched. That is the same opt-in/reset/delete contract the
+  browser copy already has, which is why this is an extension rather than a new mechanism.
+  RETENTION AND ACCESS, decided before persisting as the row requires: the value is one enum member
+  on the person's OWN user row; it is readable only through their own profile payload; it is
+  deleted by them setting the style back to default (the key is removed, not set to "default"), and
+  it dies with the user row. It is a formatting preference, not a personal fact, and nothing derived
+  from their questions is stored.
+  NOT REUSING the `appearance` column for it: a column documented as `{ mode, accent, density }` is
+  the wrong home for an AI preference, and overloading it is how a JSON column stops meaning
+  anything. An additive nullable column beside it keeps both honest.
 - [ ] C12 Planning scenarios: investigate first. Compare current Portfolio/Workload/solver
   capabilities with proposed staffing/date comparisons. Implement only a confirmed gap, with
   visible assumptions and no live plan changes until approved.
+  INVESTIGATED 2026-09-24 — and the answer is that most of this is already built, in a different
+  shape, so the gap is much smaller than the row implies. What exists:
+    - `solveSchedule()` (plan-schedule.service.ts) is a PURE function over items + dependencies:
+      working-day arithmetic, float, critical path, and violations reported rather than silently
+      corrected. It never writes. A scenario is exactly "call it with different inputs".
+    - It is ALREADY called counterfactually. `ai-schedule-adjust.service.ts` re-solves the plan
+      with the violating items' dates stripped, to derive what the dates would be if they obeyed
+      their dependencies, and offers the difference as a proposal applied row by row.
+    - The staffing half is the same story. `workload.service.ts` computes capacity, bookings,
+      time off and allocation per bucket as arithmetic, and `ai-rebalance.service.ts` already
+      answers "what if this work moved to somebody with room" (over threshold → under 80%),
+      again as per-row proposals with the before-state recorded and an undo.
+    - Proposals are reviewed and applied individually, so "no plan writes before approval" is
+      already how the machinery behaves; it is not something this item would need to add.
+  THE CONFIRMED GAP IS PRESENTATION, NOT CAPABILITY: every counterfactual above exists only as a
+  proposal you are being asked to apply. There is no way to ask "what would happen if" and simply
+  LOOK — no side-by-side of today's dates/allocation against the alternative, with the assumptions
+  named, that you can open with no intention of changing anything. That is a read-only view over
+  functions that already exist and already avoid writing.
+  RECOMMENDATION: build that view, or decide the proposal flow is enough. Do NOT build a scenario
+  ENGINE — the solver is one, and a second would be a second answer to the same question. This
+  needs the user's call on whether the view is wanted before it is worth the surface.
 - [ ] C13 Relevant digests: investigate first. Reuse Inbox, reminder schedules and notification
   preferences; evaluate explainable prioritization, snoozing and notification deduplication.
   Do not create a parallel alert engine or enable new outbound messaging automatically.
+  INVESTIGATED 2026-09-24. Taking the row's three proposals one at a time, against the code:
+    - SNOOZING IS ALREADY SHIPPED. The Inbox filters are `unhandled | snoozed | handled | all`
+      and `PATCH /inbox/:id` takes `snoozeUntil`, bounded to a year out. Nothing to do.
+    - EXPLAINABLE PRIORITIZATION is half-shipped. The daily brief (inbox.service.ts) is arithmetic
+      over definitions that already exist elsewhere, deliberately not a model paragraph, and it
+      says WHICH section a thing is in. What no row carries is why IT, specifically, is here.
+    - DEDUPLICATION IS A CONFIRMED GAP, AND IT IS MEASURED. `dispatchNotification` writes a
+      `Notification` row unconditionally; dedupe exists only inside particular producers (devops
+      findings, face enrolment reminders), not at dispatch. On this dev database: 1,916
+      notifications, of which 706 (37%) repeat an existing row's user + title + category on the
+      same day. The worst single group is 489 `face.verification_flagged` rows for one person on
+      one day — and those 489 share ONE link between them, with 75 distinct bodies. So they are
+      not 489 destinations a reader needs; they are one destination, said 489 times.
+  RECOMMENDATION, and the shape matters: collapse at READ time in the Inbox — group rows sharing
+  title + category + link into one entry carrying a count and the latest timestamp — rather than
+  dropping rows at dispatch. Nothing is lost, no migration is needed, no producer changes, and a
+  genuinely new event can never be suppressed by a dedupe window that guessed wrong. Dedupe at
+  dispatch is the version that can silently swallow something somebody needed.
 
 #### Phase D: Visual Quality and Performance
 
@@ -197,6 +261,46 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
 - [ ] D03 Interaction performance. Baseline route loading, tab changes, filtering and dialogs
   before optimization. Inspect large lazy chunks and long tasks; optimize measured bottlenecks.
   Target field p75 INP <=200ms separately for mobile/desktop; lab checks are not field proof.
+  BASELINED AND ONE BOTTLENECK FIXED (2026-09-24). The baseline is against the PRODUCTION bundle —
+  `vite preview` now proxies `/api`, because dev mode ships unbundled modules and its byte counts
+  and parse costs are fiction. Fourteen routes, plus tab changes, filtering and dialogs, measured
+  as the browser's own interaction metric (PerformanceEventTiming grouped by `interactionId`).
+  Two interactions were over 200ms: opening the New ticket dialog and closing it.
+    - THE CAUSE WAS NOT WHAT IT LOOKED LIKE. The dialog mounts a TipTap editor, so that was the
+      suspect; a CPU profile put it at 8.2ms of 270ms — 3%. 42% was native DOM work. The real
+      cause was DOM SIZE: every list in the app rendered a desktop table AND a phone card list and
+      hid one with `sm:hidden`, so /app/tickets carried 9,267 elements with 7,144 (77%) inside
+      `display:none`. Radix's dialog walks the whole document to set `aria-hidden` on open and to
+      undo it on close, so the dialog was paying for markup nobody could see. Second finding, on
+      phones only: the card list rendered every row the query returned (200 cards) while the
+      desktop table paged at 20. Third: the desktop sidebar is `hidden lg:flex`, so a phone built
+      323 elements of rail it would never show, on every page.
+    - MEASURED, interleaved, both bundles served at once (:4174 before, :4173 after), alternating
+      order each round, medians over 10 rounds laptop / 8 phone. Open 268→180ms laptop and
+      288→132ms phone; close 244→172 and 236→96. Elements: /app/tickets 9,267→2,122 laptop and
+      →1,434 phone; /app/users 2,888→1,578; /app 1,510→998 phone; /app/my-work 584→262 phone.
+    - METHOD NOTE, and it cost two wrong answers before it was learned: single runs on this box
+      are worthless here. The first comparison said the dialog got 16ms SLOWER, the second said
+      128ms faster, on identical code, and the spread within one run was 112–248ms. Only paired,
+      interleaved rounds against two live bundles settle it. Deterministic counts (elements) are
+      what the docs quote wherever they can be.
+    - A REGRESSION OF MY OWN, found by the suite and worth reading. Fewer elements made the page
+      load faster, which made Recharts measure its charts a moment earlier — before a scrollbar
+      appeared — and Recharts writes a PIXEL width that it never shrinks. A chart then hung 8px
+      off a 1366px window and took its legend 44px further, failing SC 1.4.4. The earlier fix
+      capped the legend to its container; the container was the thing that was wrong. Capped the
+      chart box itself now, so a stale measurement is a chart briefly drawn small rather than a
+      page that scrolls sideways. Verified by bisecting with `git stash`: passes without the
+      change, fails with it, passes with the cap.
+    - GUARDED: `tests/e2e/responsive.spec.ts` "builds one list layout for this width, not both"
+      runs in all five projects and fails if a page carries more than 250 elements nobody can see.
+      It was written after the fix but immediately found the sidebar, which nothing had measured.
+  STILL OPEN on this item: the target is FIELD p75, and this app collects no field metric at all —
+  every number above is lab, on one machine. Closing D03 honestly needs real-user measurement
+  (web-vitals reported from the browser), which is a feature with privacy and storage questions,
+  not a tuning change, so it is a decision for the user rather than something to ship unasked.
+  Also unconverted: `rich-text-editor` (138 kB gzipped) is the largest chunk on six app routes
+  because AdminPages imports the timesheet dialog; measured, not yet acted on.
 - [ ] D04 Optional 3D agents: decision gate, not committed delivery. Prototype only on the existing
   roster/run surface if it communicates real run state better than the 2D presentation. Require
   lazy loading, reduced-motion support, non-WebGL fallback and measured mobile overhead.
@@ -650,6 +754,9 @@ The matrix covers every requested area. Remaining Unverified details are explici
 ## Auto-Heal Log
 | Date | Symptom | Root cause | Fix | Commit |
 |---|---|---|---|---|
+| 2026-09-24 | SC 1.4.4 failed in all three responsive projects after the D03 DOM work — a chart 8px off a 1366px window, its legend 44px further | Fewer elements made the page load faster, so Recharts measured its charts before a scrollbar appeared; it writes a pixel width and never shrinks it. The earlier fix capped the LEGEND to its container, and the container was what was wrong | `max-width: 100%` on `.recharts-wrapper` and `.recharts-surface` too, so a stale measurement draws a chart small instead of scrolling the page sideways. Bisected with `git stash`: passes without the change, fails with it, passes with the cap | D03 |
+| 2026-09-24 | The new "one layout, not both" guard failed at phone and tablet width on a page with no list at all | The desktop sidebar is `hidden lg:flex`: React builds all 323 elements of the rail on every page a phone opens, and CSS only stops it being painted | Contents rendered behind a `(min-width: 1024px)` query; the `<aside>` itself stays, because the product tour anchors to it and an empty hidden box costs one element | D03 |
+| 2026-09-24 | A dialog took 248ms to open, with a TipTap editor inside it as the obvious suspect | The editor was 8.2ms of 270ms (3%). The cost was DOM size: 7,144 of the tickets page's 9,267 elements were a `display:none` card list, and Radix's dialog walks the whole document to set `aria-hidden` | Render one layout per width (`useCardLayout`), and window the phone card list to 20 with Show more | D03 |
 | 2026-09-17 | 7.4 probe: 'Can't reach the server' overlay, then a router error | The API dev server (`tsx watch`) restarted while the probe ran | Wait for the stack, rerun; product unchanged — the outage overlay behaved as designed | 7.4 |
 | 2026-09-16 | Keyboard user cannot open a ticket from the desktop table (4.3) | `TableRow` had `onClick` only: not focusable, no key handler | `tabIndex=0`, Enter/Space call `onRowClick` when the row itself is the target, focus ring | 4.3 |
 | 2026-09-16 | Views Bar ignores Home/End (4.3) | Handler only knew ArrowLeft/Right | Home/End jump to first/last view | 4.3 |

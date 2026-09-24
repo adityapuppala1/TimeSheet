@@ -119,9 +119,17 @@ export default defineConfig(({ mode }) => {
         }
       }
     },
+    // `vite preview` serves the BUILT bundle, and it is the only local way to look at what a
+    // browser actually downloads and parses in production — dev mode ships unbundled modules, so
+    // chunk sizes and parse cost measured there mean nothing. It needs the same proxy as `server`
+    // or every request 404s against the static server and the app looks broken rather than slow.
     preview: {
       host: true,
-      port: 4173
+      port: 4173,
+      proxy: {
+        "/api": { target: apiTarget, changeOrigin: true, secure: false },
+        "/uploads": { target: apiTarget, changeOrigin: true, secure: false }
+      }
     }
   };
 });

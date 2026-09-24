@@ -55,6 +55,7 @@ import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
 import { Skeleton } from "./ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { useCardLayout } from "../lib/use-media-query";
 
 /** The axes this panel can both reflect and clear. `type`/`reporterId` are not tallied here — they
  *  live in the filter row below — but the headline and its "Clear filters" action have to know about
@@ -143,6 +144,8 @@ export function TicketMetricsPanel({
   /** Writes the page's own filter state. Passing "all" clears that axis. */
   onFilterChange: (patch: Partial<TicketMetricFilters>) => void;
 }) {
+  // Cards or table — only one of them is rendered. See useCardLayout for the measurement.
+  const cardLayout = useCardLayout();
   // Collapsed by default: the per-project breakdown is a second screenful on a workspace with many
   // projects, and the status/priority rows answer the everyday question on their own.
   const [projectsOpen, setProjectsOpen] = useState(false);
@@ -283,76 +286,80 @@ export function TicketMetricsPanel({
 
             {projectsOpen && (
               <>
-                <div className="hidden overflow-x-auto sm:block">
-                  <table className="w-full text-sm">
-                    <thead className="text-left text-muted-foreground">
-                      <tr>
-                        <th className="p-2 font-medium">Project</th>
-                        <th className="p-2 text-right font-medium">Total</th>
-                        <th className="p-2 text-right font-medium">Open</th>
-                        <th className="p-2 text-right font-medium">Closed</th>
-                        <th className="w-[28%] p-2 font-medium">Priority mix</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {byProject.map((row) => {
-                        const active = filters.projectId === row.projectId;
-                        return (
-                          <tr
-                            key={row.projectId}
-                            onClick={() => toggle("projectId", row.projectId)}
-                            aria-selected={active}
-                            className={cn(
-                              "cursor-pointer border-t border-border transition hover:bg-muted/50",
-                              active && "bg-primary/5"
-                            )}
-                          >
-                            <td className="p-2">
-                              <span className="font-medium">{row.name}</span>
-                              <span className="ml-2 font-mono text-xs text-muted-foreground">{row.code}</span>
-                            </td>
-                            <td className="p-2 text-right font-semibold tabular-nums">{row.total}</td>
-                            <td className="p-2 text-right tabular-nums text-info">{row.open}</td>
-                            <td className="p-2 text-right tabular-nums text-success">{row.closed}</td>
-                            <td className="p-2">
-                              <PriorityBar byPriority={row.byPriority} total={row.total} />
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                {!cardLayout && (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="text-left text-muted-foreground">
+                        <tr>
+                          <th className="p-2 font-medium">Project</th>
+                          <th className="p-2 text-right font-medium">Total</th>
+                          <th className="p-2 text-right font-medium">Open</th>
+                          <th className="p-2 text-right font-medium">Closed</th>
+                          <th className="w-[28%] p-2 font-medium">Priority mix</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {byProject.map((row) => {
+                          const active = filters.projectId === row.projectId;
+                          return (
+                            <tr
+                              key={row.projectId}
+                              onClick={() => toggle("projectId", row.projectId)}
+                              aria-selected={active}
+                              className={cn(
+                                "cursor-pointer border-t border-border transition hover:bg-muted/50",
+                                active && "bg-primary/5"
+                              )}
+                            >
+                              <td className="p-2">
+                                <span className="font-medium">{row.name}</span>
+                                <span className="ml-2 font-mono text-xs text-muted-foreground">{row.code}</span>
+                              </td>
+                              <td className="p-2 text-right font-semibold tabular-nums">{row.total}</td>
+                              <td className="p-2 text-right tabular-nums text-info">{row.open}</td>
+                              <td className="p-2 text-right tabular-nums text-success">{row.closed}</td>
+                              <td className="p-2">
+                                <PriorityBar byPriority={row.byPriority} total={row.total} />
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
 
-                <div className="grid gap-2 sm:hidden">
-                  {byProject.map((row) => {
-                    const active = filters.projectId === row.projectId;
-                    return (
-                      <button
-                        type="button"
-                        key={row.projectId}
-                        aria-pressed={active}
-                        onClick={() => toggle("projectId", row.projectId)}
-                        className={cn(
-                          "rounded-lg border border-border p-3 text-left transition",
-                          active && "bg-primary/5 ring-2 ring-primary/50"
-                        )}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="min-w-0 truncate font-medium">{row.name}</p>
-                          <span className="font-semibold tabular-nums">{row.total}</span>
-                        </div>
-                        <div className="mt-2">
-                          <PriorityBar byPriority={row.byPriority} total={row.total} />
-                        </div>
-                        <p className="mt-2 text-xs text-muted-foreground">
-                          <span className="text-info">{row.open} open</span> ·{" "}
-                          <span className="text-success">{row.closed} closed</span>
-                        </p>
-                      </button>
-                    );
-                  })}
-                </div>
+                {cardLayout && (
+                  <div className="grid gap-2">
+                    {byProject.map((row) => {
+                      const active = filters.projectId === row.projectId;
+                      return (
+                        <button
+                          type="button"
+                          key={row.projectId}
+                          aria-pressed={active}
+                          onClick={() => toggle("projectId", row.projectId)}
+                          className={cn(
+                            "rounded-lg border border-border p-3 text-left transition",
+                            active && "bg-primary/5 ring-2 ring-primary/50"
+                          )}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="min-w-0 truncate font-medium">{row.name}</p>
+                            <span className="font-semibold tabular-nums">{row.total}</span>
+                          </div>
+                          <div className="mt-2">
+                            <PriorityBar byPriority={row.byPriority} total={row.total} />
+                          </div>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            <span className="text-info">{row.open} open</span> ·{" "}
+                            <span className="text-success">{row.closed} closed</span>
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </>
             )}
           </div>

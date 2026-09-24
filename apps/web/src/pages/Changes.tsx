@@ -62,6 +62,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
+import { useCardLayout } from "../lib/use-media-query";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -117,6 +118,8 @@ function MetricTile({
 const DEFAULT_CHANGE_FILTERS = { state: "all", changeKind: "all", riskLevel: "all", mine: false };
 
 export function Changes() {
+  // Cards or table — only one of them is rendered. See useCardLayout for the measurement.
+  const cardLayout = useCardLayout();
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -308,74 +311,78 @@ export function Changes() {
           )}
           {!changes.isLoading && rows.length > 0 && (
             <>
-              <div className="hidden overflow-x-auto sm:block">
-                <table className="w-full text-sm">
-                  <thead className="text-left text-muted-foreground">
-                    <tr className="border-b border-border">
-                      <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">Change</th>
-                      <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">Title</th>
-                      <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">Type</th>
-                      <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">Risk</th>
-                      <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">State</th>
-                      <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">Window</th>
-                      <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">Implementer</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row) => (
-                      <tr
-                        key={row.id}
-                        onClick={() => openChange(row.id)}
-                        className="cursor-pointer border-b border-border transition last:border-b-0 hover:bg-muted/50"
-                      >
-                        <td className="p-3 font-mono text-xs text-muted-foreground">{row.changeKey}</td>
-                        <td className="max-w-[320px] p-3">
-                          <span className="block truncate font-medium">{row.ticket.title}</span>
-                          <span className="text-xs text-muted-foreground">{row.ticket.project.name}</span>
-                        </td>
-                        <td className="p-3"><Badge variant={CHANGE_KIND_TONE[row.changeKind]}>{humanizeChange(row.changeKind)}</Badge></td>
-                        <td className="p-3">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Badge variant={CHANGE_RISK_TONE[row.riskLevel]}>{humanizeChange(row.riskLevel)}</Badge>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              Impact {humanizeChange(row.impact).toLowerCase()} × likelihood {humanizeChange(row.likelihood).toLowerCase()}
-                            </TooltipContent>
-                          </Tooltip>
-                        </td>
-                        <td className="p-3"><Badge variant={CHANGE_STATE_TONE[row.state]}>{humanizeChange(row.state)}</Badge></td>
-                        <td className="p-3 text-xs text-muted-foreground">{formatWindow(row.plannedStart, row.plannedEnd)}</td>
-                        <td className="p-3 text-sm">{row.ticket.assignee?.name ?? <span className="text-muted-foreground">Unassigned</span>}</td>
+              {!cardLayout && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="text-left text-muted-foreground">
+                      <tr className="border-b border-border">
+                        <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">Change</th>
+                        <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">Title</th>
+                        <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">Type</th>
+                        <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">Risk</th>
+                        <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">State</th>
+                        <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">Window</th>
+                        <th className="p-3 text-[11px] font-semibold uppercase tracking-wide">Implementer</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {rows.map((row) => (
+                        <tr
+                          key={row.id}
+                          onClick={() => openChange(row.id)}
+                          className="cursor-pointer border-b border-border transition last:border-b-0 hover:bg-muted/50"
+                        >
+                          <td className="p-3 font-mono text-xs text-muted-foreground">{row.changeKey}</td>
+                          <td className="max-w-[320px] p-3">
+                            <span className="block truncate font-medium">{row.ticket.title}</span>
+                            <span className="text-xs text-muted-foreground">{row.ticket.project.name}</span>
+                          </td>
+                          <td className="p-3"><Badge variant={CHANGE_KIND_TONE[row.changeKind]}>{humanizeChange(row.changeKind)}</Badge></td>
+                          <td className="p-3">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge variant={CHANGE_RISK_TONE[row.riskLevel]}>{humanizeChange(row.riskLevel)}</Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                Impact {humanizeChange(row.impact).toLowerCase()} × likelihood {humanizeChange(row.likelihood).toLowerCase()}
+                              </TooltipContent>
+                            </Tooltip>
+                          </td>
+                          <td className="p-3"><Badge variant={CHANGE_STATE_TONE[row.state]}>{humanizeChange(row.state)}</Badge></td>
+                          <td className="p-3 text-xs text-muted-foreground">{formatWindow(row.plannedStart, row.plannedEnd)}</td>
+                          <td className="p-3 text-sm">{row.ticket.assignee?.name ?? <span className="text-muted-foreground">Unassigned</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
               {/* Stacked cards below `sm`, the same dual rendering the ticket list uses rather than
                   a horizontal scroll nobody discovers. */}
-              <div className="grid gap-2 p-3 sm:hidden">
-                {rows.map((row) => (
-                  <button
-                    key={row.id}
-                    type="button"
-                    onClick={() => openChange(row.id)}
-                    className="rounded-lg border border-border p-3 text-left transition hover:bg-muted/50"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-xs text-muted-foreground">{row.changeKey}</span>
-                      <Badge variant={CHANGE_STATE_TONE[row.state]}>{humanizeChange(row.state)}</Badge>
-                    </div>
-                    <p className="mt-1 font-medium">{row.ticket.title}</p>
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                      <Badge variant={CHANGE_KIND_TONE[row.changeKind]}>{humanizeChange(row.changeKind)}</Badge>
-                      <Badge variant={CHANGE_RISK_TONE[row.riskLevel]}>{humanizeChange(row.riskLevel)} risk</Badge>
-                    </div>
-                    <p className="mt-2 text-xs text-muted-foreground">{formatWindow(row.plannedStart, row.plannedEnd)}</p>
-                  </button>
-                ))}
-              </div>
+              {cardLayout && (
+                <div className="grid gap-2 p-3">
+                  {rows.map((row) => (
+                    <button
+                      key={row.id}
+                      type="button"
+                      onClick={() => openChange(row.id)}
+                      className="rounded-lg border border-border p-3 text-left transition hover:bg-muted/50"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-xs text-muted-foreground">{row.changeKey}</span>
+                        <Badge variant={CHANGE_STATE_TONE[row.state]}>{humanizeChange(row.state)}</Badge>
+                      </div>
+                      <p className="mt-1 font-medium">{row.ticket.title}</p>
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <Badge variant={CHANGE_KIND_TONE[row.changeKind]}>{humanizeChange(row.changeKind)}</Badge>
+                        <Badge variant={CHANGE_RISK_TONE[row.riskLevel]}>{humanizeChange(row.riskLevel)} risk</Badge>
+                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">{formatWindow(row.plannedStart, row.plannedEnd)}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
             </>
           )}
         </CardContent>

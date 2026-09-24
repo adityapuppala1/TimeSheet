@@ -216,6 +216,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Switch views from the Views Bar under the title: List, Board, and — with planning on — Timeline and Calendar. Save view keeps the filters, grouping and columns you chose.",
       "Group by Status, Priority, Type, Project, Assignee or Sprint. Each group has a heading (status and priority groups carry their colour dot; project groups their mark) and an Add ticket row at the bottom that opens the dialog pre-filled to land in that group. Filters pre-fill the header's New ticket the same way.",
       "Change a status from the list: the status pill on a row (or phone card) is a menu of the other statuses. The server decides what is legal; a refusal shows its reason.",
+      "On a phone the list is cards rather than a table, twenty at a time — Show more at the bottom adds another twenty and tells you how many are left.",
       "Tick Columns to show or hide columns, including one per custom field and Sprint; a saved view remembers the set.",
       "Open a ticket: drag its sheet wider than 960px or press Maximize, and the fields sit beside Comments and Activity in two columns. Hide activity keeps the details in focus; the choice is remembered in this browser.",
       "In the Calendar view choose Month or Week. If you can plan, drag a chip onto another day: a scheduled item keeps its length, an unscheduled one becomes scheduled on that day.",

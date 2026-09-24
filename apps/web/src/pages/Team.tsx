@@ -36,6 +36,7 @@ import { computeTrend } from "../lib/trend";
 import { fileUrl, teamApi, timesheetApi, type TeamReport } from "../services/api";
 import { permissions } from "@timesheet/shared";
 import { useAuthStore } from "../store/auth";
+import { useCardLayout } from "../lib/use-media-query";
 
 function initialsFor(name?: string) {
   if (!name) return "?";
@@ -59,6 +60,8 @@ function relativeTime(value: string) {
 }
 
 export function Team() {
+  // Cards or table — only one of them is rendered. See useCardLayout for the measurement.
+  const cardLayout = useCardLayout();
   const queryClient = useQueryClient();
   const [trendFor, setTrendFor] = useState<TeamReport | null>(null);
   /**
@@ -314,36 +317,40 @@ export function Team() {
           <CardContent className="p-0">
             {/* Mobile card list — same data as the 7-column table below, self-contained cards
                 instead of a sideways scroll (see docs/ROADMAP.md's wide-table backlog note). */}
-            <div className="grid gap-2 p-3 sm:hidden">
-              {(escalations.data ?? []).map((row: any) => {
-                const avatarSrc = fileUrl(row.timesheet?.user?.avatarUrl);
-                return (
-                  <div key={row.id} className="grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
-                    <div className="flex items-center gap-2">
-                      <Avatar className="h-7 w-7">
-                        {avatarSrc ? <AvatarImage src={avatarSrc} alt={row.timesheet?.user?.name ?? ""} /> : null}
-                        <AvatarFallback>{initialsFor(row.timesheet?.user?.name)}</AvatarFallback>
-                      </Avatar>
-                      <span className="font-medium">{row.timesheet?.user?.name}</span>
-                      <span className="ml-auto text-xs text-destructive">{relativeTime(row.createdAt)}</span>
+            {cardLayout && (
+              <div className="grid gap-2 p-3">
+                {(escalations.data ?? []).map((row: any) => {
+                  const avatarSrc = fileUrl(row.timesheet?.user?.avatarUrl);
+                  return (
+                    <div key={row.id} className="grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
+                      <div className="flex items-center gap-2">
+                        <Avatar className="h-7 w-7">
+                          {avatarSrc ? <AvatarImage src={avatarSrc} alt={row.timesheet?.user?.name ?? ""} /> : null}
+                          <AvatarFallback>{initialsFor(row.timesheet?.user?.name)}</AvatarFallback>
+                        </Avatar>
+                        <span className="font-medium">{row.timesheet?.user?.name}</span>
+                        <span className="ml-auto text-xs text-destructive">{relativeTime(row.createdAt)}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        <span>Original: {row.escalatedFromUser?.name}</span>
+                        <span>{row.timesheet?.project?.name}</span>
+                        <span>{String(row.timesheet?.workDate ?? "").slice(0, 10)}</span>
+                        <span className="font-semibold text-foreground">{Number(row.timesheet?.totalHours ?? 0).toFixed(2)}h</span>
+                      </div>
+                      <Button size="sm" variant="success" className="justify-self-start" onClick={() => approve.mutate(row.timesheet.id)}>
+                        <CheckCircle2 className="h-4 w-4" />Approve
+                      </Button>
                     </div>
-                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                      <span>Original: {row.escalatedFromUser?.name}</span>
-                      <span>{row.timesheet?.project?.name}</span>
-                      <span>{String(row.timesheet?.workDate ?? "").slice(0, 10)}</span>
-                      <span className="font-semibold text-foreground">{Number(row.timesheet?.totalHours ?? 0).toFixed(2)}h</span>
-                    </div>
-                    <Button size="sm" variant="success" className="justify-self-start" onClick={() => approve.mutate(row.timesheet.id)}>
-                      <CheckCircle2 className="h-4 w-4" />Approve
-                    </Button>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
 
-            <div className="hidden p-3 sm:block">
-              <DataTable columns={escalationColumns} data={escalations.data ?? []} enableSearch={false} pageSize={10} />
-            </div>
+            {!cardLayout && (
+              <div className="p-3">
+                <DataTable columns={escalationColumns} data={escalations.data ?? []} enableSearch={false} pageSize={10} />
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -360,51 +367,55 @@ export function Team() {
         <CardContent className="p-0">
           {/* Mobile card list — same data as the 8-column table below (see docs/ROADMAP.md's
               wide-table backlog note). */}
-          <div className="grid gap-2 p-3 sm:hidden">
-            {reports.isLoading && Array.from({ length: 3 }).map((_, i) => <Skeleton key={`skel-card-${i}`} className="h-24 w-full" />)}
-            {!reports.isLoading &&
-              (reports.data ?? []).map((person) => {
-                const avatarSrc = fileUrl(person.avatarUrl);
-                return (
-                  <div key={person.id} className="grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
-                    <div className="flex items-center gap-3">
-                      <Avatar>
-                        {avatarSrc ? <AvatarImage src={avatarSrc} alt={person.name} /> : null}
-                        <AvatarFallback>{initialsFor(person.name)}</AvatarFallback>
-                      </Avatar>
-                      <button type="button" className="focus-ring min-w-0 flex-1 rounded text-left" onClick={() => setTrendFor(person)}>
-                        <span className="block truncate font-medium hover:underline">{person.name}</span>
-                        <Badge variant="info" className="mt-0.5">{person.role.replace("_", " ")}</Badge>
-                      </button>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <a href={`mailto:${person.email}`} className="shrink-0 text-primary"><Mail className="h-4 w-4" /></a>
-                        </TooltipTrigger>
-                        <TooltipContent>{person.email}</TooltipContent>
-                      </Tooltip>
+          {cardLayout && (
+            <div className="grid gap-2 p-3">
+              {reports.isLoading && Array.from({ length: 3 }).map((_, i) => <Skeleton key={`skel-card-${i}`} className="h-24 w-full" />)}
+              {!reports.isLoading &&
+                (reports.data ?? []).map((person) => {
+                  const avatarSrc = fileUrl(person.avatarUrl);
+                  return (
+                    <div key={person.id} className="grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
+                      <div className="flex items-center gap-3">
+                        <Avatar>
+                          {avatarSrc ? <AvatarImage src={avatarSrc} alt={person.name} /> : null}
+                          <AvatarFallback>{initialsFor(person.name)}</AvatarFallback>
+                        </Avatar>
+                        <button type="button" className="focus-ring min-w-0 flex-1 rounded text-left" onClick={() => setTrendFor(person)}>
+                          <span className="block truncate font-medium hover:underline">{person.name}</span>
+                          <Badge variant="info" className="mt-0.5">{person.role.replace("_", " ")}</Badge>
+                        </button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <a href={`mailto:${person.email}`} className="shrink-0 text-primary"><Mail className="h-4 w-4" /></a>
+                          </TooltipTrigger>
+                          <TooltipContent>{person.email}</TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        <span>Pending: {person.stats.pending > 0 ? <Badge variant="warning">{person.stats.pending}</Badge> : "0"}</span>
+                        <span>Approved: <span className="font-semibold text-success">{person.stats.approved}</span></span>
+                        <span>Rejected: {person.stats.rejected}</span>
+                        <span>Approval SLA breaches: {person.stats.slaBreached > 0 ? <Badge variant="destructive">{person.stats.slaBreached}</Badge> : "0"}</span>
+                        <span>Approved hours: <span className="font-semibold text-foreground">{person.stats.approvedHours.toFixed(2)}</span></span>
+                      </div>
                     </div>
-                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                      <span>Pending: {person.stats.pending > 0 ? <Badge variant="warning">{person.stats.pending}</Badge> : "0"}</span>
-                      <span>Approved: <span className="font-semibold text-success">{person.stats.approved}</span></span>
-                      <span>Rejected: {person.stats.rejected}</span>
-                      <span>Approval SLA breaches: {person.stats.slaBreached > 0 ? <Badge variant="destructive">{person.stats.slaBreached}</Badge> : "0"}</span>
-                      <span>Approved hours: <span className="font-semibold text-foreground">{person.stats.approvedHours.toFixed(2)}</span></span>
-                    </div>
-                  </div>
-                );
-              })}
-          </div>
+                  );
+                })}
+            </div>
+          )}
 
-          <div className="hidden p-3 sm:block">
-            <DataTable
-              columns={reportColumns}
-              data={reports.data ?? []}
-              isLoading={reports.isLoading}
-              searchPlaceholder="Search direct reports..."
-              emptyMessage="No direct reports yet. Assign a manager to teammates from Users → Edit → Reports to."
-              pageSize={10}
-            />
-          </div>
+          {!cardLayout && (
+            <div className="p-3">
+              <DataTable
+                columns={reportColumns}
+                data={reports.data ?? []}
+                isLoading={reports.isLoading}
+                searchPlaceholder="Search direct reports..."
+                emptyMessage="No direct reports yet. Assign a manager to teammates from Users → Edit → Reports to."
+                pageSize={10}
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
       )}

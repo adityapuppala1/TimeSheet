@@ -60,6 +60,7 @@ import { DropdownMenu, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { brandingApi, brandingLogoUrl, fileUrl, projectApi } from "../services/api";
+import { useMediaQuery } from "../lib/use-media-query";
 
 /**
  * Section headings group the nav so 15 items don't read as one undifferentiated list.
@@ -547,6 +548,11 @@ const SIDEBAR_COLLAPSED_KEY = "ts.sidebar.collapsed";
 
 export function Sidebar() {
   const user = useAuthStore((s) => s.user);
+  // The rail is `hidden lg:flex`, which stops the browser PAINTING it and not React building it:
+  // 323 elements on every page a phone ever opens, 28% of the dashboard's DOM there, for a rail
+  // that width will never show. The <aside> itself stays — the product tour anchors to it, and
+  // an empty hidden box costs one element — but its contents are built only where they show.
+  const wide = useMediaQuery("(min-width: 1024px)");
   const { features } = usePlanningFeatures();
   const visible = nav.filter((item) => isVisible(item, user, features));
   const avatarSrc = fileUrl(user?.avatarUrl);
@@ -582,70 +588,74 @@ export function Sidebar() {
         collapsed ? "w-[68px] p-2.5" : "w-72 p-4"
       )}
     >
-      {/* The collapse control lives in the header row, where slim-sidebar patterns put it —
-          a toggle at the bottom is off-screen muscle memory; up here it is the first thing the
-          eye meets, next to the brand it is shrinking. Slim mode stacks it under the logo. */}
-      <div className={cn("mb-6 flex shrink-0 items-center", collapsed ? "flex-col gap-2" : "justify-between gap-2")}>
-        <BrandMark slim={collapsed} className="mb-0" />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={toggle}
-              aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
-              aria-expanded={!collapsed}
-              className="focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
-            >
-              {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right" sideOffset={8}>
-            {collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
-          </TooltipContent>
-        </Tooltip>
-      </div>
-      {/* overflow-x HIDDEN, not auto: every row in here truncates by design, so a horizontal bar in a
-          207px rail can only ever be a rendering artefact somebody has to scroll past. */}
-      <div className="-mx-1 min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1">
-        <NavList items={visible} slim={collapsed} />
-      </div>
+      {wide && (
+        <>
+          {/* The collapse control lives in the header row, where slim-sidebar patterns put it —
+              a toggle at the bottom is off-screen muscle memory; up here it is the first thing the
+              eye meets, next to the brand it is shrinking. Slim mode stacks it under the logo. */}
+          <div className={cn("mb-6 flex shrink-0 items-center", collapsed ? "flex-col gap-2" : "justify-between gap-2")}>
+            <BrandMark slim={collapsed} className="mb-0" />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={toggle}
+                  aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+                  aria-expanded={!collapsed}
+                  className="focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                >
+                  {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right" sideOffset={8}>
+                {collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+          {/* overflow-x HIDDEN, not auto: every row in here truncates by design, so a horizontal bar in a
+              207px rail can only ever be a rendering artefact somebody has to scroll past. */}
+          <div className="-mx-1 min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1">
+            <NavList items={visible} slim={collapsed} />
+          </div>
 
-      {/* An account CARD, not a read-out: it opens the same menu the top bar's avatar does — one
-          shared definition in AccountMenu.tsx, so the two can never drift. modal={false} for the
-          same reason Topbar's does: a menu shouldn't freeze page scroll. */}
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            aria-label="Account menu"
-            className={cn(
-              "focus-ring mt-2 w-full shrink-0 rounded-lg border border-border bg-background text-left transition hover:bg-muted",
-              collapsed ? "p-1.5" : "p-3"
-            )}
-          >
-            {collapsed ? (
-              <div className="flex justify-center">
-                <Avatar>
-                  {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
-                  <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
-                </Avatar>
-              </div>
-            ) : (
-              <div className="flex items-center gap-3">
-                <Avatar>
-                  {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
-                  <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
-                </Avatar>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">{user?.name ?? "Guest"}</p>
-                  <p className="truncate text-xs text-muted-foreground">{user?.role?.replace("_", " ")}</p>
-                </div>
-              </div>
-            )}
-          </button>
-        </DropdownMenuTrigger>
-        <AccountMenuContent />
-      </DropdownMenu>
+          {/* An account CARD, not a read-out: it opens the same menu the top bar's avatar does — one
+              shared definition in AccountMenu.tsx, so the two can never drift. modal={false} for the
+              same reason Topbar's does: a menu shouldn't freeze page scroll. */}
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Account menu"
+                className={cn(
+                  "focus-ring mt-2 w-full shrink-0 rounded-lg border border-border bg-background text-left transition hover:bg-muted",
+                  collapsed ? "p-1.5" : "p-3"
+                )}
+              >
+                {collapsed ? (
+                  <div className="flex justify-center">
+                    <Avatar>
+                      {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
+                      <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
+                    </Avatar>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <Avatar>
+                      {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
+                      <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{user?.name ?? "Guest"}</p>
+                      <p className="truncate text-xs text-muted-foreground">{user?.role?.replace("_", " ")}</p>
+                    </div>
+                  </div>
+                )}
+              </button>
+            </DropdownMenuTrigger>
+            <AccountMenuContent />
+          </DropdownMenu>
+        </>
+      )}
     </aside>
   );
 }

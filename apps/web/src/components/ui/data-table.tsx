@@ -28,6 +28,7 @@ import {
 import { Columns3, ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { formatGroupLabel, groupCounts, groupRuns, type GroupRun } from "../../lib/group-rows";
+import { useCardLayout } from "../../lib/use-media-query";
 import { cn } from "../../lib/utils";
 import { Button } from "./button";
 import { Checkbox } from "./checkbox";
@@ -107,6 +108,9 @@ export function DataTable<TData>({
   visibleColumns,
   onVisibleColumnsChange
 }: DataTableProps<TData>) {
+  // Only ONE of the card list and the table is rendered — see useCardLayout for the measurement
+  // that made this worth a hook rather than the `sm:hidden` / `hidden sm:block` pair it replaces.
+  const cardLayout = useCardLayout();
   // MEMOISED for the same reason `effectiveSorting` is: react-table treats a fresh state object as
   // a change, and a change here re-derives row models on every render.
   const columnVisibility = useMemo<VisibilityState>(() => {
@@ -248,153 +252,158 @@ export function DataTable<TData>({
           scrolling it sideways sees 1-2 columns at a time with no context. Every column
           renders as its own label/value line instead, using the same column defs (and the
           same sorted/filtered/paginated row set) the desktop table below uses, so the two
-          never drift out of sync on data. `sm:hidden` / `hidden sm:block` split, same pattern
-          this app already used for Tickets/Team before DataTable existed. */}
-      <div className="grid gap-2 sm:hidden">
-        {isLoading && Array.from({ length: 3 }).map((_, i) => <div key={`skel-${i}`} className="h-24 w-full animate-pulse rounded-lg bg-muted" />)}
-        {!isLoading && rows.length === 0 && <EmptyState compact title={emptyMessage} action={emptyAction} />}
-        {!isLoading &&
-          entriesFor("card").map((entry) => {
-            if (entry === null || entry === undefined) return null;
-            if (!("original" in (entry as object))) return entry as ReactNode;
-            const row = entry as Row<TData>;
-            // A div with the button role rather than a <button>: cells may carry their own controls
-            // (a status pill), and a button inside a button is invalid HTML. Enter/Space still open.
-            return (
-              <div
-                key={row.id}
-                role={onRowClick ? "button" : undefined}
-                tabIndex={onRowClick ? 0 : undefined}
-                onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-                onKeyDown={
-                  onRowClick
-                    ? (e) => {
-                        if (e.target !== e.currentTarget) return;
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          onRowClick(row.original);
-                        }
-                      }
-                    : undefined
-                }
-                className={cn(
-                  "grid gap-1.5 rounded-lg border border-border bg-card p-3 text-left text-sm shadow-sm",
-                  onRowClick && "cursor-pointer"
-                )}
-              >
-                {row.getVisibleCells().map((cell) => {
-                  const header = cell.column.columnDef.header;
-                  // A column can opt out of carrying its header into the card layout.
-                  //
-                  // WHY THIS EXISTS: the card view repeats each column's header as a label beside
-                  // its value, once PER ROW. That is right for a text header and wrong for an
-                  // interactive one — a select-all checkbox in the header renders once in the
-                  // table and once per card, so a page of eight users showed nine identical
-                  // "select everyone" controls, all of which did the same thing to the same set.
-                  const meta = cell.column.columnDef.meta as { cardLabel?: boolean } | undefined;
-                  const label =
-                    meta?.cardLabel === false
-                      ? null
-                      : typeof header === "string"
-                        ? header
-                        : flexRender(header, { column: cell.column, header: cell.column, table } as any);
-                  return (
-                    <div key={cell.id} className="flex items-start justify-between gap-3">
-                      {label ? <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span> : null}
-                      <span className="min-w-0 flex-1 break-words text-right [overflow-wrap:anywhere]">
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
-      </div>
-
-      <div className="hidden rounded-lg border border-border sm:block">
-        <Table>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id} className="hover:bg-transparent">
-                {headerGroup.headers.map((header) => {
-                  const canSort = header.column.getCanSort();
-                  const sortDirection = header.column.getIsSorted();
-                  return (
-                    <TableHead key={header.id}>
-                      {header.isPlaceholder ? null : canSort ? (
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 hover:text-foreground"
-                          onClick={header.column.getToggleSortingHandler()}
-                        >
-                          {flexRender(header.column.columnDef.header, header.getContext())}
-                          {sortDirection === "asc" ? (
-                            <ArrowUp className="h-3 w-3" />
-                          ) : sortDirection === "desc" ? (
-                            <ArrowDown className="h-3 w-3" />
-                          ) : (
-                            <ArrowUpDown className="h-3 w-3 opacity-40" />
-                          )}
-                        </button>
-                      ) : (
-                        flexRender(header.column.columnDef.header, header.getContext())
-                      )}
-                    </TableHead>
-                  );
-                })}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={columns.length} className="py-10 text-center text-sm text-muted-foreground">
-                  Loading…
-                </TableCell>
-              </TableRow>
-            ) : rows.length === 0 ? (
-              <TableRow className="hover:bg-transparent">
-                <TableCell colSpan={columns.length} className="p-3">
-                  <EmptyState compact title={emptyMessage} action={emptyAction} />
-                </TableCell>
-              </TableRow>
-            ) : (
-              entriesFor("row").map((entry) => {
-                if (entry === null || entry === undefined) return null;
-                if (!("original" in (entry as object))) return entry as ReactNode;
-                const row = entry as Row<TData>;
-                return (
-                  <TableRow
-                    key={row.id}
-                    className={cn(onRowClick && "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring", rowClassName)}
-                    onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-                    // V12 4.3 keyboard pass: a clickable row is reachable by Tab and opens on
-                    // Enter/Space — a keyboard user had no way to open a ticket from the table.
-                    // Keys from controls INSIDE the row (the status pill) are theirs, not the row's.
-                    tabIndex={onRowClick ? 0 : undefined}
-                    onKeyDown={
-                      onRowClick
-                        ? (e) => {
-                            if (e.target !== e.currentTarget) return;
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              onRowClick(row.original);
-                            }
+          never drift out of sync on data. Which ONE of them mounts is decided in JS by
+          useCardLayout, not by CSS — rendering both and hiding one cost 77% of the tickets
+          page's DOM, and everything that walks the document paid for it. */}
+      {cardLayout && (
+        <div className="grid gap-2">
+          {isLoading && Array.from({ length: 3 }).map((_, i) => <div key={`skel-${i}`} className="h-24 w-full animate-pulse rounded-lg bg-muted" />)}
+          {!isLoading && rows.length === 0 && <EmptyState compact title={emptyMessage} action={emptyAction} />}
+          {!isLoading &&
+            entriesFor("card").map((entry) => {
+              if (entry === null || entry === undefined) return null;
+              if (!("original" in (entry as object))) return entry as ReactNode;
+              const row = entry as Row<TData>;
+              // A div with the button role rather than a <button>: cells may carry their own controls
+              // (a status pill), and a button inside a button is invalid HTML. Enter/Space still open.
+              return (
+                <div
+                  key={row.id}
+                  role={onRowClick ? "button" : undefined}
+                  tabIndex={onRowClick ? 0 : undefined}
+                  onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                  onKeyDown={
+                    onRowClick
+                      ? (e) => {
+                          if (e.target !== e.currentTarget) return;
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onRowClick(row.original);
                           }
-                        : undefined
-                    }
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                    ))}
-                  </TableRow>
-                );
-              })
-            )}
-          </TableBody>
-        </Table>
-      </div>
+                        }
+                      : undefined
+                  }
+                  className={cn(
+                    "grid gap-1.5 rounded-lg border border-border bg-card p-3 text-left text-sm shadow-sm",
+                    onRowClick && "cursor-pointer"
+                  )}
+                >
+                  {row.getVisibleCells().map((cell) => {
+                    const header = cell.column.columnDef.header;
+                    // A column can opt out of carrying its header into the card layout.
+                    //
+                    // WHY THIS EXISTS: the card view repeats each column's header as a label beside
+                    // its value, once PER ROW. That is right for a text header and wrong for an
+                    // interactive one — a select-all checkbox in the header renders once in the
+                    // table and once per card, so a page of eight users showed nine identical
+                    // "select everyone" controls, all of which did the same thing to the same set.
+                    const meta = cell.column.columnDef.meta as { cardLabel?: boolean } | undefined;
+                    const label =
+                      meta?.cardLabel === false
+                        ? null
+                        : typeof header === "string"
+                          ? header
+                          : flexRender(header, { column: cell.column, header: cell.column, table } as any);
+                    return (
+                      <div key={cell.id} className="flex items-start justify-between gap-3">
+                        {label ? <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span> : null}
+                        <span className="min-w-0 flex-1 break-words text-right [overflow-wrap:anywhere]">
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+        </div>
+      )}
+
+      {!cardLayout && (
+        <div className="rounded-lg border border-border">
+          <Table>
+            <TableHeader>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id} className="hover:bg-transparent">
+                  {headerGroup.headers.map((header) => {
+                    const canSort = header.column.getCanSort();
+                    const sortDirection = header.column.getIsSorted();
+                    return (
+                      <TableHead key={header.id}>
+                        {header.isPlaceholder ? null : canSort ? (
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 hover:text-foreground"
+                            onClick={header.column.getToggleSortingHandler()}
+                          >
+                            {flexRender(header.column.columnDef.header, header.getContext())}
+                            {sortDirection === "asc" ? (
+                              <ArrowUp className="h-3 w-3" />
+                            ) : sortDirection === "desc" ? (
+                              <ArrowDown className="h-3 w-3" />
+                            ) : (
+                              <ArrowUpDown className="h-3 w-3 opacity-40" />
+                            )}
+                          </button>
+                        ) : (
+                          flexRender(header.column.columnDef.header, header.getContext())
+                        )}
+                      </TableHead>
+                    );
+                  })}
+                </TableRow>
+              ))}
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={columns.length} className="py-10 text-center text-sm text-muted-foreground">
+                    Loading…
+                  </TableCell>
+                </TableRow>
+              ) : rows.length === 0 ? (
+                <TableRow className="hover:bg-transparent">
+                  <TableCell colSpan={columns.length} className="p-3">
+                    <EmptyState compact title={emptyMessage} action={emptyAction} />
+                  </TableCell>
+                </TableRow>
+              ) : (
+                entriesFor("row").map((entry) => {
+                  if (entry === null || entry === undefined) return null;
+                  if (!("original" in (entry as object))) return entry as ReactNode;
+                  const row = entry as Row<TData>;
+                  return (
+                    <TableRow
+                      key={row.id}
+                      className={cn(onRowClick && "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring", rowClassName)}
+                      onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                      // V12 4.3 keyboard pass: a clickable row is reachable by Tab and opens on
+                      // Enter/Space — a keyboard user had no way to open a ticket from the table.
+                      // Keys from controls INSIDE the row (the status pill) are theirs, not the row's.
+                      tabIndex={onRowClick ? 0 : undefined}
+                      onKeyDown={
+                        onRowClick
+                          ? (e) => {
+                              if (e.target !== e.currentTarget) return;
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                onRowClick(row.original);
+                              }
+                            }
+                          : undefined
+                      }
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                      ))}
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      )}
 
       {enablePagination && totalRows > 0 && (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

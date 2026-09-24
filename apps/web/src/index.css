@@ -214,7 +214,16 @@
      is content pushed out of the window rather than wrapped — a WCAG SC 1.4.4 failure, caught by
      the resize-text test in tests/e2e/responsive.spec.ts. Capping the wrapper at its container and
      letting the list wrap costs nothing at normal size, because at normal size it already fits. */
-  .recharts-legend-wrapper {
+  .recharts-legend-wrapper,
+  /* And the chart box itself, for the same reason one breakpoint further out. Recharts writes a
+     PIXEL width onto these from whatever it measured at mount, and it does not shrink them when
+     the space does. Whether it measured the right moment depends on load order — a page that got
+     lighter (see useCardLayout) made its charts mount earlier, before a scrollbar appeared, and a
+     chart sized for the wider page then hung 8px off the window and took its legend 44px further.
+     Capping the rendered box means a stale measurement is a chart briefly drawn small, which
+     nobody notices, instead of a page that scrolls sideways, which WCAG SC 1.4.4 forbids. */
+  .recharts-wrapper,
+  .recharts-surface {
     max-width: 100%;
   }
 

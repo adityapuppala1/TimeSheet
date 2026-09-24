@@ -74,6 +74,7 @@ import { changeApi, dashboardApi, reportApi, ticketApi, timesheetApi, type MyMon
 import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
 import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
 import { useAuthStore } from "../store/auth";
+import { useCardLayout } from "../lib/use-media-query";
 
 /** Mon–Fri days in an inclusive range. The week target scales against this rather than staying
  *  pinned to 40h: a one-day range against a 40h bar reads as a 5% week, and a month reads as 400%,
@@ -1643,6 +1644,8 @@ const ROLLUP_PAGE_SIZE = 10;
  * dashboard that renders both as 0% is the kind that gets quoted in a meeting.
  */
 function ProjectRollup({ rollup, loading, periodLabel }: { rollup: MyMonthRollup | undefined; loading: boolean; periodLabel: string }) {
+  // Cards or table — only one of them is rendered. See useCardLayout for the measurement.
+  const cardLayout = useCardLayout();
   const [page, setPage] = useState(1);
   const rows = rollup?.projects ?? [];
   const showChanges = Boolean(rollup?.totals.changes);
@@ -1683,126 +1686,130 @@ function ProjectRollup({ rollup, loading, periodLabel }: { rollup: MyMonthRollup
         ) : (
           <>
             {/* Desktop table / mobile cards — same dual rendering the Tickets page uses. */}
-            <div className="hidden overflow-x-auto sm:block">
-              <table className="w-full text-sm">
-                <thead className="text-left text-muted-foreground">
-                  <tr>
-                    <th className="p-2 font-medium">Project</th>
-                    <th className="p-2 text-right font-medium">Hours</th>
-                    <th className="p-2 text-right font-medium">Entries</th>
-                    <th className="p-2 text-right font-medium">Open</th>
-                    <th className="p-2 text-right font-medium">Closed</th>
-                    <th className="p-2 text-right font-medium">Done</th>
-                    {showChanges && <th className="p-2 text-right font-medium">Changes</th>}
-                    {showChanges && <th className="p-2 text-right font-medium">CM done</th>}
-                    <th className="p-2 font-medium">Last entry</th>
-                    <th className="w-[20%] p-2 font-medium">Approved</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pageRows.map((row) => {
-                    const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : null;
-                    const ticketTotal = row.tickets.open + row.tickets.closed;
-                    const donePct = ticketTotal > 0 ? Math.round((row.tickets.closed / ticketTotal) * 100) : null;
-                    const cmDonePct = row.changes && row.changes.raised > 0 ? Math.round((row.changes.closed / row.changes.raised) * 100) : null;
-                    return (
-                      <tr key={row.id} className="border-t border-border">
-                        <td className="p-2">
-                          <span className="font-medium">{row.name}</span>
-                          {row.code && <span className="ml-2 font-mono text-xs text-muted-foreground">{row.code}</span>}
-                          {/* Says why a zero-hour row is here at all — without it an untouched project
-                              reads as a bug rather than as something you are responsible for. */}
-                          {row.entries === 0 && <Badge variant="muted" className="ml-2">assigned</Badge>}
-                        </td>
-                        <td className="p-2 text-right font-semibold tabular-nums">{row.monthHours.toFixed(1)}</td>
-                        <td className="p-2 text-right tabular-nums text-muted-foreground">{row.entries}</td>
-                        <td className="p-2 text-right" data-testid="rollup-open">
-                          {row.tickets.open > 0 ? (
-                            <HoverTip>
-                              <HoverTipTrigger asChild>
-                                <Badge variant="info"><TicketIcon className="mr-1 h-3 w-3" />{row.tickets.open}</Badge>
-                              </HoverTipTrigger>
-                              <HoverTipContent>{row.tickets.mineOpen} of these are assigned to you</HoverTipContent>
-                            </HoverTip>
-                          ) : (
-                            <span className="text-muted-foreground">0</span>
-                          )}
-                        </td>
-                        <td className="p-2 text-right" data-testid="rollup-closed">
-                          {row.tickets.closed > 0 ? (
-                            <HoverTip>
-                              <HoverTipTrigger asChild>
-                                <Badge variant="success"><CheckCircle2 className="mr-1 h-3 w-3" />{row.tickets.closed}</Badge>
-                              </HoverTipTrigger>
-                              <HoverTipContent>{row.tickets.mineClosed} of these are assigned to you</HoverTipContent>
-                            </HoverTip>
-                          ) : (
-                            <span className="text-muted-foreground">0</span>
-                          )}
-                        </td>
-                        {/* An em dash rather than 0% when there is nothing to divide: "none of these
-                            tickets are done" and "there are no tickets here" are different facts. */}
-                        <td className="p-2 text-right text-xs font-semibold tabular-nums" data-testid="rollup-done">
-                          {donePct === null ? <span className="font-normal text-muted-foreground">—</span> : `${donePct}%`}
-                        </td>
-                        {showChanges && (
-                          <td className="p-2 text-right" data-testid="rollup-changes">
-                            {row.changes && row.changes.raised > 0 ? (
-                              <Badge variant="warning"><GitPullRequestArrow className="mr-1 h-3 w-3" />{row.changes.raised}</Badge>
+            {!cardLayout && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left text-muted-foreground">
+                    <tr>
+                      <th className="p-2 font-medium">Project</th>
+                      <th className="p-2 text-right font-medium">Hours</th>
+                      <th className="p-2 text-right font-medium">Entries</th>
+                      <th className="p-2 text-right font-medium">Open</th>
+                      <th className="p-2 text-right font-medium">Closed</th>
+                      <th className="p-2 text-right font-medium">Done</th>
+                      {showChanges && <th className="p-2 text-right font-medium">Changes</th>}
+                      {showChanges && <th className="p-2 text-right font-medium">CM done</th>}
+                      <th className="p-2 font-medium">Last entry</th>
+                      <th className="w-[20%] p-2 font-medium">Approved</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageRows.map((row) => {
+                      const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : null;
+                      const ticketTotal = row.tickets.open + row.tickets.closed;
+                      const donePct = ticketTotal > 0 ? Math.round((row.tickets.closed / ticketTotal) * 100) : null;
+                      const cmDonePct = row.changes && row.changes.raised > 0 ? Math.round((row.changes.closed / row.changes.raised) * 100) : null;
+                      return (
+                        <tr key={row.id} className="border-t border-border">
+                          <td className="p-2">
+                            <span className="font-medium">{row.name}</span>
+                            {row.code && <span className="ml-2 font-mono text-xs text-muted-foreground">{row.code}</span>}
+                            {/* Says why a zero-hour row is here at all — without it an untouched project
+                                reads as a bug rather than as something you are responsible for. */}
+                            {row.entries === 0 && <Badge variant="muted" className="ml-2">assigned</Badge>}
+                          </td>
+                          <td className="p-2 text-right font-semibold tabular-nums">{row.monthHours.toFixed(1)}</td>
+                          <td className="p-2 text-right tabular-nums text-muted-foreground">{row.entries}</td>
+                          <td className="p-2 text-right" data-testid="rollup-open">
+                            {row.tickets.open > 0 ? (
+                              <HoverTip>
+                                <HoverTipTrigger asChild>
+                                  <Badge variant="info"><TicketIcon className="mr-1 h-3 w-3" />{row.tickets.open}</Badge>
+                                </HoverTipTrigger>
+                                <HoverTipContent>{row.tickets.mineOpen} of these are assigned to you</HoverTipContent>
+                              </HoverTip>
                             ) : (
                               <span className="text-muted-foreground">0</span>
                             )}
                           </td>
-                        )}
-                        {showChanges && (
-                          <td className="p-2 text-right text-xs font-semibold tabular-nums">
-                            {cmDonePct === null ? <span className="font-normal text-muted-foreground">—</span> : `${cmDonePct}%`}
+                          <td className="p-2 text-right" data-testid="rollup-closed">
+                            {row.tickets.closed > 0 ? (
+                              <HoverTip>
+                                <HoverTipTrigger asChild>
+                                  <Badge variant="success"><CheckCircle2 className="mr-1 h-3 w-3" />{row.tickets.closed}</Badge>
+                                </HoverTipTrigger>
+                                <HoverTipContent>{row.tickets.mineClosed} of these are assigned to you</HoverTipContent>
+                              </HoverTip>
+                            ) : (
+                              <span className="text-muted-foreground">0</span>
+                            )}
                           </td>
-                        )}
-                        <td className="p-2 text-muted-foreground">{row.lastDate ?? "—"}</td>
-                        <td className="p-2">
-                          <div className="flex items-center gap-2">
-                            <Progress value={approvedPct ?? 0} className="h-1.5" />
-                            <span className="w-9 text-right text-xs font-semibold tabular-nums">
-                              {approvedPct === null ? <span className="font-normal text-muted-foreground">—</span> : `${approvedPct}%`}
-                            </span>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                          {/* An em dash rather than 0% when there is nothing to divide: "none of these
+                              tickets are done" and "there are no tickets here" are different facts. */}
+                          <td className="p-2 text-right text-xs font-semibold tabular-nums" data-testid="rollup-done">
+                            {donePct === null ? <span className="font-normal text-muted-foreground">—</span> : `${donePct}%`}
+                          </td>
+                          {showChanges && (
+                            <td className="p-2 text-right" data-testid="rollup-changes">
+                              {row.changes && row.changes.raised > 0 ? (
+                                <Badge variant="warning"><GitPullRequestArrow className="mr-1 h-3 w-3" />{row.changes.raised}</Badge>
+                              ) : (
+                                <span className="text-muted-foreground">0</span>
+                              )}
+                            </td>
+                          )}
+                          {showChanges && (
+                            <td className="p-2 text-right text-xs font-semibold tabular-nums">
+                              {cmDonePct === null ? <span className="font-normal text-muted-foreground">—</span> : `${cmDonePct}%`}
+                            </td>
+                          )}
+                          <td className="p-2 text-muted-foreground">{row.lastDate ?? "—"}</td>
+                          <td className="p-2">
+                            <div className="flex items-center gap-2">
+                              <Progress value={approvedPct ?? 0} className="h-1.5" />
+                              <span className="w-9 text-right text-xs font-semibold tabular-nums">
+                                {approvedPct === null ? <span className="font-normal text-muted-foreground">—</span> : `${approvedPct}%`}
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
-            <div className="grid gap-2 sm:hidden">
-              {pageRows.map((row) => {
-                const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : null;
-                const ticketTotal = row.tickets.open + row.tickets.closed;
-                const donePct = ticketTotal > 0 ? Math.round((row.tickets.closed / ticketTotal) * 100) : null;
-                return (
-                  <div key={row.id} className="rounded-lg border border-border p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="min-w-0 truncate font-medium">{row.name}</p>
-                      <span className="font-semibold tabular-nums">{row.monthHours.toFixed(1)}h</span>
+            {cardLayout && (
+              <div className="grid gap-2">
+                {pageRows.map((row) => {
+                  const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : null;
+                  const ticketTotal = row.tickets.open + row.tickets.closed;
+                  const donePct = ticketTotal > 0 ? Math.round((row.tickets.closed / ticketTotal) * 100) : null;
+                  return (
+                    <div key={row.id} className="rounded-lg border border-border p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="min-w-0 truncate font-medium">{row.name}</p>
+                        <span className="font-semibold tabular-nums">{row.monthHours.toFixed(1)}h</span>
+                      </div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <Progress value={approvedPct ?? 0} className="h-1.5" />
+                        <span className="text-xs font-semibold tabular-nums">{approvedPct === null ? "—" : `${approvedPct}%`}</span>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                        <span>{row.entries} entries · last {row.lastDate ?? "—"}</span>
+                        <span className="flex items-center gap-1.5">
+                          {row.tickets.open > 0 && <Badge variant="info">{row.tickets.open} open</Badge>}
+                          {row.tickets.closed > 0 && <Badge variant="success">{row.tickets.closed} closed</Badge>}
+                          {row.changes && row.changes.raised > 0 && <Badge variant="warning">{row.changes.raised} CM</Badge>}
+                          {donePct !== null && <span className="font-semibold tabular-nums">{donePct}% done</span>}
+                        </span>
+                      </div>
                     </div>
-                    <div className="mt-2 flex items-center gap-2">
-                      <Progress value={approvedPct ?? 0} className="h-1.5" />
-                      <span className="text-xs font-semibold tabular-nums">{approvedPct === null ? "—" : `${approvedPct}%`}</span>
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{row.entries} entries · last {row.lastDate ?? "—"}</span>
-                      <span className="flex items-center gap-1.5">
-                        {row.tickets.open > 0 && <Badge variant="info">{row.tickets.open} open</Badge>}
-                        {row.tickets.closed > 0 && <Badge variant="success">{row.tickets.closed} closed</Badge>}
-                        {row.changes && row.changes.raised > 0 && <Badge variant="warning">{row.changes.raised} CM</Badge>}
-                        {donePct !== null && <span className="font-semibold tabular-nums">{donePct}% done</span>}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Stated rather than silent — the server caps the list, and a card that quietly drops
                 projects is the bug this whole route was written to fix. */}

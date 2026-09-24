@@ -49,6 +49,7 @@ import { AIPromptsCard } from "./AIPromptsCard";
 import { AIProviderListCard } from "./AIProviderListCard";
 import { AgentRunsCard } from "./AgentRunsCard";
 import { NativeModelRunnerCard } from "./NativeModelRunnerCard";
+import { useCardLayout } from "../../lib/use-media-query";
 
 // Matches the exact chart styling convention used in Insights.tsx (this repo's `dataviz`
 // skill): CSS-variable colors only, fixed categorical order never re-cycled by rank.
@@ -687,6 +688,8 @@ function pct(value: number | null | undefined): string {
  * "80% positive" from eight ratings as if it meant something.
  */
 function AIQualityCard({ enabled, captureOn }: { enabled: boolean; captureOn: boolean }) {
+  // Cards or table — only one of them is rendered. See useCardLayout for the measurement.
+  const cardLayout = useCardLayout();
   const quality = useQuery({
     queryKey: ["settings", "ai", "quality"],
     queryFn: () => settingsApi.getAIQualitySummary(30),
@@ -793,56 +796,60 @@ function AIQualityCard({ enabled, captureOn }: { enabled: boolean; captureOn: bo
                 <div className="grid gap-1.5">
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">By feature — worst first</p>
                   {/* Stacked cards below sm, table above — the same fallback DataTable uses. */}
-                  <div className="grid gap-1.5 sm:hidden">
-                    {quality.data.features.map((f) => (
-                      <div key={f.feature} className="grid gap-1 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
-                        <span className="font-medium">{f.feature}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {f.interactions} calls · unusable {pct(f.parseFailureRate)} · rated {f.rated} ({pct(f.coverage)} coverage)
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="hidden overflow-x-auto rounded-lg border border-border sm:block">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
-                          <th className="p-2.5 font-semibold">Feature</th>
-                          <th className="p-2.5 font-semibold">Calls</th>
-                          <th className="p-2.5 font-semibold">Unusable</th>
-                          <th className="p-2.5 font-semibold">Rated (coverage)</th>
-                          <th className="p-2.5 font-semibold">Thumbs up</th>
-                          <th className="p-2.5 font-semibold">Avg latency</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {quality.data.features.map((f) => (
-                          <tr key={f.feature}>
-                            <td className="p-2.5 font-medium">{f.feature}</td>
-                            <td className="p-2.5 text-muted-foreground">{f.interactions}</td>
-                            <td className="p-2.5">
-                              {f.parseFailureRate == null ? (
-                                <span className="text-muted-foreground">n/a</span>
-                              ) : (
-                                <span className={f.parseFailureRate > 0.05 ? "font-semibold text-destructive" : "text-success"}>
-                                  {pct(f.parseFailureRate)}
-                                </span>
-                              )}
-                            </td>
-                            <td className="p-2.5 text-muted-foreground">
-                              {f.rated} ({pct(f.coverage)})
-                            </td>
-                            <td className="p-2.5 text-muted-foreground">
-                              {/* Suppressed below 10 ratings rather than shown as a confident-looking
-                                  percentage derived from a handful of clicks. */}
-                              {f.thumbsUpRate == null ? <span title="Too few ratings to be meaningful">—</span> : pct(f.thumbsUpRate)}
-                            </td>
-                            <td className="p-2.5 text-muted-foreground">{f.avgLatencyMs != null ? `${f.avgLatencyMs}ms` : "—"}</td>
+                  {cardLayout && (
+                    <div className="grid gap-1.5">
+                      {quality.data.features.map((f) => (
+                        <div key={f.feature} className="grid gap-1 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
+                          <span className="font-medium">{f.feature}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {f.interactions} calls · unusable {pct(f.parseFailureRate)} · rated {f.rated} ({pct(f.coverage)} coverage)
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {!cardLayout && (
+                    <div className="overflow-x-auto rounded-lg border border-border">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
+                            <th className="p-2.5 font-semibold">Feature</th>
+                            <th className="p-2.5 font-semibold">Calls</th>
+                            <th className="p-2.5 font-semibold">Unusable</th>
+                            <th className="p-2.5 font-semibold">Rated (coverage)</th>
+                            <th className="p-2.5 font-semibold">Thumbs up</th>
+                            <th className="p-2.5 font-semibold">Avg latency</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {quality.data.features.map((f) => (
+                            <tr key={f.feature}>
+                              <td className="p-2.5 font-medium">{f.feature}</td>
+                              <td className="p-2.5 text-muted-foreground">{f.interactions}</td>
+                              <td className="p-2.5">
+                                {f.parseFailureRate == null ? (
+                                  <span className="text-muted-foreground">n/a</span>
+                                ) : (
+                                  <span className={f.parseFailureRate > 0.05 ? "font-semibold text-destructive" : "text-success"}>
+                                    {pct(f.parseFailureRate)}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-2.5 text-muted-foreground">
+                                {f.rated} ({pct(f.coverage)})
+                              </td>
+                              <td className="p-2.5 text-muted-foreground">
+                                {/* Suppressed below 10 ratings rather than shown as a confident-looking
+                                    percentage derived from a handful of clicks. */}
+                                {f.thumbsUpRate == null ? <span title="Too few ratings to be meaningful">—</span> : pct(f.thumbsUpRate)}
+                              </td>
+                              <td className="p-2.5 text-muted-foreground">{f.avgLatencyMs != null ? `${f.avgLatencyMs}ms` : "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               </>
             )}

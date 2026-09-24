@@ -78,13 +78,14 @@ import { SavedViewsBar, type TicketFilters } from "../components/SavedViewsBar";
 import { PageHeader } from "../components/PageHeader";
 import { TicketCustomFields } from "../components/TicketCustomFields";
 import { TicketSprintFields } from "../components/TicketSprintFields";
-import { useMediaQuery } from "../lib/use-media-query";
+import { useCardLayout, useMediaQuery } from "../lib/use-media-query";
 import { SPLIT_MIN_SHEET_WIDTH, canSplit, readActivityHidden, ticketSheetLayout, writeActivityHidden } from "../lib/ticket-sheet-layout";
 import { ProjectMark } from "../components/ProjectMark";
 import { StatusPill } from "../components/StatusPill";
 import { ViewsBar } from "../components/ViewsBar";
 import { readProjectSelection, withoutProjectSelection } from "../lib/project-tree";
 import { formatGroupLabel, groupRuns } from "../lib/group-rows";
+import { windowCardItems } from "../lib/card-window";
 import { applyOptimistic, replaceById, rollbackOptimistic, settleOptimistic } from "../lib/optimistic";
 import { cn } from "../lib/utils";
 import { draftFor, draftFromFilters, type TicketDraftInitial } from "../lib/ticket-draft";
@@ -543,6 +544,10 @@ function groupingFor(viewMode: string, groupBy: string) {
 
 type TicketCardItem = { kind: "header"; key: string; label: string; count: number } | { kind: "row"; row: TicketRow } | { kind: "footer"; key: string; value: unknown };
 
+/** How many cards the phone list shows before "Show more" — the same 20 the desktop table pages
+ *  at, so the two views agree about what one page of tickets is. */
+const CARD_PAGE_SIZE = 20;
+
 /** The phone card list, optionally grouped: rows sorted by group label so each run is contiguous,
  *  then a header item before every run. Pure, and outside the component on purpose — the
  *  component is already the page's busiest function. */
@@ -591,6 +596,8 @@ export function Tickets() {
   const [searchParams, setSearchParams] = useSearchParams();
   const openId = searchParams.get("open");
 
+  // Cards or table — only one of them is rendered. See useCardLayout.
+  const cardLayout = useCardLayout();
   const [filters, setFilters] = useState<TicketFilters>({ ...DEFAULT_TICKET_FILTERS });
   const [createOpen, setCreateOpen] = useState(false);
   const [createInitial, setCreateInitial] = useState<TicketDraftInitial>({});
@@ -693,6 +700,12 @@ export function Tickets() {
   // sorted by group label first so every run is contiguous, then headers interleaved.
   const grouping = groupingFor(viewMode, filters.groupBy);
   const cardItems = buildTicketCardItems(tickets.data ?? [], grouping);
+  // How far down the phone list we have been asked to render. Reset whenever the list itself
+  // changes: a filter that narrows 200 tickets to 6 must not leave "Show more" claiming there are
+  // 180 more, and a person who expanded one list has not asked to expand the next one.
+  const [cardsShown, setCardsShown] = useState(CARD_PAGE_SIZE);
+  useEffect(() => { setCardsShown(CARD_PAGE_SIZE); }, [filters, grouping?.id, viewMode]);
+  const cardWindow = windowCardItems(cardItems, cardsShown);
 
   // The empty state's copy and its one honest action (null while every filter is at rest).
   const emptyCopy = emptyTicketsCopy(filters);
@@ -1015,133 +1028,146 @@ export function Tickets() {
         <CardContent className="p-0">
           {/* Mobile card list — a 9-column table has no readable layout below ~sm; a phone user
               scrolling it sideways sees 1-2 columns at a time with no context. This renders the
-              exact same row data as self-contained cards instead, `sm:hidden` (the table below
-              takes over at sm+ with `hidden sm:block`) — see docs/ROADMAP.md's backlog note on
-              "wide-table -> mobile card-view fallback". */}
-          <div className="grid gap-2 p-3 sm:hidden">
-            {tickets.isLoading &&
-              Array.from({ length: 4 }).map((_, i) => <Skeleton key={`skel-card-${i}`} className="h-24 w-full" />)}
-            {!tickets.isLoading &&
-              cardItems.map((item) => {
-                if (item.kind === "footer") {
-                  return (
-                    <AddToGroupRow
-                      key={`footer-${item.key}`}
-                      onClick={() => {
-                        setCreateInitial(draftFor(grouping?.id, item.value, filters, projects.data ?? [], projectSprints.data ?? []));
-                        setCreateOpen(true);
-                      }}
-                    />
-                  );
-                }
-                if (item.kind === "header") {
-                  return (
-                    <div key={`group-${item.key}`} className="mt-1 flex items-center gap-2 px-1 text-sm font-semibold">
-                      <span className="truncate">{groupHeading(grouping?.id, projects.data ?? [])(item.key)}</span>
-                      <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">{item.count}</span>
-                    </div>
-                  );
-                }
-                const row = item.row;
-                const TypeIcon = iconForType(row.type);
-                const overdue = Boolean(row.slaBreachAt);
-                const avatarSrc = fileUrl(row.assignee?.avatarUrl);
-                return (
-                  // A div with the button role, not a <button>: the card now contains its own
-                  // control (the status pill), and a button inside a button is invalid HTML that
-                  // the browser flags. Enter/Space open the ticket, as a button would.
-                  <div
-                    key={row.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => openTicket(row.id)}
-                    onKeyDown={(e) => {
-                      if (e.target !== e.currentTarget) return;
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        openTicket(row.id);
-                      }
-                    }}
-                    className={cn("focus-ring grid cursor-pointer gap-2 rounded-lg border border-border border-l-4 bg-card p-3 text-left text-sm shadow-sm", TONE_BORDER_CLASS[STATUS_VARIANT[row.status] ?? "muted"])}
-                    data-ticket-card
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-xs text-muted-foreground">{row.key}</span>
-                      <div className="flex items-center gap-1.5">
-                        {row.source === "EMAIL" && <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
-                        <Badge variant={PRIORITY_VARIANT[row.priority]}>{row.priority}</Badge>
-                        <StatusPill ticketId={row.id} status={row.status} onOpenTicket={openTicket} />
-                      </div>
-                    </div>
-                    <p className="truncate font-medium leading-snug">{row.title}</p>
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                      <span className="inline-flex items-center gap-1"><TypeIcon className="h-3.5 w-3.5" />{row.type}</span>
-                      <ProjectMark id={row.project.id} name={row.project.name} color={row.project.color} size="xs" />
-                      <span className="truncate">{row.project.name}</span>
-                      {overdue ? (
-                        <span className="inline-flex items-center gap-1 font-semibold text-destructive">
-                          <AlertTriangle className="h-3.5 w-3.5" />Overdue
-                        </span>
-                      ) : (
-                        row.dueAt && <span>Due {formatDate(row.dueAt)}</span>
-                      )}
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex flex-wrap gap-1">
-                        {row.labels.slice(0, 3).map((tl) => (
-                          <span
-                            key={tl.id}
-                            className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium"
-                          >
-                            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tl.label.color ?? "#94A3B8" }} />
-                            {tl.label.name}
-                          </span>
-                        ))}
-                      </div>
-                      {row.assignee ? (
-                        <div className="flex shrink-0 items-center gap-1.5">
-                          <Avatar className="h-6 w-6">
-                            {avatarSrc ? <AvatarImage src={avatarSrc} alt={row.assignee.name} /> : null}
-                            <AvatarFallback className="text-[10px]">{initialsFor(row.assignee.name)}</AvatarFallback>
-                          </Avatar>
-                          <span className="truncate text-xs">{row.assignee.name}</span>
-                        </div>
-                      ) : (
-                        <span className="shrink-0 text-xs text-muted-foreground">Unassigned</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            {!tickets.isLoading && (tickets.data ?? []).length === 0 && (
-              <EmptyState title={emptyCopy.title} description={emptyCopy.description} action={clearFiltersAction} />
-            )}
-          </div>
+              exact same row data as self-contained cards instead — see docs/ROADMAP.md's backlog
+              note on "wide-table -> mobile card-view fallback".
 
-          <div className="hidden p-3 sm:block">
-            <DataTable
-              columns={allColumns}
-              visibleColumns={visibleColumns}
-              onVisibleColumnsChange={(ids) => setSavedColumns(isDefaultColumns(specs, ids) ? null : ids)}
-              data={tickets.data ?? []}
-              isLoading={tickets.isLoading}
-              onRowClick={(row) => openTicket(row.id)}
-              searchPlaceholder="Search these results..."
-              emptyMessage={emptyCopy.title}
-              emptyAction={clearFiltersAction}
-              pageSize={20}
-              groupBy={grouping?.id}
-              groupLabel={groupHeading(grouping?.id, projects.data ?? [])}
-              groupFooter={(value) => (
-                <AddToGroupRow
-                  onClick={() => {
-                    setCreateInitial(draftFor(grouping?.id, value, filters, projects.data ?? [], projectSprints.data ?? []));
-                    setCreateOpen(true);
-                  }}
-                />
+              ONE of the two mounts, chosen by useCardLayout. This page used to render both and
+              hide one with `sm:hidden`: at 1366px that was 5,822 invisible elements here plus
+              1,322 more inside the DataTable below, 77% of the whole page. */}
+          {cardLayout && (
+            <div className="grid gap-2 p-3">
+              {tickets.isLoading &&
+                Array.from({ length: 4 }).map((_, i) => <Skeleton key={`skel-card-${i}`} className="h-24 w-full" />)}
+              {!tickets.isLoading &&
+                cardWindow.shown.map((item) => {
+                  if (item.kind === "footer") {
+                    return (
+                      <AddToGroupRow
+                        key={`footer-${item.key}`}
+                        onClick={() => {
+                          setCreateInitial(draftFor(grouping?.id, item.value, filters, projects.data ?? [], projectSprints.data ?? []));
+                          setCreateOpen(true);
+                        }}
+                      />
+                    );
+                  }
+                  if (item.kind === "header") {
+                    return (
+                      <div key={`group-${item.key}`} className="mt-1 flex items-center gap-2 px-1 text-sm font-semibold">
+                        <span className="truncate">{groupHeading(grouping?.id, projects.data ?? [])(item.key)}</span>
+                        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">{item.count}</span>
+                      </div>
+                    );
+                  }
+                  const row = item.row;
+                  const TypeIcon = iconForType(row.type);
+                  const overdue = Boolean(row.slaBreachAt);
+                  const avatarSrc = fileUrl(row.assignee?.avatarUrl);
+                  return (
+                    // A div with the button role, not a <button>: the card now contains its own
+                    // control (the status pill), and a button inside a button is invalid HTML that
+                    // the browser flags. Enter/Space open the ticket, as a button would.
+                    <div
+                      key={row.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => openTicket(row.id)}
+                      onKeyDown={(e) => {
+                        if (e.target !== e.currentTarget) return;
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          openTicket(row.id);
+                        }
+                      }}
+                      className={cn("focus-ring grid cursor-pointer gap-2 rounded-lg border border-border border-l-4 bg-card p-3 text-left text-sm shadow-sm", TONE_BORDER_CLASS[STATUS_VARIANT[row.status] ?? "muted"])}
+                      data-ticket-card
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-xs text-muted-foreground">{row.key}</span>
+                        <div className="flex items-center gap-1.5">
+                          {row.source === "EMAIL" && <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                          <Badge variant={PRIORITY_VARIANT[row.priority]}>{row.priority}</Badge>
+                          <StatusPill ticketId={row.id} status={row.status} onOpenTicket={openTicket} />
+                        </div>
+                      </div>
+                      <p className="truncate font-medium leading-snug">{row.title}</p>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        <span className="inline-flex items-center gap-1"><TypeIcon className="h-3.5 w-3.5" />{row.type}</span>
+                        <ProjectMark id={row.project.id} name={row.project.name} color={row.project.color} size="xs" />
+                        <span className="truncate">{row.project.name}</span>
+                        {overdue ? (
+                          <span className="inline-flex items-center gap-1 font-semibold text-destructive">
+                            <AlertTriangle className="h-3.5 w-3.5" />Overdue
+                          </span>
+                        ) : (
+                          row.dueAt && <span>Due {formatDate(row.dueAt)}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex flex-wrap gap-1">
+                          {row.labels.slice(0, 3).map((tl) => (
+                            <span
+                              key={tl.id}
+                              className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium"
+                            >
+                              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tl.label.color ?? "#94A3B8" }} />
+                              {tl.label.name}
+                            </span>
+                          ))}
+                        </div>
+                        {row.assignee ? (
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <Avatar className="h-6 w-6">
+                              {avatarSrc ? <AvatarImage src={avatarSrc} alt={row.assignee.name} /> : null}
+                              <AvatarFallback className="text-[10px]">{initialsFor(row.assignee.name)}</AvatarFallback>
+                            </Avatar>
+                            <span className="truncate text-xs">{row.assignee.name}</span>
+                          </div>
+                        ) : (
+                          <span className="shrink-0 text-xs text-muted-foreground">Unassigned</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              {!tickets.isLoading && cardWindow.hidden > 0 && (
+                <Button variant="outline" className="h-[44px] w-full" onClick={() => setCardsShown((n) => n + CARD_PAGE_SIZE)}>
+                  Show {Math.min(cardWindow.hidden, CARD_PAGE_SIZE)} more
+                  <span className="text-muted-foreground">· {cardWindow.hidden} left</span>
+                </Button>
               )}
-            />
-          </div>
+              {!tickets.isLoading && (tickets.data ?? []).length === 0 && (
+                <EmptyState title={emptyCopy.title} description={emptyCopy.description} action={clearFiltersAction} />
+              )}
+            </div>
+          )}
+
+          {!cardLayout && (
+            <div className="p-3">
+              <DataTable
+                columns={allColumns}
+                visibleColumns={visibleColumns}
+                onVisibleColumnsChange={(ids) => setSavedColumns(isDefaultColumns(specs, ids) ? null : ids)}
+                data={tickets.data ?? []}
+                isLoading={tickets.isLoading}
+                onRowClick={(row) => openTicket(row.id)}
+                searchPlaceholder="Search these results..."
+                emptyMessage={emptyCopy.title}
+                emptyAction={clearFiltersAction}
+                pageSize={20}
+                groupBy={grouping?.id}
+                groupLabel={groupHeading(grouping?.id, projects.data ?? [])}
+                groupFooter={(value) => (
+                  <AddToGroupRow
+                    onClick={() => {
+                      setCreateInitial(draftFor(grouping?.id, value, filters, projects.data ?? [], projectSprints.data ?? []));
+                      setCreateOpen(true);
+                    }}
+                  />
+                )}
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
       )}

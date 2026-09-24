@@ -185,6 +185,56 @@ test("SC 1.4.4 — survives text resized to 200%", async ({ page }) => {
 
 
 /**
+ * One layout gets BUILT, not two.
+ *
+ * Every wide list in this app has a table for real screens and self-contained cards for phones,
+ * and the pair used to be `sm:hidden` / `hidden sm:block` — which hides one but renders both. At
+ * 1366px /app/tickets carried 9,267 elements, 7,144 of them (77%) inside a `display:none` card
+ * list; a phone rendered the full table it would never show. It is not free: opening a dialog
+ * marks every other element in the document hidden from assistive technology and undoes it on
+ * close, so a dialog was paying for markup nobody could see — 248ms to open, 172ms once the
+ * invisible half was gone.
+ *
+ * This runs in every project in the matrix, which is the point: the failure is symmetrical, so
+ * the guard has to be asked at a phone width AND at a desktop one. The budget is generous by
+ * design — it is not a pixel assertion, it is a smoke alarm for "somebody rendered both halves
+ * again". The real hidden subtree on these pages today is the bottom navigation (40 elements,
+ * `lg:hidden`) plus a stray button or two.
+ */
+const HIDDEN_ELEMENT_BUDGET = 250;
+
+test("builds one list layout for this width, not both", async ({ page }) => {
+  test.slow();
+  for (const path of ["/app", "/app/tickets", "/app/users", "/app/team", "/app/changes"]) {
+    await page.goto(path);
+    await page.waitForLoadState("networkidle");
+    const { hidden, worst, total } = await page.evaluate(() => {
+      let hidden = 0;
+      const subtrees: Array<{ n: number; label: string }> = [];
+      // Outermost hidden elements only — counting every descendant separately would report the
+      // same subtree once per node and say nothing about where it came from.
+      const walk = (el: Element) => {
+        const cs = getComputedStyle(el);
+        if (cs.display === "none" || cs.visibility === "hidden") {
+          const n = 1 + el.querySelectorAll("*").length;
+          hidden += n;
+          subtrees.push({ n, label: `${el.tagName.toLowerCase()}.${String((el as HTMLElement).className).split(/\s+/).slice(0, 4).join(".")}` });
+          return;
+        }
+        for (const kid of Array.from(el.children)) walk(kid);
+      };
+      walk(document.body);
+      subtrees.sort((a, b) => b.n - a.n);
+      return { hidden, total: document.querySelectorAll("*").length, worst: subtrees.slice(0, 3).map((s) => `${s.n} ${s.label}`) };
+    });
+    expect(
+      hidden,
+      `${path} renders ${hidden} elements nobody can see, of ${total}. Largest hidden subtrees: ${worst.join(" | ")}. If one of these is a card list or a table, render the branch this width needs (useCardLayout) instead of hiding it.`
+    ).toBeLessThanOrEqual(HIDDEN_ELEMENT_BUDGET);
+  }
+});
+
+/**
  * The email templates screen hides its widest content — the analytics tables and charts — behind
  * a second tab, so the PAGES sweep above never exercised it. That is exactly where a real
  * overflow shipped (found via a live-device screenshot of the failure breakdown): a page can only

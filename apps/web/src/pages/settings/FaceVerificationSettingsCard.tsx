@@ -90,6 +90,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { Badge } from "../../components/ui/badge";
 import { useDebouncedValue } from "../../hooks/use-debounced-value";
 import { EmptyState } from "../../components/ui/empty-state";
+import { useCardLayout } from "../../lib/use-media-query";
 
 /** Typed against FaceOutcome (not `string`) so a value added to the union fails the build here
  *  instead of silently rendering an untinted badge — LOW_QUALITY was missing for exactly that
@@ -1147,6 +1148,8 @@ function SortableTh({
  *  Paginated server-side (see the /face/attempts handler for why this one log can't page in the
  *  browser like the DataTable surfaces do). */
 function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
+  // Cards or table — only one of them is rendered. See useCardLayout for the measurement.
+  const cardLayout = useCardLayout();
   const queryClient = useQueryClient();
   const [flaggedOnly, setFlaggedOnly] = useState(true);
   const [page, setPage] = useState(1);
@@ -1467,170 +1470,176 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
           <>
             {/* Desktop table / mobile cards — same dual-rendering fallback the Tickets and Team
                 pages use below the sm breakpoint. */}
-            <div className="hidden overflow-x-auto sm:block">
-              <table className="w-full text-sm">
-                <thead className="text-left text-muted-foreground">
-                  <tr>
-                    {!readOnly && (
-                      <th className="w-8 p-2">
-                        <Checkbox
-                          checked={allPageSelected}
-                          disabled={flaggedOnPage.length === 0}
-                          onCheckedChange={togglePageSelection}
-                          aria-label="Select every flagged attempt on this page"
-                        />
-                      </th>
-                    )}
-                    {/* "User" isn't sortable: the search box above already answers "whose?", and a
-                        name sort over a server-paged log invites scrolling for someone rather than
-                        searching for them. */}
-                    <th className="p-2 font-medium">User</th>
-                    <SortableTh field="createdAt" sort={sort} onSort={toggleSort}>When</SortableTh>
-                    <SortableTh field="context" sort={sort} onSort={toggleSort}>Context</SortableTh>
-                    <SortableTh field="outcome" sort={sort} onSort={toggleSort}>Outcome</SortableTh>
-                    <SortableTh field="similarity" sort={sort} onSort={toggleSort}>Match</SortableTh>
-                    <SortableTh field="livenessScore" sort={sort} onSort={toggleSort}>Live</SortableTh>
-                    <th className="p-2" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((a) => (
-                    <tr key={a.id} className="border-t border-border">
+            {!cardLayout && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left text-muted-foreground">
+                    <tr>
                       {!readOnly && (
-                        <td className="p-2">
-                          {/* Only flagged rows are selectable — the bulk action clears flags, and a
-                              ticked box on an unflagged row would promise something it can't do. */}
-                          {a.flaggedForReview && (
-                            <Checkbox
-                              checked={selected.has(a.id)}
-                              onCheckedChange={() => toggleRow(a.id)}
-                              aria-label={`Select ${a.user.name}'s ${a.outcome.replaceAll("_", " ").toLowerCase()} attempt`}
-                            />
-                          )}
-                        </td>
+                        <th className="w-8 p-2">
+                          <Checkbox
+                            checked={allPageSelected}
+                            disabled={flaggedOnPage.length === 0}
+                            onCheckedChange={togglePageSelection}
+                            aria-label="Select every flagged attempt on this page"
+                          />
+                        </th>
                       )}
-                      <td className="p-2">
-                        <div className="font-medium">{a.user.name}</div>
-                        <div className="text-xs text-muted-foreground">{a.user.email}</div>
-                      </td>
-                      <td className="p-2 text-muted-foreground">{new Date(a.createdAt).toLocaleString()}</td>
-                      <td className="p-2 text-muted-foreground">{a.context}</td>
-                      <td className="p-2">
-                        <div className="flex flex-wrap items-center gap-1">
-                          <Badge className={OUTCOME_TONE[a.outcome] ?? ""} variant="secondary">
-                            {a.outcome.replaceAll("_", " ").toLowerCase()}
-                          </Badge>
-                          {a.virtualCameraSuspected && (
-                            <span title={`Suspected virtual camera${a.deviceLabel ? `: ${a.deviceLabel}` : ""}`}>
-                              <VideoOff className="h-3.5 w-3.5 text-destructive" />
-                            </span>
-                          )}
-                          {a.unfamiliarNetwork && (
-                            <span title="First time verifying from this network">
-                              <Wifi className="h-3.5 w-3.5 text-amber-500" />
-                            </span>
-                          )}
-                          {a.provenanceSuspect && (
-                            <span title={a.provenanceNote ?? "Capture timing didn't line up with its challenge — worth a look"}>
-                              <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
-                            </span>
-                          )}
-                          {a.autoResolvedReason && (
-                            <span title={a.autoResolvedReason}>
-                              <Wand2 className="h-3.5 w-3.5 text-muted-foreground" />
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="p-2 tabular-nums">{a.similarity != null ? a.similarity.toFixed(3) : "—"}</td>
-                      <td className="p-2 tabular-nums">{a.livenessScore != null ? a.livenessScore.toFixed(2) : "—"}</td>
-                      <td className="p-2 text-right">
-                        <AttemptActions attempt={a} readOnly={readOnly} onReview={(note) => review.mutate({ id: a.id, note })} />
-                      </td>
+                      {/* "User" isn't sortable: the search box above already answers "whose?", and a
+                          name sort over a server-paged log invites scrolling for someone rather than
+                          searching for them. */}
+                      <th className="p-2 font-medium">User</th>
+                      <SortableTh field="createdAt" sort={sort} onSort={toggleSort}>When</SortableTh>
+                      <SortableTh field="context" sort={sort} onSort={toggleSort}>Context</SortableTh>
+                      <SortableTh field="outcome" sort={sort} onSort={toggleSort}>Outcome</SortableTh>
+                      <SortableTh field="similarity" sort={sort} onSort={toggleSort}>Match</SortableTh>
+                      <SortableTh field="livenessScore" sort={sort} onSort={toggleSort}>Live</SortableTh>
+                      <th className="p-2" />
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {rows.map((a) => (
+                      <tr key={a.id} className="border-t border-border">
+                        {!readOnly && (
+                          <td className="p-2">
+                            {/* Only flagged rows are selectable — the bulk action clears flags, and a
+                                ticked box on an unflagged row would promise something it can't do. */}
+                            {a.flaggedForReview && (
+                              <Checkbox
+                                checked={selected.has(a.id)}
+                                onCheckedChange={() => toggleRow(a.id)}
+                                aria-label={`Select ${a.user.name}'s ${a.outcome.replaceAll("_", " ").toLowerCase()} attempt`}
+                              />
+                            )}
+                          </td>
+                        )}
+                        <td className="p-2">
+                          <div className="font-medium">{a.user.name}</div>
+                          <div className="text-xs text-muted-foreground">{a.user.email}</div>
+                        </td>
+                        <td className="p-2 text-muted-foreground">{new Date(a.createdAt).toLocaleString()}</td>
+                        <td className="p-2 text-muted-foreground">{a.context}</td>
+                        <td className="p-2">
+                          <div className="flex flex-wrap items-center gap-1">
+                            <Badge className={OUTCOME_TONE[a.outcome] ?? ""} variant="secondary">
+                              {a.outcome.replaceAll("_", " ").toLowerCase()}
+                            </Badge>
+                            {a.virtualCameraSuspected && (
+                              <span title={`Suspected virtual camera${a.deviceLabel ? `: ${a.deviceLabel}` : ""}`}>
+                                <VideoOff className="h-3.5 w-3.5 text-destructive" />
+                              </span>
+                            )}
+                            {a.unfamiliarNetwork && (
+                              <span title="First time verifying from this network">
+                                <Wifi className="h-3.5 w-3.5 text-amber-500" />
+                              </span>
+                            )}
+                            {a.provenanceSuspect && (
+                              <span title={a.provenanceNote ?? "Capture timing didn't line up with its challenge — worth a look"}>
+                                <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
+                              </span>
+                            )}
+                            {a.autoResolvedReason && (
+                              <span title={a.autoResolvedReason}>
+                                <Wand2 className="h-3.5 w-3.5 text-muted-foreground" />
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-2 tabular-nums">{a.similarity != null ? a.similarity.toFixed(3) : "—"}</td>
+                        <td className="p-2 tabular-nums">{a.livenessScore != null ? a.livenessScore.toFixed(2) : "—"}</td>
+                        <td className="p-2 text-right">
+                          <AttemptActions attempt={a} readOnly={readOnly} onReview={(note) => review.mutate({ id: a.id, note })} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {/* Sorting for the card layout. The sortable <th>s only exist in the table above, so
                 without this a phone user has filters and search but no sort at all — the gap this
                 whole change set exists to close. */}
-            <div className="flex items-center gap-2 sm:hidden">
-              <Label htmlFor="face-log-sort" className="shrink-0 text-xs text-muted-foreground">Sort by</Label>
-              <Select
-                value={`${sort.by}:${sort.dir}`}
-                onValueChange={(v) => {
-                  const [by, dir] = v.split(":") as [AttemptSortField, "asc" | "desc"];
-                  setSort({ by, dir });
-                }}
-              >
-                <SelectTrigger id="face-log-sort" className="h-9"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="createdAt:desc">Newest first</SelectItem>
-                  <SelectItem value="createdAt:asc">Oldest first</SelectItem>
-                  <SelectItem value="similarity:asc">Match score, lowest first</SelectItem>
-                  <SelectItem value="similarity:desc">Match score, highest first</SelectItem>
-                  <SelectItem value="livenessScore:asc">Liveness, lowest first</SelectItem>
-                  <SelectItem value="outcome:asc">Outcome</SelectItem>
-                  <SelectItem value="context:asc">Context</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {cardLayout && (
+              <div className="flex items-center gap-2">
+                <Label htmlFor="face-log-sort" className="shrink-0 text-xs text-muted-foreground">Sort by</Label>
+                <Select
+                  value={`${sort.by}:${sort.dir}`}
+                  onValueChange={(v) => {
+                    const [by, dir] = v.split(":") as [AttemptSortField, "asc" | "desc"];
+                    setSort({ by, dir });
+                  }}
+                >
+                  <SelectTrigger id="face-log-sort" className="h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="createdAt:desc">Newest first</SelectItem>
+                    <SelectItem value="createdAt:asc">Oldest first</SelectItem>
+                    <SelectItem value="similarity:asc">Match score, lowest first</SelectItem>
+                    <SelectItem value="similarity:desc">Match score, highest first</SelectItem>
+                    <SelectItem value="livenessScore:asc">Liveness, lowest first</SelectItem>
+                    <SelectItem value="outcome:asc">Outcome</SelectItem>
+                    <SelectItem value="context:asc">Context</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
-            <div className="space-y-2 sm:hidden">
-              {rows.map((a) => (
-                <div key={a.id} className="rounded-lg border border-border p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{a.user.name}</p>
-                      <p className="truncate text-xs text-muted-foreground">{a.user.email}</p>
+            {cardLayout && (
+              <div className="space-y-2">
+                {rows.map((a) => (
+                  <div key={a.id} className="rounded-lg border border-border p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{a.user.name}</p>
+                        <p className="truncate text-xs text-muted-foreground">{a.user.email}</p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {a.virtualCameraSuspected && (
+                          <span title={`Suspected virtual camera${a.deviceLabel ? `: ${a.deviceLabel}` : ""}`}>
+                            <VideoOff className="h-3.5 w-3.5 text-destructive" />
+                          </span>
+                        )}
+                        {a.unfamiliarNetwork && (
+                          <span title="First time verifying from this network">
+                            <Wifi className="h-3.5 w-3.5 text-amber-500" />
+                          </span>
+                        )}
+                        {a.provenanceSuspect && (
+                          <span title={a.provenanceNote ?? "Capture timing didn't line up with its challenge — worth a look"}>
+                            <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
+                          </span>
+                        )}
+                        <Badge className={OUTCOME_TONE[a.outcome] ?? ""} variant="secondary">
+                          {a.outcome.replaceAll("_", " ").toLowerCase()}
+                        </Badge>
+                      </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      {a.virtualCameraSuspected && (
-                        <span title={`Suspected virtual camera${a.deviceLabel ? `: ${a.deviceLabel}` : ""}`}>
-                          <VideoOff className="h-3.5 w-3.5 text-destructive" />
-                        </span>
-                      )}
-                      {a.unfamiliarNetwork && (
-                        <span title="First time verifying from this network">
-                          <Wifi className="h-3.5 w-3.5 text-amber-500" />
-                        </span>
-                      )}
-                      {a.provenanceSuspect && (
-                        <span title={a.provenanceNote ?? "Capture timing didn't line up with its challenge — worth a look"}>
-                          <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
-                        </span>
-                      )}
-                      <Badge className={OUTCOME_TONE[a.outcome] ?? ""} variant="secondary">
-                        {a.outcome.replaceAll("_", " ").toLowerCase()}
-                      </Badge>
+                    <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <div className="flex justify-between">
+                        <dt>When</dt>
+                        <dd>{new Date(a.createdAt).toLocaleString()}</dd>
+                      </div>
+                      <div className="flex justify-between">
+                        <dt>Context</dt>
+                        <dd>{a.context}</dd>
+                      </div>
+                      <div className="flex justify-between">
+                        <dt>Match</dt>
+                        <dd className="tabular-nums">{a.similarity != null ? a.similarity.toFixed(3) : "—"}</dd>
+                      </div>
+                      <div className="flex justify-between">
+                        <dt>Live</dt>
+                        <dd className="tabular-nums">{a.livenessScore != null ? a.livenessScore.toFixed(2) : "—"}</dd>
+                      </div>
+                    </dl>
+                    <div className="mt-2 flex justify-end">
+                      <AttemptActions attempt={a} readOnly={readOnly} onReview={(note) => review.mutate({ id: a.id, note })} />
                     </div>
                   </div>
-                  <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                    <div className="flex justify-between">
-                      <dt>When</dt>
-                      <dd>{new Date(a.createdAt).toLocaleString()}</dd>
-                    </div>
-                    <div className="flex justify-between">
-                      <dt>Context</dt>
-                      <dd>{a.context}</dd>
-                    </div>
-                    <div className="flex justify-between">
-                      <dt>Match</dt>
-                      <dd className="tabular-nums">{a.similarity != null ? a.similarity.toFixed(3) : "—"}</dd>
-                    </div>
-                    <div className="flex justify-between">
-                      <dt>Live</dt>
-                      <dd className="tabular-nums">{a.livenessScore != null ? a.livenessScore.toFixed(2) : "—"}</dd>
-                    </div>
-                  </dl>
-                  <div className="mt-2 flex justify-end">
-                    <AttemptActions attempt={a} readOnly={readOnly} onReview={(note) => review.mutate({ id: a.id, note })} />
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
 
             {/* Same footer shape as DataTable's (showing X-Y of N · page-size select · prev/next)
                 so the log reads like every other table in the app, even though the paging is

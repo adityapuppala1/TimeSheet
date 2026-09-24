@@ -20,6 +20,7 @@ import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Skeleton } from "../../components/ui/skeleton";
 import { aiEvalApi, type AIEvalRunRow } from "../../services/api";
+import { useCardLayout } from "../../lib/use-media-query";
 
 const IN_FLIGHT = new Set(["QUEUED", "RUNNING"]);
 
@@ -40,6 +41,8 @@ function money(value: number | null): string {
 }
 
 export function AIEvalsCard() {
+  // Cards or table — only one of them is rendered. See useCardLayout for the measurement.
+  const cardLayout = useCardLayout();
   const [openRunId, setOpenRunId] = useState<string | null>(null);
   const runs = useQuery({
     queryKey: ["ai", "evals"],
@@ -81,55 +84,59 @@ export function AIEvalsCard() {
 
         {/* Phone: stacked cards. The desktop row is a 6-column grid that would be unreadable
             below ~640px, so it swaps rather than scrolling sideways. */}
-        <div className="grid gap-2 sm:hidden">
-          {(runs.data ?? []).map((run) => (
-            <button
-              key={run.id}
-              type="button"
-              onClick={() => setOpenRunId(run.id)}
-              className="grid gap-1 rounded-md border border-border p-3 text-left"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{run.dataset.name}</span>
-                {statusBadge(run.status)}
-              </div>
-              <p className="text-sm">
-                {pct(run.avgScore)} average · {run.passCount}/{run.scoredCount} exact
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {run.promptVersionId ? "custom prompt" : "built-in prompt"} · {run.model} · {money(run.actualCostUsd)}
-              </p>
-            </button>
-          ))}
-        </div>
-
-        <div className="hidden sm:block">
-          <div className="grid grid-cols-[1.4fr_auto_auto_auto_auto_auto] items-center gap-x-4 gap-y-1 text-sm">
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Dataset</span>
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Prompt</span>
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</span>
-            <span className="text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Score</span>
-            <span className="text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Exact</span>
-            <span className="text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Cost</span>
+        {cardLayout && (
+          <div className="grid gap-2">
             {(runs.data ?? []).map((run) => (
               <button
                 key={run.id}
                 type="button"
                 onClick={() => setOpenRunId(run.id)}
-                className="col-span-6 grid grid-cols-subgrid items-center rounded-md border border-transparent px-1 py-2 text-left transition hover:border-border hover:bg-muted/40"
+                className="grid gap-1 rounded-md border border-border p-3 text-left"
               >
-                <span className="truncate font-medium">{run.dataset.name}</span>
-                <span className="text-xs text-muted-foreground">{run.promptVersionId ? "custom" : "built-in"}</span>
-                <span>{statusBadge(run.status)}</span>
-                <span className="text-right tabular-nums">{pct(run.avgScore)}</span>
-                <span className="text-right tabular-nums text-muted-foreground">
-                  {run.passCount}/{run.scoredCount}
-                </span>
-                <span className="text-right tabular-nums text-muted-foreground">{money(run.actualCostUsd)}</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{run.dataset.name}</span>
+                  {statusBadge(run.status)}
+                </div>
+                <p className="text-sm">
+                  {pct(run.avgScore)} average · {run.passCount}/{run.scoredCount} exact
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {run.promptVersionId ? "custom prompt" : "built-in prompt"} · {run.model} · {money(run.actualCostUsd)}
+                </p>
               </button>
             ))}
           </div>
-        </div>
+        )}
+
+        {!cardLayout && (
+          <div>
+            <div className="grid grid-cols-[1.4fr_auto_auto_auto_auto_auto] items-center gap-x-4 gap-y-1 text-sm">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Dataset</span>
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Prompt</span>
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</span>
+              <span className="text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Score</span>
+              <span className="text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Exact</span>
+              <span className="text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Cost</span>
+              {(runs.data ?? []).map((run) => (
+                <button
+                  key={run.id}
+                  type="button"
+                  onClick={() => setOpenRunId(run.id)}
+                  className="col-span-6 grid grid-cols-subgrid items-center rounded-md border border-transparent px-1 py-2 text-left transition hover:border-border hover:bg-muted/40"
+                >
+                  <span className="truncate font-medium">{run.dataset.name}</span>
+                  <span className="text-xs text-muted-foreground">{run.promptVersionId ? "custom" : "built-in"}</span>
+                  <span>{statusBadge(run.status)}</span>
+                  <span className="text-right tabular-nums">{pct(run.avgScore)}</span>
+                  <span className="text-right tabular-nums text-muted-foreground">
+                    {run.passCount}/{run.scoredCount}
+                  </span>
+                  <span className="text-right tabular-nums text-muted-foreground">{money(run.actualCostUsd)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <p className="text-xs text-muted-foreground">
           <strong>Score</strong> is the average across examples — for structured answers it's the share of fields that matched, so

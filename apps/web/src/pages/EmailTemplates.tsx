@@ -89,6 +89,7 @@ import { useAuthStore } from "../store/auth";
 import { copyText } from "../lib/clipboard";
 import { PageHeader } from "../components/PageHeader";
 import { EmptyState } from "../components/ui/empty-state";
+import { useCardLayout } from "../lib/use-media-query";
 
 const FALLBACK_DEFAULT = `<h2>Title</h2>
 <p>Hi {{name}}, your action is required.</p>
@@ -706,6 +707,8 @@ const TONE_BADGE: Record<EmailFailureTriage["tone"], "destructive" | "warning" |
  * message survives one click away in the detail dialog, alongside the optional AI diagnosis.
  */
 function FailureBreakdownCard() {
+  // Cards or table — only one of them is rendered. See useCardLayout for the measurement.
+  const cardLayout = useCardLayout();
   const [days, setDays] = useState(30);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
@@ -794,8 +797,8 @@ function FailureBreakdownCard() {
             )}
 
             {/* Desktop: a scannable table. */}
-            {filtered.length > 0 && (
-              <div className="hidden overflow-x-auto sm:block">
+            {filtered.length > 0 && !cardLayout && (
+              <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -847,32 +850,34 @@ function FailureBreakdownCard() {
             )}
 
             {/* Phones: the same rows as tappable cards. */}
-            <div className="grid gap-2 sm:hidden">
-              {filtered.map((reason) => {
-                const triage = triageEmailFailure(reason.reason);
-                return (
-                  <button
-                    key={reason.id}
-                    type="button"
-                    onClick={() => setDetailId(reason.id)}
-                    // min-w-0 + overflow-hidden are what make the truncate below actually truncate:
-                    // a grid item with visible overflow takes the UNWRAPPED nowrap SMTP line as its
-                    // automatic minimum width, which forced the whole page ~1150px wide on phones.
-                    className="focus-ring min-w-0 overflow-hidden rounded-lg border border-border p-3 text-left transition hover:bg-muted/40"
-                  >
-                    <span className="flex items-start justify-between gap-2">
-                      <span className="min-w-0 text-sm font-medium">{triage.title}</span>
-                      <Badge variant="destructive" className="shrink-0">{reason.count.toLocaleString()}</Badge>
-                    </span>
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      {reason.recipients.length}{reason.recipientsTruncated ? "+" : ""} recipient(s) · last{" "}
-                      {new Date(reason.lastSeen).toLocaleDateString()}
-                    </span>
-                    <span className="mt-1 block truncate font-mono text-[11px] text-muted-foreground">{reason.reason}</span>
-                  </button>
-                );
-              })}
-            </div>
+            {cardLayout && (
+              <div className="grid gap-2">
+                {filtered.map((reason) => {
+                  const triage = triageEmailFailure(reason.reason);
+                  return (
+                    <button
+                      key={reason.id}
+                      type="button"
+                      onClick={() => setDetailId(reason.id)}
+                      // min-w-0 + overflow-hidden are what make the truncate below actually truncate:
+                      // a grid item with visible overflow takes the UNWRAPPED nowrap SMTP line as its
+                      // automatic minimum width, which forced the whole page ~1150px wide on phones.
+                      className="focus-ring min-w-0 overflow-hidden rounded-lg border border-border p-3 text-left transition hover:bg-muted/40"
+                    >
+                      <span className="flex items-start justify-between gap-2">
+                        <span className="min-w-0 text-sm font-medium">{triage.title}</span>
+                        <Badge variant="destructive" className="shrink-0">{reason.count.toLocaleString()}</Badge>
+                      </span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        {reason.recipients.length}{reason.recipientsTruncated ? "+" : ""} recipient(s) · last{" "}
+                        {new Date(reason.lastSeen).toLocaleDateString()}
+                      </span>
+                      <span className="mt-1 block truncate font-mono text-[11px] text-muted-foreground">{reason.reason}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </>
         )}
       </CardContent>

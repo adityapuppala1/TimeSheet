@@ -283,6 +283,24 @@ canvas in this app follows now (`apps/web/src/lib/render-loop.ts`) — this pane
 of it, which on a 120Hz screen meant a scene turning at full rate behind a page you had scrolled
 past.
 
+## 10b. One layout at a time
+
+Wide tables become cards on a phone — Tickets, Users, Projects, Reports, Team, Changes, Email
+templates, the dashboard's project roll-up and the settings logs all do this. Only the one your
+screen is actually getting is built (`useCardLayout` in `apps/web/src/lib/use-media-query.ts`);
+the other does not exist in the page.
+
+That is a rule, not a preference, and it is the same rule §10 applies to canvases: work you cannot
+see is still work. Rendering both and hiding one with `sm:hidden` put 7,144 invisible elements on
+the tickets page — 77% of it — and every dialog paid for them, because opening one marks the whole
+rest of the document hidden from assistive technology and undoes it on close.
+
+The phone card list shows 20 cards with **Show more** beneath, matching the 20 the desktop table
+pages at. Before, the phone rendered every row the query returned.
+
+Use CSS (`hidden sm:block`) when both branches are a few elements of markup. Use the hook when they
+are whole component trees.
+
 ## 11. Timeline zoom
 
 The Timeline (Plan → Timeline) zooms Day, Week, Month, **Quarter** and **Year**. Quarter shows month
