@@ -524,11 +524,22 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
       fixed (see the D04 row and CHANGELOG).
     - No breaking API change: `PATCH /inbox/:id` gained an OPTIONAL `ids`, so an older client is
       unaffected.
-  WHAT REMAINS, and it is four commands from CONTRIBUTING.md § "Releasing a version", none of which
-  an agent should run unasked: bump VERSION, rename `## Unreleased` to a numbered heading and open a
-  fresh one, run the WHOLE suite AFTER that rename (two unit tests read the changelog and fail if
-  VERSION has no matching heading), tag, push, and create the GitHub Release. CD builds the images
-  from the tag.
+  STEP 1 IS NOW DONE (2026-09-24), on the user's instruction to "update all the docs, change log,
+  version". VERSION 5.5.0 -> **5.6.0**; `## Unreleased` renamed to
+  `## 5.6.0 — the work you cannot see, and the text you could not read — 2026-09-24` with a fresh
+  empty Unreleased opened above it; Chart.yaml `appVersion` follows to 5.6.0 and its own `version`
+  to 0.9.4 (that one is NOT asserted by CI, so it was bumped by hand rather than left to drift).
+  MINOR, not major: everything in the section is additive. The only API change is an OPTIONAL
+  `ids` on `PATCH /inbox/:id`; no route, permission or contract was removed.
+  README recounted from CONTRIBUTING's one-liners: tenant migrations 123 -> 124, web pages
+  100 -> 101, e2e specs 31 -> 33. The rest of the table was already correct.
+  THE INSTALLERS NEEDED NO CHANGE, which was verified rather than assumed: `install.sh`,
+  `update.sh`, `install.ps1` and `update.ps1` all read the VERSION file at run time and compare it
+  against the tag being deployed — there is no hardcoded version anywhere in them. All four parse
+  cleanly, and both compose files render with the new ClamAV variables present.
+  WHAT STILL REMAINS, and an agent must not do it unasked: `git tag v5.6.0`, push the tag, and
+  create the GitHub Release. CD builds the images from the tag. Merging to main is a separate
+  decision again (AGENTS.md).
 
 - [ ] E05 Field performance measurement — NEW, carved out of D03 rather than left implied.
   D03's acceptance is field p75 INP <=200ms on mobile and desktop separately, and this app collects
@@ -598,7 +609,7 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
 
 ## Historical Status
 - Phase: 2 — theme lifecycle (done) → mode + accents (done) → shell: touch targets (done) → PageHeader + derived breadcrumb: ALL 17 in-app pages (done) → sidebar Project → Module tree (done) → density comfortable/compact (done) → Phase 2 complete → Phase 3: 3.1 palette record search (done) → 3.2 keyboard shortcuts (done) → 3.3 list grouping (done) → 3.4 custom fields on the ticket (done) → 3.5 table columns (done) → 3.6 EmptyState primitive + slice 1 (done) → 3.7 slice 2 (done) → 3.8 Inbox keyboard triage (done) → 3.9 docs pass (done) → 3.10 two dashboard widgets (done) → 3.11a schema + toggle (done) → 3.11b API (done) → 3.11c sprints UI (done) → 3.12 LOOK slice 1 (done) → 3.13 LOOK slice 2 (done) → 3.14 LOOK slice 3 (done) → 3.15 stored per-project colours (done this session) → 3.16 two-column task panel (done this session) → 3.17 sprint on ticket creation (done this session) → 3.18 empty-state slice 3 (done this session) → 3.19 (done this session) → 3.20 Workload measures (done this session) → Phase 3 complete (3.1–3.21) → Phase 4: 4.1 responsive sweep (done this session) → 4.2 contrast (done this session) → 4.3 keyboard pass (done this session) → Phases 0–6 complete; the branch holds an unpushed 5.3.0 → Phase 7 planned 2026-09-17 from the user's direction (small parity gaps 7.1–7.4, colour/motion pass 7.5, one gated three.js surface 7.6, P3 pick 7.7). Phases 0–7 done; 5.3.0 and 5.4.0 prepared on the branch → Phase 8 (P3 rows, user's go-ahead 2026-09-17): 8.1 @mentions (done) → 8.2 connected records (done) → 8.3 assigned comments (done) → 8.4 doc relationships (done) → 8.5 Studio list as a Docs Hub (done) → 8.6 design notes (done) → Phase 8 closed → 9.1 personal stand-up (done, under the next Unreleased) → 8.7 marketing catch-up + 5.5.0 PREPARED on the branch (VERSION, CHANGELOG, Helm appVersion, README recount) — NOT tagged, NOT pushed, NOT released: that is a maintainer's call under CONTRIBUTING. Nothing further is buildable without a decision: publish 5.5.0, or pick one of the three products. Keep UI_GUIDE.md in step with every later UI unit.
-- Last updated: 2026-09-24 by Claude Code (Opus 5). Phases 0–13 done; Phases A–E worked to the end of what can be done without a decision — 45 of 52 rows closed, and the seven that remain are listed with their blocker at the top of Next Actions.
+- Last updated: 2026-09-24 by Claude Code (Opus 5). Phases 0–13 done; Phases A–E worked to the end of what can be done without a decision — 48 of 52 rows closed, and the four that remain are listed with their blocker at the top of Next Actions. **VERSION is 5.6.0 and CHANGELOG's 5.6.0 section is closed**; the tag, the GitHub Release and any merge to main are still the user's to take.
 - Baseline at the end of this session: lint PASS (699 warnings, zero errors, ratchet at the ceiling); API 3302/3302 across 225 files; web 358/358 across 41; contrast 108/110 with 0 gating failures; `git diff --check` clean. Playwright: every project green — desktop (all specs) with responsive phone/tablet in one 410-test run, laptop 128, 4k 68, and a consolidated E02 run recorded on that row.
 - Shipped this session, each its own commit: `51f4310` D03 (one layout per width; dialogs 268→180ms laptop, 288→132ms phone), `b96398a` C11 (the AI answer style follows the person, not the browser), `88dff48` C13 (the Inbox shows one entry per notice), `7ad964e` D02+B05 (the appearance/keyboard/touch matrix, which found the 41px phone nav bar).
 - Post-change checks: per unit in the Session Log.

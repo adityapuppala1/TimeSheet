@@ -10,6 +10,8 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 5.6.0 — the work you cannot see, and the text you could not read — 2026-09-24
+
 ### 🛡️ Two fixes found by deciding not to build something
 
 - **The 3D portfolio view now steps aside on a machine with no GPU**, like every other scene in the
