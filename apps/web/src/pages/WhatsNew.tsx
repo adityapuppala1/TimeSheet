@@ -124,21 +124,21 @@ const NOTE_CATEGORIES: NoteCategory[] = [
   },
   {
     label: "Security",
-    tone: "bg-destructive/10 text-destructive",
+    tone: "bg-destructive/10 text-destructive-ink",
     icon: ShieldCheck,
     emoji: ["🔒", "🔐", "🛡", "🔑"],
     match: [/\bsecurity\b|harden|vulnerab|\bcve\b|\bvapt\b/i, /password|privacy|guardrail|isolation|\breplay\b/i]
   },
   {
     label: "Performance",
-    tone: "bg-info/10 text-info",
+    tone: "bg-info/10 text-info-ink",
     icon: Gauge,
     emoji: ["⚡", "🚀"],
     match: [/\bperformance\b|\bslow(er)?\b|deadlock/i, /latency|throughput|rate limit|load[- ]test|\bmemory\b/i]
   },
   {
     label: "Fixes",
-    tone: "bg-warning/10 text-warning",
+    tone: "bg-warning/10 text-warning-ink",
     icon: Bug,
     emoji: ["🐛", "🐞", "🧯", "🩹", "🛠"],
     match: [
@@ -151,7 +151,7 @@ const NOTE_CATEGORIES: NoteCategory[] = [
   },
   {
     label: "Infrastructure",
-    tone: "bg-info/10 text-info",
+    tone: "bg-info/10 text-info-ink",
     icon: Ship,
     emoji: ["🚢", "🐳", "☸", "🗄"],
     match: [
@@ -191,7 +191,7 @@ const NOTE_CATEGORIES: NoteCategory[] = [
   },
   {
     label: "Features",
-    tone: "bg-success/10 text-success",
+    tone: "bg-success/10 text-success-ink",
     icon: Sparkles,
     // 🎯 a goal/target feature, ▶ something that now runs on its own, ⚖ measurement and
     // accounting, ✉ an outbound message that did not exist before, 🔀 a governance flow the

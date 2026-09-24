@@ -55,7 +55,7 @@ function CopyableSecret({ value }: { value: string }) {
 
 const DELIVERY_STATUS_TONE: Record<WebhookDeliveryRow["status"], string> = {
   pending: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  exhausted: "bg-destructive/10 text-destructive",
+  exhausted: "bg-destructive/10 text-destructive-ink",
   delivered: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
 };
 

@@ -59,7 +59,7 @@ export function TrialFeedbackPage() {
     return (
       <div className="grid min-h-screen place-items-center bg-background px-4 text-center">
         <div className="max-w-md">
-          <span className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-full bg-success/15 text-success">
+          <span className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-full bg-success/15 text-success-ink">
             <CheckCircle2 className="h-7 w-7" />
           </span>
           <h1 className="text-2xl font-black tracking-tight text-foreground">Thank you</h1>

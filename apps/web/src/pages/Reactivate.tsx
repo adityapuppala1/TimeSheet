@@ -51,7 +51,7 @@ export function ReactivatePage() {
       <div className="w-full max-w-lg rounded-xl border border-border bg-card p-8 shadow-sm">
         {done?.restored || done?.alreadyActive ? (
           <div className="grid gap-4 text-center">
-            <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-success/15 text-success">
+            <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-success/15 text-success-ink">
               <CheckCircle2 className="h-7 w-7" />
             </span>
             <h1 className="text-2xl font-black tracking-tight text-foreground">{done.alreadyActive ? `${d.workspace} is already open` : `${d.workspace} is back`}</h1>

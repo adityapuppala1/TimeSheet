@@ -10,6 +10,21 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🔤 Status badges you can actually read
+
+- **"HIGH" was 2.09:1.** Every status and priority badge in the app wrote its text in the same
+  colour it filled itself with — `bg-warning/15 text-warning` — and on a light theme that is pale
+  amber text on pale amber, at 10.5px. Measured on the running app: HIGH 2.09, MEDIUM 3.63, where
+  text that size needs 4.5. Dark mode had its own casualties.
+- **Each tone now has an ink of its own**, used only for text on a tint of itself. The fills are
+  untouched, hues and saturation are unchanged — a warning still reads as amber, a success as
+  green — and the worst badge on the app is now 4.75. 53 hand-rolled chips across 23 files moved
+  onto it, and the face verification log's raw colour codes went with them.
+- **The gate that missed this now catches it.** `npm run check:contrast` had only ever checked
+  these tones as *dots* — a 3:1 non-text rule, and report-only at that — so nothing ever asked the
+  question that mattered. It checks badge text now, at the tint the badge actually paints, and it
+  fails the build.
+
 ### 🎯 The phone's navigation bar is finally big enough to hit
 
 - **41px, where the minimum is 44.** The V12 touch pass raised every button, input and select in

@@ -97,19 +97,19 @@ import { useCardLayout } from "../../lib/use-media-query";
  *  reason, and since ATTEMPT_OUTCOMES is derived from this map its absence also hid the app's
  *  largest failure bucket from the log's outcome filter. */
 const OUTCOME_TONE: Record<FaceOutcome, string> = {
-  PASSED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  NO_MATCH: "bg-destructive/10 text-destructive",
-  SPOOF_SUSPECTED: "bg-destructive/10 text-destructive",
-  CHALLENGE_FAILED: "bg-destructive/10 text-destructive",
+  PASSED: "bg-success/15 text-success-ink",
+  NO_MATCH: "bg-destructive/10 text-destructive-ink",
+  SPOOF_SUSPECTED: "bg-destructive/10 text-destructive-ink",
+  CHALLENGE_FAILED: "bg-destructive/10 text-destructive-ink",
   /** Amber, not red: the frame was unjudgeable and the person was asked to retake — telling them
    *  it looked like a match failure would be false. */
-  LOW_QUALITY: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  MULTIPLE_FACES: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  NO_FACE: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  LOW_QUALITY: "bg-warning/15 text-warning-ink",
+  MULTIPLE_FACES: "bg-warning/15 text-warning-ink",
+  NO_FACE: "bg-warning/15 text-warning-ink",
   NOT_ENROLLED: "bg-muted text-muted-foreground",
   /** The audited insecure-context pass-through — amber, not muted: every one of these is a
    *  submission that went UNCHECKED, which is exactly what this log exists to make visible. */
-  SKIPPED_INSECURE: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  SKIPPED_INSECURE: "bg-warning/15 text-warning-ink",
   ERROR: "bg-muted text-muted-foreground"
 };
 
@@ -274,7 +274,7 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
 
           {/* Biometric data carries real legal obligations. Saying so at the point of decision is
               far more useful than burying it in docs the person flipping this switch won't read. */}
-          <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
+          <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/15 p-3 text-sm text-warning-ink">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <p>
               This collects <strong>biometric data</strong>, which is regulated (GDPR Art.9, Illinois BIPA, India's DPDP Act and
@@ -522,8 +522,8 @@ function FaceStatsCard() {
             return (
               <div key={bucket.from} className="flex min-w-8 flex-1 flex-col items-center justify-end gap-1" title={`${bucket.from}–${bucket.to}: ${bucket.passed} passed, ${bucket.rejected} rejected`}>
                 <div className="flex w-full flex-col justify-end overflow-hidden rounded-sm" style={{ height }}>
-                  <div className="w-full bg-emerald-500/80" style={{ height: `${passedShare * 100}%` }} />
-                  <div className="w-full bg-red-500/70" style={{ height: `${(1 - passedShare) * 100}%` }} />
+                  <div className="w-full bg-success/80" style={{ height: `${passedShare * 100}%` }} />
+                  <div className="w-full bg-destructive/70" style={{ height: `${(1 - passedShare) * 100}%` }} />
                 </div>
                 <span className="text-[10px] tabular-nums text-muted-foreground">{bucket.from.toFixed(2)}</span>
               </div>
@@ -665,8 +665,8 @@ function PolicyCopilot() {
  *  to act, and the amber state is what makes the dashboard worth glancing at. */
 function AccuracyTile({ label, value, target, bad, title }: { label: string; value: string; target: string; bad: boolean; title: string }) {
   return (
-    <div className={`rounded-lg border p-3 text-center ${bad ? "border-amber-500/40 bg-amber-500/10" : "border-border bg-muted/30"}`} title={title}>
-      <p className={`text-lg font-bold tabular-nums ${bad ? "text-amber-600 dark:text-amber-400" : ""}`}>{value}</p>
+    <div className={`rounded-lg border p-3 text-center ${bad ? "border-warning/40 bg-warning/15" : "border-border bg-muted/30"}`} title={title}>
+      <p className={`text-lg font-bold tabular-nums ${bad ? "text-warning-ink" : ""}`}>{value}</p>
       <p className="text-xs font-medium">{label}</p>
       <p className="text-[11px] text-muted-foreground">{target}</p>
     </div>
@@ -1013,8 +1013,8 @@ const GAP_LABEL: Record<FaceEnrollmentGapKind, string> = {
 };
 
 const GAP_TONE: Record<FaceEnrollmentGapKind, string> = {
-  SINGLE_POSE: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  STALE_MODEL: "bg-destructive/10 text-destructive",
+  SINGLE_POSE: "bg-warning/15 text-warning-ink",
+  STALE_MODEL: "bg-destructive/10 text-destructive-ink",
   NOT_ENROLLED: "bg-muted text-muted-foreground"
 };
 
@@ -1531,12 +1531,12 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
                             )}
                             {a.unfamiliarNetwork && (
                               <span title="First time verifying from this network">
-                                <Wifi className="h-3.5 w-3.5 text-amber-500" />
+                                <Wifi className="h-3.5 w-3.5 text-warning" />
                               </span>
                             )}
                             {a.provenanceSuspect && (
                               <span title={a.provenanceNote ?? "Capture timing didn't line up with its challenge — worth a look"}>
-                                <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
+                                <ShieldAlert className="h-3.5 w-3.5 text-warning" />
                               </span>
                             )}
                             {a.autoResolvedReason && (
@@ -1602,12 +1602,12 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
                         )}
                         {a.unfamiliarNetwork && (
                           <span title="First time verifying from this network">
-                            <Wifi className="h-3.5 w-3.5 text-amber-500" />
+                            <Wifi className="h-3.5 w-3.5 text-warning" />
                           </span>
                         )}
                         {a.provenanceSuspect && (
                           <span title={a.provenanceNote ?? "Capture timing didn't line up with its challenge — worth a look"}>
-                            <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
+                            <ShieldAlert className="h-3.5 w-3.5 text-warning" />
                           </span>
                         )}
                         <Badge className={OUTCOME_TONE[a.outcome] ?? ""} variant="secondary">
@@ -1744,9 +1744,9 @@ function AttemptActions({
   });
 
   const RISK_TONE: Record<FaceReviewAiSummary["risk"], string> = {
-    LOW: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-    MEDIUM: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-    HIGH: "bg-destructive/10 text-destructive"
+    LOW: "bg-success/15 text-success-ink",
+    MEDIUM: "bg-warning/15 text-warning-ink",
+    HIGH: "bg-destructive/10 text-destructive-ink"
   };
 
   return (

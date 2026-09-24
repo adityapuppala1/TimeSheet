@@ -3055,14 +3055,14 @@ const VERIFICATION_EVIDENCE: Record<
   { tone: string; detail: (finding: SecurityFindingRow) => string }
 > = {
   AWAITING_PROOF: {
-    tone: "border-info/30 bg-info/5 text-info",
+    tone: "border-info/30 bg-info/5 text-info-ink",
     detail: (f) => {
       const since = f.awaitingVerificationSince ? ` on ${new Date(f.awaitingVerificationSince).toLocaleDateString()}` : "";
       return `Claimed fixed${since}. Waiting for the next ${f.tool} scan on this repository and branch to confirm it — only that tool counts.`;
     }
   },
   VERIFIED_FIXED: {
-    tone: "border-success/30 bg-success/5 text-success",
+    tone: "border-success/30 bg-success/5 text-success-ink",
     detail: (f) => {
       const commit = f.verifiedByCommitSha ? ` at commit ${f.verifiedByCommitSha.slice(0, 12)}` : "";
       const when = f.verifiedFixedAt ? `, on ${new Date(f.verifiedFixedAt).toLocaleString()}` : "";
@@ -3070,11 +3070,11 @@ const VERIFICATION_EVIDENCE: Record<
     }
   },
   REFUTED_BY_SCAN: {
-    tone: "border-destructive/30 bg-destructive/5 text-destructive",
+    tone: "border-destructive/30 bg-destructive/5 text-destructive-ink",
     detail: (f) => `A later ${f.tool} scan still reported this after it was marked fixed, so it was put back to OPEN.`
   },
   UNVERIFIED: {
-    tone: "border-warning/30 bg-warning/5 text-warning",
+    tone: "border-warning/30 bg-warning/5 text-warning-ink",
     detail: (f) =>
       `No ${f.tool} scan has run on this repository and branch since the fix was claimed. Nothing has been proven either way — this is not a failed fix, and nothing was reopened because of it.`
   }
@@ -3241,8 +3241,8 @@ const LINEAGE_EVENT_ICON: Record<TicketLineageEvent["type"], typeof GitBranch> =
   security_finding: ShieldAlert
 };
 const LINEAGE_TONE_CLASS: Record<TicketLineageEvent["tone"], string> = {
-  success: "border-success/30 bg-success/5 text-success",
-  failure: "border-destructive/30 bg-destructive/5 text-destructive",
+  success: "border-success/30 bg-success/5 text-success-ink",
+  failure: "border-destructive/30 bg-destructive/5 text-destructive-ink",
   neutral: "border-border bg-muted/30 text-muted-foreground"
 };
 

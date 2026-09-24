@@ -16,10 +16,10 @@ const alertVariants = cva(
     variants: {
       variant: {
         default: "bg-card text-card-foreground",
-        info: "border-info/30 bg-info/10 text-info [&>svg]:text-info",
-        success: "border-success/30 bg-success/10 text-success [&>svg]:text-success",
-        warning: "border-warning/40 bg-warning/10 text-warning [&>svg]:text-warning",
-        destructive: "border-destructive/40 bg-destructive/10 text-destructive [&>svg]:text-destructive"
+        info: "border-info/30 bg-info/10 text-info-ink [&>svg]:text-info",
+        success: "border-success/30 bg-success/10 text-success-ink [&>svg]:text-success",
+        warning: "border-warning/40 bg-warning/10 text-warning-ink [&>svg]:text-warning",
+        destructive: "border-destructive/40 bg-destructive/10 text-destructive-ink [&>svg]:text-destructive"
       }
     },
     defaultVariants: { variant: "default" }

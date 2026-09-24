@@ -389,9 +389,9 @@ export function KpiCard({
   const toneClass = {
     default: "bg-muted text-foreground",
     accent: "bg-accent/15 text-accent",
-    success: "bg-success/15 text-success",
-    warning: "bg-warning/15 text-warning",
-    destructive: "bg-destructive/15 text-destructive"
+    success: "bg-success/15 text-success-ink",
+    warning: "bg-warning/15 text-warning-ink",
+    destructive: "bg-destructive/15 text-destructive-ink"
   }[tone];
   return (
     /* Everything steps down one notch at 2-up-on-a-phone width: a smaller badge, smaller value

@@ -1000,7 +1000,7 @@ function ActivityCard({
         {comparable && (hours > 0 || previous > 0) && (
           <div
             className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm ${
-              up ? "bg-success/10 text-success" : "bg-warning/10 text-warning"
+              up ? "bg-success/10 text-success-ink" : "bg-warning/10 text-warning-ink"
             }`}
           >
             <span>

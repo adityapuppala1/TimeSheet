@@ -45,7 +45,7 @@ export class ErrorBoundary extends Component<Props, State> {
       <div className="grid min-h-screen place-items-center bg-background p-4">
         <div className="w-full max-w-lg rounded-lg border border-destructive/40 bg-card p-6 shadow-lg">
           <div className="flex items-start gap-3">
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-destructive/10 text-destructive">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-destructive/10 text-destructive-ink">
               <AlertTriangle className="h-5 w-5" />
             </div>
             <div className="min-w-0">

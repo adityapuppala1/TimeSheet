@@ -39,9 +39,9 @@ import { cn } from "../../lib/utils";
 export type SectionState = "live" | "ready" | "attention" | "off";
 
 export const SECTION_STATE_META: Record<SectionState, { label: string; className: string; dot: string }> = {
-  live: { label: "Live", className: "bg-success/10 text-success ring-success/20", dot: "bg-success" },
-  ready: { label: "Ready — not switched on", className: "bg-warning/10 text-warning ring-warning/20", dot: "bg-warning" },
-  attention: { label: "Needs attention", className: "bg-warning/10 text-warning ring-warning/20", dot: "bg-warning" },
+  live: { label: "Live", className: "bg-success/10 text-success-ink ring-success/20", dot: "bg-success" },
+  ready: { label: "Ready — not switched on", className: "bg-warning/10 text-warning-ink ring-warning/20", dot: "bg-warning" },
+  attention: { label: "Needs attention", className: "bg-warning/10 text-warning-ink ring-warning/20", dot: "bg-warning" },
   off: { label: "Not set up", className: "bg-muted text-muted-foreground ring-border", dot: "bg-muted-foreground/50" }
 };
 

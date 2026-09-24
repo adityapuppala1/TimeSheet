@@ -283,6 +283,25 @@ canvas in this app follows now (`apps/web/src/lib/render-loop.ts`) — this pane
 of it, which on a 120Hz screen meant a scene turning at full rate behind a page you had scrolled
 past.
 
+## 10a. A tone's fill and a tone's ink are different colours
+
+Status, priority, risk and outcome all resolve to one of five semantic tones, and each tone has
+three values, not two:
+
+| | what it is | where it is used |
+|---|---|---|
+| `--success` | the fill | dots, bars, borders, a solid button |
+| `--success-foreground` | text on the SOLID fill | white on a filled button |
+| `--success-ink` | text on a TINT of the fill | the badge, the chip, the status pill |
+
+The third one is the one that is easy to miss, and skipping it is not a cosmetic mistake. Until
+2026-09-24 badges wrote `bg-warning/15 text-warning` — the fill as its own text — and on a light
+theme "HIGH" measured **2.09:1** at 10.5px against the 4.5 that size needs.
+
+`npm run check:contrast` gates all four inks in both themes, at the 15% tint `Badge` paints. If you
+write a chip by hand rather than using `<Badge>`, use `bg-<tone>/15 text-<tone>-ink` and it is
+covered; use `text-<tone>` and you have quietly made it unreadable.
+
 ## 10b. One layout at a time
 
 Wide tables become cards on a phone — Tickets, Users, Projects, Reports, Team, Changes, Email

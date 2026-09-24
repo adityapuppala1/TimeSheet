@@ -241,9 +241,9 @@ function StatTile({ icon, label, value, hint, tone }: {
       <div
         className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${
           tone === "destructive"
-            ? "bg-destructive/10 text-destructive"
+            ? "bg-destructive/10 text-destructive-ink"
             : tone === "warning"
-              ? "bg-warning/10 text-warning"
+              ? "bg-warning/10 text-warning-ink"
               : "bg-primary/10 text-primary"
         }`}
       >

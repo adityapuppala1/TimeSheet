@@ -74,7 +74,7 @@ export function MaintenanceBanner() {
     <AlertDialog open={popupOpen}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <div className="mb-2 grid h-12 w-12 place-items-center rounded-full bg-warning/15 text-warning">
+          <div className="mb-2 grid h-12 w-12 place-items-center rounded-full bg-warning/15 text-warning-ink">
             <CalendarClock className="h-6 w-6" aria-hidden />
           </div>
           <AlertDialogTitle>Scheduled maintenance ahead</AlertDialogTitle>

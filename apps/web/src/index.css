@@ -31,6 +31,31 @@
     --success: 152 64% 38%;
     --success-foreground: 0 0% 100%;
 
+    /*
+     * INK: what a tone's TEXT becomes when it sits on a 10-15% tint OF ITSELF — a badge, a chip, a
+     * status pill. `--success-foreground` above answers a different question (text on a SOLID
+     * fill) and cannot be reused here, because a tint of success is nearly white and white text
+     * on it is invisible.
+     *
+     * WHY THESE EXIST AT ALL. Until 2026-09-24 those chips used the FILL colour as their own text:
+     * `bg-warning/15 text-warning`. Measured on the running app at 10.5px, "HIGH" came out at
+     * **2.09:1** and "MEDIUM" at 3.63 — against the 4.5 that text this size needs. The app's
+     * contrast gate never caught it because it checked these tones only as DOTS (a 3:1 non-text
+     * rule), and report-only at that. The gate now checks the text case and fails on it.
+     *
+     * The values keep each tone's hue and saturation and move only lightness, so a warning still
+     * reads as amber and a success still reads as green — solved for >= 4.75:1 (a margin over 4.5
+     * so rounding cannot drop one under) against the stronger of the two tints
+     * in use — 15%, which is what `Badge` paints. That is the HARDER case and it is worth saying
+     * why, because the first attempt got it backwards and solved against 10%: a stronger tint is a
+     * DARKER background on a light theme, which gives dark text LESS contrast, not more. The
+     * browser measurement caught it (4.44 against a gate that said 4.75); the arithmetic did not.
+     */
+    --success-ink: 152 64% 28%;      /* 2.87 -> 4.82 */
+    --warning-ink: 32 96% 32%;       /* 2.08 -> 4.79 */
+    --destructive-ink: 0 78% 43%;    /* 3.62 -> 4.80 */
+    --info-ink: 215 88% 44%;         /* 3.64 -> 4.76 */
+
     --warning: 32 96% 52%;
     --warning-foreground: 32 90% 14%;
 
@@ -148,6 +173,14 @@
 
     --success: 152 60% 46%;
     --success-foreground: 0 0% 100%;
+
+    /* Ink on dark: success and warning already cleared AA as their own text (5.98 and 6.66), so
+     * they are unchanged and the token simply names them. Destructive and info did not — 3.70 and
+     * 4.42 — and here the fix is LIGHTER rather than darker, because the tint sits on a dark card. */
+    --success-ink: 152 60% 46%;      /* already 5.45 */
+    --warning-ink: 32 92% 58%;       /* already 6.03 */
+    --destructive-ink: 0 72% 66%;    /* 3.52 -> 4.76 */
+    --info-ink: 215 90% 65%;         /* 4.10 -> 4.84 */
 
     --warning: 32 92% 58%;
     --warning-foreground: 32 90% 10%;

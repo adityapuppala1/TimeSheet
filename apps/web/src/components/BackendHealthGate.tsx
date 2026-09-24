@@ -86,7 +86,7 @@ export function BackendHealthGate() {
     >
       <div className="w-full max-w-md rounded-lg border border-destructive/40 bg-card p-6 shadow-lg">
         <div className="flex items-start gap-3">
-          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-destructive/10 text-destructive">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-destructive/10 text-destructive-ink">
             <WifiOff className="h-5 w-5" />
           </div>
           <div className="min-w-0">

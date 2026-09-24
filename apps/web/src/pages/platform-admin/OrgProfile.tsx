@@ -123,8 +123,8 @@ const OVERRIDE_EFFECT_LABEL: Record<FeatureOverrideEffect, string> = {
 };
 
 const TIMELINE_TONE: Record<TimelineEntry["severity"], string> = {
-  critical: "bg-destructive/15 text-destructive",
-  warning: "bg-warning/15 text-warning",
+  critical: "bg-destructive/15 text-destructive-ink",
+  warning: "bg-warning/15 text-warning-ink",
   info: "bg-muted text-muted-foreground"
 };
 

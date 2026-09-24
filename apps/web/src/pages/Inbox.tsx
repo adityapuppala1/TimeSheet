@@ -357,7 +357,7 @@ function DailyBriefCard({ loading, data }: Readonly<{ loading: boolean; data?: i
                 <span
                   className={cn(
                     "mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md",
-                    s.tone === "attention" ? "bg-warning/15 text-warning-foreground" : "bg-background text-muted-foreground"
+                    s.tone === "attention" ? "bg-warning/15 text-warning-ink-foreground" : "bg-background text-muted-foreground"
                   )}
                   aria-hidden
                 >

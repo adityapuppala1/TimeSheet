@@ -67,7 +67,7 @@ export function SessionEndedDialog() {
     <AlertDialog open>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <div className="mb-2 grid h-12 w-12 place-items-center rounded-full bg-destructive/10 text-destructive">
+          <div className="mb-2 grid h-12 w-12 place-items-center rounded-full bg-destructive/10 text-destructive-ink">
             <ShieldAlert className="h-6 w-6" aria-hidden />
           </div>
           <AlertDialogTitle>{copy.title}</AlertDialogTitle>

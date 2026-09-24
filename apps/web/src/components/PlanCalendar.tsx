@@ -58,10 +58,10 @@ const addDays = (d: Date, n: number) => new Date(d.getTime() + n * MS_PER_DAY);
  *  "amber means review" stays true across the whole product. */
 const CATEGORY_CHIP: Record<WorkStatusCategoryValue, string> = {
   TODO: "bg-muted text-muted-foreground hover:bg-muted/80",
-  ACTIVE: "bg-info/10 text-info hover:bg-info/20",
-  REVIEW: "bg-warning/10 text-warning hover:bg-warning/20",
-  DONE: "bg-success/10 text-success hover:bg-success/20",
-  CANCELLED: "bg-destructive/10 text-destructive hover:bg-destructive/20"
+  ACTIVE: "bg-info/10 text-info-ink hover:bg-info/20",
+  REVIEW: "bg-warning/10 text-warning-ink hover:bg-warning/20",
+  DONE: "bg-success/10 text-success-ink hover:bg-success/20",
+  CANCELLED: "bg-destructive/10 text-destructive-ink hover:bg-destructive/20"
 };
 
 /** How many chips a cell shows before folding the rest into "N more…". Three keeps the tallest

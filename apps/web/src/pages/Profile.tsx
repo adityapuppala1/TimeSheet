@@ -531,7 +531,7 @@ export function Profile() {
         <Card>
           <CardHeader>
             <div className="flex items-center gap-3">
-              <div className="grid h-10 w-10 place-items-center rounded-lg bg-warning/10 text-warning">
+              <div className="grid h-10 w-10 place-items-center rounded-lg bg-warning/10 text-warning-ink">
                 <KeyRound className="h-5 w-5" />
               </div>
               <div>

@@ -141,7 +141,7 @@ function StatTile({ icon, label, value, tone }: { icon: React.ReactNode; label: 
   return (
     <Card>
       <CardContent className="flex items-center gap-3 pt-6">
-        <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg ${tone === "destructive" ? "bg-destructive/10 text-destructive" : tone === "warning" ? "bg-warning/10 text-warning" : "bg-primary/10 text-primary"}`}>
+        <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg ${tone === "destructive" ? "bg-destructive/10 text-destructive-ink" : tone === "warning" ? "bg-warning/10 text-warning-ink" : "bg-primary/10 text-primary"}`}>
           {icon}
         </div>
         <div className="min-w-0">

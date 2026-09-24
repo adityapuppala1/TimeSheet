@@ -42,7 +42,7 @@ export function PlanLapsedPage() {
     <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4 py-10">
       <Card className="w-full max-w-lg">
         <CardHeader>
-          <div className="mb-1 grid h-10 w-10 place-items-center rounded-lg bg-warning/10 text-warning">
+          <div className="mb-1 grid h-10 w-10 place-items-center rounded-lg bg-warning/10 text-warning-ink">
             <Lock className="h-5 w-5" />
           </div>
           <CardTitle>This workspace is paused</CardTitle>

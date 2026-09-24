@@ -158,6 +158,25 @@ for (const [theme, t, ink] of [
   for (const tone of ["success", "warning", "destructive", "info", "primary"]) {
     check(theme, `tone ${tone}: dot/border vs card`, contrast(t[tone], t.card), UI, REPORT_ONLY);
   }
+
+  /*
+   * A BADGE'S TEXT ON ITS OWN TINT, and this one GATES.
+   *
+   * The dot check above is a 3:1 non-text rule and report-only, and for two years it was the only
+   * thing looking at these tones. It cannot see the case that actually matters: `Badge` fills with
+   * `bg-<tone>/15` and writes on it at 10.5px, where 4.5:1 applies. Measured on the running app on
+   * 2026-09-24, before `--<tone>-ink` existed: "HIGH" 2.09:1, "MEDIUM" 3.63. Both shipped, because
+   * nothing here asked.
+   *
+   * Checked at 15%, the tint `Badge` actually paints, because that is the HARDER case — and the
+   * first version of this check got that backwards and used 10%. A stronger tint is a DARKER
+   * background on a light theme, so dark text has LESS contrast against it, not more. The gate
+   * said 4.75 while the browser measured 4.44 on the same badge. Measure the tint that ships.
+   */
+  for (const tone of ["success", "warning", "destructive", "info"]) {
+    const chip = blend(t[tone], 0.15, t.card);
+    check(theme, `tone ${tone}: badge text on its own tint`, contrastRgbVsTriplet(chip, t[`${tone}-ink`]), TEXT);
+  }
   check(theme, "tone muted: dot vs card", contrast(t["muted-foreground"], t.card), UI, REPORT_ONLY);
 
   // Plan marks on the chart surface.

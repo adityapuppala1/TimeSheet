@@ -60,14 +60,14 @@ const DISC: Record<SealTone, Record<SealState, string>> = {
   primary: {
     idle: "border-primary/30 bg-primary/5 text-primary group-hover:border-primary/60 group-hover:bg-primary/10",
     scanning: "border-primary bg-primary/15 text-primary",
-    success: "border-success bg-success/15 text-success",
-    error: "border-destructive bg-destructive/10 text-destructive"
+    success: "border-success bg-success/15 text-success-ink",
+    error: "border-destructive bg-destructive/10 text-destructive-ink"
   },
   accent: {
     idle: "border-accent/40 bg-accent/5 text-accent group-hover:border-accent/70 group-hover:bg-accent/10",
     scanning: "border-accent bg-accent/15 text-accent",
-    success: "border-success bg-success/15 text-success",
-    error: "border-destructive bg-destructive/10 text-destructive"
+    success: "border-success bg-success/15 text-success-ink",
+    error: "border-destructive bg-destructive/10 text-destructive-ink"
   }
 };
 

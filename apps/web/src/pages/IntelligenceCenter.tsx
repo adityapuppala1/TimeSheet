@@ -247,7 +247,7 @@ function MemoryRows({ loading, rows }: { loading: boolean; rows: AiAskExchangeRo
 function Signal({ label, value, icon: Icon, href, attention = false }: { label: string; value: number | string; icon: typeof ClipboardList; href: string; attention?: boolean }) {
   return (
     <Link to={href} className="focus-ring group flex min-h-[92px] items-center gap-3 border-b border-border p-4 transition hover:bg-muted/50 last:border-b-0 lg:min-h-[126px] lg:border-b-0 lg:border-r lg:last:border-r-0">
-      <span className={cn("flex h-9 w-9 items-center justify-center rounded-md", attention ? "bg-warning/10 text-warning-foreground" : "bg-primary/10 text-primary")}><Icon className="h-4 w-4" /></span>
+      <span className={cn("flex h-9 w-9 items-center justify-center rounded-md", attention ? "bg-warning/10 text-warning-ink-foreground" : "bg-primary/10 text-primary")}><Icon className="h-4 w-4" /></span>
       <span><strong className="block text-xl tabular-nums">{value}</strong><span className="text-xs text-muted-foreground">{label}</span></span>
       <ArrowRight className="ml-auto h-4 w-4 text-muted-foreground opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100 group-focus-visible:opacity-100" />
     </Link>

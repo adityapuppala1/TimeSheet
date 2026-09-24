@@ -10,10 +10,13 @@ const badgeVariants = cva(
         default: "border-transparent bg-primary text-primary-foreground",
         secondary: "border-transparent bg-secondary text-secondary-foreground",
         outline: "text-foreground",
-        success: "border-transparent bg-success/15 text-success",
-        warning: "border-transparent bg-warning/15 text-warning",
-        destructive: "border-transparent bg-destructive/15 text-destructive",
-        info: "border-transparent bg-info/15 text-info",
+        /* The fill is a tint of the tone; the TEXT is that tone's `ink`, which is a different
+           value for a reason — see index.css. Using the fill colour as its own text put "HIGH" at
+           2.09:1 on a light theme, at 10.5px. `scripts/contrast-check.mjs` now gates this pair. */
+        success: "border-transparent bg-success/15 text-success-ink",
+        warning: "border-transparent bg-warning/15 text-warning-ink",
+        destructive: "border-transparent bg-destructive/15 text-destructive-ink",
+        info: "border-transparent bg-info/15 text-info-ink",
         muted: "border-transparent bg-muted text-muted-foreground"
       }
     },

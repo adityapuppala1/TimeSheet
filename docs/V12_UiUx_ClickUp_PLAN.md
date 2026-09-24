@@ -291,15 +291,34 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
 
 #### Phase D: Visual Quality and Performance
 
-- [ ] D01 Visual consistency. Apply existing status/project colors consistently; improve
+- [x] D01 Visual consistency. Apply existing status/project colors consistently; improve
   hierarchy, spacing, icon alignment and compact panel headings. Reuse theme/accent/density
   preferences. No global rebrand, ornamental hero or competing design system.
-  NOT STARTED — and it is the ONLY row left on this plan that is implementable without a decision
-  from the user, so it is the resume point. Scope it before touching anything: the status, change
-  and project colour sources are already centralised (`lib/ticket-visuals.ts`,
-  `lib/change-visuals.ts`, `lib/identity-colors.ts`), so the unit is finding the places that still
-  hand-roll a colour rather than inventing a system — a grep-and-compare job, not a rebrand. The
-  row forbids a competing design system and it means it.
+  DONE 2026-09-24 — and the grep-and-compare turned up something much worse than inconsistency.
+  The colour SOURCES were already centralised, as expected. What nobody had checked is whether the
+  pattern they all share is readable: every status and priority badge wrote its text in the same
+  colour it filled itself with (`bg-warning/15 text-warning`). On a light theme that is pale amber
+  on pale amber. Measured on the running app at 10.5px: "HIGH" 2.09:1, "MEDIUM" 3.63, against the
+  4.5 text that size needs. Dark mode failed on destructive (3.52) and info (4.10).
+  WHY THE CONTRAST GATE NEVER SAW IT: it checked these tones only as DOTS — a 3:1 non-text rule —
+  and report-only at that. The question that mattered was never asked.
+  THE FIX is a third value per tone, `--<tone>-ink`: the text colour for a tint OF that tone, as
+  distinct from `--<tone>-foreground` (text on a SOLID fill, which is white and cannot be reused
+  because a tint is nearly white). Hue and saturation are untouched, only lightness moves, so a
+  warning still reads as amber. Fills are untouched entirely. 53 hand-rolled chips across 23 files
+  moved onto it, plus the face verification log's raw `emerald-500`/`amber-500` codes — that file
+  now has zero raw palette colours, down from 38.
+  AND THE GATE NOW ASKS: `check:contrast` gained 8 GATING pairs (4 tones x 2 themes) measuring badge
+  text on the tint `Badge` actually paints. 116/118, 0 gating failures. Proven by reverting one ink
+  to its old value and watching the gate fail.
+  A MISTAKE WORTH KEEPING: the first solve used the 10% tint, reasoning that a thinner tint is a
+  lighter background and therefore harder. That is backwards for dark text — a lighter background
+  gives MORE contrast. The gate said 4.75 while the browser measured 4.44 on the same badge. Solved
+  against 15%, the tint that ships. The arithmetic was confident and wrong; the browser was not.
+  VERIFIED: 29 tinted chips swept across 5 pages in both themes, 0 below AA, worst 4.75 (was 2.09).
+  Screenshots of the ticket table in both themes confirm the hues still read as themselves.
+  NOT CONVERTED, deliberately: `bg-emerald-500/80` style fills inside data-viz and the marketing
+  pages, which are not status tones and do not follow the theme.
 - [x] D02 Responsive verification. Check 390px phone, 768px tablet, 1440px desktop and 1920px
   wide desktop; add 320px and 200% zoom checks for changed controls. Cover light/dark, selected
   accent variants, touch, keyboard and reduced motion. Tables may scroll inside their container.
@@ -548,19 +567,19 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
 
 ### Where this stands (2026-09-24)
 
-**46 of 52 rows closed.** Everything still open is below, with WHY it is open — the distinction
+**47 of 52 rows closed.** Everything still open is below, with WHY it is open — the distinction
 that matters is between work nobody has done and work nobody can do without a decision.
 
 | Row | State | What it is waiting for |
 |---|---|---|
-| D01 Visual consistency | **Open — implementable now** | Nothing. This is the resume point: the colour sources are already centralised, so the unit is finding the places that still hand-roll one. |
 | 7.7b Which P3 product | Blocked | The user picking ONE of wikis, chat, whiteboards, MCP client, connected search, guests. Each is a product, not a UI pass. |
 | D04 Optional 3D agents | Blocked | A decision gate by its own wording — it is explicitly "not committed delivery". |
 | E01 Live-provider evaluation | Blocked | Consented test data and a cost budget. It spends real money against a real provider; not something to start unasked. |
 | E04 Release decision | Blocked | The user. Publishing, deploying and merging to main each need an explicit say-so (AGENTS.md). |
 | E05 Field performance | Blocked | A privacy decision. D03's target is FIELD p75 INP and this app collects no field metric; making it measurable means collecting from real users. |
 
-So: one row left to build, and five that are somebody's call rather than somebody's task.
+So: nothing left to build. All five remaining rows are somebody's call rather than somebody's
+task — a product decision, a budget, or a release.
 Nothing is half-finished — see "In Progress / Half-done" below, which is still empty on purpose.
 
 ### Prioritized UX and product extensions
@@ -987,6 +1006,14 @@ The matrix covers every requested area. Remaining Unverified details are explici
 - ~~Sprints carry no tier entitlement~~ — DECIDED BY DEFAULT 2026-09-17 (pending the product owner's confirmation, one line to move): sprints ride with the timeline's tier (`entitlements.ganttEnabled`) in both `getEffectivePlanning` and `assertSprintsEnabled`, because iterations, points and a burndown schedule planned work the way the Gantt does. The refusal names the upgrade in the planning gate's words. No tier matrix change: the existing Gantt entitlement is reused, so no plan gains or loses anything it did not already have.
 
 ## Session Log (newest first)
+
+### 2026-09-24 — Claude Code (Opus 5), D01: the badge nobody could read
+- Took D01 expecting a tidy-up — the colour sources were already centralised, so the row looked like a grep for stragglers. The grep found something else: every status and priority badge in the app wrote its text in the colour it filled itself with, `bg-warning/15 text-warning`. On a light theme that is pale amber on pale amber. Measured on the running app at 10.5px: "HIGH" **2.09:1**, "MEDIUM" 3.63, where 4.5 is required.
+- THE GATE HAD NEVER ASKED. `check:contrast` checked these tones only as DOTS — a 3:1 non-text rule — and report-only. Two years of green on a question that was never posed.
+- Fix: a third value per tone, `--<tone>-ink`, for text on a tint of itself, distinct from `-foreground` (text on a solid fill). Hue and saturation untouched; only lightness moves. 53 chips across 23 files, plus the face log's 38 raw palette codes, now resolve through it. The gate gained 8 GATING pairs and was proven by reverting one ink and watching it fail.
+- I GOT THE HARD CASE BACKWARDS FIRST. Solved against the 10% tint on the reasoning that a thinner tint is a lighter background and so harder. For dark text a lighter background is EASIER. The gate said 4.75; the browser measured 4.44 on the same badge. Re-solved against 15%, the tint that ships. Twice today the arithmetic was confident and the browser was right — worth remembering which one to trust.
+- Left off at: nothing buildable remains. All five open rows are decisions — 7.7b, D04, E01, E04, E05.
+
 
 ### 2026-09-24 — Claude Code (Opus 5), the GitHub usage report, read rather than guessed at
 - THE USER'S OWN BILLING CSV (2026-08-25..09-24) settles three things I had been treating as one problem.

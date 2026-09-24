@@ -33,21 +33,32 @@ export default {
           DEFAULT: "hsl(var(--accent))",
           foreground: "hsl(var(--accent-foreground))"
         },
+        /*
+         * `ink` is what a tone's TEXT becomes when it sits on a tint OF ITSELF — a badge, a chip, a
+         * status pill. It is NOT `foreground`, which is the text on a SOLID fill (white on a filled
+         * button); a tint of warning is nearly white, and white on it is invisible. Measured on the
+         * running app before these existed: "HIGH" rendered 2.09:1 at 10.5px. The values, and why
+         * each is what it is, are in index.css; scripts/contrast-check.mjs gates them.
+         */
         destructive: {
           DEFAULT: "hsl(var(--destructive))",
-          foreground: "hsl(var(--destructive-foreground))"
+          foreground: "hsl(var(--destructive-foreground))",
+          ink: "hsl(var(--destructive-ink))"
         },
         success: {
           DEFAULT: "hsl(var(--success))",
-          foreground: "hsl(var(--success-foreground))"
+          foreground: "hsl(var(--success-foreground))",
+          ink: "hsl(var(--success-ink))"
         },
         warning: {
           DEFAULT: "hsl(var(--warning))",
-          foreground: "hsl(var(--warning-foreground))"
+          foreground: "hsl(var(--warning-foreground))",
+          ink: "hsl(var(--warning-ink))"
         },
         info: {
           DEFAULT: "hsl(var(--info))",
-          foreground: "hsl(var(--info-foreground))"
+          foreground: "hsl(var(--info-foreground))",
+          ink: "hsl(var(--info-ink))"
         },
         popover: {
           DEFAULT: "hsl(var(--popover))",
