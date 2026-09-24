@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Router } from "express";
 import { z } from "zod";
-import { roles, ACCENT_IDS, DENSITIES, THEME_MODES, type AccentId } from "@timesheet/shared";
+import { roles, ACCENT_IDS, AI_ANSWER_STYLES, DENSITIES, THEME_MODES, type AccentId, type AiAnswerStyle } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { avatarsDir, resolveWithin } from "../config/storage-paths.js";
 import { prisma } from "../config/prisma.js";
@@ -373,6 +373,17 @@ const profilePatchSchema = z.object({
       })
       .strict()
       .optional()
+      .nullable(),
+    // Same rule as `appearance` above, and the same reason: validated against the SHARED list, so a
+    // style the API accepted but neither the picker nor AI_ANSWER_STYLE_GUIDANCE knew would save
+    // cleanly and then do nothing — which is worse than refusing it, because the person would
+    // believe they had changed something.
+    aiPreferences: z
+      .object({
+        answerStyle: z.enum(AI_ANSWER_STYLES as unknown as [AiAnswerStyle, ...AiAnswerStyle[]]).optional().nullable()
+      })
+      .strict()
+      .optional()
       .nullable()
   })
 });
@@ -413,6 +424,16 @@ authRouter.patch("/profile", requireAuth, validate(profilePatchSchema), async (r
       a === null
         ? null
         : { ...(a.mode ? { mode: a.mode } : {}), ...(a.accent ? { accent: a.accent } : {}), ...(a.density ? { density: a.density } : {}) };
+  }
+
+  if ("aiPreferences" in req.body) {
+    // "default" is the ABSENCE of a preference, not a preference, so choosing it clears the row
+    // rather than storing the word. The browser copy has always behaved that way
+    // (apps/web/src/lib/ai-answer-style.ts), and if the server disagreed, "reset" would leave a
+    // stored preference behind that the person believes they deleted. That is a retention promise.
+    const prefs = req.body.aiPreferences;
+    const style = prefs === null ? null : prefs?.answerStyle;
+    data.aiPreferences = !style || style === "default" ? null : { answerStyle: style };
   }
 
   if (Object.keys(data).length === 0) throw new AppError(422, "No profile fields provided");

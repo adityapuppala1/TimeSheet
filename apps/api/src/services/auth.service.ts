@@ -10,7 +10,7 @@
  * WHO calls this: `controllers/auth.controller.ts` (password + LDAP), `controllers/sso.controller.ts`
  * (Google/Microsoft/SAML).
  */
-import { resolveHeldRoles, type RoleName, isAccentId, isDensity, isThemeMode, type AppearancePreference } from "@timesheet/shared";
+import { resolveHeldRoles, type RoleName, isAccentId, isAiAnswerStyle, isDensity, isThemeMode, type AiPreferences, type AppearancePreference } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
@@ -54,6 +54,7 @@ export type ProfilePayload = {
   managerId: string | null;
   manager: { id: string; name: string; email: string } | null;
   appearance: AppearancePreference | null;
+  aiPreferences: AiPreferences | null;
 };
 
 /** Only the two known keys, only if valid; anything else reads as absent. */
@@ -65,6 +66,16 @@ function readAppearance(raw: unknown): AppearancePreference | null {
   if (isAccentId(accent)) out.accent = accent;
   if (isDensity(density)) out.density = density;
   return Object.keys(out).length ? out : null;
+}
+
+/** Only the one known key, only if it names a style this build still has guidance for. A row
+ *  written by an older build, edited by hand, or naming a style since withdrawn reads as "never
+ *  chose" — the default answer — rather than as a key the prompt layer would look up and miss.
+ *  "default" stored as a value is treated the same way: it is what no choice looks like. */
+function readAiPreferences(raw: unknown): AiPreferences | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { answerStyle } = raw as Record<string, unknown>;
+  return isAiAnswerStyle(answerStyle) && answerStyle !== "default" ? { answerStyle } : null;
 }
 
 export async function buildProfilePayload(userId: string): Promise<ProfilePayload> {
@@ -90,7 +101,8 @@ export async function buildProfilePayload(userId: string): Promise<ProfilePayloa
     manager: user.manager ?? null,
     // Read back through the shared guards rather than cast: a row written by an older build, or
     // edited by hand, must degrade to "never chose" and not to a palette id the web cannot render.
-    appearance: readAppearance(user.appearance)
+    appearance: readAppearance(user.appearance),
+    aiPreferences: readAiPreferences(user.aiPreferences)
   };
 }
 
@@ -454,7 +466,8 @@ export async function login(
       timezone: user.timezone,
       managerId: user.managerId,
       manager: user.manager ?? null,
-      appearance: readAppearance(user.appearance)
+      appearance: readAppearance(user.appearance),
+      aiPreferences: readAiPreferences(user.aiPreferences)
     } satisfies ProfilePayload
   };
 }
@@ -530,7 +543,8 @@ export async function completeSsoLogin(
       timezone: user.timezone,
       managerId: user.managerId,
       manager: user.manager ?? null,
-      appearance: readAppearance(user.appearance)
+      appearance: readAppearance(user.appearance),
+      aiPreferences: readAiPreferences(user.aiPreferences)
     } satisfies ProfilePayload
   };
 }

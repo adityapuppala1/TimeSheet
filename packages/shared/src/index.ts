@@ -16,6 +16,7 @@ export * from "./native-runtime.js";
 export * from "./native-engine.js";
 export * from "./appearance.js";
 export * from "./ai-preferences.js";
+import type { AiPreferences } from "./ai-preferences.js";
 /**
  * WHAT: the single `@timesheet/shared` package — every type/constant that both `apps/api` and
  * `apps/web` need to agree on: roles/permission keys, activity types, ticket status/priority
@@ -124,6 +125,10 @@ export interface AuthUser {
   manager?: { id: string; name: string; email: string } | null;
   /** Saved theme mode and accent — see appearance.ts. Absent or null means "never chose". */
   appearance?: AppearancePreference | null;
+  /** Saved AI answer style — see ai-preferences.ts. Absent or null means "never chose", and the
+   *  browser's own copy answers instead. Kept apart from `appearance` on purpose: one is how the
+   *  app looks, the other is how it writes. */
+  aiPreferences?: AiPreferences | null;
 }
 
 /**

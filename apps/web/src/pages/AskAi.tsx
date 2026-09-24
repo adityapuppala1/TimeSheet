@@ -21,7 +21,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, Copy, Eraser, Loader2, MessagesSquare, Send, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
-import { askAiApi, type AiAskExchangeRow } from "../services/api";
+import { askAiApi, authApi, type AiAskExchangeRow } from "../services/api";
 import { AskAiCapabilitiesButton, useAskAiSuggestions } from "../components/ai/ask-ai-capabilities";
 import { SlashMenu, useSlashMenu } from "../components/ai/slash-menu";
 import { copyText } from "../lib/clipboard";
@@ -43,13 +43,38 @@ const serverMessage = (err: any, fallback: string) => err?.response?.data?.messa
 
 export function AskAi() {
   const userId = useAuthStore((state) => state.user?.id);
-  const answerStyle = useAnswerStyle(userId);
+  const setUser = useAuthStore((state) => state.setUser);
+  const savedStyle = useAuthStore((state) => state.user?.aiPreferences?.answerStyle);
+  // The profile's copy if there is one, this browser's otherwise — see resolveAnswerStyle.
+  const answerStyle = useAnswerStyle(userId, savedStyle);
   const qc = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [prompt, setPrompt] = useState(() => searchParams.get("prompt")?.slice(0, 2000) ?? "");
   const feedRef = useRef<HTMLDivElement>(null);
 
   const history = useQuery({ queryKey: ["ask-ai", "history"], queryFn: () => askAiApi.history() });
+
+  /**
+   * Saves the choice to BOTH copies, browser first.
+   *
+   * Browser first because it is synchronous: the picker shows the new value in the same frame,
+   * whatever the network does. The profile write is what makes the choice follow the person to
+   * their phone; if it fails, the local copy still holds and the message says which half did not
+   * happen rather than claiming nothing was saved.
+   */
+  const saveStyle = useMutation({
+    mutationFn: async (style: AiAnswerStyle) => {
+      if (userId && !saveAnswerStyle(userId, style)) toast.error("Could not save the answer style in this browser.");
+      // "default" clears the stored preference rather than storing the word — the same promise the
+      // browser copy makes, kept on the server too.
+      return authApi.updateProfile({ aiPreferences: { answerStyle: style } });
+    },
+    onSuccess: (user) => setUser(user),
+    onError: (err: any) =>
+      toast.error("Saved here, but not to your profile", {
+        description: serverMessage(err, "It will not follow you to another device until this succeeds.")
+      })
+  });
   // Role-derived, not hardcoded: every chip is backed by a capability this person's assistant can
   // actually reach, so an administrator is offered the spend and health questions and an engineer
   // is not offered a question that would only come back refused.
@@ -175,10 +200,8 @@ export function AskAi() {
           </div>
         </div>
         <div className="flex max-w-full flex-wrap items-center gap-1">
-          <Select value={answerStyle} onValueChange={(value) => {
-            if (userId && !saveAnswerStyle(userId, value as AiAnswerStyle)) toast.error("Could not save the answer style in this browser.");
-          }}>
-            <SelectTrigger className="w-36" aria-label="Answer style (this browser)"><SelectValue /></SelectTrigger>
+          <Select value={answerStyle} onValueChange={(value) => saveStyle.mutate(value as AiAnswerStyle)}>
+            <SelectTrigger className="w-36" aria-label="Answer style"><SelectValue /></SelectTrigger>
             <SelectContent>{AI_ANSWER_STYLES.map((style) => <SelectItem key={style} value={style}>{style.charAt(0).toUpperCase() + style.slice(1)}</SelectItem>)}</SelectContent>
           </Select>
           <AskAiCapabilitiesButton />

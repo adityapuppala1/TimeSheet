@@ -10,6 +10,21 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🧭 Your answer style follows you
+
+- **Ask AI's answer style is saved to your profile, not to one browser.** Default, Concise,
+  Detailed or Checklist was remembered per browser, so the same person picked Concise on a laptop
+  and got Default on their phone, and clearing site data reset it without saying so. It is on your
+  profile now and arrives with your sign-in anywhere.
+- **Choosing Default still deletes it.** On the server as well as in the browser — the word
+  "default" is never stored, because that would leave behind a preference you believe you removed.
+  It is an explicit choice you made and can delete, and nothing about the questions you ask is
+  kept: the row holds one value from a fixed list and nothing else, and a request carrying any
+  other key is refused.
+- **The browser still holds a copy**, so the picker is right before your profile has loaded and
+  stays right if a save fails — and when a save does fail, the message says which half did not
+  happen rather than claiming nothing was saved.
+
 ### ⚡ Lists that only draw what you can actually see
 
 - **Every list in the app was drawing itself twice.** A table for the desktop, a card list for the

@@ -421,7 +421,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "“What can it do?” (top right) lists every capability and which ones your role locks.",
       "Rate answers with the thumbs — ratings feed the workspace's quality datasets.",
       "Expand Tool evidence to inspect the recorded calls. Scoped ticket searches include links to the ticket rows they returned; other arguments are audit context and may be truncated.",
-      "Choose an answer style in the header: Default, Concise, Detailed or Checklist. This preference is remembered for your user in this browser only; choosing Default removes it. It affects ordinary Ask AI answers, not report or workflow generation, and never changes permissions.",
+      "Choose an answer style in the header: Default, Concise, Detailed or Checklist. It is saved to your profile, so it follows you to your phone and to any other browser you sign in from; choosing Default deletes it rather than storing it, on the server as well as here. It affects ordinary Ask AI answers, not report or workflow generation, and never changes permissions.",
       "The one thing it writes is a DRAFT timesheet entry, which you review and submit yourself."
     ],
     notes: "It answers only about this product and workspace — no web search, no outside knowledge. Off-topic questions get a polite fixed refusal.",

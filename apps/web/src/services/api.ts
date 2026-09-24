@@ -522,6 +522,9 @@ export const authApi = {
       timezone?: string | null;
       /** `null` clears the saved appearance; absent leaves it alone. */
       appearance?: AppearancePreference | null;
+      /** `null`, or an answer style of "default", clears the saved AI preference; absent leaves
+       *  it alone. See packages/shared/src/ai-preferences.ts. */
+      aiPreferences?: { answerStyle?: import("@timesheet/shared").AiAnswerStyle | null } | null;
     }
   ) => (await api.patch<AuthUser>("/auth/profile", payload)).data,
   uploadAvatar: async (file: File) => {

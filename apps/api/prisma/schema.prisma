@@ -172,6 +172,17 @@ model User {
   /// and on anyone who never chose: the web renders that as "follow the OS, brand teal", which is
   /// exactly what those people were already seeing. Display-only; nothing reads it for behaviour.
   appearance               Json?
+  /// The person's saved AI answer preference — `{ answerStyle?: "concise"|"detailed"|"checklist" }`,
+  /// validated against `packages/shared/src/ai-preferences.ts` on write. A SECOND column rather than
+  /// a key inside `appearance`: that one is how the app LOOKS and is edited from the Appearance card;
+  /// this is how it WRITES and is chosen on Ask AI. Overloading one JSON column with both is how a
+  /// column stops meaning anything. NULL on every row that predates it and on anyone who never chose
+  /// — which reads as the default answer style, exactly what those people already had.
+  ///
+  /// Only ever an explicit choice the person made and can delete. Nothing inferred from what they
+  /// asked is stored here, and "default" is written as NULL rather than as the word, so resetting
+  /// really is a deletion.
+  aiPreferences            Json?
   /// When this person finished first-run setup (profile details, plus face enrollment when the
   /// workspace policy covers them). NULL means they have not, and the app is gated for them.
   ///

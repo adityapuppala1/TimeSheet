@@ -154,9 +154,10 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
   out-of-scope values. Added a focused disposable-fixture E2E test and aligned Help/UI guide.
   Web tests pass 346/346 and focused ESLint has zero errors. Browser E2E launch stalls during
   Playwright startup, so the new test remains unverified in a live browser.
-- [ ] C11 Cross-device preferences. Extend existing user profile storage for explicit answer
+- [x] C11 Cross-device preferences. Extend existing user profile storage for explicit answer
   preferences with opt-in, reset and deletion. Define retention and access before persisting.
   Do not infer personal facts or create a second AI conversation-history store.
+  DONE 2026-09-24.
   INVESTIGATED 2026-09-24 — the preference already exists; what it lacks is exactly the thing this
   row is named after. `AI_ANSWER_STYLES` (default | concise | detailed | checklist) is a SHARED
   definition with per-style guidance, chosen on Ask AI and sent with the request. It is stored in
@@ -181,6 +182,19 @@ Record blockers and the reason before taking a later item. Do not quietly reorde
   NOT REUSING the `appearance` column for it: a column documented as `{ mode, accent, density }` is
   the wrong home for an AI preference, and overloading it is how a JSON column stops meaning
   anything. An additive nullable column beside it keeps both honest.
+  SHIPPED: additive nullable `User.aiPreferences` (idempotent migration, the information_schema +
+  PREPARE guard so `migrate deploy` re-running it cannot fail on either MySQL 8 or MariaDB);
+  `AiPreferences` + `isAiAnswerStyle` in packages/shared; profile PATCH validated against the
+  SHARED list and written as exactly the validated shape; all three payload builders (login,
+  refresh, profile) read it back through the guard; `resolveAnswerStyle(saved, local)` decides
+  which store wins; Ask AI writes both copies, browser first because that one is synchronous.
+  Verified LIVE, and the verification is the point of the item: browser A picked Detailed and
+  PATCHed 200; browser B — a separate context with an empty localStorage, so anything it shows came
+  from the server — opened Ask AI and showed Detailed. Against the API directly: a fresh login
+  carries the value, resetting to Default leaves SQL NULL rather than the word, an unknown style is
+  422, and an extra key (`systemPrompt`) is 422. The dev account was restored to NULL afterwards.
+  Gates after the last edit: lint 699 warnings / 0 errors (ratchet passes), API 3292/3292 (+8),
+  web 358/358 (+6), typecheck clean.
 - [ ] C12 Planning scenarios: investigate first. Compare current Portfolio/Workload/solver
   capabilities with proposed staffing/date comparisons. Implement only a confirmed gap, with
   visible assumptions and no live plan changes until approved.
@@ -806,6 +820,17 @@ The matrix covers every requested area. Remaining Unverified details are explici
 - ~~Sprints carry no tier entitlement~~ — DECIDED BY DEFAULT 2026-09-17 (pending the product owner's confirmation, one line to move): sprints ride with the timeline's tier (`entitlements.ganttEnabled`) in both `getEffectivePlanning` and `assertSprintsEnabled`, because iterations, points and a burndown schedule planned work the way the Gantt does. The refusal names the upgrade in the planning gate's words. No tier matrix change: the existing Gantt entitlement is reused, so no plan gains or loses anything it did not already have.
 
 ## Session Log (newest first)
+
+### 2026-09-24 — Claude Code (Opus 5), D03 interaction performance, then C11 — and two wrong diagnoses on the way
+- D03: baselined the PRODUCTION bundle before touching anything (`vite preview` proxies /api now; dev mode's byte counts are fiction). Two interactions were over 200ms INP. The TipTap editor inside the dialog was the obvious suspect and a CPU profile put it at 3% — the cost was DOM SIZE, because every list rendered BOTH its table and its card list and hid one with `sm:hidden`: 7,144 invisible elements on /app/tickets, 77% of the page, which a Radix dialog walks twice (aria-hidden on open, undo on close). `useCardLayout` renders one. Also windowed the phone card list to 20 (it rendered all 200 while the desktop table paged at 20) and stopped the `hidden lg:flex` sidebar building 323 elements on every phone page.
+- MEASUREMENT DISCIPLINE, learned the hard way AGAIN: single runs on this box are worthless. The first A/B said the dialog got 16ms SLOWER, the second said 128ms faster, on identical code, spread 112–248ms within one run. Only two bundles served at once, alternating order each round, settles it. Open 268→180ms laptop / 288→132ms phone; close 244→172 / 236→96. Elements are deterministic and are what the docs quote.
+- I SHIPPED A REGRESSION AND THE SUITE CAUGHT IT: a lighter page loads faster, so Recharts measured before a scrollbar appeared, and it writes a pixel width it never shrinks — a chart 8px off a 1366px window, SC 1.4.4 red in three projects. The previous fix capped the legend to its container; the container was wrong. Bisected with `git stash` before fixing.
+- TWO WRONG DIAGNOSES, both corrected in the same session, both worth remembering. (a) I said the e2e EPROTO failures came from editing `packages/shared` mid-run; they came from TWO Vite instances bound to 5173, one HTTPS one HTTP, connections landing on either at random — `strictPort: true` does not prevent it here. `netstat -ano | grep 5173` showing more than one PID is the whole diagnosis. (b) I read "0 tickets created in 90 minutes" as a stalled suite; MySQL `NOW()` is local and `createdAt` is UTC, so everything looked 5.5 hours old. Compare against `UTC_TIMESTAMP()`.
+- Verification: every Playwright project green — desktop (all specs) + responsive phone/tablet in one 410-test run, laptop 128, 4k 68. New guard "builds one list layout for this width, not both" runs in all five and found the sidebar.
+- C11: the answer style moved from localStorage to `User.aiPreferences`. Proved cross-device with a second browser context holding no localStorage. Reset writes NULL, not the word "default".
+- C12 and C13 INVESTIGATED, not built — both rows say "investigate first" and the investigation is the deliverable. C12 is mostly already built as proposals; the gap is a read-only "what if" view and it needs the user's call. C13's dedupe gap is measured: 706 of 1,916 notifications repeat, worst group 489 rows sharing ONE link.
+- Left off at: C13 (read-time roll-up in the Inbox) is the next implementable unit; D02's remaining half and B05's keyboard checks want one matrix spec. Main untouched; branch not pushed yet this session beyond f27990b.
+
 ### 2026-09-21 — Claude Code (Opus 5), Phase 13: the landing page, and the performance regression I shipped into it
 - 13.1–13.3: measured before touching anything, which is the only reason the edit was the right one — `#features` alone held 3,119 of the page's 5,232 words. Progressive disclosure (native `<details>`), not deletion, because docs/MARKETING_PAGES.md makes those sentences an audit trail. 1,864 words after, every claim still present.
 - 13.4 IS THE ONE TO READ. The user reported GPU/CPU/RAM load immediately after I shipped 13.1–13.3, and the report was correct: I had added a third WebGL scene to a page already running two. Measuring then found two OLDER causes I would never have guessed — a `position: fixed` scene that no "pause off screen" check can ever help, and `transform: scale` on SVG nodes forcing a layout every frame forever. The fix is generalised in `lib/render-loop.ts` so the next scene cannot repeat it.
