@@ -832,6 +832,45 @@ curl -s -H "Authorization: Bearer $B64" \
 Anything untagged and absent from that set is genuinely orphaned. On 2026-09-24 that was 117
 versions out of 675.
 
+### The minutes budget, and what each run actually costs
+
+The account's plan includes **2,000 Actions minutes a month**. Windows bills at **double**, so the
+number that matters is billable-equivalent minutes, not wall-clock. Measured from real runs on
+2026-09-24:
+
+| What | Wall-clock | Billable-equivalent | When it runs |
+|---|---|---|---|
+| Cheap tier (build, typecheck, unit + integration, manifest checks) | ~11 min | **~11** | every push that touches code |
+| e2e, 4 shards | 23 + 12 + 17 + 15 | **67** | full tier only |
+| `install.sh` end-to-end | 4 min | **4** | full tier only |
+| Typecheck + build on Windows | 8 min | **16** (×2) | main, tags, `[full-ci]` |
+| **A full-tier run** | | **~97** | |
+
+So a full run is **5% of the month's allowance**. Two dispatched runs in one afternoon is 10%, and
+that is exactly how 90% got used with a week of the cycle left.
+
+**What keeps it down, in order of how much it saves:**
+
+1. **Do not dispatch a full-tier run to "just check"** — 97 minutes each. Push and let the cheap
+   tier answer; ask for the full tier when you are about to merge or tag.
+2. **Documentation-only pushes are skipped entirely** (`paths-ignore` on the push trigger). A prose
+   commit cannot break a build and no longer spends 11 minutes proving it. Pull requests are
+   deliberately exempt — a PR with no checks at all reads worse than one that cost 11 minutes.
+3. **Both Windows jobs run on main, tags and `[full-ci]` only.** They are 8 and ~1 minutes, but
+   they bill as 16 and 2. What they protect against — path handling, case sensitivity, line
+   endings — reaches a user through a release, not through a branch push.
+4. **`concurrency` cancels superseded branch runs**, so three pushes ten minutes apart cost one
+   run and not three.
+5. **`[full-ci]` in a commit message** pulls the expensive jobs in on a branch when you genuinely
+   need them, without dispatching a whole run.
+
+**The one thing this repo cannot do for you:** set a spending limit. If the included minutes run
+out, GitHub bills the overage unless a **$0 Actions budget** is set on the account (Settings →
+Billing → Budgets and alerts). A $0 budget blocks further runs until the cycle resets instead of
+charging — which for a solo account is almost always what you want. Re-sharding e2e was measured
+and rejected as a lever: setup is only ~2.3 minutes per shard, so the 4 shards duplicate about 9
+minutes, and the suite itself is ~58 minutes of genuine testing that no arrangement removes.
+
 ### The retention that keeps it that way
 
 `.github/workflows/ghcr-retention.yml` runs `scripts/prune-ghcr.mjs` after every successful CD run
