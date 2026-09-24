@@ -69,6 +69,15 @@ const blankField = (index: number): RequestFormFieldRow => ({
   required: false
 });
 
+/** One row per submission filter. `ALL` is the fallback, so a filter added to the picker without a
+ *  row here degrades to the neutral wording rather than rendering `undefined`. */
+const SUBMISSION_EMPTY_STATES: Record<string, { title: string; description: string }> = {
+  PENDING: { title: "No submissions awaiting review", description: "New submissions from published forms will appear here." },
+  ACCEPTED: { title: "No accepted submissions", description: "Accepted submissions will appear here." },
+  REJECTED: { title: "No rejected submissions", description: "Rejected submissions will appear here." },
+  ALL: { title: "No submissions yet", description: "Submissions arrive here when someone sends a published form." }
+};
+
 export function RequestsPage() {
   const user = useAuthStore((s) => s.user);
   const navigate = useNavigate();
@@ -156,6 +165,10 @@ export function RequestsPage() {
   }
 
   const rows = submissions.data ?? [];
+  /* A table, not a ternary ladder: the empty state has to name the filter that emptied it (an
+     unqualified "No submissions yet" under an ACCEPTED filter reads as "nobody has ever sent one"),
+     and one row per filter is the shape that makes a missing case obvious. */
+  const emptySubmissions = SUBMISSION_EMPTY_STATES[statusFilter] ?? SUBMISSION_EMPTY_STATES.ALL;
 
   return (
     <div className="grid min-w-0 gap-4 p-4 sm:p-6">
@@ -212,7 +225,16 @@ export function RequestsPage() {
               {submissions.isLoading ? (
                 <Skeleton className="h-32 w-full" />
               ) : rows.length === 0 ? (
-                <EmptyState compact title="No submissions yet" description="Submissions arrive here when someone sends a published form." />
+                <EmptyState
+                  compact
+                  title={emptySubmissions.title}
+                  description={emptySubmissions.description}
+                  action={statusFilter !== "all" && (
+                    <Button size="sm" variant="outline" onClick={() => setStatusFilter("all")}>
+                      View all submissions
+                    </Button>
+                  )}
+                />
               ) : (
                 rows.map((row) => (
                   <div key={row.id} className="grid gap-2 rounded-lg border border-border p-3">
@@ -226,7 +248,9 @@ export function RequestsPage() {
                           {row.ticket.key}
                         </button>
                       )}
-                      <span className="truncate text-sm font-medium">{row.ticket?.title ?? "(no ticket)"}</span>
+                      <span className="min-w-0 flex-1 break-words text-sm font-medium [overflow-wrap:anywhere]">
+                        {row.ticket?.title ?? "(no ticket)"}
+                      </span>
                       <Badge variant="outline">{row.form.name}</Badge>
                       {row.status === "PENDING" && <Badge variant="warning">Needs review</Badge>}
                       {row.status === "ACCEPTED" && <Badge variant="success">Accepted</Badge>}

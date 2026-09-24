@@ -28,6 +28,8 @@ export interface ChatActor {
   id: string;
   role: string;
   permissions: string[];
+  /** Request-level restriction; never grants permissions the actor does not have. */
+  readOnly?: boolean;
 }
 
 /**
@@ -58,6 +60,7 @@ const PRIVILEGED_ROLES = new Set(["SUPER_ADMIN"]);
 
 /** The one predicate. Both the prompt filter and the execution gate call this and nothing else. */
 export function canUseTool(tool: AccessibleTool, actor: ChatActor): boolean {
+  if (actor.readOnly && tool.acts) return false;
   const access = tool.access;
   if (!access) return true;
   if (access.superAdminOnly && !PRIVILEGED_ROLES.has(actor.role)) return false;
@@ -76,6 +79,9 @@ export function visibleTools<T extends AccessibleTool>(tools: readonly T[], acto
  * and that is worth surfacing as a refusal in the run rather than a quiet empty result.
  */
 export function assertToolAllowed(tool: AccessibleTool, actor: ChatActor): void {
+  if (actor.readOnly && tool.acts) {
+    throw new Error(`"${tool.name}" cannot run in a read-only report. Answer using read tools only.`);
+  }
   if (!canUseTool(tool, actor)) {
     throw new Error(
       `"${tool.name}" is not available to this person's role. Tell them this needs ${

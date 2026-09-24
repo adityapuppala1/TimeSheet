@@ -204,6 +204,40 @@ function aiBoard(input: {
   ];
 }
 
+/** The shape this file needs from a React Query result, and nothing more. */
+type Loadable = { isError: boolean; data?: unknown };
+
+/**
+ * Which sections have NOTHING to show — the query failed AND there is no cached data behind it.
+ * `isError` alone is the wrong test: React Query reports an error on a failed background refetch
+ * while still holding the last good response, and a section that quietly replaces real figures
+ * with "could not load" the moment a refresh blips is worse than one that keeps showing them.
+ *
+ * Hoisted out of the component because seven of these inline took it past the cognitive-complexity
+ * ceiling, and because the rule above deserves to be stated once rather than seven times.
+ */
+function failedSections(q: {
+  settings: Loadable;
+  providers: Loadable;
+  runtime: Loadable;
+  usage: Loadable;
+  usageTrend: Loadable;
+  autonomy: Loadable;
+  prompts: Loadable;
+  datasets: Loadable;
+}): Record<string, boolean> {
+  const blank = (x: Loadable) => x.isError && !x.data;
+  return {
+    features: blank(q.settings),
+    providers: blank(q.providers),
+    native: blank(q.runtime),
+    usage: blank(q.usage) || blank(q.usageTrend),
+    capabilities: blank(q.autonomy),
+    prompts: blank(q.prompts),
+    datasets: blank(q.datasets)
+  };
+}
+
 export function AISettingsTab({ readOnly }: { readOnly: boolean }) {
   const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: ["settings", "ai"], queryFn: settingsApi.getAI });
@@ -295,8 +329,13 @@ export function AISettingsTab({ readOnly }: { readOnly: boolean }) {
     [aiOn, keyed, captureOn, providers.data, runtime.data, usage.data?.totalCostUsd, settings.data?.monthlyBudgetUsd, autonomy.data, prompts.data, datasets.data?.length]
   );
 
-  const liveCount = board.filter((b) => b.state === "live").length;
-  const byId = (id: string) => board.find((b) => b.id === id)!;
+  const sectionUnavailable = failedSections({ settings, providers, runtime, usage, usageTrend, autonomy, prompts, datasets });
+  const unavailableCount = Object.values(sectionUnavailable).filter(Boolean).length;
+  const visibleBoard = board.map((entry) => sectionUnavailable[entry.id]
+    ? { ...entry, value: undefined, state: "attention" as const, stateLabel: "Could not load" }
+    : entry);
+  const liveCount = visibleBoard.filter((b) => b.state === "live").length;
+  const byId = (id: string) => visibleBoard.find((b) => b.id === id)!;
   const section = (id: string) => {
     const entry = byId(id);
     return { id, prefix: PREFIX, name: entry.name, blurb: entry.blurb, state: entry.state, stateLabel: entry.stateLabel, Icon: entry.Icon, open: sections.isOpen(id), onToggle: () => sections.toggle(id) };
@@ -306,15 +345,25 @@ export function AISettingsTab({ readOnly }: { readOnly: boolean }) {
     <div className="grid gap-4">
       <SectionBoard
         title="AI at a glance"
-        summary={aiSummary(settings.isLoading, aiOn, liveCount, board.length)}
-        entries={board}
+        summary={settings.isError && !settings.data ? "AI settings could not be loaded; status is unknown." : aiSummary(settings.isLoading, aiOn, liveCount, board.length)}
+        entries={visibleBoard}
         onPick={(id) => sections.reveal(id, PREFIX)}
         columns={4}
-        aside={<span className="text-xs font-medium tabular-nums text-muted-foreground">{liveCount} / {board.length}</span>}
+        aside={<span className="text-xs font-medium tabular-nums text-muted-foreground">{unavailableCount ? `${unavailableCount} unavailable` : `${liveCount} / ${board.length}`}</span>}
       />
 
       <SettingsSection {...section("features")}>
         {settings.isLoading && <Skeleton className="h-40 w-full" />}
+        {settings.isError && !settings.data && (
+          <Alert variant="warning">
+            <ShieldAlert className="h-4 w-4" />
+            <AlertTitle>AI settings could not be loaded</AlertTitle>
+            <AlertDescription className="flex flex-wrap items-center gap-2">
+              <span>The master switch and data-retention settings are unavailable until the saved policy loads.</span>
+              <Button size="sm" variant="outline" onClick={() => settings.refetch()}>Retry</Button>
+            </AlertDescription>
+          </Alert>
+        )}
         {!settings.isLoading && settings.data && (
           <>
             {!settings.data.apiKeyConfigured && (

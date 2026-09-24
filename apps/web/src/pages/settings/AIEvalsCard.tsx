@@ -11,11 +11,12 @@
  * costs nothing.
  */
 import { useQuery } from "@tanstack/react-query";
-import { FlaskConical } from "lucide-react";
+import { AlertTriangle, FlaskConical } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Skeleton } from "../../components/ui/skeleton";
 import { aiEvalApi, type AIEvalRunRow } from "../../services/api";
@@ -62,7 +63,17 @@ export function AIEvalsCard() {
       </CardHeader>
       <CardContent className="grid gap-3">
         {runs.isLoading && <Skeleton className="h-20 w-full" />}
-        {!runs.isLoading && (runs.data ?? []).length === 0 && (
+        {runs.isError && !runs.data && (
+          <Alert variant="warning">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Evaluation runs could not be loaded</AlertTitle>
+            <AlertDescription className="flex flex-wrap items-center gap-2">
+              <span>Retry to see the latest results.</span>
+              <Button size="sm" variant="outline" onClick={() => runs.refetch()}>Retry</Button>
+            </AlertDescription>
+          </Alert>
+        )}
+        {!runs.isLoading && !runs.isError && (runs.data ?? []).length === 0 && (
           <p className="py-2 text-sm text-muted-foreground">
             No evaluations yet. Open a golden dataset above and choose <strong>Run evaluation</strong>.
           </p>

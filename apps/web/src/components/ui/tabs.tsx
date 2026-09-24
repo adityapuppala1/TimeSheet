@@ -7,9 +7,39 @@ export const Tabs = TabsPrimitive.Root;
 export const TabsList = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.List>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>
->(({ className, ...props }, ref) => (
+>(({ className, ...props }, ref) => {
+  const listRef = React.useRef<HTMLDivElement>(null);
+  React.useImperativeHandle(ref, () => listRef.current!);
+  React.useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    let frame = 0;
+    const reveal = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (list.getAttribute("aria-orientation") === "vertical") return;
+        const selected = list.querySelector<HTMLElement>('[role="tab"][data-state="active"]');
+        if (!selected) return;
+        const bounds = list.getBoundingClientRect();
+        const tab = selected.getBoundingClientRect();
+        if (tab.left < bounds.left) list.scrollLeft += tab.left - bounds.left;
+        else if (tab.right > bounds.right) list.scrollLeft += tab.right - bounds.right;
+      });
+    };
+    const resize = new ResizeObserver(reveal);
+    const selection = new MutationObserver(reveal);
+    resize.observe(list);
+    selection.observe(list, { subtree: true, attributes: true, attributeFilter: ["data-state"] });
+    reveal();
+    return () => {
+      cancelAnimationFrame(frame);
+      resize.disconnect();
+      selection.disconnect();
+    };
+  }, []);
+  return (
   <TabsPrimitive.List
-    ref={ref}
+    ref={listRef}
     className={cn(
       // overflow-x-auto (new) so a TabsList wider than its container scrolls horizontally
       // instead of being silently clipped by html/body's `overflow-x: clip` (index.css) —
@@ -28,7 +58,8 @@ export const TabsList = React.forwardRef<
     )}
     {...props}
   />
-));
+  );
+});
 TabsList.displayName = TabsPrimitive.List.displayName;
 
 export const TabsTrigger = React.forwardRef<

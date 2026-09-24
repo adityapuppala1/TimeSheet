@@ -120,6 +120,23 @@ describe("the Ask AI guardrails", () => {
   const reporter = { id: "u2", role: "MANAGER", permissions: ["tickets:view", "reports:view"] };
   const superAdmin = { id: "u3", role: "SUPER_ADMIN", permissions: [] };
 
+  it("hides and refuses every write action in read-only reports, including for admins", () => {
+    const actor = { ...superAdmin, readOnly: true };
+    expect(visibleTools(AI_CHAT_ACTIONS, actor)).toEqual([]);
+    for (const action of AI_CHAT_ACTIONS) {
+      expect(canUseTool(action, actor), action.name).toBe(false);
+      expect(() => assertToolAllowed(action, actor), action.name).toThrow(/read-only report/);
+    }
+  });
+
+  it("preserves read permissions and normal chat actions", () => {
+    expect(visibleTools(AI_CHAT_TOOLS, { ...reporter, readOnly: true })).toEqual(visibleTools(AI_CHAT_TOOLS, reporter));
+    const draft = AI_CHAT_ACTIONS.find((action) => !action.access)!;
+    expect(draft).toBeDefined();
+    expect(canUseTool(draft, engineer)).toBe(true);
+    expect(canUseTool(draft, { ...engineer, readOnly: false })).toBe(true);
+  });
+
   it("hides super-admin tools from everyone else, however many permissions they hold", () => {
     const spend = AI_CHAT_TOOLS.find((t) => t.name === "ai_spend")!;
     expect(canUseTool(spend, engineer)).toBe(false);

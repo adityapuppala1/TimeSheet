@@ -25,6 +25,7 @@ import { Bot, Camera, CheckCircle2, ChevronRight, Circle, ClipboardList, Phone, 
 import { Link } from "react-router";
 import { useFaceStatus } from "../lib/use-face-status";
 import { usePlanningFeatures } from "../lib/use-planning";
+import { summarizeSetup } from "../lib/setup-checklist";
 import { aiOverviewApi, goalApi } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { Button } from "./ui/button";
@@ -43,8 +44,20 @@ interface ChecklistItem {
 
 export function SetupChecklistCard() {
   const user = useAuthStore((s) => s.user);
-  const dismissKey = `setup-checklist-dismissed:${user?.id ?? "anon"}`;
-  const [dismissed, setDismissed] = useState(() => localStorage.getItem(dismissKey) === "1");
+  if (!user) return null;
+  return <UserSetupChecklist key={`${user.id}:${user.role}`} />;
+}
+
+function UserSetupChecklist() {
+  const user = useAuthStore((s) => s.user);
+  const dismissKey = `setup-checklist-dismissed:${user?.id}:${user?.role}`;
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(dismissKey) === "1";
+    } catch {
+      return false;
+    }
+  });
 
   const faceStatus = useFaceStatus();
   const { features: planningFeatures } = usePlanningFeatures();
@@ -87,20 +100,20 @@ export function SetupChecklistCard() {
   const setupItems: ChecklistItem[] = !isSuperAdmin
     ? []
     : [
-        ...(goals.data && goals.data.length === 0
+        ...(planningFeatures.goals && goals.isSuccess && goals.data
           ? [
               {
                 key: "first-goal",
                 label: "Write your first goal",
                 description:
                   "Wire it to something this workspace already records — approved hours, billed spend, tickets closed — and its progress reports itself.",
-                done: false,
+                done: goals.data.length > 0,
                 to: "/app/goals",
                 icon: <Target className="h-4 w-4 text-primary" />
               }
             ]
           : []),
-        ...(w && w.agents.enabled === 0
+        ...(workspace.isSuccess && w
           ? [
               {
                 key: "first-agent",
@@ -109,20 +122,20 @@ export function SetupChecklistCard() {
                   w.agents.total === 0
                     ? "Six are ready to install, each built from AI this workspace already runs. They arrive switched off."
                     : "Every teammate on the roster is off, so nothing they own can run.",
-                done: false,
+                done: w.agents.enabled > 0,
                 to: "/app/agents",
                 icon: <Bot className="h-4 w-4 text-primary" />
               }
             ]
           : []),
-        ...(w && w.flows.live === 0
+        ...(workspace.isSuccess && w
           ? [
               {
                 key: "first-flow",
                 label: w.flows.total === 0 ? "Build a workflow" : "Switch on a workflow",
                 description:
                   "A trigger, then steps. Replay it against your own recent history first — it calls no model and writes nothing.",
-                done: false,
+                done: w.flows.live > 0,
                 to: "/app/studio",
                 icon: <Workflow className="h-4 w-4 text-primary" />
               }
@@ -163,14 +176,11 @@ export function SetupChecklistCard() {
     });
   }
 
-  const open = [...items, ...setupItems].filter((i) => !i.done);
-  const hasBlockingOpen = open.some((i) => i.blocking);
+  const { ordered, total, completed, hasBlockingOpen } = summarizeSetup([...items, ...setupItems]);
 
   // Nothing left to do — or dismissed and nothing workflow-blocking remains.
-  if (open.length === 0) return null;
+  if (completed === total) return null;
   if (dismissed && !hasBlockingOpen) return null;
-
-  const doneCount = items.length + setupItems.length - open.length;
 
   return (
     <Card className="border-primary/30 bg-primary/[0.03]">
@@ -179,7 +189,7 @@ export function SetupChecklistCard() {
           <div className="flex items-center gap-2">
             <ClipboardList className="h-4 w-4 text-primary" />
             <p className="text-sm font-semibold">
-              Finish setting up <span className="text-muted-foreground font-normal">— {doneCount}/{items.length} done</span>
+              Finish setting up <span className="text-muted-foreground font-normal">— {completed}/{total} done</span>
             </p>
           </div>
           {!hasBlockingOpen && (
@@ -189,7 +199,11 @@ export function SetupChecklistCard() {
               className="h-7 w-7"
               aria-label="Dismiss setup checklist"
               onClick={() => {
-                localStorage.setItem(dismissKey, "1");
+                try {
+                  localStorage.setItem(dismissKey, "1");
+                } catch {
+                  // Keep dismissal usable when the browser disallows persistent storage.
+                }
                 setDismissed(true);
               }}
             >
@@ -198,8 +212,9 @@ export function SetupChecklistCard() {
           )}
         </div>
 
+        <progress className="mt-3 h-1.5 w-full accent-primary" value={completed} max={total} aria-label="Setup completion" />
         <ul className="mt-3 grid gap-2">
-          {items.map((item) => (
+          {ordered.map((item) => (
             <li key={item.key}>
               {item.done ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -213,7 +228,7 @@ export function SetupChecklistCard() {
                 >
                   <Circle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                   <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1.5 text-sm font-medium">
+                    <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
                       {item.icon}
                       {item.label}
                       {item.blocking && (

@@ -47,13 +47,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { z } from "zod";
 import type { TicketPriority } from "@prisma/client";
-import { resolveProviderLabel, type AIProvider } from "@timesheet/shared";
+import { resolveProviderLabel, AI_ANSWER_STYLE_GUIDANCE, type AIProvider } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { isNativeProviderBaseUrl } from "../config/native-ai.js";
 import { prisma } from "../config/prisma.js";
 import { computeRecentAvgCostByLabel, computeRecentStatusByLabel, recordProviderAttemptOutcome } from "./ai-provider-config.service.js";
 import { acquireAiSlot } from "./ai-concurrency.service.js";
-import { AI_CHAT_TOOLS, findAiChatTool, type AiChatToolContext } from "./ai-chat-tools.js";
+import { AI_CHAT_TOOLS, findAiChatTool, type AiChatSourceReference, type AiChatToolContext } from "./ai-chat-tools.js";
 import { AI_CHAT_ACTIONS, findAiChatAction } from "./ai-chat-actions.js";
 import { assertToolAllowed, sanitiseToolResult, visibleTools, type AccessibleTool, type ChatActor } from "./ai-chat-guardrails.js";
 import { cleanAnswer as cleanAskAnswer } from "./ai-answer-format.js";
@@ -4597,7 +4597,7 @@ const ASK_HISTORY_CLIP = 500;
 
 export interface AskChatResult {
   answer: string;
-  toolCalls: Array<{ tool: string; detail: string }>;
+  toolCalls: Array<{ tool: string; detail: string; references?: AiChatSourceReference[] }>;
   model: string;
   provider: string;
   inputTokens: number;
@@ -4631,6 +4631,8 @@ export interface AskChatResult {
  */
 export async function askWorkspaceChat(input: {
   prompt: string;
+  answerStyle?: import("@timesheet/shared").AiAnswerStyle;
+  readOnly?: boolean;
   history: Array<{ prompt: string; answer: string | null }>;
   toolCtx: AiChatToolContext;
   userId: string;
@@ -4647,7 +4649,8 @@ export async function askWorkspaceChat(input: {
   const actor: ChatActor = {
     id: input.toolCtx.req.user.id,
     role: input.toolCtx.req.user.role,
-    permissions: input.toolCtx.req.user.permissions
+    permissions: input.toolCtx.req.user.permissions,
+    readOnly: input.readOnly === true
   };
   const allowedTools = visibleTools(AI_CHAT_TOOLS, actor);
   const allowedActions = visibleTools(AI_CHAT_ACTIONS, actor);
@@ -4669,7 +4672,7 @@ export async function askWorkspaceChat(input: {
     .join("\n---\n");
 
   const transcript: string[] = [];
-  const toolCalls: Array<{ tool: string; detail: string }> = [];
+  const toolCalls: AskChatResult["toolCalls"] = [];
   let inputTokens = 0;
   let outputTokens = 0;
   let costUsd = 0;
@@ -4801,6 +4804,7 @@ export async function askWorkspaceChat(input: {
           from it, never from what a past answer claimed you could or could not do — capabilities
           change between conversations):\n${historyLines}\n`
         : "",
+      `ANSWER STYLE: ${AI_ANSWER_STYLE_GUIDANCE[input.answerStyle ?? "default"]}`,
       `QUESTION: ${input.prompt}`,
       extra
     ]
@@ -4852,7 +4856,8 @@ export async function askWorkspaceChat(input: {
     if (helpTool) {
       try {
         assertToolAllowed(helpTool, actor);
-        const result = sanitiseToolResult(await helpTool.run({ query: input.prompt }, input.toolCtx));
+        const helpOutput = await helpTool.run({ query: input.prompt }, input.toolCtx);
+        const result = sanitiseToolResult(typeof helpOutput === "string" ? helpOutput : helpOutput.content);
         if (!result.startsWith("No help articles matched")) {
           toolCalls.push({ tool: "help_articles", detail: JSON.stringify({ query: input.prompt.slice(0, 120) }) });
           transcript.push(`--- help_articles ---\n<tool_result>\n${result}\n</tool_result>`);
@@ -5012,6 +5017,7 @@ export async function askWorkspaceChat(input: {
 
     const tool = findAiChatTool(parsed.tool) ?? findAiChatAction(parsed.tool);
     let result: string;
+    let references: AiChatSourceReference[] | undefined;
     if (!tool) {
       // The list here is the ALLOWED one, not the registry: naming a tool the person cannot use
       // would advertise it, and the next step would spend a call getting refused.
@@ -5022,13 +5028,22 @@ export async function askWorkspaceChat(input: {
         // never shown — a hallucinated name, or one suggested by text inside a tool result — and the
         // gate refuses it on identity, not on the model's willingness to behave.
         assertToolAllowed(tool, actor);
-        result = sanitiseToolResult(await tool.run(parsed.args ?? {}, input.toolCtx));
+        const output = await tool.run(parsed.args ?? {}, input.toolCtx);
+        if (typeof output === "string") result = sanitiseToolResult(output);
+        else {
+          result = sanitiseToolResult(output.content);
+          references = output.references.map((reference) => ({
+            ...reference,
+            key: sanitiseToolResult(reference.key),
+            title: sanitiseToolResult(reference.title)
+          }));
+        }
       } catch (error) {
         // A broken tool is reported INTO the loop, so the model can answer from what it has rather
         // than the whole question failing on one bad read.
         result = `The tool failed: ${(error as Error).message.slice(0, 300)}`;
       }
-      toolCalls.push({ tool: parsed.tool, detail: JSON.stringify(parsed.args ?? {}).slice(0, 160) });
+      toolCalls.push({ tool: parsed.tool, detail: JSON.stringify(parsed.args ?? {}).slice(0, 160), ...(references?.length ? { references } : {}) });
     }
     if (!result.startsWith("The tool failed:")) {
       lastCallSignature = signature;

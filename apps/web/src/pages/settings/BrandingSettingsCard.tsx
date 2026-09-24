@@ -79,9 +79,15 @@ export function BrandingSettingsCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
+        {branding.isError && !branding.data && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 p-3">
+            <p role="alert" className="text-sm text-destructive">Branding settings could not be loaded. Editing is unavailable until they load.</p>
+            <Button size="sm" variant="outline" onClick={() => branding.refetch()}>Retry</Button>
+          </div>
+        )}
         {branding.isLoading ? (
           <Skeleton className="h-24 w-full" />
-        ) : (
+        ) : branding.data ? (
           <>
             <div className="grid gap-2">
               <Label>Logo</Label>
@@ -156,7 +162,7 @@ export function BrandingSettingsCard() {
               </p>
             </div>
           </>
-        )}
+        ) : null}
       </CardContent>
     </Card>
   );

@@ -13,8 +13,19 @@ import { calculateHours } from "@timesheet/shared";
 import { AlertTriangle, CalendarClock, Check, ChevronsUpDown, Eraser, Save, Send, Sparkles, Ticket } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
+import { useBlocker } from "react-router";
 import { z } from "zod";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "../components/ui/alert-dialog";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { FileDropzone } from "../components/ui/file-dropzone";
@@ -205,6 +216,8 @@ function RefinableRichText({
 export function Timesheet() {
   const queryClient = useQueryClient();
   const [files, setFiles] = useState<File[]>([]);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const mutationLock = useRef(false);
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: () => timesheetApi.list() });
   /**
@@ -232,6 +245,20 @@ export function Timesheet() {
       endTime: "18:00"
     }
   });
+
+  const hasUnsavedChanges = form.formState.isDirty || files.length > 0;
+  const blocker = useBlocker(hasUnsavedChanges);
+  const discardPromptOpen = confirmClear || blocker.state === "blocked";
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [hasUnsavedChanges]);
 
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -357,8 +384,35 @@ export function Timesheet() {
     onError: (error: any) => {
       const message = error?.response?.data?.message ?? "Submission failed. Check required fields, time overlap, and max hours.";
       toast.error("Could not save timesheet", { description: message });
+    },
+    onSettled: () => {
+      mutationLock.current = false;
     }
   });
+
+  const saveOnce = (variables: { values: FormData; draft: boolean; faceVerificationId?: string }) => {
+    if (mutationLock.current) return;
+    mutationLock.current = true;
+    mutation.mutate(variables);
+  };
+
+  const clearForm = () => {
+    form.reset();
+    setFiles([]);
+    setConfirmClear(false);
+    toast.info("Form cleared");
+  };
+
+  const cancelDiscard = () => {
+    setConfirmClear(false);
+    if (blocker.state === "blocked") blocker.reset();
+  };
+
+  const confirmDiscard = () => {
+    if (blocker.state === "blocked") blocker.proceed();
+    else clearForm();
+    setConfirmClear(false);
+  };
 
   // Whether THIS user must pass a face check before submitting. Read from the server rather
   // than assumed, since it depends on the workspace policy plus a per-user override.
@@ -374,7 +428,7 @@ export function Timesheet() {
       setFaceDialogOpen(true);
       return;
     }
-    mutation.mutate({ values, draft: false });
+    saveOnce({ values, draft: false });
   };
 
   return (
@@ -617,14 +671,19 @@ export function Timesheet() {
                   <Progress value={capPercent} className={overCap ? "[&>div]:bg-destructive" : ""} />
                 </div>
                 <div className="flex flex-wrap gap-2 md:justify-end">
-                  <Button type="button" variant="ghost" onClick={() => { form.reset(); setFiles([]); toast.info("Form cleared"); }}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={mutation.isPending}
+                    onClick={() => (hasUnsavedChanges ? setConfirmClear(true) : clearForm())}
+                  >
                     <Eraser className="h-4 w-4" />Clear
                   </Button>
                   <Button
                     type="button"
                     variant="outline"
                     disabled={mutation.isPending}
-                    onClick={form.handleSubmit((values) => mutation.mutate({ values, draft: true }), focusFirstInvalid)}
+                    onClick={form.handleSubmit((values) => saveOnce({ values, draft: true }), focusFirstInvalid)}
                   >
                     <Save className="h-4 w-4" />Save draft
                   </Button>
@@ -665,10 +724,25 @@ export function Timesheet() {
         context="TIMESHEET"
         actionLabel="submit this timesheet"
         onVerified={(verificationId) => {
-          if (pendingValues) mutation.mutate({ values: pendingValues, draft: false, faceVerificationId: verificationId });
+          if (pendingValues) saveOnce({ values: pendingValues, draft: false, faceVerificationId: verificationId });
           setPendingValues(null);
         }}
       />
+
+      <AlertDialog open={discardPromptOpen} onOpenChange={(open) => !open && cancelDiscard()}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard this timesheet entry?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your unsaved fields and attached files will be lost. Save a draft first if you want to resume this entry later.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={cancelDiscard}>Keep editing</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDiscard}>Discard changes</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

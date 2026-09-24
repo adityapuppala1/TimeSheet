@@ -461,7 +461,7 @@ const FEATURES: Feature[] = [
     icon: Bot,
     group: "AI, governed",
     title: "AI, bring your own key",
-    body: "Auto-triage, duplicate detection, a writing assistant, comment summaries, drafted status reports and \"Ask AI\" search — on Anthropic, OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi, Nvidia NIM, your own local Ollama, any OpenAI-compatible endpoint you point it at, or a model this server runs itself with no key and no third party at all."
+    body: "Auto-triage, duplicate detection, a writing assistant, comment summaries, drafted status reports, permission-aware \"Ask AI\" search, and an Intelligence Center that combines the daily brief, personal work, measured delivery risk and reviewable AI actions — on Anthropic, OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi, Nvidia NIM, your own local Ollama, any OpenAI-compatible endpoint you point it at, or a model this server runs itself with no key and no third party at all."
   },
   {
     icon: Cpu,

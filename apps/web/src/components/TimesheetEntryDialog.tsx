@@ -126,8 +126,11 @@ export function TimesheetEntryDialog({
     queryKey: ["timesheet", entryId],
     queryFn: () => timesheetApi.get(entryId!),
     enabled: Boolean(entryId),
-    // The seed makes the first paint instant; `staleTime: 0` means the real row still lands.
-    initialData: initialEntry && initialEntry.id === entryId ? (initialEntry as TimesheetEntryDetail) : undefined
+    // Paint the list seed immediately, but always fetch the canonical detail. The global query
+    // staleTime is 30 seconds, so without this timestamp an initialData seed would suppress the
+    // detail request and could omit reviewer or attachment data for that whole interval.
+    initialData: initialEntry && initialEntry.id === entryId ? (initialEntry as TimesheetEntryDetail) : undefined,
+    initialDataUpdatedAt: 0
   });
 
   const entry = query.data;
@@ -226,9 +229,15 @@ export function TimesheetEntryDialog({
               Loading entry…
             </div>
           ) : query.isError ? (
-            <p className="py-8 text-sm text-destructive">
-              {serverMessage(query.error, "This entry could not be loaded. It may have been deleted.")}
-            </p>
+            <div role="alert" className="grid justify-items-start gap-3 py-8">
+              <p className="text-sm text-destructive">
+                {serverMessage(query.error, "This entry could not be loaded. It may have been deleted.")}
+              </p>
+              <Button variant="outline" size="sm" disabled={query.isFetching} onClick={() => query.refetch()}>
+                {query.isFetching && <Loader2 className="h-4 w-4 animate-spin" />}
+                Retry entry details
+              </Button>
+            </div>
           ) : entry && editing ? (
             <EntryEditForm entry={entry} formId={EDIT_FORM_ID} onSaved={invalidate} onDone={() => setEditing(false)} />
           ) : entry ? (
@@ -245,7 +254,7 @@ export function TimesheetEntryDialog({
           to "what can I do with this?" in both modes.
         */}
         <DialogFooter className="shrink-0 flex-wrap gap-2 border-t border-border pt-3">
-          {entry && editing ? (
+          {entry && editing && !query.isError ? (
             <>
               <Button variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
               <Button type="submit" form={EDIT_FORM_ID}>
@@ -254,14 +263,14 @@ export function TimesheetEntryDialog({
             </>
           ) : entry ? (
             <>
-              {canEdit && (
+              {!query.isError && canEdit && (
                 <Button variant="outline" onClick={() => setEditing(true)}>
                   <Pencil className="h-4 w-4" />Edit entry
                 </Button>
               )}
-              {footerExtras?.(entry)}
+              {!query.isError && footerExtras?.(entry)}
               {/* A draft has to be sendable from where it is read — see `canSubmit`. */}
-              {canSubmit && (
+              {!query.isError && canSubmit && (
                 <Button variant="default" disabled={decision.isSubmitting} onClick={() => decision.requestSubmit(entry)}>
                   {decision.isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                   Submit for approval
@@ -269,12 +278,12 @@ export function TimesheetEntryDialog({
               )}
               {/* Deciding, from ANY screen that opens this dialog — the dashboard timeline could
                   previously show the entry and offer nothing to do about it. */}
-              {entry.status === "SUBMITTED" && rejectHandler && (
+              {!query.isError && entry.status === "SUBMITTED" && rejectHandler && (
                 <Button variant="outline" disabled={decision.isDeciding} onClick={() => rejectHandler(entry)}>
                   <X className="h-4 w-4" />Reject
                 </Button>
               )}
-              {entry.status === "SUBMITTED" && approveHandler && (
+              {!query.isError && entry.status === "SUBMITTED" && approveHandler && (
                 <Button variant="success" disabled={decision.isDeciding} onClick={() => approveHandler(entry)}>
                   <Check className="h-4 w-4" />Approve
                 </Button>

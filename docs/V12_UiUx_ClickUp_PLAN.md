@@ -2,7 +2,252 @@
 > Any agent: read §3 of SYSTEM_PROMPT_V12_UiUx_ClickUp.md, then this file before working.
 > Branch: V12_UiUx_ClickUp — NEVER merge to main.
 
-## Current Status
+## Read First: Implementation Plan
+
+Updated 2026-09-23. This is the single implementation plan for the current continuation.
+The ordered checklist below takes precedence over historical resume points later in this file.
+The historical feature matrix and session notes remain evidence, not a second backlog.
+
+**Product objective:** make it easier to plan work, capture actual time, review exceptions and
+govern AI-assisted changes using the same underlying work records. Improve speed, clarity and
+trust without creating duplicate modules or changing approval authority.
+
+**Status meaning:** `[x]` = implemented and locally verified for the stated scope, not released.
+`[ ]` = unfinished. An investigation is not a promised feature. Never mark an entire phase done
+because one screen passed. Existing user changes must be preserved.
+
+### Already Implemented in This Continuation
+
+- [x] C01 Intelligence overview: existing brief/work/risk/provider data, permission-aware sections,
+  occupied desktop columns, named AI shortcuts, touch targets and keyboard focus.
+- [x] C02 Contextual assistant: reuse Ask AI, retain unsent follow-up text, respect role permissions.
+- [x] C03 Reports: read-only generation, date validation, Markdown export, stale-result protection.
+- [x] C04 Workflow draft scaffold: catalogue validation, manual trigger, human gate first,
+  explicit application to an empty editor, manual-edit and stale-response protection.
+- [x] C05 Personalization first slice: per-user browser-local answer style and reset to Default.
+  This is not cross-device memory.
+- [x] C06 Setup: workspace milestones, accurate progress denominator and scoped dismissal.
+- [x] C07 Agents: error/retry states, role-appropriate guidance, identity wrapping, keyboard
+  tooltips, bounded run-trace dialog and validated capability selection before starting.
+- [x] C08 Shared tabs: keep the active horizontal tab visible after selection and resizing.
+- [x] C09 Navigation baseline: superadmin 36 routes/32 tab selections; employee and manager
+  36 route attempts/10 tab selections each. Protected redirects are not rendered-page coverage.
+
+### Ordered Execution Checklist
+
+Finish one independently verifiable slice at a time. Resume at the first unfinished item.
+Record blockers and the reason before taking a later item. Do not quietly reorder this list.
+
+#### Phase A: Trustworthy AI Context
+
+- [x] A01 Report context. Extend the existing report result with its recorded timestamp,
+  requested period/grouping and existing tool evidence. Clearly distinguish generation time
+  from source-data freshness. Verify unchanged export, input edits and mobile wrapping.
+- [x] A02 Source evidence: ticket-only, verified references from scoped `search_tickets` and
+  `get_ticket` reads are attached to the corresponding tool call and link through the existing
+  ticket detail route. Other model-supplied arguments remain plain text. Old history entries
+  remain valid; other tools do not claim ticket evidence. Agent-run proposals retain their existing
+  server-fetched detail link. Do not generalize references to other entities without tracing each
+  tool's permission scope and returned row IDs.
+- [x] A03 Failure and freshness states. Audit loading, empty, error, retry and stale results in
+  the existing Intelligence/Ask AI/agent surfaces. Keep unavailable values distinct from zero.
+  Initial Ask AI history failure differs from a truly empty history and retries into the existing
+  empty state. Agent capability, project and trace failures have recovery controls; an in-flight
+  run list retains its last loaded rows after a failed poll. Intelligence data/settings failures
+  expose retries and retain unavailable values (including risk, which previously rendered zero on
+  error). Verified with `node scripts/verify-intelligence.mjs`, which exercises these paths using
+  API fixtures and checks phone/desktop and light/dark layouts. No production data or agent run was
+  changed.
+
+#### Phase B: Daily-Work UX
+
+- [x] B01 Ticket detail. Read/open existing detail tabs and inspect focus, long content,
+  attachments and list return context. The existing URL-driven sheet, horizontal tab reveal and
+  tests already covered all tab destinations, so none were duplicated. Fixed the concrete Files
+  gaps: long filenames wrap; remove has an accessible file-specific name, is shown only to its
+  uploader or a ticket manager (matching the API), and requires explicit confirmation. Browser
+  checks covered all tabs at 390px, keyboard Home/End, confirmation cancellation, long-name
+  wrapping, desktop sizing, and close/back list route context. The existing all-tabs test passed.
+  This does not claim every create/edit validation or attachment-upload failure path is audited.
+- [x] B02 Approval detail. The shared
+  detail dialog now always fetches canonical detail even when seeded from the queue (the global
+  30-second staleTime previously suppressed that request), offers an explicit retry on failure,
+  and hides mutation/detail-only actions while the query is in error. Live browser verified the
+  submitted queue, pending detail and human decision actions, plus approved detail with review
+  history and no approve/reject actions. A one-off Chromium run mocked two 503 responses, confirmed
+  retry is exposed and actions are suppressed during failure, then retried successfully and
+  confirmed the approved record is read-only. Web TypeScript and targeted ESLint pass (existing
+  warnings only). The Playwright test CLI still stalls before discovery in this environment, but
+  this focused browser verification completed without taking any approval action.
+- [x] B03 Time entry. Kept the existing Save draft and Submit for approval paths; the established
+  validation-focus behavior and pending-state buttons remain intact. Added a synchronous save lock,
+  SPA navigation and browser-unload guards for dirty fields/files, and a confirmation before Clear
+  discards work. Failed saves retain the entered values and leave retry available. Browser checks
+  exercised Keep editing/Discard for Clear and route navigation, injected a transient save failure,
+  retried successfully with a rapid double click, confirmed one saved draft, and deleted/verified
+  that uniquely marked test record. Phone screenshot inspected at 390px; web TypeScript, targeted
+  ESLint and unit suite passed (346 tests). No second draft store or autosave path was added.
+- [x] B04 List and view consistency. Checked Tickets, Requests, History, Inbox, and the Users,
+  Projects and Audit admin lists. Existing filters, saved ticket views, inbox-specific states and
+  history filter/summary behavior were reused; no competing views were added. Fixed Requests empty
+  results to distinguish status-filter misses from a genuinely empty inbox, with a “View all” reset,
+  and allowed long submission titles to wrap instead of truncating. Verified live Requests filter,
+  empty-state and reset behavior against workspace data; inspected the other lists live without
+  taking approval or admin actions. Desktop and phone-width document overflow checks were clean.
+  The source already uses filter-aware empty states in Tickets, History and Inbox; sampled Users,
+  Projects and Audit lists retain their existing filters. Browser checks were non-mutating.
+- [ ] B05 Settings usability. Review all 20 existing tabs plus nested sections; improve error
+  placement, configuration summaries and keyboard reachability. No additional settings hub.
+  First slice: initial-load failures in Reminders and Email channels now show inline retry instead
+  of an indefinite skeleton/blank matrix. BCC no longer renders a false off-state during an
+  initial settings outage, and Ticketing SLA shows the same retry state. Cached settings remain
+  visible on background-refresh errors. Tabs, values, permissions and save mutations are unchanged.
+  Extended the same recovery pattern to Ticketing automation rules and Email intake connection,
+  routing, assignment and project/person option queries. Failed rule lists no longer masquerade as
+  empty lists; option-load retries retain the in-progress rule draft. No settings were saved during
+  live verification; Email intake rendered its existing connection/routing/assignment sections.
+  Focused ESLint has zero errors and the 346-test web suite passes. All 20 tabs were traversed live
+  and each became selected; no configuration was saved. A follow-up showed the browser's responsive
+  override reports an effective CSS viewport of 422px (not 390px); document width matched that
+  viewport, so the apparent overflow was a measurement mismatch, not a Settings defect. This
+  traversal does not verify every nested control or each card's independent error state. Ticketing's
+  live board and all four existing sections were checked without saving; label removal now has a
+  specific accessible name. Change Management now retries its primary settings query instead of
+  disappearing, and failed catalogue loads show an unavailable state with retry rather than an
+  empty catalogue. Live-checked its board and catalogues without saving. Keep B05 active for
+  remaining settings error states, keyboard focus and nested-control checks. Branding now hides
+  baseline-dependent editing until settings load and exposes retry on initial failure; Storage &
+  logs now retries unavailable status rather than presenting a blank card. Chat Integrations
+  distinguishes initial settings/routing/project query failures from genuinely unconfigured
+  connections and empty rules, with targeted retries. Live-checked Branding, Storage & logs and
+  Chat Integrations; normal configuration controls rendered and no settings were saved. The
+  Storage page also accurately showed this dev instance's existing console-only logging status.
+  Single sign-on now blocks its provider board and editors when the primary configuration has no
+  loaded baseline, with an inline retry; SCIM initial failure is explicitly unknown and retryable
+  rather than looking switched off. The live configured-provider view and existing sign-in safety
+  controls rendered unchanged; no provider tests, toggles, token actions or saves were triggered.
+  Focused ESLint has zero errors and the web production build passes (existing chunk-size warning).
+  The induced primary/SCIM outage branches were source-verified, not simulated against the live
+  auth service. Keep B05 active for remaining independent query failures, nested-control keyboard
+  checks and responsive verification. Security & DevOps Git status now has explicit unavailable
+  and retry states; credential entry and webhook detail skeletons no longer appear authoritative
+  during an initial Git-status failure. Its live configured view rendered without invoking Git
+  actions. Focused ESLint has zero errors (one existing complexity warning) and production build
+  passes; the query-failure branch was source-verified, not simulated. MCP policy failure now
+  blocks endpoint/tool/credential controls until retry succeeds; failed acting-user lookup is
+  visible and prevents credential issuance. AI master settings, provider list, prompt list/detail,
+  golden dataset list/detail/recent-problem list, and evaluation list now distinguish initial
+  query failure from off/empty state and expose scoped retries. Existing cached results remain
+  available during refresh failures; baseline-dependent provider/dataset edits are withheld only
+  when no data has loaded. Live-checked the normal MCP and AI tabs without invoking an AI provider
+  test, changing policy, or issuing a credential. Web tests pass 346/346, build passes, focused
+  ESLint has zero errors (warnings only), and diff-check is clean. AI/MCP outage branches were
+  source-verified rather than induced against live AI or external-access services. Keep B05 active
+  for the remaining Settings cards, nested keyboard controls and responsive checks.
+
+#### Phase C: Smarter Existing Features
+
+- [x] C10 Workflow configuration. Inspected the catalogue/editor/API validation contract. Added
+  supported draft configuration incrementally with scoped project/person/approver pickers.
+  Simulation and explicit review now precede activation; the activation control remains disabled
+  on simulation failure and offers retry. Existing server validation still rejects unsupported or
+  out-of-scope values. Added a focused disposable-fixture E2E test and aligned Help/UI guide.
+  Web tests pass 346/346 and focused ESLint has zero errors. Browser E2E launch stalls during
+  Playwright startup, so the new test remains unverified in a live browser.
+- [ ] C11 Cross-device preferences. Extend existing user profile storage for explicit answer
+  preferences with opt-in, reset and deletion. Define retention and access before persisting.
+  Do not infer personal facts or create a second AI conversation-history store.
+- [ ] C12 Planning scenarios: investigate first. Compare current Portfolio/Workload/solver
+  capabilities with proposed staffing/date comparisons. Implement only a confirmed gap, with
+  visible assumptions and no live plan changes until approved.
+- [ ] C13 Relevant digests: investigate first. Reuse Inbox, reminder schedules and notification
+  preferences; evaluate explainable prioritization, snoozing and notification deduplication.
+  Do not create a parallel alert engine or enable new outbound messaging automatically.
+
+#### Phase D: Visual Quality and Performance
+
+- [ ] D01 Visual consistency. Apply existing status/project colors consistently; improve
+  hierarchy, spacing, icon alignment and compact panel headings. Reuse theme/accent/density
+  preferences. No global rebrand, ornamental hero or competing design system.
+- [ ] D02 Responsive verification. Check 390px phone, 768px tablet, 1440px desktop and 1920px
+  wide desktop; add 320px and 200% zoom checks for changed controls. Cover light/dark, selected
+  accent variants, touch, keyboard and reduced motion. Tables may scroll inside their container.
+- [ ] D03 Interaction performance. Baseline route loading, tab changes, filtering and dialogs
+  before optimization. Inspect large lazy chunks and long tasks; optimize measured bottlenecks.
+  Target field p75 INP <=200ms separately for mobile/desktop; lab checks are not field proof.
+- [ ] D04 Optional 3D agents: decision gate, not committed delivery. Prototype only on the existing
+  roster/run surface if it communicates real run state better than the 2D presentation. Require
+  lazy loading, reduced-motion support, non-WebGL fallback and measured mobile overhead.
+
+#### Phase E: Completion and Release Readiness
+
+- [ ] E01 Live-provider evaluation. Use consented test data and a bounded cost budget; evaluate
+  grounding, permission boundaries, malicious record text and tool failures. Mock tests do not
+  demonstrate model quality. No real approvals, outbound messages or destructive writes in probes.
+- [ ] E02 Regression closure. Re-run changed paths plus cross-module contracts, all applicable
+  tests/build/lint and role checks. Record screenshots, failures and residual risks by task ID.
+- [ ] E03 Documentation alignment. Update UI guide/shared Help, API docs where changed, and the
+  release/marketing surfaces required by ship-feature. No claims for pending capabilities.
+- [ ] E04 Release decision. Prepare upgrade notes and migration verification where applicable.
+  Publishing, production deployment and merging require a separate explicit decision.
+
+### No-Deviation Rules
+
+1. Before editing, read the full affected page/component and its data contract. Check existing
+   implementations, current diffs and this checklist for duplicates.
+2. Every change must map to a task ID above. New ideas go into a proposed scope amendment with
+   the user benefit, existing surface, dependency and verification plan before implementation.
+3. Keep routes, permissions, approval gates, public contracts and existing workflows intact.
+   Use additive migrations and existing feature flags for risky changes; never silently enable AI.
+4. Prefer existing components, theme tokens and APIs. No new page/tab/store for an existing job.
+5. Mark done only after scoped tests and browser checks. Report blocked or unverified work
+   explicitly. Maintain one active item and an exact next step in this file.
+6. Improvements are iterative, not endless scope growth: finish the checklist, review measured
+   usability/performance evidence, then agree the next version of the plan.
+
+### Verification and Current Handoff
+
+- Active item: B05 Settings usability. B04 is complete for the named list surfaces. B05 has the
+  first retryable-load improvements and all 20 tabs were traversed; nested-control and remaining
+  independent error-state checks are still open. Branding, Storage & logs and Chat Integrations
+  initial-load recovery is implemented and live checked. SSO now blocks configuration edits on a
+  missing initial baseline and retries; configured-provider workflow was live checked without
+  invoking any mutation. Security & DevOps Git retry handling is implemented and the normal page
+  was live checked without invoking any mutation. MCP policy/acting-user and AI settings/provider/
+  prompt/dataset/evaluation initial failures now have scoped recovery; normal AI and MCP tabs were
+  live checked without a provider test, policy change or credential issuance. No settings were
+  saved. Web suite passes 346/346; web production build passes; focused ESLint has zero errors
+  (warnings only). Next: finish independent Settings query failures, then keyboard/nested-control
+  and responsive checks before closing B05.
+  C10 implementation and docs are complete; its Playwright
+  E2E test is pending because the
+  test runner hangs during startup. Graphify is unavailable; focused source reads and live app checks
+  are being used instead.
+- A02 source evidence review: `search_tickets` and `get_ticket` select real IDs within the same
+  `ticketProjectScope` used by the ticket pages. Their results now carry typed ticket references;
+  tool-call JSON persists them additively and older rows remain compatible. The shared evidence
+  disclosure renders these as links to `/app/tickets?open=<id>` and shows other args only as text.
+  The controller still scopes history to its owner; ticket detail rechecks access. Agent-run API
+  remains superadmin-only and fetches its actual proposal server-side. API/Web TypeScript checks
+  passed after these changes. A final browser run encountered the login screen and is inconclusive;
+  no claim of live link verification. Graphify package is unavailable.
+  Extended browser pass also verified Ask AI history disclosure with long arguments on mobile;
+  report and chat screenshots inspected. Production build passed with existing large-chunk warnings.
+- A01 completed: existing `createdAt`, requested period/grouping and tool names displayed in
+  the report. Source freshness explicitly not certified. No new API, page or dependency.
+  Browser checks passed at 390/768/1440 in both themes; phone screenshots inspected. Export and
+  stale-input regressions passed. 343 web tests, TypeScript, targeted ESLint and production build
+  passed. Existing large-chunk build warnings remain under D03; no performance claim.
+- Latest prior checks: 343 web tests, TypeScript and browser regression passed. Targeted
+  Intelligence ESLint has one complexity warning; this is not a clean full-repository lint claim.
+- AI browser responses are mocked. No live-model quality, complete write-flow coverage or
+  production performance certification is claimed.
+- Graphify query/update currently fails because the configured Python lacks the package.
+- Commands: `npm run test --workspace @timesheet/web`, `npm run lint --workspace @timesheet/web`,
+  targeted `npx eslint <changed files>`, `node scripts/verify-intelligence.mjs`, `git diff --check`.
+  Full release gates and route audits are broader than this focused browser regression.
+
+## Historical Status
 - Phase: 2 — theme lifecycle (done) → mode + accents (done) → shell: touch targets (done) → PageHeader + derived breadcrumb: ALL 17 in-app pages (done) → sidebar Project → Module tree (done) → density comfortable/compact (done) → Phase 2 complete → Phase 3: 3.1 palette record search (done) → 3.2 keyboard shortcuts (done) → 3.3 list grouping (done) → 3.4 custom fields on the ticket (done) → 3.5 table columns (done) → 3.6 EmptyState primitive + slice 1 (done) → 3.7 slice 2 (done) → 3.8 Inbox keyboard triage (done) → 3.9 docs pass (done) → 3.10 two dashboard widgets (done) → 3.11a schema + toggle (done) → 3.11b API (done) → 3.11c sprints UI (done) → 3.12 LOOK slice 1 (done) → 3.13 LOOK slice 2 (done) → 3.14 LOOK slice 3 (done) → 3.15 stored per-project colours (done this session) → 3.16 two-column task panel (done this session) → 3.17 sprint on ticket creation (done this session) → 3.18 empty-state slice 3 (done this session) → 3.19 (done this session) → 3.20 Workload measures (done this session) → Phase 3 complete (3.1–3.21) → Phase 4: 4.1 responsive sweep (done this session) → 4.2 contrast (done this session) → 4.3 keyboard pass (done this session) → Phases 0–6 complete; the branch holds an unpushed 5.3.0 → Phase 7 planned 2026-09-17 from the user's direction (small parity gaps 7.1–7.4, colour/motion pass 7.5, one gated three.js surface 7.6, P3 pick 7.7). Phases 0–7 done; 5.3.0 and 5.4.0 prepared on the branch → Phase 8 (P3 rows, user's go-ahead 2026-09-17): 8.1 @mentions (done) → 8.2 connected records (done) → 8.3 assigned comments (done) → 8.4 doc relationships (done) → 8.5 Studio list as a Docs Hub (done) → 8.6 design notes (done) → Phase 8 closed → 9.1 personal stand-up (done, under the next Unreleased) → 8.7 marketing catch-up + 5.5.0 PREPARED on the branch (VERSION, CHANGELOG, Helm appVersion, README recount) — NOT tagged, NOT pushed, NOT released: that is a maintainer's call under CONTRIBUTING. Nothing further is buildable without a decision: publish 5.5.0, or pick one of the three products. Keep UI_GUIDE.md in step with every later UI unit.
 - Last updated: 2026-09-21 by Claude Code (Fable 5.1). Phases 0–11 done and RELEASED (5.3.0–5.5.0 on main, 2026-09-17, the never-push rule lifted once for that); Phase 12 (CI budget, e2e fixes, settings boards, TipTap 3, zero advisories) done on the branch under Unreleased.
 - Baseline at the end of this session: lint PASS (699 warnings, zero errors, ratchet at the ceiling); API 3282/3282; web 329/329; contrast 0 gating; `npm audit` 0 (dev included); full-tier CI green on the branch at `c86727f`, run 35580617651.
@@ -11,6 +256,160 @@
 - Prior checkpoint: resolve current with `git log -1`.
 
 ## Next Actions (ordered; first unchecked = resume point)
+### Prioritized UX and product extensions
+
+These are enhancements to existing surfaces, not authorization to create duplicate pages.
+Existing approvals, SLA escalation, capacity, budget forecasts, saved views, agents, workflow
+simulation, themes and density must be reused. Candidates below require a focused source review
+before implementation; an opportunity is not a claim that all related functionality is absent.
+
+| Priority | Existing surface | Proposed enhancement | Acceptance boundary |
+|---|---|---|---|
+| P0 | Intelligence and shared navigation | Role-aware occupied columns, named AI links, visible focus and generous touch targets | No empty permission-hidden grid track; keyboard and phone checks; no route changes |
+| P1 | Tickets, approvals, time-entry dialogs | Review primary-action placement, validation focus, draft-loss warnings and return-to-list context | Preserve current permissions and save/submit distinction; inspect each full dialog first |
+| P1 | Existing lists and views | Consistent loading/error/empty states, long-name handling, filter/scroll preservation where missing | Do not duplicate saved views; preserve intentional horizontal table scrolling |
+| P1 | Ask AI, reports, agent traces | More actionable source references, data timestamp/scope and explicit limitations | Reuse existing tool calls and history; never invent confidence or provenance |
+| P1 | Workflow Studio | Complete supported step configuration with scoped pickers and preview before apply | Reuse catalogue, simulation and human gates; generated IDs never bypass permissions |
+| P2 | Profile / Ask AI | Opt-in cross-device answer preferences with reset and retention controls | Extend existing user preferences; no inferred personal memory or new conversation store |
+| P2 | Portfolio / Workload | Evaluate scenario comparisons for staffing/date changes against existing forecasts | First inspect current solver; assumptions explicit; no plan writes before approval |
+| P2 | Inbox / existing notifications | Evaluate digest relevance and explain why an item needs attention | Reuse reminders and notification preferences; no second alert engine |
+| P2 | Existing page loading | Measure real interaction bottlenecks and optimize heavy lazy chunks | Baseline first; target field p75 INP <=200ms separately on phone/desktop; not yet measured |
+| Deferred | Agent roster / run details | Optional state-driven 3D only if it improves comprehension | Lazy, reduced-motion, non-WebGL fallback; never required to operate the agent |
+
+Design direction: restrained work surfaces, existing semantic status/project colors, tighter
+information hierarchy, stable controls and short purposeful motion. No global palette replacement,
+decorative hero, new navigation tier or automatic approval behavior.
+Research: W3C focus-not-obscured guidance supports checking sticky actions against keyboard focus
+(https://www.w3.org/WAI/WCAG22/Understanding/focus-not-obscured-minimum/). The interaction budget
+comes from https://web.dev/articles/inp and is a target, not a current performance claim.
+
+Current slice: Intelligence now fills available desktop columns for users without risk access;
+AI shortcuts have unique accessible names and 44px minimum height; source/history links expose
+focus rings and their directional affordance on keyboard focus. Existing routes remain unchanged.
+The daily brief also occupies full width when AI history is permission-hidden. Verification:
+343 web tests, TypeScript and extended browser regression passed; restricted-role screenshot
+inspected. Targeted ESLint has no errors and one page-complexity warning. AI responses mocked;
+this is not API permission testing or measured field performance. Graphify remains unavailable.
+
+### September 23 continuation: AI and adaptive UX (local, unreleased)
+
+Extend the existing surfaces below; do not create a second builder, assistant history store, or roadmap.
+
+| Area | Existing implementation to reuse | Current continuation status |
+|---|---|---|
+| Workflow authoring | `Studio.tsx`, `FlowCanvas.tsx`, `/flows`, authority validation, simulation and activation | AI draft scaffold implemented locally via the existing read-only Ask AI call. Strict schema/catalogue validation; manual trigger; approval gate first; no generated identities/settings. Explicit Use draft fills an empty existing editor only. Full configuration generation remains pending. |
+| Personal AI history | `AskAi.tsx`, `/ai-chat/history`, `aiAskExchange`, bounded follow-up context and clear-history | Already implemented. Do not add another memory store for conversation history. Explicit, user-controlled long-term preferences remain pending. |
+| Reports | `AiReportBuilder.tsx`, existing `/ai-chat/ask`, rich content renderer | Implemented locally. Read-only flag now blocks write tools at prompt selection and execution; report requests omit prior chat turns. Markdown export and date validation are present. |
+| Adaptive setup | `SetupChecklistCard.tsx`, face policy, existing goals/AI overview queries | Fixed locally: workspace milestones render, progress totals agree, required items come first, dismissal is user/role scoped. |
+| Intelligence overview | `IntelligenceCenter.tsx`, existing inbox/work/risk/provider APIs | Implemented locally. History/risk UI permission gates, complete daily brief list, routing-order lookup and honest configuration status added. No model-health score is inferred from configuration. |
+
+Verification for this continuation: API and web TypeScript passed; Ask AI guardrail, deflection,
+protocol and Help tests passed (79 tests). `node scripts/verify-intelligence.mjs` passed at desktop
+and mobile widths in light/dark, including report read-only payload/export, copilot draft preservation,
+setup progress/dismissal, and a restricted-permission identity fixture (no account changes).
+AI responses were stubbed; this does not evaluate a live model. Targeted ESLint: zero errors,
+two warnings (controller nested conditional and Intelligence page complexity). `git diff --check`
+passed. Graphify query/update cannot run: configured Python lacks the `graphify` package.
+Workflow draft follow-up: six parser/prompt tests pass; targeted new-file ESLint has no warnings;
+web TypeScript passes. Browser checks passed at 390/1440 in both themes with mocked AI output,
+including preservation of manual edits and zero workflow write requests during generation/application.
+The draft intentionally requires the author to configure approvers, conditions and action targets.
+Follow-up: draft conditions now accept catalogue-listed priority/source values and sender domains,
+with `is` / `is_not`; project IDs and unsupported values are rejected. The existing condition picker
+now persists its displayed default operator when selecting a field. Eight focused draft tests pass.
+Approvers, projects and action targets still require explicit selection; activation remains unchanged.
+Personalization first slice: Ask AI has an explicit answer-style selector (Default, Concise,
+Detailed, Checklist), saved per user in this browser only. Default deletes the preference.
+Server validates the enum and applies fixed presentation guidance; original questions, permissions,
+and tool gates are unchanged. Reports/workflow drafts do not inherit it. Three storage tests pass.
+This is NOT cross-device long-term factual memory; that remains pending.
+
+Full release checks, live-provider evaluation, complete workflow configuration generation, explicit memory controls and
+marketing/release synchronization remain pending. Do not describe the whole roadmap as complete.
+
+### Earlier phase checklist
+### September 23 page review and enhancement pass
+
+Product purpose confirmed from README and existing flows: connect planned tickets, actual approved
+time, capacity/budgets and governed changes. Employee screens optimize daily capture; managers need
+exceptions and approval context; admins need configuration, permissions, cost and execution evidence.
+No new product page, tab, feature store, or agent execution engine is added by this pass.
+
+Read-only navigation audit: `scripts/audit-ui-pages.mjs` derives destinations from the existing
+Sidebar AST (plus Profile and Help), signs in as the seeded super admin, blocks API writes, records
+full rendered page/panel text and captures 1440/390 light/dark viewport screenshots. Results are local
+in `test-results/ui-audit/results.json`. Completed: 36 routes, 32 visible/enabled tab selections,
+144 screenshots, no navigation exceptions or JavaScript page errors. This is NOT verification of
+all record-detail dialogs, hidden/nested tabs, roles, permissions, write workflows or live models.
+Off-screen geometry includes intentional horizontal scroll containers and is a review signal, not
+proof of a layout defect. Screenshots are not automatically equivalent to visual approval.
+
+| Existing surfaces | Use case and next review decision |
+|---|---|
+| Home, time entry, history, inbox, my work | Preserve quick daily capture. Review keyboard/focus and failure states before changing layout; preserve intentional timeline scrolling. |
+| Tickets (List/Board/Timeline/Calendar), requests (Inbox/Forms), changes | Preserve one underlying record across views. Next: nested details, form validation, attachment and approval paths, without real writes during audits. |
+| Goals, sprints, timeline, portfolio, workload, blueprints, requirements, proposals | Preserve dense planning and measured capacity. Review narrow-screen legend/table legibility and proposal review separately; do not replace planning with decorative cards. |
+| Intelligence, Ask AI, agents, workflows, AI overview/activity | Reuse existing assistant/history, gallery, canvas and run traces. Agents source read in full; error states, stable identity colors, selector accessibility and mobile identity wrapping improved. |
+| Approvals, team, dashboards, reports, insights, security insights | Preserve source-backed metrics. Next: role-specific review and drill-down consistency. No arbitrary health/readiness scores. |
+| Users, projects, audit, email templates/analytics, practice update | Preserve administration and auditability. Next: empty/error/loading state comparisons and long-name wrapping. |
+| Settings (20 tabs), Profile, Help | Existing tabs retained. Shared TabsList now keeps the selected horizontal tab visible on resize and selection without moving the page or changing keyboard activation. |
+
+Research supporting the decisions:
+- W3C tabs pattern: preserve selected-tab semantics and keyboard navigation; automatic activation
+  only suits panels without noticeable latency: https://www.w3.org/WAI/ARIA/apg/patterns/tabs/
+- ClickUp agent/automation activity emphasizes review of runs and explanations, already represented
+  by TimeSphere's existing traces: https://help.clickup.com/hc/en-us/articles/30953763592087-View-your-Automations-and-Autopilot-Agents-activity
+- Agent permissions remain explicit, not inferred from a visual identity:
+  https://help.clickup.com/hc/en-us/articles/36926065055127-Super-Agent-privacy-security-and-permissions
+
+3D agent presentation remains a design investigation, not a shipped feature. Any implementation must
+enhance the existing roster/run surface, communicate actual state, lazy-load, respect reduced motion,
+retain a non-WebGL fallback and prove mobile performance. No decorative scene was added in this pass.
+Pending product work remains: cross-device explicit memory, complete workflow configuration generation,
+live-provider evaluation and full release synchronization. Do not mark these complete based on mocks.
+
+Verification: all 343 web unit tests passed; web TypeScript and production build passed. The build
+still reports large lazy chunks (not a performance certification). Targeted Tabs ESLint is clean;
+Agents has three pre-existing nested-conditional warnings and no errors. Browser regressions cover
+agent roster/ledger outages and retry recovery plus selected-tab visibility after desktop-to-phone
+resize. Agent roster now precedes ledger details on the same page. No agent was created, enabled,
+retired or run by these checks. Graphify remains unavailable in the configured Python interpreter.
+
+Role follow-up: the same read-only audit now accepts `employee`, `manager` or `superadmin` and
+writes role-separated artifacts. Employee and manager each completed 36 route attempts, 10 tab
+selections and 144 screenshots with no JavaScript page errors or navigation exceptions. Twelve
+employee destinations and eight manager destinations redirected to Home under existing route
+guards; these are not claims of rendered-page coverage or API authorization testing.
+Agents now gives non-administrators appropriate idle-agent guidance rather than a Settings link
+they cannot use; administrators deep-link to the existing AI tab. Identity/capability tooltips
+are keyboard focusable. The existing Agent runs card now distinguishes list/detail errors from
+empty history, offers retry, checks the resolved capability before starting, and bounds long
+trace dialogs to the viewport. No new page, tab, agent or execution path was added.
+Follow-up checks: 343 web tests and web lint passed. The browser regression passed, including
+trace-error retry recovery and a long trace constrained at 390px; its screenshot was inspected.
+The harness explicitly expands the existing Agent runs section before opening a run. AI responses
+and trace records were fixtures; no agent execution was requested. `git diff --check` passed.
+Remaining nested/write workflows and live AI evaluations are still pending.
+
+Workflow draft follow-up: reviewed the assistant, parser and existing FlowDialog integration.
+Fixed stale-result application when the requested outcome changes during or after generation.
+Mutation variables retain the submitted outcome; only a matching result/error is displayed.
+Restoring the original outcome restores its draft without another AI request. Existing manual-edit
+protection, explicit application and zero automatic workflow writes remain unchanged.
+Verification: the extended browser regression passed delayed-response and post-response edits,
+restoration, manual-edit protection and zero workflow writes. Phone screenshot inspected; 343 web
+tests, web TypeScript and targeted component ESLint passed. Responses were mocked, not live AI.
+
+Report follow-up: reviewed the complete existing AiReportBuilder. Results and export now require
+the current prompt to match the submitted dates, grouping and question; stale responses show a
+settings-changed status, and failed answers cannot render as successful reports. Restoring the
+original inputs reuses the result without another request. Browser regressions cover dates,
+grouping and an edited question during a delayed response. No duplicate report surface or API.
+The setup-progress browser assertion now samples count and denominator in one DOM evaluation
+to avoid comparing different asynchronous renders. Web tests: 343 passed; TypeScript passed.
+Extended browser regression and targeted ESLint passed; AI responses were mocked. Graphify
+remains unavailable. No release, deployment or live-model evaluation was performed.
+
 - [x] Phase 0: inventory architecture, commands, existing modules and design foundation.
 - [x] Reproduce baseline test timeout and isolate the unit test from developer SMTP configuration.
 - [x] Phase 1: research official ClickUp sources and fill every required Feature Matrix area; inspect existing implementations before assigning parity status.

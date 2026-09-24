@@ -152,6 +152,18 @@ export function liveOrOff(live: boolean, liveLabel: string, offLabel: string, va
   return live ? { state: "live", label: liveLabel, value } : { state: "off", label: offLabel, value };
 }
 
+/**
+ * The same, for a tile whose query can fail. A board tile reading "None active" when the request
+ * errored is worse than useless: it is a confident statement of something nobody checked, and the
+ * section underneath it is showing a retry button at the time. Two callers had written this out by
+ * hand; naming it also keeps the ternary out of `liveOrOff`'s arguments, which is what put the file
+ * over the lint ratchet.
+ */
+export function liveOrError(isError: boolean, live: boolean, liveLabel: string, offLabel: string, value?: string): TileVerdict {
+  if (isError) return { state: "attention", label: "Could not load", value: "Retry in section" };
+  return liveOrOff(live, liveLabel, offLabel, value);
+}
+
 // ── Face verification
 export function facePolicyVerdict(allowedByPlan: boolean, enabled: boolean, everyone: boolean): TileVerdict {
   let value = "Off";

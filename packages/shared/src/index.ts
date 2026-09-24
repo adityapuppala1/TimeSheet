@@ -15,6 +15,7 @@ export * from "./native-runtime.js";
    above all) that must read identically on the settings screen and in the installer. */
 export * from "./native-engine.js";
 export * from "./appearance.js";
+export * from "./ai-preferences.js";
 /**
  * WHAT: the single `@timesheet/shared` package — every type/constant that both `apps/api` and
  * `apps/web` need to agree on: roles/permission keys, activity types, ticket status/priority

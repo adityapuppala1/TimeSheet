@@ -49,6 +49,18 @@ export interface AiChatToolSpec {
   readonly publishes?: boolean;
 }
 
+export interface AiChatSourceReference {
+  kind: "ticket";
+  id: string;
+  key: string;
+  title: string;
+}
+
+export interface AiChatToolResult {
+  content: string;
+  references: AiChatSourceReference[];
+}
+
 /** The request-shaped context every executor needs — who is asking, with which permissions. */
 export interface AiChatToolContext {
   req: { user: { id: string; role: string; permissions: string[] } };
@@ -66,7 +78,7 @@ async function scopeWhere(ctx: AiChatToolContext) {
   return scope.unrestricted ? {} : { projectId: { in: scope.projectIds } };
 }
 
-export type AiChatTool = AiChatToolSpec & { run: (args: Record<string, unknown>, ctx: AiChatToolContext) => Promise<string> };
+export type AiChatTool = AiChatToolSpec & { run: (args: Record<string, unknown>, ctx: AiChatToolContext) => Promise<string | AiChatToolResult> };
 
 const EVERYDAY_TOOLS: ReadonlyArray<AiChatTool> = [
   {
@@ -86,12 +98,15 @@ const EVERYDAY_TOOLS: ReadonlyArray<AiChatTool> = [
       };
       const rows = await prisma.ticket.findMany({
         where,
-        select: { key: true, title: true, status: true, priority: true, assignee: { select: { name: true } }, project: { select: { code: true } } },
+        select: { id: true, key: true, title: true, status: true, priority: true, assignee: { select: { name: true } }, project: { select: { code: true } } },
         orderBy: { updatedAt: "desc" },
         take: Math.min(Number(args.limit) || 20, 40)
       });
       if (rows.length === 0) return "No tickets matched.";
-      return clip(rows.map((t) => `[${t.key}] (${t.status}, ${t.priority}, ${t.project.code}) ${t.title}${t.assignee ? ` — ${t.assignee.name}` : ""}`).join("\n"));
+      return {
+        content: clip(rows.map((t) => `[${t.key}] (${t.status}, ${t.priority}, ${t.project.code}) ${t.title}${t.assignee ? ` — ${t.assignee.name}` : ""}`).join("\n")),
+        references: rows.map(({ id, key, title }) => ({ kind: "ticket", id, key, title }))
+      };
     }
   },
   {
@@ -103,19 +118,22 @@ const EVERYDAY_TOOLS: ReadonlyArray<AiChatTool> = [
       const ticket = await prisma.ticket.findFirst({
         where: { key: String(args.key ?? ""), deletedAt: null, ...(await scopeWhere(ctx)) },
         select: {
-          key: true, title: true, status: true, priority: true, type: true, description: true, dueAt: true,
+          id: true, key: true, title: true, status: true, priority: true, type: true, description: true, dueAt: true,
           assignee: { select: { name: true } }, reporter: { select: { name: true } }, project: { select: { name: true } },
           _count: { select: { comments: true, attachments: true } }
         }
       });
       if (!ticket) return "No such ticket in your accessible projects.";
       const text = (ticket.description ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 600);
-      return clip(
-        `[${ticket.key}] ${ticket.title}\nProject: ${ticket.project.name} · ${ticket.type} · ${ticket.status} · ${ticket.priority}` +
+      return {
+        content: clip(
+          `[${ticket.key}] ${ticket.title}\nProject: ${ticket.project.name} · ${ticket.type} · ${ticket.status} · ${ticket.priority}` +
           `\nReporter: ${ticket.reporter.name} · Assignee: ${ticket.assignee?.name ?? "unassigned"} · Due: ${ticket.dueAt?.toISOString().slice(0, 10) ?? "none"}` +
           `\nComments: ${ticket._count.comments} · Attachments: ${ticket._count.attachments}` +
           (text ? `\nDescription: ${text}` : "")
-      );
+        ),
+        references: [{ kind: "ticket", id: ticket.id, key: ticket.key, title: ticket.title }]
+      };
     }
   },
   {

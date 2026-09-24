@@ -619,6 +619,16 @@ function ScimProvisioningCard({
       onToggle={onToggle}
     >
       {scim.isLoading && <Skeleton className="h-32 w-full" />}
+      {scim.isError && !scim.data && (
+        <Alert variant="warning">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>SCIM settings could not be loaded</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-2">
+            <span>Provisioning status is unknown. Retry before changing this connection.</span>
+            <Button size="sm" variant="outline" onClick={() => scim.refetch()}>Retry</Button>
+          </AlertDescription>
+        </Alert>
+      )}
       {!scim.isLoading && scim.data && (
         <>
           <CopyableUrl label="SCIM base URL" url={baseUrl} />
@@ -727,10 +737,12 @@ export function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
         Boolean(l?.ldapUrl || l?.ldapBindDn || l?.ldapBindCredentialSet || l?.ldapSearchBase),
         Boolean(l?.isEnabled)
       ),
-      scim: stateFrom(Boolean(scim.data?.tokenSet), Boolean(scim.data?.tokenSet), Boolean(scim.data?.isEnabled))
+      scim: scim.isError && !scim.data
+        ? "attention" as const
+        : stateFrom(Boolean(scim.data?.tokenSet), Boolean(scim.data?.tokenSet), Boolean(scim.data?.isEnabled))
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.data, scim.data]);
+  }, [settings.data, scim.data, scim.isError]);
 
   useEffect(() => {
     if (autoOpened.current || !settings.data) return;
@@ -761,13 +773,32 @@ export function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
     tile("ldap", "LDAP / AD", "Direct bind against your directory", states.ldap, LdapMark),
     tile("scim", "SCIM provisioning", "Accounts created and closed by your IdP", states.scim, ScimMark)
   ];
+  if (scim.isError && !scim.data) board[board.length - 1].stateLabel = "Could not load";
   const liveCount = board.filter((e) => e.state === "live").length;
+  const unknownCount = scim.isError && !scim.data ? 1 : 0;
+  let connectionSummary: string;
+  if (unknownCount > 0) connectionSummary = "Some connection status is unavailable; retry before changing sign-in configuration.";
+  else if (liveCount === 0) connectionSummary = "Nothing is switched on yet — everyone signs in with a password.";
+  else connectionSummary = `${liveCount} ${liveCount === 1 ? "connection is" : "connections are"} live.`;
+
+  if (settings.isError && !settings.data) {
+    return (
+      <Alert variant="warning">
+        <AlertTriangle className="h-4 w-4" />
+        <AlertTitle>Sign-in settings could not be loaded</AlertTitle>
+        <AlertDescription className="flex flex-wrap items-center gap-2">
+          <span>Provider status is unknown. Retry before changing sign-in methods or provider configuration.</span>
+          <Button size="sm" variant="outline" onClick={() => settings.refetch()}>Retry</Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
 
   return (
     <div className="grid gap-5">
       <SectionBoard
         title="Connections"
-        summary={liveCount === 0 ? "Nothing is switched on yet — everyone signs in with a password." : `${liveCount} ${liveCount === 1 ? "connection is" : "connections are"} live.`}
+        summary={connectionSummary}
         entries={board}
         onPick={pick}
         aside={<span className="text-xs font-medium tabular-nums text-muted-foreground">{liveCount} / {board.length}</span>}

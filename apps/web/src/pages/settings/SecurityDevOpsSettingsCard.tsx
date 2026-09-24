@@ -238,6 +238,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
   const repoRules = useQuery({ queryKey: ["finding-routing", "repository-maps"], queryFn: findingRoutingApi.repositoryMaps.list });
   const pathRules = useQuery({ queryKey: ["finding-routing", "module-path-rules"], queryFn: findingRoutingApi.modulePathRules.list });
   const sections = useOpenSections(OPEN_KEY, ["ingestion"]);
+  const gitUnavailable = git.isError && !git.data;
   const ing = ingestion.data;
   const repoCount = repoRules.data?.length ?? 0;
   const pathCount = pathRules.data?.length ?? 0;
@@ -251,7 +252,9 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
   const remediationOn = Boolean(ing?.verifyResolutionEnabled || ing?.autoReopenEnabled);
   const remediationV = liveOrOff(remediationOn, "In force", "Off", ing ? `Verify ${onOff(ing.verifyResolutionEnabled)} · reopen ${onOff(ing.autoReopenEnabled)}` : undefined);
   const digestsV = liveOrOff(digestOn || weeklyOn, "Sending", "Off — set in Email channels", notifications.data ? `Close ${onOff(digestOn)} · weekly ${onOff(weeklyOn)}` : undefined);
-  const gitV = devopsGitVerdict(git.data);
+  const gitV = git.isError && !git.data
+    ? { state: "attention" as const, label: "Could not load" }
+    : devopsGitVerdict(git.data);
   const tile = (id: string, name: string, blurb: string, Icon: BoardEntry["Icon"], v: { state: BoardEntry["state"]; label?: string; value?: string }): BoardEntry => ({ id, name, blurb, Icon, value: v.value, state: v.state, stateLabel: v.label });
   const board: BoardEntry[] = [
     tile("ingestion", "Ingestion", "Eight webhook URLs and the bearer token your pipeline posts with.", Webhook, ingestionV),
@@ -775,9 +778,18 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          {git.isLoading ? (
-            <Skeleton className="h-16 w-full" />
-          ) : git.data?.connected ? (
+          {git.isLoading && <Skeleton className="h-16 w-full" />}
+          {gitUnavailable && (
+            <Alert variant="warning">
+              <ShieldAlert className="h-4 w-4" />
+              <AlertTitle>Git connection status could not be loaded</AlertTitle>
+              <AlertDescription className="flex flex-wrap items-center gap-2">
+                <span>Retry before entering credentials or changing this connection.</span>
+                <Button size="sm" variant="outline" onClick={() => git.refetch()}>Retry</Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          {!git.isLoading && !gitUnavailable && git.data?.connected && (
             <>
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-success/40 bg-success/5 px-3 py-2.5">
                 <div className="min-w-0">
@@ -824,7 +836,8 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                 )}
               </div>
             </>
-          ) : (
+          )}
+          {!git.isLoading && !gitUnavailable && !git.data?.connected && (
             <>
               {!readOnly && (
                 <div className="flex flex-col gap-2 sm:flex-row">
@@ -877,7 +890,18 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
-          {git.data?.providerWebhookUrls ? (
+          {gitUnavailable && (
+            <Alert variant="warning">
+              <ShieldAlert className="h-4 w-4" />
+              <AlertTitle>Git webhook details could not be loaded</AlertTitle>
+              <AlertDescription className="flex flex-wrap items-center gap-2">
+                <span>Retry to load the existing provider URLs and secret status.</span>
+                <Button size="sm" variant="outline" onClick={() => git.refetch()}>Retry</Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          {git.isLoading && <Skeleton className="h-16 w-full" />}
+          {!git.isLoading && !gitUnavailable && git.data?.providerWebhookUrls && (
             <>
               {Object.entries(git.data.providerWebhookUrls).map(([provider, url]) => (
                 <CopyableUrl
@@ -915,8 +939,6 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                 work as always.
               </p>
             </>
-          ) : (
-            <Skeleton className="h-16 w-full" />
           )}
         </CardContent>
       </Card>

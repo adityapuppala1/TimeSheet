@@ -60,6 +60,7 @@ import {
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { FlowCanvas, type CanvasStep } from "../components/FlowCanvas";
+import { FlowDraftAssistant } from "../components/FlowDraftAssistant";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -279,7 +280,10 @@ export function StudioPage() {
                   flow={flow}
                   canManage={isSuperAdmin}
                   busy={toggle.isPending || retire.isPending || runNow.isPending}
-                  onToggle={(enabled) => toggle.mutate({ id: flow.id, enabled })}
+                  onToggle={(enabled) => {
+                    if (enabled) setSimulating(flow);
+                    else toggle.mutate({ id: flow.id, enabled });
+                  }}
                   onEdit={() => setEditing(flow)}
                   onSimulate={() => setSimulating(flow)}
                   onRetire={() => retire.mutate(flow.id)}
@@ -303,7 +307,17 @@ export function StudioPage() {
           onSaved={invalidate}
         />
       )}
-      {simulating && <SimulationDialog flow={simulating} onClose={() => setSimulating(null)} />}
+      {simulating && (
+        <SimulationDialog
+          flow={simulating}
+          activating={toggle.isPending}
+          onClose={() => setSimulating(null)}
+          onActivate={() => toggle.mutate(
+            { id: simulating.id, enabled: true },
+            { onSuccess: () => setSimulating(null) }
+          )}
+        />
+      )}
     </div>
   );
 }
@@ -827,7 +841,7 @@ function StepConfigFields({
     const field = catalogue?.branchFields.find((f) => f.key === text("field"));
     return (
       <div className="grid gap-1.5 sm:grid-cols-3">
-        <Select value={text("field")} onValueChange={(v) => patch({ field: v, value: undefined })}>
+        <Select value={text("field")} onValueChange={(v) => patch({ field: v, op: text("op") || "is", value: undefined })}>
           <SelectTrigger className="min-h-[44px] text-xs sm:min-h-0 sm:h-8">
             <SelectValue placeholder="Only if…" />
           </SelectTrigger>
@@ -1039,6 +1053,17 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
         </DialogHeader>
 
         <div className="space-y-4">
+          {!flow && catalogue.data && <FlowDraftAssistant
+            catalogue={catalogue.data}
+            canApply={!name.trim() && !description.trim() && steps.length === 0 && trigger === "MANUAL" && agentProfileId === "none"}
+            onApply={(draft) => {
+              setName(draft.name);
+              setDescription(draft.description ?? "");
+              setSteps(draft.steps);
+              setView("list");
+              setSelectedId(null);
+            }}
+          />}
           <div className="grid gap-3 sm:grid-cols-[5rem_minmax(0,1fr)]">
             <div className="space-y-1.5">
               <Label htmlFor="flow-emoji">Icon</Label>
@@ -1311,7 +1336,12 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
   );
 }
 
-function SimulationDialog({ flow, onClose }: Readonly<{ flow: FlowRow; onClose: () => void }>) {
+function SimulationDialog({ flow, activating, onClose, onActivate }: Readonly<{
+  flow: FlowRow;
+  activating: boolean;
+  onClose: () => void;
+  onActivate: () => void;
+}>) {
   const sim = useQuery<FlowSimulation>({ queryKey: ["flows", flow.id, "simulate"], queryFn: () => flowApi.simulate(flow.id) });
 
   return (
@@ -1325,6 +1355,13 @@ function SimulationDialog({ flow, onClose }: Readonly<{ flow: FlowRow; onClose: 
         </DialogHeader>
 
         {sim.isLoading && <Skeleton className="h-48" />}
+
+        {sim.isError && (
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 p-3">
+            <p className="text-sm text-destructive">The replay could not be loaded. This flow is still off.</p>
+            <Button size="sm" variant="outline" onClick={() => sim.refetch()}>Retry replay</Button>
+          </div>
+        )}
 
         {sim.data && (
           <div className="space-y-3">
@@ -1369,8 +1406,9 @@ function SimulationDialog({ flow, onClose }: Readonly<{ flow: FlowRow; onClose: 
             Close
           </Button>
           {!flow.enabled && flow.activatable && (
-            <Button asChild>
-              <Link to="/app/studio">Looks right — switch it on from the card</Link>
+            <Button onClick={onActivate} disabled={!sim.data || sim.isError || activating}>
+              {activating ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-4 w-4" />}
+              I reviewed the replay — switch on
             </Button>
           )}
         </DialogFooter>

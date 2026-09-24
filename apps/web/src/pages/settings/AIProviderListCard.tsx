@@ -23,7 +23,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { aiModels, aiProviderPresets, findNativeModel, resolveProviderLabel, type AIProvider, type NativeKvCacheType } from "@timesheet/shared";
-import { ArrowDown, ArrowUp, Bolt, KeyRound, Loader2, Pencil, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, Bolt, KeyRound, Loader2, Pencil, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import {
   settingsApi,
   type AIProviderConfigInput,
@@ -35,6 +35,7 @@ import { Badge } from "../../components/ui/badge";
 import { AI_PROVIDER_MARKS } from "../../components/ui/connector-marks";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -135,6 +136,7 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
   });
 
   const rows = providers.data ?? [];
+  const providersUnavailable = providers.isError && !providers.data;
 
   /* WHY THE LIST ITSELF ASKS ABOUT THE RUNTIME. A `LLAMA_CPP` row's health is not a property of the
      row: it depends on whether a process is serving on this host right now, which no amount of
@@ -171,7 +173,17 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
       </CardHeader>
       <CardContent className="grid gap-3">
         {providers.isLoading && <Skeleton className="h-24 w-full" />}
-        {!providers.isLoading && rows.length === 0 && (
+        {providersUnavailable && (
+          <Alert variant="warning">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Provider configuration could not be loaded</AlertTitle>
+            <AlertDescription className="flex flex-wrap items-center gap-2">
+              <span>Retry before adding or changing a provider.</span>
+              <Button size="sm" variant="outline" onClick={() => providers.refetch()}>Retry</Button>
+            </AlertDescription>
+          </Alert>
+        )}
+        {!providers.isLoading && !providers.isError && rows.length === 0 && (
           <p className="text-sm text-muted-foreground">
             No provider configured yet — AI features use Anthropic via the server's own key, if one is set.
             Add a provider to use your own key, a different vendor, or a local model.
@@ -290,8 +302,8 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
             </div>
           </div>
         ))}
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" disabled={readOnly} onClick={() => setEditing("new")}>
+        {!providersUnavailable && <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" disabled={readOnly || providers.isLoading} onClick={() => setEditing("new")}>
             <Plus className="mr-1 h-3.5 w-3.5" />
             Add provider
           </Button>
@@ -308,7 +320,7 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
             )}
             Suggest order
           </Button>
-        </div>
+        </div>}
 
         {globalSettings.data && (
           <div className="flex items-start justify-between gap-3 rounded-lg border border-border p-3">

@@ -28,6 +28,10 @@ Engineering: `packages/shared/src/appearance.ts` (the one definition both apps c
 
 ## 2. Command palette and record search
 
+The Intelligence overview fills the available columns when risk or AI-history sections are hidden
+by permissions. AI shortcuts have distinct accessible names and 44px minimum touch targets;
+source and history links expose keyboard focus without changing their destinations.
+
 **Open it:** `Ctrl K` (`⌘ K` on a Mac) from anywhere, even while typing in a field, or click the
 search box in the top bar.
 
@@ -68,6 +72,14 @@ cannot intercept them. Engineering: one table in `apps/web/src/lib/shortcuts.ts`
 the palette's hints and the Help article all render from it.
 
 ## 4. Getting around
+
+Horizontal tab strips keep the selected tab visible when their container changes width, including
+desktop-to-phone resizing. This does not change tab order, activation, or keyboard navigation.
+
+On Agents, gallery and roster identity colors now agree. Failed roster, gallery, ledger and history
+requests show separate retry states rather than appearing empty. Gallery category and capability
+selectors expose their selected state to assistive technology.
+The roster appears before detailed ledger/history sections so agent status is easier to reach on phones.
 
 - **Breadcrumb.** Every in-app page shows *Section › Page* under the top bar, derived from the
   sidebar's own navigation table — never typed per page, so it cannot drift from the sidebar.
@@ -145,9 +157,30 @@ the change is undone and the error explains why.
 **Flow runs.** In the **Workflow Studio**, "What they have done" filters by flow and by status and
 groups runs under Today, Yesterday or the date. Clearing the filters restores the whole feed.
 
+**Flow activation.** Switching on a draft first opens a read-only replay of recent matching triggers.
+Review the samples, then choose **I reviewed the replay — switch on**. If the replay cannot load,
+retry it; activation remains disabled until it does. Switching an already-live flow off remains
+immediate.
+
+**AI workflow drafts (local continuation).** In New flow, a generated draft belongs to the
+requested outcome submitted with it. Changing that outcome hides the old draft, including when
+the response arrives after your edit. Generate again, or restore the original outcome to review
+its draft. Applying still requires an empty editor and does not save or activate the workflow.
+
+**AI reports (local continuation).** Report results and Markdown export match the submitted
+dates, grouping and question. Changing these settings hides the previous result and export until
+you generate again or restore the original settings. A delayed response never replaces your edits.
+The result shows when the report was recorded, its requested period and grouping, and tools
+consulted. The recorded timestamp does not certify freshness of the underlying source data.
+Ask AI answers and generated reports share a keyboard-accessible **Tool evidence** disclosure.
+It lists recorded calls and their arguments in order. Arguments may be truncated and are plain
+text, not verified source links. A recorded call alone does not establish success or data freshness.
+
 **Agent runs.** Under **Workspace settings → AI**, the Agent runs list filters by status and by
 when a run happened, and groups what it finds under Today, Yesterday or the date. Clearing the
-filters restores the full list.
+filters restores the full list. List and run-detail failures show a retry action instead of an
+empty history. Long run traces scroll within the dialog on phones. Starting a run requires a
+resolved capability and, where required, a selected project.
 
 **Your stand-up.** At the top of **My work**, pick a period and press **Write it**: the AI phrases
 your own recent tickets, comments and logged hours as a short first-person stand-up you can copy.

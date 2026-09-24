@@ -18,16 +18,21 @@
  * in the meta figures dies.
  */
 import { Fragment, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Copy, Eraser, Loader2, MessagesSquare, Send, Sparkles, ThumbsDown, ThumbsUp, Wrench } from "lucide-react";
+import { AlertTriangle, Check, Copy, Eraser, Loader2, MessagesSquare, Send, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
 import { askAiApi, type AiAskExchangeRow } from "../services/api";
 import { AskAiCapabilitiesButton, useAskAiSuggestions } from "../components/ai/ask-ai-capabilities";
 import { SlashMenu, useSlashMenu } from "../components/ai/slash-menu";
 import { copyText } from "../lib/clipboard";
+import { AI_ANSWER_STYLES, type AiAnswerStyle } from "@timesheet/shared";
+import { useAuthStore } from "../store/auth";
+import { saveAnswerStyle, useAnswerStyle } from "../lib/ai-answer-style";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { cn } from "../lib/utils";
 import { AiMarkdown } from "../components/ui/ai-markdown";
 import { AiLoader } from "../components/ui/strands-gl";
-import { Badge } from "../components/ui/badge";
+import { ToolEvidence } from "../components/ai/tool-evidence";
 import { BorderGlow } from "../components/ui/border-glow";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
@@ -37,8 +42,11 @@ import { toast } from "../components/ui/toaster";
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
 export function AskAi() {
+  const userId = useAuthStore((state) => state.user?.id);
+  const answerStyle = useAnswerStyle(userId);
   const qc = useQueryClient();
-  const [prompt, setPrompt] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [prompt, setPrompt] = useState(() => searchParams.get("prompt")?.slice(0, 2000) ?? "");
   const feedRef = useRef<HTMLDivElement>(null);
 
   const history = useQuery({ queryKey: ["ask-ai", "history"], queryFn: () => askAiApi.history() });
@@ -47,6 +55,17 @@ export function AskAi() {
   // is not offered a question that would only come back refused.
   const suggestions = useAskAiSuggestions();
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    const seeded = searchParams.get("prompt")?.slice(0, 2000);
+    if (!seeded) return;
+    setPrompt(seeded);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("prompt");
+      return next;
+    }, { replace: true });
+    requestAnimationFrame(() => promptRef.current?.focus());
+  }, [searchParams, setSearchParams]);
   /* The same capability list the "What can it do?" dialog shows, and the same one the server builds
      the prompt from — so the menu can never offer something the assistant would refuse. Cached by
      react-query, so opening the menu costs no request. */
@@ -68,7 +87,7 @@ export function AskAi() {
   });
 
   const ask = useMutation({
-    mutationFn: (q: string) => askAiApi.ask(q),
+    mutationFn: (q: string) => askAiApi.ask(q, { answerStyle }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ask-ai", "history"] }),
     onError: (err: any, q) => {
       toast.error("Could not ask", { description: serverMessage(err, "Try again.") });
@@ -106,6 +125,39 @@ export function AskAi() {
   // Chips stay visible while the conversation is young — the moment somebody has a rhythm going
   // they are noise, so they retire after a few exchanges rather than living in the layout forever.
   const showChips = rows.length <= 2 && !ask.isPending;
+  let historyContent: React.ReactNode;
+  if (history.isLoading) historyContent = <Skeleton className="h-40 w-full" />;
+  else if (history.isError && rows.length === 0) historyContent = (
+    <div role="alert" className="grid justify-items-center gap-3 py-12 text-center">
+      <p className="text-sm text-destructive">AI history is unavailable. Your questions have not been deleted.</p>
+      <Button variant="outline" onClick={() => history.refetch()}>Retry AI history</Button>
+    </div>
+  );
+  else if (rows.length === 0 && !ask.isPending) historyContent = <EmptyState />;
+  else historyContent = (
+    <div className="grid gap-5">
+      {history.isError && <div role="status" className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-sm">
+        <span>Could not refresh history. Showing the exchanges already loaded.</span>
+        <Button variant="outline" size="sm" onClick={() => history.refetch()}>Retry history</Button>
+      </div>}
+      {rows.map((row, i) => (
+        <Fragment key={row.id}>
+          <DaySeparator current={row.createdAt} previous={rows[i - 1]?.createdAt} />
+          <Exchange row={row} />
+        </Fragment>
+      ))}
+      {ask.isPending && (
+        <div className="grid gap-3">
+          <UserBubble text={ask.variables ?? ""} />
+          <AssistantRow>
+            <div className="rounded-2xl rounded-tl-md border border-primary/20 bg-card px-4 py-3">
+              <AiLoader label="Consulting the workspace…" />
+            </div>
+          </AssistantRow>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className="flex h-[calc(100vh-7.5rem)] flex-col">
@@ -122,7 +174,13 @@ export function AskAi() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex max-w-full flex-wrap items-center gap-1">
+          <Select value={answerStyle} onValueChange={(value) => {
+            if (userId && !saveAnswerStyle(userId, value as AiAnswerStyle)) toast.error("Could not save the answer style in this browser.");
+          }}>
+            <SelectTrigger className="w-36" aria-label="Answer style (this browser)"><SelectValue /></SelectTrigger>
+            <SelectContent>{AI_ANSWER_STYLES.map((style) => <SelectItem key={style} value={style}>{style.charAt(0).toUpperCase() + style.slice(1)}</SelectItem>)}</SelectContent>
+          </Select>
           <AskAiCapabilitiesButton />
           {rows.length > 0 && <ClearHistoryButton />}
         </div>
@@ -130,32 +188,7 @@ export function AskAi() {
 
       <div ref={feedRef} onScroll={onFeedScroll} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl px-1 pb-4">
-          {history.isLoading ? (
-            <Skeleton className="h-40 w-full" />
-          ) : rows.length === 0 && !ask.isPending ? (
-            <EmptyState />
-          ) : (
-            <div className="grid gap-5">
-              {rows.map((row, i) => (
-                <Fragment key={row.id}>
-                  <DaySeparator current={row.createdAt} previous={rows[i - 1]?.createdAt} />
-                  <Exchange row={row} />
-                </Fragment>
-              ))}
-              {ask.isPending && (
-                <div className="grid gap-3">
-                  <UserBubble text={ask.variables ?? ""} />
-                  <AssistantRow>
-                    {/* The app's "waiting for the answer" mark, in its large-canvas form — one
-                        luminous thread breathing across the bubble. */}
-                    <div className="rounded-2xl rounded-tl-md border border-primary/20 bg-card px-4 py-3">
-                      <AiLoader label="Consulting the workspace…" />
-                    </div>
-                  </AssistantRow>
-                </div>
-              )}
-            </div>
-          )}
+          {historyContent}
         </div>
       </div>
 
@@ -298,18 +331,7 @@ function Exchange({ row }: { row: AiAskExchangeRow }) {
             <AiMarkdown content={row.answer ?? ""} />
           )}
 
-          {row.toolCalls.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              <Wrench className="h-3 w-3 text-muted-foreground" aria-hidden />
-              {/* What the answer actually consulted — the strip that separates "it looked" from
-                  "it made that up". */}
-              {row.toolCalls.map((t, i) => (
-                <Badge key={i} variant="muted" className="font-mono text-[10px]">
-                  {t.tool}
-                </Badge>
-              ))}
-            </div>
-          )}
+          <ToolEvidence calls={row.toolCalls} />
 
           <MetaStrip row={row} />
         </div>

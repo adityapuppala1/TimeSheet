@@ -11,11 +11,12 @@
  * says that up front rather than letting someone write out a correction and then hit an error.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Database, Play, Plus, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, Database, Play, Plus, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -48,6 +49,7 @@ function featureLabel(value: string): string {
 export function AIDatasetsCard({ readOnly, contentCaptureOn }: { readOnly: boolean; contentCaptureOn: boolean }) {
   const queryClient = useQueryClient();
   const datasets = useQuery({ queryKey: ["ai", "datasets"], queryFn: aiDatasetApi.list });
+  const datasetsUnavailable = datasets.isError && !datasets.data;
 
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState({ name: "", feature: "triage", description: "" });
@@ -85,8 +87,18 @@ export function AIDatasetsCard({ readOnly, contentCaptureOn }: { readOnly: boole
         )}
 
         {datasets.isLoading && <Skeleton className="h-16 w-full" />}
+        {datasetsUnavailable && (
+          <Alert variant="warning">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Datasets could not be loaded</AlertTitle>
+            <AlertDescription className="flex flex-wrap items-center gap-2">
+              <span>Retry before creating or editing a set.</span>
+              <Button size="sm" variant="outline" onClick={() => datasets.refetch()}>Retry</Button>
+            </AlertDescription>
+          </Alert>
+        )}
 
-        {!datasets.isLoading && (datasets.data ?? []).length === 0 && (
+        {!datasets.isLoading && !datasets.isError && (datasets.data ?? []).length === 0 && (
           <p className="py-2 text-sm text-muted-foreground">No datasets yet.</p>
         )}
 
@@ -108,7 +120,7 @@ export function AIDatasetsCard({ readOnly, contentCaptureOn }: { readOnly: boole
           ))}
         </div>
 
-        {!readOnly && !creating && (
+        {!readOnly && !creating && !datasetsUnavailable && (
           <Button size="sm" variant="outline" className="justify-self-start" onClick={() => setCreating(true)}>
             <Plus className="h-4 w-4" />New dataset
           </Button>
@@ -229,6 +241,16 @@ function DatasetDetailDialog({
           </DialogHeader>
 
           {dataset.isLoading && <Skeleton className="h-40 w-full" />}
+          {dataset.isError && !dataset.data && (
+            <Alert variant="warning">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>Dataset could not be loaded</AlertTitle>
+              <AlertDescription className="flex flex-wrap items-center gap-2">
+                <span>Examples and evaluation actions are unavailable until it loads.</span>
+                <Button size="sm" variant="outline" onClick={() => dataset.refetch()}>Retry</Button>
+              </AlertDescription>
+            </Alert>
+          )}
 
           {dataset.data && (
             <div className="grid gap-5">
@@ -293,7 +315,17 @@ function DatasetDetailDialog({
                     Responses that failed to parse, or that someone rated down. These are where a golden set earns its keep.
                   </p>
                   {candidates.isLoading && <Skeleton className="h-16 w-full" />}
-                  {!candidates.isLoading && (candidates.data ?? []).length === 0 && (
+                  {candidates.isError && !candidates.data && (
+                    <Alert variant="warning">
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertTitle>Recent problem examples could not be loaded</AlertTitle>
+                      <AlertDescription className="flex flex-wrap items-center gap-2">
+                        <span>The problem list is unavailable, not empty.</span>
+                        <Button size="sm" variant="outline" onClick={() => candidates.refetch()}>Retry</Button>
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                  {!candidates.isLoading && !candidates.isError && (candidates.data ?? []).length === 0 && (
                     <p className="py-2 text-sm text-muted-foreground">
                       No recorded problems for this capability — nothing to correct right now.
                     </p>

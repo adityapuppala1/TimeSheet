@@ -1312,11 +1312,22 @@ copy. Mail is best-effort: a slow SMTP server cannot lose a transition that alre
 `/ai-chat/*` — the full-page Ask AI: a conversation with a memory, distinct from the palette's
 one-shot `POST /ai/ask`. Same toggle (`workspaceSearchEnabled`), same capability (`ask_ai`).
 
-- `POST /ai-chat/ask` `{ prompt }` — answers through a tool loop and PERSISTS the exchange: prompt,
+- `POST /ai-chat/ask` `{ prompt, readOnly?: boolean, answerStyle?: "default" | "concise" | "detailed" | "checklist" }` — answers through a tool loop and PERSISTS the exchange: prompt,
   answer, which tools were consulted, model, provider, tokens, estimated cost and duration, all
   stored at answer time so the history keeps saying what each answer actually cost after the
   workspace's model changes. A failed attempt is stored too, with its error — "it failed at 14:02"
   is part of the history.
+  Ticket search/detail calls add optional `references` to that call's stored tool evidence.
+  Each reference is built from the permission-scoped ticket row (`kind`, opaque ticket `id`, key,
+  title), not parsed from model text. Existing exchanges and other tool calls may omit it. Opening
+  a reference uses the Tickets detail route, which performs its usual access check.
+  With `readOnly: true`, write actions are excluded from the model's tool list and refused again at
+  execution, including for super admins. Earlier chat turns are not loaded into report context.
+  History and usage logging still occur; this restriction prevents domain actions, not audit records.
+  Omitting the flag preserves the existing chat behavior. The Intelligence report builder sets it.
+  `answerStyle` is optional presentation guidance, not a permission or tool override. The Ask AI page
+  remembers the explicitly selected style per user in browser storage; Default deletes that preference.
+  The original question is stored unchanged. Report and workflow generation do not send this preference.
 - `GET /ai-chat/history?limit=` — the asker's OWN exchanges, oldest first. There is no cross-user
   read and no admin view: what somebody asks an assistant is closer to a search history than to a
   work record.

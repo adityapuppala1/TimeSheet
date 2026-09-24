@@ -134,6 +134,10 @@ test.describe("Timesheet", () => {
     // doesn't exist" ten seconds later, with no hint whether it was a 428 face gate, a 409
     // overlap, or a validation error — all of which have looked identical here before.
     const rejections: string[] = [];
+    let draftRequests = 0;
+    page.on("request", (request) => {
+      if (request.method() === "POST" && new URL(request.url()).pathname === "/api/timesheets/draft") draftRequests += 1;
+    });
     page.on("response", async (res) => {
       if (res.url().includes("/api/timesheets") && res.status() >= 400) {
         rejections.push(`${res.status()} ${res.request().method()} — ${(await res.text().catch(() => "")).slice(0, 200)}`);
@@ -172,7 +176,23 @@ test.describe("Timesheet", () => {
     await fillTime(page, "Start time", slot.start);
     await fillTime(page, "End time", slot.end);
     await page.getByLabel("Task description", { exact: true }).fill(marker);
-    await page.getByRole("button", { name: /save draft/i }).click();
+    let draftAttempts = 0;
+    await page.route("**/api/timesheets/draft", async (route) => {
+      draftAttempts += 1;
+      if (draftAttempts === 1) {
+        return route.fulfill({ status: 503, json: { message: "Temporary save outage" } });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return route.continue();
+    });
+    const saveDraft = page.getByRole("button", { name: /save draft/i });
+    await saveDraft.click();
+    await expect(page.getByText("Could not save timesheet")).toBeVisible();
+    await expect(page.getByLabel("Task description", { exact: true })).toContainText(marker);
+    await expect(saveDraft).toBeEnabled();
+    expect(draftRequests).toBe(1);
+    rejections.length = 0;
+    await saveDraft.dblclick();
 
 
     // The real assertion: the row exists server-side. Polled because the save is a mutation whose
@@ -196,6 +216,7 @@ test.describe("Timesheet", () => {
       .toBe(true);
 
     expect(rejections, "the API rejected the save").toEqual([]);
+    expect(draftRequests, "a rapid repeat click must not create a second save request").toBe(2);
     expect(await findDraft(), "the draft should exist server-side after saving").toBeTruthy();
 
     // Clean up so repeated runs don't accumulate drafts. An employee CAN delete their own draft,
@@ -207,6 +228,34 @@ test.describe("Timesheet", () => {
     // Postcondition, not just the status: this spec's whole history is of teardowns that reported
     // success while leaving the row behind.
     await expectGone(findDraft, `timesheet draft ${match!.id}`);
+  });
+
+  test("protects unsaved fields from Clear and in-app navigation", async ({ page }) => {
+    await signInAsEmployee(page);
+    await page.goto("/app/timesheet");
+    const description = page.getByLabel("Task description", { exact: true });
+    await description.fill("Keep this work while I check another page.");
+
+    const history = page.getByRole("link", { name: "History", exact: true }).first();
+    await history.click();
+    const discardDialog = page.getByRole("alertdialog");
+    await expect(discardDialog.getByText("Discard this timesheet entry?", { exact: true })).toBeVisible();
+    await discardDialog.getByRole("button", { name: "Keep editing" }).click();
+    await expect(page).toHaveURL(/\/app\/timesheet$/);
+    await expect(description).toContainText("Keep this work");
+
+    await page.getByRole("button", { name: "Clear", exact: true }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Keep editing" }).click();
+    await expect(description).toContainText("Keep this work");
+
+    await page.getByRole("button", { name: "Clear", exact: true }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Discard changes" }).click();
+    await expect(description).toBeEmpty();
+
+    await description.fill("Discard only after the confirmation.");
+    await history.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Discard changes" }).click();
+    await expect(page).toHaveURL(/\/app\/history$/);
   });
 
   /**
@@ -320,7 +369,8 @@ test.describe("Timesheet", () => {
     expect(measured.triggerWidth, "the ticket trigger is wider than the cell holding it").toBeLessThanOrEqual(measured.parentWidth + 1);
   });
 
-  test("refuses to delete an approved entry, even for a superadmin", async ({}, testInfo) => {
+  test("refuses to delete an approved entry, even for a superadmin", async ({ page }, testInfo) => {
+    await page.close(); // This is an API-only contract check; no browser session is needed.
     // The guard that protects the billing record: approved hours feed rate snapshots, cost
     // reports and Verified Work Attestations. If this ever starts returning 204, history becomes
     // rewritable after a client has already been shown it.

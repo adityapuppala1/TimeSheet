@@ -101,7 +101,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     where: "Anywhere in the app. Press ? to see the full list for your role.",
     when: "When you would rather not reach for the mouse: opening the palette, logging time, raising a ticket, or jumping between pages.",
     steps: [
-      "Press Ctrl K (⌘ K on a Mac) to open the command palette from anywhere, even while typing in a field.",
+      "Press Ctrl K (⌘ K on a Mac) to open the command palette from anywhere, even while typing in a field. Search pages, records and actions together; a full question can be handed directly to Ask AI.",
       "Press ? to open the shortcuts dialog. It lists only the shortcuts your role can use.",
       "Press N to go and log time, or C to create a ticket (the dialog opens on arrival).",
       "Press G then another letter to jump: G H home, G L log timesheet, G T tickets, G W my work, G I inbox, G P your profile.",
@@ -110,6 +110,21 @@ export const HELP_ARTICLES: HelpArticle[] = [
     notes:
       "Single keys and sequences are ignored while you are typing in a field, an editor or an open dialog, so a letter is always just a letter there. The browser keeps Ctrl N, Ctrl T and Ctrl W for itself, which is why none of the app's shortcuts use them.",
     keywords: ["keyboard", "shortcut", "shortcuts", "hotkey", "palette", "command", "ctrl k", "cmd k", "g t", "?", "inbox", "triage", "j k"]
+  },
+  {
+    id: "contextual-ai-copilot",
+    category: "Getting started",
+    title: "The contextual AI copilot",
+    where: "The sparkle button at the lower-right of every app page",
+    when: "When you want an answer about the work on the screen without leaving your current workflow.",
+    steps: [
+      "Press the sparkle button. The suggested questions adapt to the page you are viewing.",
+      "Choose a suggestion or ask in plain language; press Enter to send, or Shift Enter for a new line.",
+      "Read the answer in the side panel while the current page remains in place.",
+      "Choose Open full Ask AI history when you need previous answers, charts, feedback or the complete capability list."
+    ],
+    notes: "The copilot uses the same permission-filtered tools as Ask AI. It can only read data your role may already see.",
+    keywords: ["copilot", "contextual", "assistant", "sparkle", "side panel", "ask ai", "suggestions"]
   },
   {
     id: "notifications",
@@ -306,7 +321,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     steps: [
       "The date filter at the top drives EVERY card — change it once and hours, tickets and comparisons all follow.",
       "Comparisons read against the previous equal-length period, so “vs last period” means what it says.",
-      "The day timeline shows one lane per person you are entitled to see; the setup checklist retires itself as you finish it."
+      "The day timeline shows one lane per person you are entitled to see; the setup checklist retires itself as you finish it. Required face enrollment appears first and cannot be dismissed while incomplete. Super admins also see workspace goals, AI teammates and workflow milestones when available; completed milestones remain in the progress total."
     ],
     screenshot: "dashboard.png",
     keywords: ["dashboard", "home", "date filter", "cards", "timeline", "week", "overview"]
@@ -404,10 +419,28 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Type / in the box to open the capability menu — everything your role allows, filter by typing, Enter to pick.",
       "“What can it do?” (top right) lists every capability and which ones your role locks.",
       "Rate answers with the thumbs — ratings feed the workspace's quality datasets.",
+      "Expand Tool evidence to inspect the recorded calls. Scoped ticket searches include links to the ticket rows they returned; other arguments are audit context and may be truncated.",
+      "Choose an answer style in the header: Default, Concise, Detailed or Checklist. This preference is remembered for your user in this browser only; choosing Default removes it. It affects ordinary Ask AI answers, not report or workflow generation, and never changes permissions.",
       "The one thing it writes is a DRAFT timesheet entry, which you review and submit yourself."
     ],
     notes: "It answers only about this product and workspace — no web search, no outside knowledge. Off-topic questions get a polite fixed refusal.",
     keywords: ["ask ai", "assistant", "chat", "question", "slash", "capabilities", "chart"]
+  },
+  {
+    id: "intelligence-center",
+    category: "AI",
+    title: "Your intelligence center",
+    where: "Sidebar → Intelligence",
+    when: "At the start of the day, or when you need one place to decide what deserves attention before opening individual screens.",
+    steps: [
+      "Choose Build report in the header, enter a date range and grouping, then Generate report. Reports use read-only tools and do not include earlier chat turns. Review the result and tools consulted before exporting it as Markdown.",
+      "Read the attention stream: daily brief counts, open work, blockers and delivery risk are calculated from records you may already see.",
+      "Choose Build a report, Draft missing time, Explain delivery risk or Design a workflow to open Ask AI with a reviewable prompt already prepared.",
+      "Use Daily brief to jump to the source queue, or Recent AI context to continue an earlier question using current workspace data.",
+      "Super admins also see AI readiness guidance for the master switch, enabled providers and measured provider-order recommendation."
+    ],
+    notes: "AI-assisted actions open as questions or drafts. The center never publishes, submits, approves or changes configuration automatically.",
+    keywords: ["intelligence", "center", "daily brief", "risk", "report builder", "draft time", "workflow", "ai readiness", "memory"]
   },
   {
     id: "standup",
@@ -478,6 +511,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
     when: "Named assistants that compose capabilities the workspace already runs — scoped, budgeted, and off by default.",
     steps: [
       "Create a teammate, name it, and scope it to specific capabilities and projects.",
+      "Super admins can open Workflows → New flow, enter a Requested outcome and choose Draft with AI. This uses the existing Ask AI setting and budget. Review the proposed sequence, then choose Use draft to load it into an empty editor. Nothing is saved or activated by generation.",
+      "AI drafts start with a manual trigger and human approval. They can fill supported priority, source and sender-domain conditions. Choose the approver and complete remaining settings, then save. Switching on always opens a read-only replay first; review its samples and choose I reviewed the replay — switch on to activate. If replay fails, retry it; activation stays unavailable until replay loads. Drafting rejects unsupported steps and never selects people or projects on your behalf.",
       "Everything it proposes lands on the AI suggestions page as reviewable rows — accept or reject each individually; there is deliberately no apply-everything.",
       "Runs are priced on the same ledger as human work, against the same AI budget.",
       "Workspace settings → AI → Agent runs lists every run, grouped by the day it ran. Filter by status (Failed, Held for review, Stopped at a limit…) and by period to find one, then open it for its full step trace.",

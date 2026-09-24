@@ -145,7 +145,7 @@ test.describe("approvals queue", () => {
     // A UTF-8 BOM so Excel does not mangle accented names, then the same header the workspace-wide
     // export uses — the sharing is deliberate, so a drift here means one of the two moved.
     expect(body.subarray(0, 3).toString("hex")).toBe("efbbbf");
-    const text = body.toString("utf8").replace(/^﻿/, "");
+    const text = body.toString("utf8").replace(/^\uFEFF/, "");
     // Every field quoted, including the header — that is what keeps a project name containing a
     // comma from shifting every column after it.
     expect(text.split("\n")[0]).toBe(
@@ -200,5 +200,49 @@ test.describe("approvals queue", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.locator("table")).toBeHidden();
     await openFirstEntry();
+  });
+
+  test("detail fetch can be retried, and decided entries stay read-only", async ({ page }) => {
+    const counts = await statusCounts();
+    const rows = await withAdminRequest(async (ctx, headers) =>
+      (await (await ctx.get("/api/timesheets", { headers })).json()) as Array<{ id: string; status: string }>
+    );
+    const pending = rows.find((row) => row.status === "SUBMITTED");
+    const decided = rows.find((row) => row.status === "APPROVED" || row.status === "REJECTED");
+    test.skip(!counts.SUBMITTED || !pending || !decided, "need one pending and one decided entry in the demo data");
+
+    await openApprovals(page);
+    await shownTotal(page);
+    let detailRequests = 0;
+    const detailRoute = "**/api/timesheets/*";
+    await page.route(detailRoute, (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (!/^\/api\/timesheets\/[^/]+$/.test(pathname)) return route.continue();
+      detailRequests += 1;
+      return detailRequests <= 2
+        ? route.fulfill({ status: 503, json: { message: "Temporary detail outage" } })
+        : route.continue();
+    });
+    await page.locator('button[title="Open the full entry"]').filter({ visible: true }).first().click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText("Temporary detail outage")).toBeVisible({ timeout: 10_000 });
+    await expect(dialog.getByRole("button", { name: "Retry entry details" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
+    expect(detailRequests).toBe(2);
+    await dialog.getByRole("button", { name: "Retry entry details" }).click();
+    await expect(dialog.getByText("Task", { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(dialog.getByRole("button", { name: "Approve", exact: true })).toBeVisible();
+    await page.unroute(detailRoute);
+    await page.keyboard.press("Escape");
+
+    await page.locator("#approval-status").click();
+    const statusLabel = decided!.status === "APPROVED" ? "Approved" : "Rejected";
+    await page.getByRole("option", { name: statusLabel, exact: true }).click();
+    await shownTotal(page);
+    await page.locator('button[title="Open the full entry"]').filter({ visible: true }).first().click();
+    const decidedDialog = page.getByRole("dialog");
+    await expect(decidedDialog.getByText(statusLabel.toUpperCase(), { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(decidedDialog.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
+    await expect(decidedDialog.getByRole("button", { name: "Reject", exact: true })).toHaveCount(0);
   });
 });

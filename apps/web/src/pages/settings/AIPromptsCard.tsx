@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -43,6 +44,16 @@ export function AIPromptsCard({ readOnly }: { readOnly: boolean }) {
       </CardHeader>
       <CardContent className="grid gap-4">
         {prompts.isLoading && <Skeleton className="h-24 w-full" />}
+        {prompts.isError && !prompts.data && (
+          <Alert variant="warning">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Prompts could not be loaded</AlertTitle>
+            <AlertDescription className="flex flex-wrap items-center gap-2">
+              <span>Retry before opening or changing a prompt.</span>
+              <Button size="sm" variant="outline" onClick={() => prompts.refetch()}>Retry</Button>
+            </AlertDescription>
+          </Alert>
+        )}
 
         <div className="grid gap-1.5">
           {(prompts.data ?? []).map((p) => (
@@ -148,6 +159,16 @@ function PromptEditorDialog({ feature, readOnly, onClose }: { feature: string | 
         </DialogHeader>
 
         {detail.isLoading && <Skeleton className="h-56 w-full" />}
+        {detail.isError && !detail.data && (
+          <Alert variant="warning">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Prompt details could not be loaded</AlertTitle>
+            <AlertDescription className="flex flex-wrap items-center gap-2">
+              <span>The editor is unavailable until the current prompt loads.</span>
+              <Button size="sm" variant="outline" onClick={() => detail.refetch()}>Retry</Button>
+            </AlertDescription>
+          </Alert>
+        )}
 
         {detail.data && (
           <div className="grid gap-5">

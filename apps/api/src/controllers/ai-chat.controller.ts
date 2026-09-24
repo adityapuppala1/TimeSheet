@@ -19,7 +19,8 @@
  */
 import { Router } from "express";
 import { z } from "zod";
-import { permissions } from "@timesheet/shared";
+import { Prisma } from "@prisma/client";
+import { permissions, AI_ANSWER_STYLES } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
@@ -38,7 +39,7 @@ aiChatRouter.use(requireAuth);
 const HISTORY_MAX = 100;
 
 const askSchema = z.object({
-  body: z.object({ prompt: z.string().trim().min(3).max(2000) }).strict()
+  body: z.object({ prompt: z.string().trim().min(3).max(2000), readOnly: z.boolean().optional(), answerStyle: z.enum(AI_ANSWER_STYLES).optional() }).strict()
 });
 
 // The per-user AI limiter, the same one every other model-spending route carries. A chat box is the
@@ -47,6 +48,7 @@ const askSchema = z.object({
 // minute of hammering before it lands.
 aiChatRouter.post("/ask", requirePermission(permissions.TICKETS_VIEW), aiRateLimit, validate(askSchema), async (req, res) => {
   const prompt = String(req.body.prompt);
+  const readOnly = req.body.readOnly === true;
 
   // The model gets recent exchanges so follow-up questions resolve — "and how many of those are
   // critical?" has to mean something.
@@ -63,7 +65,7 @@ aiChatRouter.post("/ask", requirePermission(permissions.TICKETS_VIEW), aiRateLim
   // format failure or small talk — none of which help the next question, and all of which model the
   // wrong behaviour. Over-fetched then filtered, so six useful turns survive a bad patch instead of
   // the window collapsing the moment something fails.
-  const recent = (
+  const recent = readOnly ? [] : (
     await prisma.aiAskExchange.findMany({
       where: { userId: req.user!.id, error: null },
       orderBy: { createdAt: "desc" },
@@ -79,6 +81,8 @@ aiChatRouter.post("/ask", requirePermission(permissions.TICKETS_VIEW), aiRateLim
   try {
     const result = await askWorkspaceChat({
       prompt,
+      readOnly,
+      answerStyle: req.body.answerStyle,
       history: recent.reverse(),
       toolCtx: { req: req as never },
       userId: req.user!.id,
@@ -90,7 +94,7 @@ aiChatRouter.post("/ask", requirePermission(permissions.TICKETS_VIEW), aiRateLim
         userId: req.user!.id,
         prompt,
         answer: result.answer,
-        toolCalls: result.toolCalls,
+        toolCalls: result.toolCalls as unknown as Prisma.InputJsonValue,
         model: result.model,
         provider: result.provider,
         inputTokens: result.inputTokens,

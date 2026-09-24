@@ -25,6 +25,7 @@ import { SectionBoard, SettingsSection, useOpenSections, type BoardEntry } from 
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { McpMark } from "../../components/ui/connector-marks";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -233,6 +234,18 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
   };
 
   if (mcp.isLoading) return <Skeleton className="h-40 w-full" />;
+  if (mcp.isError && !mcp.data) {
+    return (
+      <Alert variant="warning">
+        <AlertTriangle className="h-4 w-4" />
+        <AlertTitle>MCP policy could not be loaded</AlertTitle>
+        <AlertDescription className="flex flex-wrap items-center gap-2">
+          <span>Endpoint and tool status are unknown. Retry before changing external access.</span>
+          <Button size="sm" variant="outline" onClick={() => mcp.refetch()}>Retry</Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
 
   return (
     <div className="grid gap-4">
@@ -426,6 +439,16 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
 
             {!readOnly && (
               <div className="flex flex-wrap gap-2">
+                {users.isError && (
+                  <Alert variant="warning" className="basis-full">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>People could not be loaded</AlertTitle>
+                    <AlertDescription className="flex flex-wrap items-center gap-2">
+                      <span>Retry before issuing a credential tied to a specific person.</span>
+                      <Button size="sm" variant="outline" onClick={() => users.refetch()}>Retry people</Button>
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <Input
                   className="min-w-[12rem] flex-1"
                   value={newName}
@@ -433,7 +456,7 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
                   placeholder="Credential name (e.g. Priya's Claude Desktop)"
                 />
                 <Select value={newUserId} onValueChange={setNewUserId}>
-                  <SelectTrigger className="w-64">
+                  <SelectTrigger className="w-64" disabled={users.isLoading || users.isError}>
                     <SelectValue placeholder="Acts as…" />
                   </SelectTrigger>
                   <SelectContent>
@@ -454,7 +477,7 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
                 />
                 <Button
                   size="sm"
-                  disabled={!newName.trim() || !newUserId || createCredential.isPending}
+                  disabled={!newName.trim() || !newUserId || users.isLoading || users.isError || createCredential.isPending}
                   onClick={() => createCredential.mutate()}
                 >
                   <Plus className="h-4 w-4" />

@@ -108,7 +108,7 @@ import { StorageAndLogsCard } from "./settings/StorageAndLogsCard";
 import { AISettingsTab } from "./settings/AISettingsTab";
 import { PageHeader } from "../components/PageHeader";
 import { SectionBoard, SettingsSection, useOpenSections, type BoardEntry } from "../components/settings/settings-sections";
-import { countOf, liveOrOff } from "../lib/settings-state";
+import { countOf, liveOrError, liveOrOff } from "../lib/settings-state";
 
 interface ToggleRow {
   key: keyof NotificationPreferences;
@@ -408,6 +408,15 @@ function useUpdate() {
   });
 }
 
+function SettingsLoadError({ onRetry }: Readonly<{ onRetry: () => void }>) {
+  return (
+    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+      <p className="text-sm text-destructive">These settings couldn&apos;t be loaded. No value has been changed.</p>
+      <Button size="sm" variant="outline" onClick={onRetry}>Retry</Button>
+    </div>
+  );
+}
+
 function ReminderScheduleCard({ readOnly }: { readOnly: boolean }) {
   const settings = useSettings();
   const update = useUpdate();
@@ -436,6 +445,7 @@ function ReminderScheduleCard({ readOnly }: { readOnly: boolean }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
+        {settings.isError && !settings.data && <SettingsLoadError onRetry={() => settings.refetch()} />}
         {settings.data?.serverTimezone && (
           <div className="flex items-start gap-3 rounded-lg border border-info/40 bg-info/10 p-3 text-sm">
             <AlarmClock className="mt-0.5 h-4 w-4 shrink-0 text-info" />
@@ -457,7 +467,7 @@ function ReminderScheduleCard({ readOnly }: { readOnly: boolean }) {
             <Skeleton className="h-12 w-full" />
           </>
         )}
-        {!settings.isLoading && settings.data && (
+        {!settings.isLoading && !settings.isError && settings.data && (
           <>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-1.5">
@@ -655,7 +665,9 @@ function EmailChannelsCard({ readOnly }: { readOnly: boolean }) {
           </div>
         )}
 
-        {!settings.isLoading && (
+        {settings.isError && !settings.data && <SettingsLoadError onRetry={() => settings.refetch()} />}
+
+        {!settings.isLoading && !settings.isError && settings.data && (
           // Horizontal scroll is contained HERE rather than on the page: seven columns cannot fit
           // a phone, and letting the page scroll sideways breaks every other card on the tab.
           <div className="overflow-x-auto rounded-lg border border-border">
@@ -805,7 +817,7 @@ function EmailChannelsCard({ readOnly }: { readOnly: boolean }) {
           </div>
         )}
 
-        {!settings.isLoading && (
+        {!settings.isLoading && !settings.isError && settings.data && (
           <div className="rounded-lg border border-dashed border-border p-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Always sent</p>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -873,6 +885,8 @@ function BccAndFormsCard({ readOnly }: { readOnly: boolean }) {
             </div>
             {settings.isLoading ? (
               <Skeleton className="h-6 w-11 rounded-full" />
+            ) : settings.isError && !settings.data ? (
+              <Button variant="outline" size="sm" onClick={() => settings.refetch()}>Retry</Button>
             ) : (
               <Switch
                 id="bcc-admin"
@@ -984,9 +998,9 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
   const slaHours = settings.data;
   const activeTypes = (types.data ?? []).filter((t: { isActive?: boolean }) => t.isActive !== false).length;
   const ruleCount = rules.data?.length ?? 0;
-  const typesV = liveOrOff(activeTypes > 0, "Offered on the form", "None active", types.data ? `${activeTypes} active` : undefined);
+  const typesV = liveOrError(types.isError, activeTypes > 0, "Offered on the form", "None active", types.data ? `${activeTypes} active` : undefined);
   const labelCount = labels.data?.length ?? 0;
-  const labelsV = liveOrOff(labelCount > 0, "In use", "None yet", labels.data ? countOf(labelCount, "label") : undefined);
+  const labelsV = liveOrError(labels.isError, labelCount > 0, "In use", "None yet", labels.data ? countOf(labelCount, "label") : undefined);
   const rulesV = liveOrOff(ruleCount > 0, "Running on new tickets", "None yet", rules.data ? countOf(ruleCount, "rule") : undefined);
   const board: BoardEntry[] = [
     {
@@ -995,12 +1009,12 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
       blurb: "Hours to resolve by priority, cost analytics, the leaderboard, CI gates, malware scanning, attestations.",
       Icon: Timer,
       value: slaHours ? `${slaHours.slaCriticalHours}h critical · ${slaHours.slaHighHours}h high · ${slaHours.slaMediumHours}h medium · ${slaHours.slaLowHours}h low` : undefined,
-      state: "live",
-      stateLabel: "In force"
+      state: settings.isError ? "attention" : "live",
+      stateLabel: settings.isError ? "Could not load" : "In force"
     },
     { id: "types", name: "Ticket types", blurb: "Bug, task, improvement — and your own.", Icon: Tag, value: typesV.value, state: typesV.state, stateLabel: typesV.label },
     { id: "labels", name: "Labels", blurb: "Cross-cutting tags: regression, customer-reported…", Icon: Tags, value: labelsV.value, state: labelsV.state, stateLabel: labelsV.label },
-    { id: "rules", name: "Automation rules", blurb: "The first matching rule assigns, labels and notifies a new ticket.", Icon: Workflow, value: rulesV.value, state: rulesV.state, stateLabel: rulesV.label }
+    { id: "rules", name: "Automation rules", blurb: "The first matching rule assigns, labels and notifies a new ticket.", Icon: Workflow, value: rules.isError ? "Retry in section" : rulesV.value, state: rules.isError ? "attention" : rulesV.state, stateLabel: rules.isError ? "Could not load" : rulesV.label }
   ];
   const shell = (id: string) => {
     const e = board.find((b) => b.id === id)!;
@@ -1029,7 +1043,9 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          {(settings.isLoading || !sla) ? (
+          {settings.isError && !settings.data ? (
+            <SettingsLoadError onRetry={() => settings.refetch()} />
+          ) : (settings.isLoading || !sla) ? (
             <Skeleton className="h-24 w-full" />
           ) : (
             <>
@@ -1181,6 +1197,8 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
           <CardDescription>Bug/Task/Improvement are seeded defaults — add your own or retire ones you don't use.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
+          {types.isError && <SettingsLoadError onRetry={() => types.refetch()} />}
+          {types.isLoading && <Skeleton className="h-16 w-full" />}
           {!readOnly && (
             <div className="flex flex-wrap items-end gap-2">
               <div className="grid gap-1.5">
@@ -1197,7 +1215,7 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
             </div>
           )}
           <div className="divide-y divide-border rounded-lg border border-border">
-            {(types.data ?? []).map((t) => (
+            {!types.isError && (types.data ?? []).map((t) => (
               <div key={t.id} className="flex items-center gap-3 p-3">
                 <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: t.color ?? "#94A3B8" }} />
                 <span className="flex-1 text-sm font-medium">{t.name}</span>
@@ -1205,7 +1223,7 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
                 {!readOnly && <Switch checked={t.isActive} onCheckedChange={(v) => toggleType.mutate({ id: t.id, isActive: v })} />}
               </div>
             ))}
-            {(types.data ?? []).length === 0 && <p className="p-3 text-sm text-muted-foreground">No ticket types yet.</p>}
+            {!types.isLoading && !types.isError && (types.data ?? []).length === 0 && <p className="p-3 text-sm text-muted-foreground">No ticket types yet.</p>}
           </div>
         </CardContent>
       </Card>
@@ -1218,6 +1236,8 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
           <CardDescription>Cross-cutting tags for tickets (e.g. "regression", "customer-reported").</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
+          {labels.isError && <SettingsLoadError onRetry={() => labels.refetch()} />}
+          {labels.isLoading && <Skeleton className="h-12 w-full" />}
           {!readOnly && (
             <div className="flex flex-wrap items-end gap-2">
               <div className="grid gap-1.5">
@@ -1234,18 +1254,18 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
             </div>
           )}
           <div className="flex flex-wrap gap-2">
-            {(labels.data ?? []).map((l) => (
+            {!labels.isError && (labels.data ?? []).map((l) => (
               <span key={l.id} className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs font-medium">
                 <span className="h-2 w-2 rounded-full" style={{ backgroundColor: l.color ?? "#94A3B8" }} />
                 {l.name}
                 {!readOnly && (
-                  <button type="button" onClick={() => removeLabel.mutate(l.id)} className="ml-1 text-muted-foreground hover:text-destructive">
+                  <button type="button" aria-label={`Remove ${l.name} label`} onClick={() => removeLabel.mutate(l.id)} className="ml-1 text-muted-foreground hover:text-destructive">
                     <X className="h-3 w-3" />
                   </button>
                 )}
               </span>
             ))}
-            {(labels.data ?? []).length === 0 && <p className="text-sm text-muted-foreground">No labels yet.</p>}
+            {!labels.isLoading && !labels.isError && (labels.data ?? []).length === 0 && <p className="text-sm text-muted-foreground">No labels yet.</p>}
           </div>
         </CardContent>
       </Card>
@@ -1320,7 +1340,19 @@ function TicketRulesCard({ readOnly }: { readOnly: boolean }) {
       <CardContent className="grid gap-4">
         {rules.isLoading && <Skeleton className="h-24 w-full" />}
 
-        {!rules.isLoading && (
+        {rules.isError && <SettingsLoadError onRetry={() => rules.refetch()} />}
+        {(projects.isError || users.isError || labels.isError) && (
+          <div className="grid gap-2 rounded-md border border-destructive/30 p-3">
+            <p role="alert" className="text-sm text-destructive">Some rule options could not be loaded. Your draft is unchanged.</p>
+            <div className="flex flex-wrap gap-2">
+              {projects.isError && <Button size="sm" variant="outline" onClick={() => projects.refetch()}>Retry projects</Button>}
+              {users.isError && <Button size="sm" variant="outline" onClick={() => users.refetch()}>Retry people</Button>}
+              {labels.isError && <Button size="sm" variant="outline" onClick={() => labels.refetch()}>Retry labels</Button>}
+            </div>
+          </div>
+        )}
+
+        {!rules.isLoading && !rules.isError && (
           <div className="grid gap-2">
             {(rules.data ?? []).length === 0 && <p className="text-sm text-muted-foreground">No automation rules yet.</p>}
             {(rules.data ?? []).map((rule, index) => (
@@ -1628,8 +1660,9 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
+          {settings.isError && !settings.data && <SettingsLoadError onRetry={() => settings.refetch()} />}
           {settings.isLoading || !draft ? (
-            <Skeleton className="h-40 w-full" />
+            !settings.isError && <Skeleton className="h-40 w-full" />
           ) : (
             <>
               {settings.data?.lastPollError && (
@@ -1723,6 +1756,10 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
           <CardDescription>First active match (in creation order) wins. No match falls back to the project above.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
+          {projects.isError && <SettingsLoadError onRetry={() => projects.refetch()} />}
+          {routingRules.isError && <SettingsLoadError onRetry={() => routingRules.refetch()} />}
+          {assigneeRules.isError && <SettingsLoadError onRetry={() => assigneeRules.refetch()} />}
+          {users.isError && <SettingsLoadError onRetry={() => users.refetch()} />}
           {!readOnly && (
             <div className="grid gap-2 sm:grid-cols-5 sm:items-end">
               <div className="grid gap-1.5">
@@ -1829,7 +1866,7 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
               </div>
               )
             )}
-            {(routingRules.data ?? []).length === 0 && (
+            {!routingRules.isError && (routingRules.data ?? []).length === 0 && (
               <p className="p-3 text-sm text-muted-foreground">No routing rules yet — inbound mail lands in the fallback project.</p>
             )}
           </div>
@@ -1898,7 +1935,7 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
                 )}
               </div>
             ))}
-            {(assigneeRules.data ?? []).length === 0 && <p className="p-3 text-sm text-muted-foreground">No auto-assignment rules yet.</p>}
+            {!assigneeRules.isError && (assigneeRules.data ?? []).length === 0 && <p className="p-3 text-sm text-muted-foreground">No auto-assignment rules yet.</p>}
           </div>
         </CardContent>
       </Card>

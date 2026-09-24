@@ -5798,7 +5798,11 @@ export interface AiAskExchangeRow {
   prompt: string;
   answer: string | null;
   error: string | null;
-  toolCalls: Array<{ tool: string; detail: string }>;
+  toolCalls: Array<{
+    tool: string;
+    detail: string;
+    references?: Array<{ kind: "ticket"; id: string; key: string; title: string }>;
+  }>;
   model: string | null;
   provider: string | null;
   inputTokens: number;
@@ -5831,7 +5835,7 @@ export interface AiChatCapabilities {
 }
 
 export const askAiApi = {
-  ask: async (prompt: string) => (await api.post<AiAskExchangeRow>("/ai-chat/ask", { prompt })).data,
+  ask: async (prompt: string, options?: { readOnly?: boolean; answerStyle?: import("@timesheet/shared").AiAnswerStyle }) => (await api.post<AiAskExchangeRow>("/ai-chat/ask", { prompt, ...options })).data,
   /** What this person's assistant can actually do — the same filter the prompt is built through. */
   capabilities: async () => (await api.get<AiChatCapabilities>("/ai-chat/capabilities")).data,
   history: async (limit = 50) => (await api.get<AiAskExchangeRow[]>("/ai-chat/history", { params: { limit } })).data,

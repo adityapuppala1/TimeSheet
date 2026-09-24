@@ -27,6 +27,7 @@ import { SectionBoard, SettingsSection, useOpenSections, type BoardEntry } from 
 import { catalogueVerdict, changeSettingsVerdict } from "../../lib/settings-state";
 import { changeApi, type ChangeCatalogueKind } from "../../services/api";
 import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { ChangeCatalogueEditor } from "../../components/change/ChangeCatalogueEditor";
 import { Input } from "../../components/ui/input";
@@ -73,7 +74,14 @@ export function ChangeManagementSettingsCard({ readOnly }: { readOnly: boolean }
   const sections = useOpenSections(OPEN_KEY, ["settings"]);
 
   if (config.isLoading) return <Skeleton className="h-64 w-full" />;
-  if (!config.data) return null;
+  if (config.isError || !config.data) {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 p-3">
+        <p role="alert" className="text-sm text-destructive">Change management settings could not be loaded.</p>
+        <Button size="sm" variant="outline" onClick={() => config.refetch()}>Retry</Button>
+      </div>
+    );
+  }
   const { settings, entitlements } = config.data;
   const on = settings.enableChangeManagement && entitlements.changeManagementEnabled;
 
@@ -82,7 +90,16 @@ export function ChangeManagementSettingsCard({ readOnly }: { readOnly: boolean }
     { id: "settings", name: "Change management", blurb: "The switch, the approval SLA and the face check on sign-off.", Icon: ShieldCheck, value: settingsV.value, state: settingsV.state, stateLabel: settingsV.label },
     ...CATALOGUES.map((c, i) => {
       const v = catalogueVerdict(counts[i].data);
-      return { id: c.kind, name: c.title, blurb: c.description, Icon: c.Icon, value: v.value, state: v.state, stateLabel: v.label };
+      const failed = counts[i].isError;
+      return {
+        id: c.kind,
+        name: c.title,
+        blurb: c.description,
+        Icon: c.Icon,
+        value: failed ? "Retry in section" : v.value,
+        state: failed ? "attention" as const : v.state,
+        stateLabel: failed ? "Could not load" : v.label
+      };
     })
   ];
   const shell = (id: string) => {

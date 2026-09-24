@@ -87,9 +87,17 @@ export function ChatIntegrationsSettingsCard({ readOnly }: { readOnly: boolean }
       };
     });
     const rulesV = liveOrOff(ruleCount > 0, "In force", "Defaults only", routingRules.data ? countOf(ruleCount, "rule") : undefined);
-    entries.push({ id: RULES_ID, name: "Routing rules", blurb: "Which channel or command lands in which project.", Icon: GitBranch, value: rulesV.value, state: rulesV.state, stateLabel: rulesV.label });
+    entries.push({
+      id: RULES_ID,
+      name: "Routing rules",
+      blurb: "Which channel or command lands in which project.",
+      Icon: GitBranch,
+      value: routingRules.isError ? "Retry in section" : rulesV.value,
+      state: routingRules.isError ? "attention" : rulesV.state,
+      stateLabel: routingRules.isError ? "Could not load" : rulesV.label
+    });
     return entries;
-  }, [rows, allowedPlatforms, routingRules.data, ruleCount]);
+  }, [rows, allowedPlatforms, routingRules.data, routingRules.isError, ruleCount]);
 
   const liveCount = board.filter((b) => b.id !== RULES_ID && b.state === "live").length;
   const entry = (id: string) => board.find((b) => b.id === id)!;
@@ -99,6 +107,12 @@ export function ChatIntegrationsSettingsCard({ readOnly }: { readOnly: boolean }
   };
 
   if (settings.isLoading) return <Skeleton className="h-40 w-full" />;
+  if (settings.isError || !settings.data) return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 p-3">
+      <p role="alert" className="text-sm text-destructive">Chat integration settings could not be loaded.</p>
+      <Button size="sm" variant="outline" onClick={() => settings.refetch()}>Retry</Button>
+    </div>
+  );
 
   return (
     <div className="grid gap-4">
@@ -139,12 +153,14 @@ export function ChatIntegrationsSettingsCard({ readOnly }: { readOnly: boolean }
             <CardDescription>First active match (in creation order) wins. No match falls back to that platform's default project above.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
+            {projects.isError && <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 p-3"><p role="alert" className="text-sm text-destructive">Projects could not be loaded. Existing routing data is unchanged.</p><Button size="sm" variant="outline" onClick={() => projects.refetch()}>Retry projects</Button></div>}
+            {routingRules.isError && <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 p-3"><p role="alert" className="text-sm text-destructive">Routing rules could not be loaded; this is not an empty rules list.</p><Button size="sm" variant="outline" onClick={() => routingRules.refetch()}>Retry rules</Button></div>}
             {!readOnly && <NewRoutingRuleRow projects={projects.data ?? []} />}
             <div className="divide-y divide-border rounded-lg border border-border">
-              {(routingRules.data ?? []).map((rule) => (
+              {!routingRules.isError && (routingRules.data ?? []).map((rule) => (
                 <RoutingRuleRow key={rule.id} rule={rule} readOnly={readOnly} />
               ))}
-              {(routingRules.data ?? []).length === 0 && (
+              {!routingRules.isError && (routingRules.data ?? []).length === 0 && (
                 <p className="p-3 text-sm text-muted-foreground">No routing rules yet — messages land in each platform's default project.</p>
               )}
             </div>

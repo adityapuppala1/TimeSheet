@@ -191,16 +191,15 @@ export function AgentsPage() {
         </div>
       )}
 
-      {!gateMessage && !roster.isLoading && (
+      {roster.isError && !gateMessage && <AgentLoadError label="Agent roster unavailable" onRetry={() => roster.refetch()} />}
+
+      {!gateMessage && roster.isSuccess && (
         <>
           <div className="grid gap-3 sm:grid-cols-3">
             <StatCard label="On the roster" value={`${enabledCount} of ${entries.length} on`} icon={<Bot className="h-4 w-4" />} />
             <StatCard label="Runs, all time" value={String(runsToday)} icon={<Activity className="h-4 w-4" />} />
             <StatCard label="Spent today" value={usd(spentToday)} icon={<Coins className="h-4 w-4" />} />
           </div>
-
-          <LedgerStrip data={ledger.data} loading={ledger.isLoading} />
-          <LedgerHistoryCard />
 
           {entries.length === 0 ? (
             <Card className="animate-fade-in">
@@ -236,6 +235,8 @@ export function AgentsPage() {
               ))}
             </div>
           )}
+          {ledger.isError ? <AgentLoadError label="Agent ledger unavailable" onRetry={() => ledger.refetch()} /> : <LedgerStrip data={ledger.data} loading={ledger.isLoading} />}
+          <LedgerHistoryCard />
         </>
       )}
 
@@ -249,6 +250,7 @@ export function AgentsPage() {
             </DialogDescription>
           </DialogHeader>
           {catalogue.isLoading && <Skeleton className="h-64" />}
+          {catalogue.isError && <AgentLoadError label="Agent gallery unavailable" onRetry={() => catalogue.refetch()} />}
 
           {catalogue.data && (
             <>
@@ -261,9 +263,10 @@ export function AgentsPage() {
                     <button
                       key={c}
                       type="button"
+                      aria-pressed={active}
                       onClick={() => setGalleryCategory(c)}
                       className={cn(
-                        "rounded-full px-3 py-1.5 text-sm font-medium transition-colors duration-150",
+                        "min-h-[44px] rounded-md px-3 py-1.5 text-sm font-medium transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
                         active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
                       )}
                     >
@@ -318,6 +321,13 @@ export function AgentsPage() {
       )}
     </div>
   );
+}
+
+function AgentLoadError({ label, onRetry }: { label: string; onRetry: () => void }) {
+  return <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-4">
+    <p className="flex items-center gap-2 text-sm"><AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />{label}</p>
+    <Button variant="outline" size="sm" onClick={onRetry}>Retry {label.replace(" unavailable", "").toLowerCase()}</Button>
+  </div>;
 }
 
 /**
@@ -410,6 +420,7 @@ function LedgerHistoryCard() {
   const data = history.data;
 
   if (history.isLoading) return <Skeleton className="h-40" />;
+  if (history.isError) return <AgentLoadError label="Agent history unavailable" onRetry={() => history.refetch()} />;
   if (!data || data.entries.length === 0) return null;
 
   const peakCost = Math.max(...data.daily.map((d) => d.costUsd), 0.0001);
@@ -660,6 +671,7 @@ function CustomAgentDialog({
                     key={c.id}
                     type="button"
                     onClick={() => toggle(c.id)}
+                    aria-pressed={on}
                     className={cn("flex w-full items-start gap-2 rounded p-2 text-left transition-colors", on ? "bg-primary/10" : "hover:bg-muted")}
                   >
                     <span
@@ -733,7 +745,7 @@ function AgentCard({
             <span
               className={cn(
                 "grid h-10 w-10 shrink-0 place-items-center rounded-lg text-xl transition-colors",
-                entry.enabled ? "bg-primary/10" : "bg-muted"
+                agentTint(entry.templateKey ?? entry.id)
               )}
               aria-hidden
             >
@@ -755,7 +767,7 @@ function AgentCard({
               <CardDescription className="mt-0.5 text-xs">
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="cursor-help font-mono">{entry.identity.email}</span>
+                    <span tabIndex={0} className="focus-ring rounded-sm break-all cursor-help font-mono">{entry.identity.email}</span>
                   </TooltipTrigger>
                   <TooltipContent className="max-w-xs">
                     Its own identity, so its actions appear under this name in the audit trail and it can be assigned work.
@@ -794,11 +806,8 @@ function AgentCard({
           <p className="flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-xs">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning-foreground" aria-hidden />
             <span>
-              Switched on, but nothing in it can act yet — every capability below has its AI feature turned off in{" "}
-              <Link to="/app/settings" className="underline">
-                Workspace settings → AI → AI features
-              </Link>
-              .
+              Switched on, but nothing in it can act yet. Its AI features are disabled.{" "}
+              {canManage ? <Link to="/app/settings?tab=ai" className="underline">Review AI settings</Link> : "Ask a workspace administrator to review its AI settings."}
             </span>
           </p>
         )}
@@ -826,14 +835,15 @@ function AgentCard({
                 <Tooltip key={c.id}>
                   <TooltipTrigger asChild>
                     <span
+                      tabIndex={0}
                       className={cn(
-                        "inline-flex cursor-help items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
+                        "focus-ring inline-flex max-w-full flex-wrap cursor-help items-center gap-1 rounded-md border px-2 py-0.5 text-[11px]",
                         !c.runnable && "opacity-60",
                         c.claimedByOther && "border-dashed"
                       )}
                     >
                       {c.actsOnUntrustedInput && <ShieldAlert className="h-3 w-3 text-warning-foreground" />}
-                      <span className={cn("font-medium", !c.runnable && "line-through decoration-1")}>{c.title}</span>
+                      <span className={cn("break-words font-medium", !c.runnable && "line-through decoration-1")}>{c.title}</span>
                       <Badge variant={copy.tone} className="ml-0.5 px-1 py-0 text-[9px]">
                         {copy.label}
                       </Badge>
@@ -936,7 +946,7 @@ function AgentCard({
                 Applies its own changes, within guardrails
               </span>
             )}
-            <Link to="/app/settings" className="inline-flex min-h-[44px] items-center text-[11px] text-muted-foreground underline decoration-dotted sm:min-h-0">
+            <Link to="/app/settings?tab=ai" className="inline-flex min-h-[44px] items-center text-[11px] text-muted-foreground underline decoration-dotted sm:min-h-0">
               Set how much authority each capability has
             </Link>
             <Button variant="ghost" size="sm" className="ml-auto min-h-[44px] px-3 text-xs sm:min-h-0 sm:h-7 sm:px-2" onClick={onRetire} disabled={busy}>

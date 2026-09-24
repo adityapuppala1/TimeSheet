@@ -156,6 +156,9 @@ export function AgentRunsCard() {
   const active = rows.filter((r) => IN_FLIGHT.has(r.status));
   const filtered = status !== "ALL" || period !== "0";
   const dayGroups = groupRunsByDay(rows);
+  const showRunError = runs.isError && !runs.data;
+  const showEmptyRuns = !runs.isLoading && !showRunError && rows.length === 0;
+  const showRunList = !runs.isLoading && !showRunError && rows.length > 0;
 
   return (
     <Card className={cn(active.length > 0 && "ai-glow")}>
@@ -232,7 +235,7 @@ export function AgentRunsCard() {
             </p>
             <Button
               size="sm"
-              disabled={!capability || (selected?.needsProject && !projectId) || queue.isPending}
+              disabled={!selected || capabilities.isLoading || capabilities.isError || (selected.needsProject && (!projectId || projects.isError)) || queue.isPending}
               onClick={() => queue.mutate()}
             >
               {queue.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Play className="mr-2 h-3.5 w-3.5" />}
@@ -241,13 +244,19 @@ export function AgentRunsCard() {
           </div>
         </div>
 
+        {capabilities.isLoading && <p role="status" className="text-xs text-muted-foreground">Loading available capabilities...</p>}
+        {capabilities.isError && <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 p-3 text-sm">
+          <span>Agent capabilities unavailable. No run can be started until they load.</span>
+          <Button variant="outline" size="sm" onClick={() => capabilities.refetch()}>Retry capabilities</Button>
+        </div>}
+
         {active.length > 0 && (
           <AiStrands
             label={`${active.length} run${active.length === 1 ? "" : "s"} in flight — steps appear below as they happen.`}
           />
         )}
 
-        <RunOutcomeStats rows={rows} />
+        {runs.isSuccess && <RunOutcomeStats rows={rows} />}
 
         {/* --------------------------------- The runs --------------------------------- */}
         {/* V12 9.2: Status and Date run, the two filters the reference's Activity tab offers that
@@ -267,7 +276,11 @@ export function AgentRunsCard() {
                 </SelectItem>
               ))}
             </SelectContent>
-          </Select>
+                </Select>
+                {projects.isError && <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-destructive">
+                  <span>Projects unavailable; select a project after retrying.</span>
+                  <Button variant="outline" size="sm" onClick={() => projects.refetch()}>Retry projects</Button>
+                </div>}
           <Select value={period} onValueChange={setPeriod}>
             <SelectTrigger className="h-[44px] w-[160px]" aria-label="Filter by date run" data-runs-period>
               <SelectValue />
@@ -294,15 +307,28 @@ export function AgentRunsCard() {
             </Button>
           )}
         </div>
-        {runs.isLoading ? (
-          <Skeleton className="h-32 w-full" />
-        ) : rows.length === 0 ? (
-          <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground" data-runs-empty>
-            {filtered
-              ? "No run matches those filters. Widen the period, or clear them."
-              : "Nothing has run yet. Queue one above — it will appear here with everything it did."}
-          </p>
-        ) : (
+        {runs.isLoading && <Skeleton className="h-32 w-full" />}
+        {showRunError && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 p-4">
+          <p className="text-sm">Agent runs unavailable.</p>
+          <Button variant="outline" size="sm" onClick={() => runs.refetch()}>Retry agent runs</Button>
+        </div>}
+        {showEmptyRuns && (
+          <div className="grid gap-3">
+            {runs.isError && <p role="status" className="text-sm text-muted-foreground">Could not refresh the run list. Showing the last loaded result.</p>}
+            <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground" data-runs-empty>
+              {filtered
+                ? "No run matches those filters. Widen the period, or clear them."
+                : "Nothing has run yet. Queue one above — it will appear here with everything it did."}
+            </p>
+            {runs.isError && <Button variant="outline" size="sm" className="w-fit" onClick={() => runs.refetch()}>Retry agent runs</Button>}
+          </div>
+        )}
+        {showRunList && (
+          <div className="grid gap-3">
+          {runs.isError && <div role="status" className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-sm">
+            <span>Could not refresh runs. Showing the last loaded list.</span>
+            <Button variant="outline" size="sm" onClick={() => runs.refetch()}>Retry agent runs</Button>
+          </div>}
           <ul className="grid gap-2">
             {dayGroups.map((group) => (
               <li key={group.key} className="grid gap-2">
@@ -363,6 +389,7 @@ export function AgentRunsCard() {
               </li>
             ))}
           </ul>
+          </div>
         )}
       </CardContent>
 
@@ -446,7 +473,7 @@ function RunTraceDialog({ runId, onClose }: { runId: string | null; onClose: () 
 
   return (
     <Dialog open={Boolean(runId)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="w-[calc(100vw-2rem)] max-w-2xl">
+      <DialogContent className="max-h-[90dvh] w-[calc(100vw-2rem)] max-w-2xl overflow-y-auto break-words">
         <DialogHeader>
           <DialogTitle className="flex flex-wrap items-center gap-2">
             <Bot className="h-4 w-4 text-primary" />
@@ -464,8 +491,12 @@ function RunTraceDialog({ runId, onClose }: { runId: string | null; onClose: () 
         </DialogHeader>
 
         {run.isLoading && <Skeleton className="h-40 w-full" />}
+        {run.isError && <div role="alert" className="grid gap-3">
+          <p className="text-sm text-destructive">Run details unavailable.</p>
+          <Button variant="outline" onClick={() => run.refetch()}>Retry run details</Button>
+        </div>}
 
-        {run.data && (
+        {run.data && !run.isError && (
           <div className="grid gap-3">
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {[

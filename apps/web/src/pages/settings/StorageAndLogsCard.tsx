@@ -92,6 +92,12 @@ export function StorageAndLogsCard() {
           </CardTitle>
           <CardDescription>Couldn't read the server's storage configuration.</CardDescription>
         </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 p-3">
+            <p role="alert" className="text-sm text-destructive">Storage status is unavailable; no health conclusion can be drawn.</p>
+            <Button size="sm" variant="outline" onClick={() => status.refetch()}>Retry</Button>
+          </div>
+        </CardContent>
       </Card>
     );
   }

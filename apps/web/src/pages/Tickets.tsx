@@ -107,6 +107,16 @@ import { Card, CardContent } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
 import { DataTable } from "../components/ui/data-table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "../components/ui/alert-dialog";
 import { FileDropzone } from "../components/ui/file-dropzone";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -2185,7 +2195,13 @@ function TicketDetailSheet({
                   <CommentsPanel ticketId={ticket.id} projectId={ticket.project.id} comments={ticket.comments} onPosted={invalidate} />
                 </TabsContent>
                 <TabsContent value="attachments">
-                  <AttachmentsPanel ticketId={ticket.id} attachments={ticket.attachments} onChanged={invalidate} />
+                  <AttachmentsPanel
+                    ticketId={ticket.id}
+                    attachments={ticket.attachments}
+                    currentUserId={user?.id}
+                    canManage={Boolean(user?.permissions.includes(permissions.TICKETS_MANAGE))}
+                    onChanged={invalidate}
+                  />
                 </TabsContent>
                 <TabsContent value="checklist">
                   <ChecklistPanel ticketId={ticket.id} items={ticket.checklistItems} onChanged={invalidate} />
@@ -2852,13 +2868,18 @@ function BranchesPanel({
 function AttachmentsPanel({
   ticketId,
   attachments,
+  currentUserId,
+  canManage,
   onChanged
 }: {
   ticketId: string;
   attachments: TicketAttachmentRow[];
+  currentUserId?: string;
+  canManage: boolean;
   onChanged: () => void;
 }) {
   const [pending, setPending] = useState<File[]>([]);
+  const [removing, setRemoving] = useState<TicketAttachmentRow | null>(null);
   const upload = useMutation({
     mutationFn: () => ticketApi.attachments.upload(ticketId, pending),
     onSuccess: () => {
@@ -2882,19 +2903,51 @@ function AttachmentsPanel({
           Upload {pending.length} file(s)
         </Button>
       )}
-      <div className="grid gap-2">
+      <ul className="grid gap-2">
         {attachments.length === 0 && <p className="text-sm text-muted-foreground">No attachments yet.</p>}
         {attachments.map((a) => (
-          <div key={a.id} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm">
-            <a href={fileUrl(a.url)} target="_blank" rel="noreferrer" className="truncate text-primary hover:underline">
+          <li key={a.id} className="flex min-w-0 items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm">
+            <a href={fileUrl(a.url)} target="_blank" rel="noreferrer" className="min-w-0 [overflow-wrap:anywhere] text-primary hover:underline">
               {a.fileName}
             </a>
-            <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive" onClick={() => remove.mutate(a.id)}>
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+            {(canManage || a.uploadedBy?.id === currentUserId) && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0 text-destructive"
+                aria-label={`Remove ${a.fileName}`}
+                disabled={remove.isPending}
+                onClick={() => setRemoving(a)}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </li>
         ))}
-      </div>
+      </ul>
+      <AlertDialog open={Boolean(removing)} onOpenChange={(open) => !open && setRemoving(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this attachment?</AlertDialogTitle>
+            <AlertDialogDescription className="break-words">{removing?.fileName} will be removed from this ticket.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={remove.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={remove.isPending}
+              onClick={(event) => {
+                event.preventDefault();
+                if (!removing) return;
+                remove.mutate(removing.id, { onSuccess: () => setRemoving(null) });
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {remove.isPending ? "Removing..." : "Remove attachment"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

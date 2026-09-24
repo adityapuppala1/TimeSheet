@@ -18,6 +18,7 @@ import { Link, useNavigate } from "react-router";
 import {
   BarChart3,
   Bot,
+  BrainCircuit,
   Briefcase,
   CalendarDays,
   CalendarPlus2,
@@ -70,7 +71,7 @@ import { AiStrands } from "./ui/ai-strands";
 import { BorderGlow } from "./ui/border-glow";
 import { useAuthStore } from "../store/auth";
 import { usePlanningFeatures } from "../lib/use-planning";
-import { aiApi, authApi, searchApi, type PlanningEffective } from "../services/api";
+import { askAiApi, authApi, searchApi, type PlanningEffective } from "../services/api";
 import { toast } from "./ui/toaster";
 import { toggleTheme as switchTheme } from "../lib/theme";
 
@@ -98,6 +99,7 @@ const navRoutes: NavRoute[] = [
   { label: "Tickets", to: "/app/tickets", icon: Ticket, permission: permissions.TICKETS_VIEW, hint: "Bugs & tasks" },
   { label: "History", to: "/app/history", icon: FileClock },
   { label: "Inbox", to: "/app/inbox", icon: Mailbox, hint: "Today's brief & notifications" },
+  { label: "Intelligence", to: "/app/intelligence", icon: BrainCircuit, hint: "Attention, AI actions, risks and readiness" },
   { label: "My work", to: "/app/my-work", icon: ListTodo, hint: "Your queue, all projects" },
   { label: "Goals", to: "/app/goals", icon: Target, feature: "goals", hint: "Objectives with measured progress" },
   { label: "Requests", to: "/app/requests", icon: Inbox, permission: permissions.TICKETS_VIEW, feature: "requestForms", hint: "Intake forms & inbox" },
@@ -142,6 +144,7 @@ export function CommandPalette({ open, onOpenChange, onOpenShortcuts }: Props) {
   const logoutStore = useAuthStore((s) => s.logout);
   const [, force] = useState(0);
   const [askOpen, setAskOpen] = useState(false);
+  const [askSeed, setAskSeed] = useState("");
   const canAskAI = Boolean(user?.permissions.includes(permissions.TICKETS_VIEW));
   const { features } = usePlanningFeatures();
 
@@ -288,6 +291,23 @@ export function CommandPalette({ open, onOpenChange, onOpenShortcuts }: Props) {
           </CommandGroup>
         )}
         {anyHit && <CommandSeparator />}
+        {canAskAI && query.trim().length >= 3 && (
+          <CommandGroup heading="Ask AI">
+            <CommandItem
+              value={`ask ai ${query}`}
+              keywords={[query]}
+              onSelect={() => {
+                setAskSeed(query.trim());
+                onOpenChange(false);
+                setAskOpen(true);
+              }}
+            >
+              <Sparkles className="text-primary" />
+              <span className="min-w-0 truncate">Ask “{query.trim()}”</span>
+              <CommandShortcut>AI</CommandShortcut>
+            </CommandItem>
+          </CommandGroup>
+        )}
         <CommandGroup heading="Navigate">
           {visibleRoutes.map((route) => (
             <CommandItem key={route.to} value={`${route.label} ${route.hint ?? ""}`} onSelect={() => jump(route.to)}>
@@ -317,6 +337,7 @@ export function CommandPalette({ open, onOpenChange, onOpenShortcuts }: Props) {
             <CommandItem
               value="ask ai search tickets question chat"
               onSelect={() => {
+                setAskSeed("");
                 onOpenChange(false);
                 setAskOpen(true);
               }}
@@ -355,23 +376,27 @@ export function CommandPalette({ open, onOpenChange, onOpenShortcuts }: Props) {
         </CommandGroup>
         </CommandList>
       </CommandDialog>
-      <AskAIDialog open={askOpen} onOpenChange={setAskOpen} />
+      <AskAIDialog open={askOpen} onOpenChange={setAskOpen} initialQuestion={askSeed} />
     </>
   );
 }
 
-function AskAIDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+function AskAIDialog({ open, onOpenChange, initialQuestion }: { open: boolean; onOpenChange: (open: boolean) => void; initialQuestion?: string }) {
   const [question, setQuestion] = useState("");
   const [history, setHistory] = useState<Array<{ id: string; question: string; answer: string }>>([]);
 
   const ask = useMutation({
-    mutationFn: (q: string) => aiApi.ask(q),
+    mutationFn: (q: string) => askAiApi.ask(q),
     onSuccess: (res, q) => {
-      setHistory((h) => [...h, { id: `${Date.now()}-${h.length}`, question: q, answer: res.answer }]);
+      setHistory((h) => [...h, { id: `${Date.now()}-${h.length}`, question: q, answer: res.answer ?? res.error ?? "No answer was returned." }]);
       setQuestion("");
     },
     onError: (err: any) => toast.error("Could not get an answer", { description: serverMessage(err, "AI may be disabled for this workspace.") })
   });
+
+  useEffect(() => {
+    if (open && initialQuestion) setQuestion(initialQuestion);
+  }, [open, initialQuestion]);
 
   function submit() {
     const q = question.trim();

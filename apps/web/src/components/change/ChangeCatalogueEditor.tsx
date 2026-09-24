@@ -204,6 +204,11 @@ export function ChangeCatalogueEditor({
 
       {rows.isLoading ? (
         <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>
+      ) : rows.isError ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 p-3">
+          <p role="alert" className="text-sm text-destructive">This catalogue could not be loaded.</p>
+          <Button size="sm" variant="outline" onClick={() => rows.refetch()}>Retry</Button>
+        </div>
       ) : list.length === 0 ? (
         <EmptyState compact title="Nothing here yet" />
       ) : (

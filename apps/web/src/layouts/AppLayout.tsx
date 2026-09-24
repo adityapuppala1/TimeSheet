@@ -18,6 +18,7 @@ import { SessionEndedDialog } from "../components/SessionEndedDialog";
 import { MobileNav, Sidebar } from "../components/Sidebar";
 import { Topbar } from "../components/Topbar";
 import { AppLoader } from "../components/ui/app-loader";
+import { ContextualAiPanel } from "../components/ContextualAiPanel";
 import { useAuthStore } from "../store/auth";
 import { loginUrlFor } from "../utils/return-to";
 
@@ -67,6 +68,7 @@ export function AppLayout() {
           <MobileNav />
         </main>
       </div>
+      {user.permissions.includes("tickets:view") && <ContextualAiPanel key={`${user.id}:${user.role}`} />}
       {/* Overlays the shell rather than replacing it, for the same reason BackendHealthGate does:
           unmounting the app would destroy in-progress state, and the gate lifts on its own the
           moment the server says the requirements are met. */}
