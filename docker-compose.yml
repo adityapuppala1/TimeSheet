@@ -141,6 +141,14 @@ services:
       # OpenAI-compatible provider (Ollama, Groq, OpenRouter…) is configured exclusively there.
       # There is deliberately no OPENAI_API_KEY variable anywhere in this application.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # TypeSafe / Jev — typed judgments (routing, ranking, verification) rather than generated
+      # text. Blank key = off, like ANTHROPIC_API_KEY above. The names are the SDK's own: it reads
+      # them from the environment when its constructor options are omitted, so they must survive
+      # into the container or a key pasted into .env would do nothing here.
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      TYPESAFE_BASE_URL: ${TYPESAFE_BASE_URL:-}
+      TYPESAFE_DEFAULT_MODEL: ${TYPESAFE_DEFAULT_MODEL:-jev-latest}
+      TYPESAFE_LOG_LEVEL: ${TYPESAFE_LOG_LEVEL:-warn}
       # The hourly GitHub release check behind the What's-new page. UPDATE_CHECK=off is the
       # air-gapped posture: the page then lists the release history bundled in this image's own
       # CHANGELOG.md and nothing calls out. Only the literal "off" disables it — any other value,

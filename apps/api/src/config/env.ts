@@ -250,6 +250,33 @@ const schema = z.object({
   ANTHROPIC_API_KEY: z.string().default(""),
 
   /**
+   * TYPESAFE / JEV. A different KIND of model from ANTHROPIC_API_KEY above, which is why it is a
+   * separate block rather than another provider row: Anthropic generates text, Jev returns a typed
+   * judgment and a probability for a question code already knows how to ask. It is for the places
+   * where this codebase currently needs semantic understanding and has to fake it — routing an
+   * intake message, ranking candidates, deciding whether an extracted field really is what it
+   * claims. Nothing reads these yet; they are declared so a key can be pasted in and used.
+   *
+   * THESE FOUR NAMES ARE NOT OURS TO CHOOSE. `@typesafe-ai/sdk`'s client reads exactly these from
+   * the environment when its constructor options are omitted, so renaming one here would silently
+   * stop working the moment somebody constructs the client the documented way
+   * (docs.typesafe.ai/sdk/javascript/api/interfaces/TypeSafeClientConfig).
+   *
+   * Empty is the off switch, like ANTHROPIC_API_KEY: with no key the client cannot be built, and
+   * anything that wants a judgment has to fall back to whatever it does today.
+   */
+  TYPESAFE_API_KEY: z.string().default(""),
+  /** Blank means the SDK's own default (https://api.typesafe.ai). Set it only to point at a proxy
+   *  or a regional endpoint — an empty string must never be passed to the client as a baseURL. */
+  TYPESAFE_BASE_URL: z.string().default(""),
+  /** `jev-latest` tracks the newest model. Pin a version (e.g. `jev-1.13.0`) when a judgment's
+   *  behaviour has been measured against it and a silent upgrade would change decisions. */
+  TYPESAFE_DEFAULT_MODEL: z.string().default("jev-latest"),
+  /** The SDK's own logger threshold. `warn` is its default; `debug` prints request/response shapes,
+   *  so keep it off anything that handles a real workspace's data. */
+  TYPESAFE_LOG_LEVEL: z.enum(["debug", "info", "warn", "error", "silent"]).default("warn"),
+
+  /**
    * THE MANAGED llama.cpp RUNTIME. All five are optional and the defaults add up to "this
    * deployment does nothing native", which is what every existing installation runs — see
    * config/native-ai.ts for how they resolve and services/native-runtime.service.ts for who reads

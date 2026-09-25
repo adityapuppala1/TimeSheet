@@ -43,6 +43,13 @@ data:
   CLAMAV_HOST: {{ .host | quote }}
   CLAMAV_PORT: {{ .port | quote }}
   {{- end }}
+  {{- with .Values.typesafe }}
+  # TypeSafe / Jev, non-secret half. TYPESAFE_API_KEY comes from the Secret this Deployment mounts
+  # wholesale via envFrom — it is not emitted here. Names are the SDK's own and must not change.
+  TYPESAFE_BASE_URL: {{ .baseUrl | quote }}
+  TYPESAFE_DEFAULT_MODEL: {{ .defaultModel | quote }}
+  TYPESAFE_LOG_LEVEL: {{ .logLevel | quote }}
+  {{- end }}
   {{- with .Values.sla }}
   # Approval + ticket SLA escalation. The cron values are scan frequency, the hours are deadlines.
   SLA_ENABLED: {{ .enabled | quote }}

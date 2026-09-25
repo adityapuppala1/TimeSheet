@@ -180,6 +180,16 @@ clamav:
   host: ""
   port: 3310
 
+# TypeSafe / Jev — typed judgments rather than generated text (https://docs.typesafe.ai).
+# The API KEY is deliberately NOT here: it belongs in the Secret alongside the other credentials
+# (see secrets.example.yaml), because values.yaml survives in `helm get values` and `helm history`.
+# These three are the harmless half, and the empty base URL means "use the SDK's own default".
+typesafe:
+  baseUrl: ""
+  defaultModel: "jev-latest"
+  # debug | info | warn | error | silent. `debug` logs request and response shapes.
+  logLevel: "warn"
+
 # Approval and ticket SLA escalation. Also previously absent from the chart, which meant a
 # Kubernetes deployment could not turn escalation off or retune it without editing the ConfigMap by
 # hand — while both compose files exposed most of it. The cron schedules are how often the workers
