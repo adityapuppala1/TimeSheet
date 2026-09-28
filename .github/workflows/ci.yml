@@ -12,7 +12,20 @@ name: CI
 on:
   push:
     branches: ["**"]
-    tags: ["v*.*.*"]
+    # NO `tags:` HERE, AND THAT IS THE SINGLE BIGGEST SAVING IN THIS FILE. A release tag points at a
+    # commit that has ALREADY landed on `main` and already run everything below against that exact
+    # SHA — so a tag push re-ran the whole suite for zero new information. Measured on 2026-09-28:
+    # `v5.6.0` cost 120 billed minutes and `v5.7.0` another 120, out of 414 for the entire release
+    # day. That is 58% of a release spent proving a green that was six minutes old.
+    #
+    # CD still triggers on tags (.github/workflows/cd.yml) — building and publishing the images IS
+    # the thing a tag is for, and that is 3-4 minutes, not two hours.
+    #
+    # WHAT THIS GIVES UP, stated plainly: a tag placed on a commit that is NOT on `main` would now
+    # ship without CI. The release process in CONTRIBUTING.md tags the release commit after it is on
+    # `main`, and the "Every changelog version is tagged" job below still runs on `main`, so the two
+    # halves stay tied together. If you ever need to validate a tag itself, `workflow_dispatch` on
+    # that ref gives the full tier on demand.
     # A commit that changes only prose cannot break a build, and the cheap tier still costs ~11
     # minutes to prove it. Measured on 2026-09-24: 2 of the last 10 commits were documentation
     # only, so ~11% of the push budget was spent re-proving the same green. The account's whole
@@ -38,7 +51,16 @@ on:
 # billed minutes each. `main` and tags are exempt: a release run is never cancelled by the next.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+  # NOW INCLUDING `main`, which it deliberately excluded before. The old reasoning was that a
+  # release run must never be cancelled by the next push. In practice releases arrive as a BURST —
+  # 2026-09-28 pushed `main` three times within an hour and paid for three complete runs, of which
+  # only the last described the code that shipped. The tip of `main` is what gets released, and it
+  # is always the run that survives.
+  #
+  # What this gives up: an intermediate commit on `main` can end up with no green tick of its own.
+  # That is the correct trade for a branch that is pushed in bursts — and `git bisect` over CI
+  # results was never how anything here was debugged.
+  cancel-in-progress: true
 
 env:
   NODE_VERSION: "22"
@@ -54,11 +76,36 @@ env:
 # So the jobs are in two tiers. The CHEAP tier — build, lint, unit, integration, and the
 # syntax/manifest checks — runs on every push to every branch, because that is what catches the
 # mistakes that matter most, and it costs ~11 minutes. The FULL tier — the e2e shards, the
-# installer run and the Windows build — runs where a wrong answer is expensive: pushes to `main`,
-# version tags, and pull requests. On any other branch it runs when asked: a commit message
-# containing `[full-ci]`, or a manual run from the Actions tab (`workflow_dispatch`). The local
-# gates (`npm run lint`, both unit suites, the Playwright suite against the dev stack) remain the
+# installer run and the Windows build — runs where a wrong answer is expensive: pushes to `main`
+# and pull requests. On any other branch it runs when asked: a commit message containing
+# `[full-ci]`, or a manual run from the Actions tab (`workflow_dispatch`). The local gates
+# (`npm run lint`, both unit suites, the Playwright suite against the dev stack) remain the
 # developer's own check before a push.
+#
+# ── WHERE THE MONTH ACTUALLY WENT, measured 2026-09-01..28 across all nine repositories ────────
+#
+#   4,412 billed minutes total, against an allowance of 2,000. 99% of it was this repository and
+#   95% of THAT was this one workflow. Within it, by job:
+#
+#     2,350 min (53%)  the four e2e shards
+#       714 min (16%)  Typecheck + build (windows)   — 415 wall-clock minutes, billed double
+#       464 min (11%)  Build, typecheck, unit + integration (ubuntu)
+#       179 min ( 4%)  Execute install.sh end-to-end
+#
+#   Three things were paying for nothing, and all three are fixed above:
+#     • TAG PUSHES RE-RAN EVERYTHING against a SHA `main` had just tested — 240 minutes for two
+#       tags on one day. `on.push` no longer lists tags.
+#     • `main` WAS EXEMPT FROM CANCELLATION, so a burst of three pushes bought three full runs when
+#       only the last one described what shipped. `cancel-in-progress` is now unconditional.
+#     • EVERY PULL REQUEST RAN ALL 619 e2e TESTS, including firefox and webkit — the slowest
+#       projects and the ones that answer a pre-release question, not a per-push one. Pull requests
+#       now run `desktop` + `responsive-phone` (348 tests) over two shards; `main` still runs
+#       everything over four.
+#
+#   The measurement is worth repeating before changing any gate here, rather than reasoned about:
+#   list the runs, sum each job'"'"'s completed_at minus started_at, round each job UP to the minute,
+#   and double anything on a windows runner. The billing API returns zeros for this account, and
+#   the per-run `timing` endpoint does too, so the job timestamps are the only honest source.
 #
 # A job-level `if:` cannot read `env`, so the gate expression is written out on each full-tier job
 # (marked "FULL TIER"); keep the copies identical.
@@ -253,16 +300,39 @@ jobs:
   #
   # `fail-fast: false` because a failure in shard 2 says nothing about shard 3, and cancelling the
   # others would hide two thirds of the picture on the run you most need it.
+  #
+  # TWO SIZES, BECAUSE e2e IS 53% OF THE ENTIRE ACTIONS BILL. Measured 2026-09-01..28: 2,350 of
+  # 4,412 billed minutes were these four shards. Running the same 619 tests on every pull-request
+  # push is what made that number, and most of those pushes are not the one that ships.
+  #
+  #   FULL  (main, or `[full-ci]`)  — 4 shards, every project: 279 desktop + 32 firefox + 32 webkit
+  #                                   + 4 x 69 responsive = 619 tests. This is what gates a release.
+  #   LIGHT (pull requests, dispatch) — 2 shards, `desktop` + `responsive-phone` = 348 tests.
+  #
+  # WHY THOSE TWO PROJECTS AND NOT JUST `desktop`. `desktop` is the body of the suite, and
+  # `responsive-phone` is the width where layout bugs actually bite — the CI-only overflow failures
+  # this repo has had were all found at 390px, never at 1920. Dropping firefox and webkit is where
+  # the time goes: they are 64 tests but the SLOWEST, webkit measured at 1.67x firefox on the same
+  # specs, and they are cross-browser smoke — the question you want answered before a release, not
+  # on every push to a branch.
+  #
+  # AND TWO SHARDS, NOT FOUR, FOR THE LIGHT TIER. Each shard pays ~5 minutes of fixed cost before it
+  # runs a single test (checkout, install, Prisma generate, MySQL, migrate, seed, browsers). Four
+  # shards of a half-sized suite spend more on setup than they save in parallelism.
   e2e:
-    name: e2e ${{ matrix.shard }}/4
+    name: e2e ${{ matrix.shard }}/${{ (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full-ci]')) && '4' || '2' }}
     runs-on: ubuntu-latest
     # FULL TIER — see the budget note at the top.
-    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full-ci]') }}
+    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full-ci]') }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        # `strategy` cannot read `env`, so the FULL/LIGHT condition is spelled out here and again in
+        # the run step below. They must agree: a 4-entry matrix running `--shard=n/2` would execute
+        # shards 3 and 4 against a two-way split and silently test nothing. The step derives its
+        # `--shard` denominator from this same expression for that reason.
+        shard: ${{ fromJSON((github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full-ci]')) && '[1,2,3,4]' || '[1,2]') }}
     services:
       mysql:
         image: mysql:8.4
@@ -348,10 +418,21 @@ jobs:
         if: steps.pw-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps
 
-      - name: Run e2e suite (shard ${{ matrix.shard }} of 4)
-        run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
+      - name: Run e2e suite
+        # The denominator and the project list both come from FULL, which is the same expression the
+        # matrix above uses — see the note there for why it is written twice.
         env:
           CI: "true"
+          FULL: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full-ci]') }}
+        run: |
+          if [ "$FULL" = "true" ]; then
+            echo "FULL tier: every project, shard ${{ matrix.shard }} of 4"
+            npm run test:e2e -- --shard=${{ matrix.shard }}/4
+          else
+            echo "LIGHT tier: desktop + responsive-phone, shard ${{ matrix.shard }} of 2"
+            echo "  (firefox, webkit and the tablet/laptop/4k widths run on main — or add [full-ci] to this commit)"
+            npm run test:e2e -- --project=desktop --project=responsive-phone --shard=${{ matrix.shard }}/2
+          fi
 
       # Artifact storage is billed too, and this was most of that bill: a failing shard's report
       # weighed 25–32 MB, almost all of it failure VIDEOS (a .webm per attempt), kept for 14 days,
@@ -515,7 +596,7 @@ jobs:
     #
     # If you are about to change something platform-shaped and want it checked early, say so:
     # `[full-ci]` in the commit message still brings it in.
-    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || contains(github.event.head_commit.message, '[full-ci]') }}
+    if: ${{ github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '[full-ci]') }}
     strategy:
       fail-fast: false
       matrix:
@@ -597,7 +678,7 @@ jobs:
             fi
           done
           if [ -n "$missing" ]; then
-            echo "::error file=CHANGELOG.md::CHANGELOG.md documents versions with no git tag:$missing. Tag the release commit (git tag -a vX.Y.Z) and push it, or take the section out of the changelog."
+            echo "::error file=CHANGELOG.md::CHANGELOG.md documents versions with no git tag:$missing. PUSH THE TAG IN THE SAME COMMAND AS THE BRANCH \"git push origin main v${missing# v}\" so the tag already exists when this job runs. Pushing them separately leaves this run red until the next push to main, because a workflow run belongs to one ref and the tag push no longer starts a CI run of its own. Or take the section out of the changelog."
             exit 1
           fi
           echo "Every documented version has a tag."
@@ -728,7 +809,7 @@ jobs:
     name: Execute install.sh end-to-end
     runs-on: ubuntu-latest
     # FULL TIER — a real Docker build of both images per run; see the budget note at the top.
-    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full-ci]') }}
+    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[full-ci]') }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
@@ -754,7 +835,7 @@ jobs:
     # reaches main or a tag, which is every path by which an installer script can reach a customer;
     # a broken `install.ps1` sitting on a feature branch for an hour harms nobody. `[full-ci]` in a
     # commit message still pulls it in early when you are actually editing the installers.
-    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || contains(github.event.head_commit.message, '[full-ci]') }}
+    if: ${{ github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '[full-ci]') }}
     steps:
       - uses: actions/checkout@v7
 

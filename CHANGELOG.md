@@ -10,6 +10,38 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 💸 The Actions bill, measured and then cut
+
+The account ran out of minutes mid-session: 4,412 billed against an allowance of 2,000. Measured
+across all nine repositories for 2026-09-01..28 — by summing each job's own start and finish
+timestamps, rounding each job up to the minute and doubling Windows, because the billing API and the
+per-run `timing` endpoint both return zeros for this account.
+
+**99% was this repository, and 95% of that was one workflow.** Inside it: the four e2e shards were
+**2,350 minutes (53% of everything)**, the Windows typecheck 714 (16%, from 415 wall-clock minutes
+at double rate), the ubuntu build/unit/integration job 464, and the installer run 179. One day,
+9 September, was 1,830 minutes — 42% of the month.
+
+Three things were paying for nothing:
+
+- **Tag pushes re-ran the entire suite** against a commit `main` had just tested. `v5.6.0` and
+  `v5.7.0` cost 120 minutes each out of 414 for the whole release day — 58% of a release spent
+  re-proving a green that was six minutes old. CI no longer runs on tags; CD still does, because
+  building the images is what a tag is actually for. Push the branch and tag in one command
+  (`git push origin main v1.2.0`), which CONTRIBUTING.md already said and now says why.
+- **`main` was exempt from run cancellation.** Releases arrive as a burst — three pushes within an hour
+  on 2026-09-28 bought three complete runs, of which only the last described the code that shipped.
+  Cancellation is now unconditional; the tip of `main` is always the run that survives.
+- **Every pull request ran all 619 e2e tests**, firefox and webkit included — the slowest projects,
+  and the ones that answer a pre-release question rather than a per-push one. Pull requests now run
+  `desktop` + `responsive-phone` (348 tests) over two shards, because those are the body of the
+  suite and the width where layout bugs actually bite; `main` still runs everything over four.
+  Two shards rather than four, because each shard pays ~5 minutes of fixed setup before its first
+  test and four shards of a half-sized suite spend more on setup than they save.
+
+Verified with `actionlint` and by listing the selected tests for each tier, since CI itself cannot
+run until the allowance resets.
+
 ### 🧪 Two CI-only e2e failures, diagnosed rather than retried
 
 Both had been red on `main` for a while, and neither was a defect in the product. Test changes only.

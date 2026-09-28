@@ -271,6 +271,15 @@ unpushed — while the notes sat in the very bundle being served. See
 2. **Commit, then tag**: `git tag v1.2.0 && git push origin main v1.2.0`. The tag must match
    VERSION exactly (`v` prefix on the tag only) — `update.sh` verifies the server reports the
    tag's version after upgrading, so a mismatch fails every customer's update.
+
+   **Push the branch and the tag in that ONE command.** CI no longer runs on tag pushes (a tag
+   points at a commit `main` has already tested, and re-running it cost 120 billed minutes per
+   release — see the note on `on.push` in `.github/workflows/ci.yml`). The "Every changelog version
+   is tagged" job runs on `main`, so if you push the branch first and the tag afterwards, that job
+   fails on the branch run and **stays** failed until the next push to `main` — a workflow run
+   belongs to one ref, and the later tag push starts no run that could clear it. Pushed together,
+   the tag already exists when the job looks for it. This is not hypothetical: it is what turned
+   `main` red on 2026-09-28.
 3. **Create the GitHub Release** for the tag, pasting the CHANGELOG section as the body. Optional
    for the What's-new page (it already has these notes), and still worth doing: a Release body can
    be corrected after shipping, and GitHub's copy wins the merge when it is non-empty.
