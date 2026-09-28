@@ -143,6 +143,27 @@ new prompt.
   and CD publishes images without deploying, so a pipeline change is never the fix for a routing
   problem.
 
+### 🧹 Three static-analysis findings, fixed rather than silenced
+
+`maintenance.service.ts` carried all three. None was a bug; each was the kind of shape that becomes
+one on the next edit, so the warning ceilings came **down** rather than the findings being waived.
+
+- **`updateMaintenanceSettings` was over the complexity ceiling**, and most of it was six branches
+  about one subject sitting in the middle of an upsert. Lifted into `assertWindowIsCoherent`, where
+  it is also easier to see that the last rule is the interesting one: a *new* start time must not be
+  in the past, but an *unchanged* one may be, or an admin extending a window that is already running
+  gets told their own active window is invalid.
+- **A `void` used to silence an unused parameter.** `forceLogoutNonAdmins` takes the actor's id and
+  does not use it — the controller writes the audit row, because it is the layer that knows the
+  request, the reason and the IP. Renamed to `_actorUserId`, which is how that is said on purpose;
+  `void` reads like a leftover.
+- **A template literal nested inside an inline ternary**, which is exactly the shape that turns
+  "from X until Y" into "from Xuntil Y" the moment somebody edits one of the spaces. Two statements
+  now.
+
+Warning count 699 → **696**, and all three per-rule ceilings in `lint-baseline.json` were lowered to
+match, so none of them can drift back.
+
 ### 🧪 Two workspaces, over real HTTP
 
 - **The routing is covered where the bugs actually were — in how the pieces compose.** Everything

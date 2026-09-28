@@ -111,6 +111,40 @@ function invalidateCache(): void {
   }
 }
 
+/** Five minutes of grace on a newly-set start time, to absorb the seconds spent filling the form. */
+const START_GRACE_MS = 5 * 60 * 1000;
+
+/**
+ * Every rule about what a maintenance window may say, in one place.
+ *
+ * LIFTED OUT OF `updateMaintenanceSettings` because that function was over the project's
+ * cognitive-complexity ceiling and this was most of the reason: six branches that are all about one
+ * subject and none of which touch the upsert around them. Reading it separately is also how you
+ * notice that the LAST rule is the interesting one and the first four are arithmetic.
+ *
+ * THE LAST RULE, which looks like a bug until you know the case it protects. A NEW start time must
+ * be now or later — scheduling a window to have already begun is either a typo or a stale form. But
+ * an UNCHANGED past start is legitimate: an admin extending or re-wording a window that is already
+ * running must not be told their own active window is invalid. So the check is on whether the start
+ * MOVED, not on whether it is in the past.
+ */
+async function assertWindowIsCoherent(scheduledStartAt: Date | null, scheduledEndAt: Date | null): Promise<void> {
+  // An armed maintenance mode with no start would either never fire (surprising) or fire instantly
+  // (more surprising). Both rejected loudly instead.
+  if (!scheduledStartAt) throw new AppError(422, "Pick when the maintenance window starts.");
+  if (!scheduledEndAt) throw new AppError(422, "Pick when the maintenance window ends.");
+  if (scheduledEndAt <= scheduledStartAt) throw new AppError(422, "The window must end after it starts.");
+  if (scheduledEndAt <= new Date()) {
+    throw new AppError(422, "That window is entirely in the past — pick an end time that hasn't happened yet.");
+  }
+
+  const stored = await getMaintenanceSettings();
+  const startChanged = stored.scheduledStartAt?.getTime() !== scheduledStartAt.getTime();
+  if (startChanged && scheduledStartAt.getTime() < Date.now() - START_GRACE_MS) {
+    throw new AppError(422, "The window can't start in the past — pick the current time or later.");
+  }
+}
+
 export async function updateMaintenanceSettings(params: {
   enabled: boolean;
   scheduledStartAt: Date | null;
@@ -134,27 +168,7 @@ export async function updateMaintenanceSettings(params: {
     }
   }
 
-  if (params.enabled) {
-    // Enabling requires a coherent window — an armed maintenance mode with no start would either
-    // never fire (surprising) or fire instantly (more surprising). Both rejected loudly instead.
-    if (!params.scheduledStartAt) throw new AppError(422, "Pick when the maintenance window starts.");
-    if (!params.scheduledEndAt) throw new AppError(422, "Pick when the maintenance window ends.");
-    if (params.scheduledEndAt <= params.scheduledStartAt) {
-      throw new AppError(422, "The window must end after it starts.");
-    }
-    if (params.scheduledEndAt <= new Date()) {
-      throw new AppError(422, "That window is entirely in the past — pick an end time that hasn't happened yet.");
-    }
-    // A NEW start time must be now or later — scheduling a window to have already begun is
-    // either a typo or a stale form. The one legitimate past-start is an UNCHANGED one: an
-    // admin extending or re-wording a window that is already running must not be told their
-    // own active window is invalid. Five minutes of grace absorbs form-filling time.
-    const stored = await getMaintenanceSettings();
-    const startChanged = stored.scheduledStartAt?.getTime() !== params.scheduledStartAt.getTime();
-    if (startChanged && params.scheduledStartAt.getTime() < Date.now() - 5 * 60 * 1000) {
-      throw new AppError(422, "The window can't start in the past — pick the current time or later.");
-    }
-  }
+  if (params.enabled) await assertWindowIsCoherent(params.scheduledStartAt, params.scheduledEndAt);
 
   // The flag rides with the window rather than persisting past it: a platform window that is
   // cleared hands the control back, and a workspace arming its own window afterwards owns it.
@@ -306,7 +320,7 @@ export async function getOnlineUsers(): Promise<{ count: number; sessionCount: n
  * active, the login itself is refused and they're shown the maintenance page. The chain needs no
  * cooperation from the client at all, which is the property that makes it an actual control.
  */
-export async function forceLogoutNonAdmins(actorUserId: string): Promise<{ revokedSessions: number }> {
+export async function forceLogoutNonAdmins(_actorUserId: string): Promise<{ revokedSessions: number }> {
   const result = await prisma.session.updateMany({
     where: {
       revokedAt: null,
@@ -314,7 +328,11 @@ export async function forceLogoutNonAdmins(actorUserId: string): Promise<{ revok
     },
     data: { revokedAt: new Date() }
   });
-  void actorUserId; // audited by the controller — the parameter documents who may call this.
+  // `_actorUserId` is deliberately unused HERE: the controller writes the audit row, because it is
+  // the layer that also knows the request, the reason and the IP. The parameter stays in the
+  // signature because it documents who may call this and makes the audit obligation visible at
+  // every call site — the underscore is how the linter is told that is on purpose, rather than
+  // `void`-ing it, which reads like a leftover.
   return { revokedSessions: result.count };
 }
 
@@ -335,7 +353,10 @@ export async function notifyUsersOfMaintenance(): Promise<{ notified: number }> 
 
   const start = settings.scheduledStartAt;
   const end = settings.scheduledEndAt;
-  const windowText = `${start.toLocaleString()}${end ? ` until ${end.toLocaleString()}` : ""}`;
+  // Built in two steps rather than nested: an inner template inside an inline ternary is the shape
+  // that turns "from X until Y" into "from Xuntil Y" the moment somebody edits one of the spaces.
+  const untilText = end ? ` until ${end.toLocaleString()}` : "";
+  const windowText = `${start.toLocaleString()}${untilText}`;
   const extra = settings.message ? ` ${settings.message}` : "";
 
   for (const user of recipients) {
