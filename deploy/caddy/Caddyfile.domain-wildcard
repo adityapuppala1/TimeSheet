@@ -11,6 +11,9 @@
 # certificate is a real decision with a prerequisite (below), and a deployment that is working today
 # on a single domain must not be able to inherit that prerequisite by accident.
 #
+# Validated with `caddy validate` against caddy:2-alpine, both as shipped and with the `tls` line
+# below uncommented — both report "Valid configuration".
+#
 # ── THE PREREQUISITE, STATED PLAINLY ────────────────────────────────────────────────────────────
 # Let's Encrypt will not issue a wildcard over the HTTP-01 challenge. Wildcards require DNS-01, and
 # DNS-01 requires Caddy to hold an API credential for your DNS provider — which means a Caddy build

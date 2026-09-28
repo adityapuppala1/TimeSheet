@@ -82,7 +82,7 @@ model Organization {
   /// AN OVERRIDE THAT GRANTS BEYOND THE PLAN IS A DECISION, NOT A SETTING. The route that writes
   /// this refuses a body that grants a capability the tier forbids unless the operator explicitly
   /// acknowledges that is what they are doing, and the `platformAudit` row names every granting key.
-  featureOverrides               Json?
+  featureOverrides Json?
 
   /// Self-serve billing (see docs/ROADMAP.md's "Monetization readiness" theme and
   /// billing.controller.ts) — set once the org's own SUPER_ADMIN completes a Stripe Checkout
@@ -184,6 +184,9 @@ model Organization {
   aiAdvice           PlatformAiAdvice[]
   usageSnapshots     OrgUsageSnapshot[]
   alertStates        PlatformAlertState[]
+
+  /// Short-lived SSO handoff codes — see SsoHandoffCode for why they are not in memory.
+  ssoHandoffCodes SsoHandoffCode[]
 
   @@index([status])
 }
@@ -1103,7 +1106,7 @@ model OrgUsageSnapshot {
   /// Automation identities, counted SEPARATELY rather than folded in. Adoption of the agent roster
   /// is worth seeing, and keeping the two columns apart is what makes "MRR never bills a robot" a
   /// property a test can break rather than a comment nobody re-reads.
-  agentSeats  Int  @default(0)
+  agentSeats  Int @default(0)
   /// The ceiling in force that day — the org's override, else the tier's. Kept per-row because the
   /// tier's limit is editable, and a seat-pressure chart drawn against TODAY's ceiling would
   /// silently rewrite history the moment somebody retunes a plan.
@@ -1173,15 +1176,15 @@ model OrgUsageSnapshot {
 /// The advisor is OFF until an operator configures it. There is no default provider, no fallback to
 /// a tenant's settings, and nothing is sent anywhere while `enabled` is false.
 model PlatformAiSettings {
-  id       String  @id @default("global")
-  enabled  Boolean @default(false)
+  id              String  @id @default("global")
+  enabled         Boolean @default(false)
   /// "ANTHROPIC" or "OPENAI_COMPATIBLE" — the same two shapes the tenant side supports, so a
   /// self-hosted Ollama is a first-class choice for an operator who will not send fleet metrics to
   /// a third party at all.
-  provider String  @default("ANTHROPIC") @db.VarChar(32)
+  provider        String  @default("ANTHROPIC") @db.VarChar(32)
   /// Required for OPENAI_COMPATIBLE; ignored for Anthropic.
-  baseUrl  String? @db.VarChar(500)
-  model    String  @default("claude-sonnet-5") @db.VarChar(120)
+  baseUrl         String? @db.VarChar(500)
+  model           String  @default("claude-sonnet-5") @db.VarChar(120)
   /// AES-256-GCM, write-only. The console is told whether a key is set, never what it is.
   encryptedApiKey String? @db.Text
 
@@ -1189,8 +1192,8 @@ model PlatformAiSettings {
   /// re-run in a loop is a bill with a UI.
   dailyCallLimit Int @default(50)
 
-  updatedAt   DateTime @updatedAt
-  updatedBy   String?  @db.VarChar(255)
+  updatedAt DateTime @updatedAt
+  updatedBy String?  @db.VarChar(255)
 }
 
 /// One generated advisory, kept whether or not anybody acted on it.
@@ -1203,26 +1206,26 @@ model PlatformAiSettings {
 /// separate, human-initiated call to the same guarded endpoint the operator could have used
 /// directly. The model proposes; a person disposes.
 model PlatformAiAdvice {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
   /// Who asked for it. The advisor is never self-triggered.
-  actorLabel     String   @db.VarChar(255)
-  model          String   @db.VarChar(120)
+  actorLabel     String    @db.VarChar(255)
+  model          String    @db.VarChar(120)
   /// One-paragraph summary, already length-clamped by the sanitiser.
-  summary        String   @db.Text
+  summary        String    @db.Text
   /// The validated findings: severity, title, why, and an allowlisted action id.
   findings       Json?
   /// What the model was shown, so a wrong answer can be diagnosed rather than argued about.
   factsDigest    Json?
-  inputTokens    Int      @default(0)
-  outputTokens   Int      @default(0)
+  inputTokens    Int       @default(0)
+  outputTokens   Int       @default(0)
   /// "PENDING" until a human acts: "APPLIED", "DISMISSED".
-  status         String   @default("PENDING") @db.VarChar(24)
+  status         String    @default("PENDING") @db.VarChar(24)
   decidedAt      DateTime?
-  decidedBy      String?  @db.VarChar(255)
+  decidedBy      String?   @db.VarChar(255)
   /// Free text from the operator when they dismissed it — the training signal that matters most.
-  decisionNote   String?  @db.Text
+  decisionNote   String?   @db.Text
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -1309,19 +1312,58 @@ model PlatformAlertState {
   detail   String @db.Text
   area     String @db.VarChar(24)
 
-  firstSeenAt DateTime  @default(now())
-  lastSeenAt  DateTime
+  firstSeenAt      DateTime  @default(now())
+  lastSeenAt       DateTime
   /// When a message about this condition was last DELIVERED, and at what severity. Both null until
   /// one actually leaves the building.
   lastReportedAt   DateTime?
   reportedSeverity String?   @db.VarChar(16)
   /// Set on the first sweep the condition is gone. A later recurrence clears it again rather than
   /// creating a second row, so the timeline reads as one condition coming and going.
-  resolvedAt DateTime?
+  resolvedAt       DateTime?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([organizationId, alertKey])
   @@index([resolvedAt, severity])
   @@index([organizationId, lastSeenAt])
+}
+
+/// A completed SSO sign-in, parked for the few seconds it takes the browser to reach the workspace
+/// it belongs to.
+///
+/// WHY THE CONTROL PLANE AND NOT MEMORY, which is where this started. OAuth registers ONE exact
+/// `redirect_uri`, so every workspace's sign-in returns to a single callback host; the session then
+/// has to be handed to the workspace's own hostname, because a refresh cookie written for the
+/// callback host is unreadable there. An in-memory map does that correctly on ONE process and fails
+/// on a deployment with several API replicas behind a round-robin balancer: the code is minted on
+/// one pod and redeemed on another, which looks to the person like a sign-in that randomly fails.
+/// Here, every replica sees every code, and a restart mid-redirect no longer loses the session.
+///
+/// WHY THE CONTROL PLANE SPECIFICALLY: this is cross-tenant by nature — it is written by a callback
+/// that has not yet resolved a tenant from its Host header, and read by a request that has. There is
+/// no single tenant database both halves can agree on.
+model SsoHandoffCode {
+  id String @id @default(uuid())
+
+  /// HMAC of the one-time code, never the code itself: this table is reachable by anything that can
+  /// read the control plane, and a plaintext entry would be a live session for somebody's workspace.
+  codeHash String @unique @db.VarChar(64)
+
+  /// Bound at mint time and checked at redemption. Without it a code minted for one workspace could
+  /// be redeemed at another's origin, writing the first workspace's refresh cookie onto a hostname
+  /// belonging to someone else.
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// The session itself, AES-encrypted at rest with `ENCRYPTION_KEY` — the same treatment tenant
+  /// DSNs and BYOK provider keys get. It holds a usable refresh token for up to 60 seconds, so it
+  /// gets the same protection as the credentials it sits beside rather than less.
+  encryptedPayload String @db.Text
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  /// Swept by expiry; the unique codeHash above is what redemption looks up.
+  @@index([expiresAt])
 }

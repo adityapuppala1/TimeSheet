@@ -787,11 +787,13 @@ workspace host are the same origin, so the API redirects straight to `/app` exac
 You still register **one** `redirect_uri` at the IdP — the one your `APP_BASE_URL` produces. There is
 no per-customer IdP configuration.
 
-> **One honest constraint.** The codes live in memory, so they do not survive a restart and do not
-> span replicas. Behind a round-robin balancer with several API pods, a sign-in will occasionally
-> mint on one process and redeem on another; the person sees it fail and retries successfully. Use
-> sticky sessions on `/api/auth/sso/*`, or accept the occasional retry. A shared store is the fix
-> when it stops being acceptable, and it is not built.
+**It works across replicas and across restarts.** The codes live in the control plane
+(`SsoHandoffCode`), not in a process's memory — an in-memory map works on exactly one pod, and behind
+a round-robin balancer the code gets minted on one and redeemed on another, so the sign-in fails at
+random. The row is claimed with a `DELETE` whose reported row count decides the winner, so two pods
+redeeming simultaneously produce exactly one session and the loser is told the code expired. No
+sticky sessions needed. The migration is applied automatically by `migrate deploy` on both the
+Compose and Helm upgrade paths — there is no manual step.
 
 
 ### On-prem with no public domain — a private CA
@@ -1906,10 +1908,19 @@ To validate the deployment manifests without a cluster, see
 [Verifying the chart without a live cluster](#verifying-the-chart-without-a-live-cluster) — CI runs
 the same `helm lint` / `helm template` / `docker compose config` checks on every push.
 
-The Playwright suite runs entirely against Shape 1 (one `DEFAULT_ORG_SLUG` org) — it doesn't
-exercise subdomain routing or a second tenant. Multi-org-specific behavior (isolation, SSO
-routing, provisioning) is verified via direct API checks against real second/third
-organizations during development, not by the automated suite yet.
+The Playwright suite runs entirely against Shape 1 (one `DEFAULT_ORG_SLUG` org) — no browser test
+drives a second tenant. **The routing itself is covered below Playwright**, by
+`apps/api/tests/integration/multi-workspace-routing.integration.test.ts`, which runs the real
+`cors()` and `resolveTenant` middleware over supertest against two workspaces and asserts what the
+unit tests could not: that the pieces COMPOSE. Both defects that shipped were composition failures —
+a proxy replacing `Host` before the router saw it, and CORS refusing the very origin the router had
+just accepted — and every pure-function test passed throughout. It pins the confusing shape
+explicitly (a same-origin GET carries no `Origin`, so the page renders and only the write is
+refused), the wrong-workspace-on-a-rewritten-Host regression, custom-domain routing, and that
+interleaved concurrent requests never leak one workspace's context into another.
+
+Provisioning and SSO end-to-end against real second/third organizations are still checked by hand
+during development, not by the automated suite.
 
 ### Testing two workspaces on a development machine
 

@@ -68,6 +68,13 @@ with `ROOT_DOMAIN` unset, every value below is byte-for-byte what it was.
   organization it was minted for** — redeeming it at another workspace's origin fails and burns it.
   The page strips it from the address bar before the request is sent. You still register **one**
   `redirect_uri`; there is no per-customer IdP configuration.
+- **And it works across replicas and restarts.** The codes live in the control plane
+  (`SsoHandoffCode`), not in a process's memory. A map works on exactly one pod — behind a
+  round-robin balancer the code is minted on one and redeemed on another, so the sign-in fails at
+  random, which is the worst kind of bug to field because retrying usually works. The row is claimed
+  with a `DELETE` whose row count decides the winner, so two pods redeeming at the same instant
+  produce exactly one session. No sticky sessions, and the migration rides in on `migrate deploy` for
+  both Compose and Helm — no manual upgrade step.
 - **Verified custom domains are accepted as origins automatically.** A workspace on `time.acme.com`
   is not under `ROOT_DOMAIN`, so this previously needed a `WEB_ORIGIN` edit and a restart per
   customer — which nobody would discover until that customer could not sign in. The API keeps a
@@ -135,6 +142,24 @@ new prompt.
   `proxy_set_header Host $host`, so containerised deployments were never affected by the proxy bug;
   and CD publishes images without deploying, so a pipeline change is never the fix for a routing
   problem.
+
+### 🧪 Two workspaces, over real HTTP
+
+- **The routing is covered where the bugs actually were — in how the pieces compose.** Everything
+  about multi-workspace routing was tested as pure functions, and every one of those tests passed
+  throughout the period when subdomain routing did not work in a browser at all. Both defects were
+  composition failures: a proxy replacing `Host` before the router saw it, and a CORS layer refusing
+  the very origin the router had just accepted.
+  `apps/api/tests/integration/multi-workspace-routing.integration.test.ts` now drives the real
+  `cors()` and `resolveTenant` over supertest against two workspaces — no browser, no database — and
+  pins the confusing shape explicitly: a same-origin GET carries no `Origin`, so the page renders
+  and only the write is refused. It also covers the rewritten-`Host` regression, custom-domain
+  routing, the transport being held fixed while the subdomain floats, and that interleaved
+  concurrent requests never leak one workspace's tenant context into another. It runs in CI's cheap
+  tier alongside the unit suite.
+- **The wildcard Caddyfile is validated**, not merely written: `caddy validate` against
+  `caddy:2-alpine` reports "Valid configuration" both as shipped and with the bring-your-own-cert
+  `tls` line enabled.
 
 ### 🧪 Tests for the parts that were silently wrong
 

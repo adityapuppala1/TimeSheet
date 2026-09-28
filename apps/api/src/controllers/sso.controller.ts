@@ -105,7 +105,7 @@ async function finishSsoLogin(
   // Different origin: the cookie would be useless here. Park the session behind a one-time code and
   // let the workspace's own hostname redeem it, so the cookie is written by a request whose Host is
   // the workspace. See services/sso-handoff.service.ts for the code's lifetime and bindings.
-  const code = issueHandoffCode({
+  const code = await issueHandoffCode({
     orgId: org.id,
     accessToken: result.accessToken,
     refreshToken: result.refreshToken,

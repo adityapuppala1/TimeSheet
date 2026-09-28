@@ -302,7 +302,7 @@ authRouter.post(
   validate(z.object({ body: z.object({ code: z.string().min(1).max(200) }) })),
   async (req, res) => {
     const { orgId } = requireTenantContext();
-    const result = redeemHandoffCode(req.body.code, orgId);
+    const result = await redeemHandoffCode(req.body.code, orgId);
     if (!result.ok) throw new AppError(401, "This sign-in link has expired. Please sign in again.");
 
     res.cookie(REFRESH_COOKIE, result.payload.refreshToken, refreshCookieOptions(result.payload.refreshTokenExpiresAt));

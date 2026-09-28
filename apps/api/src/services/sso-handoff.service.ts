@@ -21,18 +21,23 @@
  * worth anything is about as small as it can be made. The SPA also strips it from the address bar
  * on arrival, so it does not linger in history.
  *
+ * WHY THE CONTROL PLANE AND NOT AN IN-MEMORY MAP, which is what this was for one commit. A map
+ * works on exactly one process. On a deployment with several API replicas behind a round-robin
+ * balancer the code is minted on one pod and redeemed on another — so the sign-in fails at random,
+ * which is the worst kind of bug to field because retrying usually works. It also lost every
+ * in-flight sign-in on a restart or a rolling deploy. The CONTROL plane specifically, because this
+ * is cross-tenant by nature: written by a callback that has not resolved a tenant from its Host
+ * header, read by a request that has, with no single tenant database both halves could agree on.
+ *
  * WHY SINGLE-ORG DEPLOYMENTS NEVER SEE ANY OF THIS. `finishSsoLogin` only takes this path when the
  * workspace's base URL differs from the origin the callback arrived on, which cannot happen unless
  * `ROOT_DOMAIN` is set or the workspace has a custom domain. Every on-prem install keeps the exact
- * redirect it has today.
- *
- * THE HONEST LIMITATION, same as the workspace-finder codes next door: this map is in memory, so it
- * does not survive a restart and does not span replicas. A multi-instance deployment behind a
- * round-robin balancer will occasionally mint on one process and redeem on another, and the person
- * sees the sign-in fail and retries. The fix when that matters is a shared store, not a bigger map.
+ * redirect it has today, and never writes a row here.
  */
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
+import { controlPrisma } from "../config/control-prisma.js";
 import { env } from "../config/env.js";
+import { decryptSecret, encryptSecret } from "../utils/encryption.js";
 
 /** Sixty seconds. This is a redirect the browser follows immediately; anything longer is only a
  *  longer window for a leaked URL to be worth something. */
@@ -47,29 +52,49 @@ export interface HandoffPayload {
   user: unknown;
 }
 
-interface Pending extends HandoffPayload {
-  codeHash: string;
-  expiresAt: number;
-}
+/**
+ * Keyed hash of the one-time code.
+ *
+ * Keyed with the app's own secret rather than a bare digest, for the same reason the workspace
+ * directory hashes email addresses: this row is reachable by anything that can read the control
+ * plane, and the key is what makes it useless without the application secret. The RAW code exists
+ * only in the redirect URL and is never written anywhere.
+ */
+const hashCode = (code: string): string => createHmac("sha256", env.JWT_ACCESS_SECRET).update(code).digest("hex");
 
-const pending = new Map<string, Pending>();
-
-/** Keyed, not a bare digest: this hashes a live credential, and the key is what makes the map
- *  useless to anything that reads it without the application secret. Same argument as the
- *  workspace-finder codes. */
-const hash = (code: string): string => createHmac("sha256", env.JWT_ACCESS_SECRET).update(code).digest("hex");
-
-function sweep(now: number): void {
-  for (const [key, value] of pending) if (value.expiresAt <= now) pending.delete(key);
-}
-
-/** Mints a one-time code for a completed sign-in. The code goes in the redirect; nothing else does. */
-export function issueHandoffCode(payload: HandoffPayload): string {
-  const now = Date.now();
-  sweep(now);
+/**
+ * Mints a one-time code for a completed sign-in. The code goes in the redirect; nothing else does.
+ *
+ * The payload is AES-encrypted at rest with `ENCRYPTION_KEY` — the same treatment tenant DSNs and
+ * BYOK provider keys get. It holds a usable refresh token for up to a minute, so it gets the
+ * protection of the credentials it sits beside rather than less.
+ */
+export async function issueHandoffCode(payload: HandoffPayload): Promise<string> {
   const code = randomBytes(32).toString("base64url");
-  // Keyed by the HASH, so the raw code exists only in the redirect URL and never at rest.
-  pending.set(hash(code), { ...payload, codeHash: hash(code), expiresAt: now + TTL_MS });
+
+  await controlPrisma.ssoHandoffCode.create({
+    data: {
+      codeHash: hashCode(code),
+      organizationId: payload.orgId,
+      encryptedPayload: encryptSecret(JSON.stringify(payload)),
+      expiresAt: new Date(Date.now() + TTL_MS)
+    }
+  });
+
+  // Opportunistic sweep: the table would otherwise accumulate a row per SSO sign-in forever.
+  //
+  // AWAITED RATHER THAN DETACHED, which is the opposite of the usual instinct. This runs on a
+  // sign-in, not a page load, and it is one indexed DELETE over a table that holds at most a
+  // minute of traffic — so the latency is irrelevant, and awaiting means no floating promise and a
+  // deterministic state for anything that looks at the table afterwards. Swallowed, because a
+  // failed sweep must not fail a sign-in that has already succeeded: the rows are expired and
+  // unusable either way, and the next mint tries again.
+  try {
+    await controlPrisma.ssoHandoffCode.deleteMany({ where: { expiresAt: { lt: new Date() } } });
+  } catch {
+    /* see above */
+  }
+
   return code;
 }
 
@@ -82,53 +107,41 @@ export type HandoffResult = { ok: true; payload: HandoffPayload } | { ok: false;
  * hostname the browser was sent to, and that hostname is what `resolveTenant` turned into a
  * workspace. Without this, a code minted for one organization could be redeemed at another's origin
  * — which would write that organization's refresh cookie onto a hostname belonging to someone else.
- * Bound here rather than trusted from the URL.
+ * Bound at mint time rather than trusted from the URL.
+ *
+ * THE ROW IS DELETED BEFORE THE ORGANIZATION IS CHECKED, deliberately. A code that survives a failed
+ * redemption is a code somebody can keep trying, and the organization check is exactly the thing
+ * worth retrying against — at every origin they can reach. The delete is also what makes this
+ * single-use ACROSS REPLICAS: `deleteMany` reports how many rows it removed, so two pods racing to
+ * redeem the same code produce exactly one winner and the loser sees "expired".
  */
-export function redeemHandoffCode(code: string, expectedOrgId: string): HandoffResult {
-  const now = Date.now();
-  sweep(now);
+export async function redeemHandoffCode(code: string, expectedOrgId: string): Promise<HandoffResult> {
   if (!code) return { ok: false, reason: "expired" };
 
-  const key = hash(code);
-  const entry = pending.get(key);
-  if (!entry) return { ok: false, reason: "expired" };
+  const row = await controlPrisma.ssoHandoffCode.findUnique({ where: { codeHash: hashCode(code) } });
+  if (!row) return { ok: false, reason: "expired" };
 
-  // Constant-time even though the map lookup above already matched: the comparison is cheap and the
-  // habit is what keeps a future refactor from introducing a timing signal here.
-  const expected = Buffer.from(entry.codeHash, "hex");
-  const actual = Buffer.from(key, "hex");
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return { ok: false, reason: "expired" };
+  // ATOMIC CLAIM — the database decides the winner, not a read-then-write in application code.
+  const claimed = await controlPrisma.ssoHandoffCode.deleteMany({ where: { id: row.id } });
+  if (claimed.count === 0) return { ok: false, reason: "expired" };
 
-  // Burned whatever the outcome. A code that survives a failed redemption is a code somebody can
-  // keep trying, and the org check below is exactly the thing worth retrying against.
-  pending.delete(key);
-  if (entry.orgId !== expectedOrgId) return { ok: false, reason: "wrong-workspace" };
+  // Expiry is checked AFTER the claim, so an expired code is burned here rather than left for the
+  // sweep — and an expired code and an unknown one report identically, which is what stops the
+  // response telling an anonymous caller whether a code they hold was ever real.
+  if (row.expiresAt.getTime() <= Date.now()) return { ok: false, reason: "expired" };
+  if (row.organizationId !== expectedOrgId) return { ok: false, reason: "wrong-workspace" };
 
+  const payload = JSON.parse(decryptSecret(row.encryptedPayload)) as HandoffPayload;
   return {
     ok: true,
-    payload: {
-      orgId: entry.orgId,
-      accessToken: entry.accessToken,
-      refreshToken: entry.refreshToken,
-      refreshTokenExpiresAt: entry.refreshTokenExpiresAt,
-      user: entry.user
-    }
+    // `refreshTokenExpiresAt` survives JSON as a STRING, and the refresh cookie's `expires` needs a
+    // real Date — handing the string through produced a session cookie that vanished with the
+    // browser, i.e. "signed out every time I close the tab" for SSO users only.
+    payload: { ...payload, refreshTokenExpiresAt: new Date(payload.refreshTokenExpiresAt) }
   };
 }
 
 /** Test-only reset, so one spec's leftovers cannot decide another spec's outcome. */
-export function __resetHandoffCodesForTests(): void {
-  pending.clear();
-}
-
-/**
- * Test-only view of what is actually stored.
- *
- * Exists because the alternative was a test that could not see the thing it claimed to check: an
- * earlier version asserted "the raw code is not held anywhere" by serialising unrelated module
- * state, and storing the raw code on purpose left all nine tests green. A property about internal
- * representation needs a window onto that representation, or it is decoration.
- */
-export function __handoffKeysForTests(): string[] {
-  return [...pending.keys()];
+export async function __resetHandoffCodesForTests(): Promise<void> {
+  await controlPrisma.ssoHandoffCode.deleteMany({});
 }
