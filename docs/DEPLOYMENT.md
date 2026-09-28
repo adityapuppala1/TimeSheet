@@ -755,28 +755,44 @@ branding and the SSO buttons load; the `POST` to `/api/auth/login` carries one a
 403 about an allow-list. If you see that, `ROOT_DOMAIN` is the variable to look at, not `WEB_ORIGIN`
 — and the error message now says so.
 
-**Verified custom domains are the exception.** A workspace on `time.acme.com` is not under
-`ROOT_DOMAIN`, and the CORS check is synchronous while the domain list lives in the control-plane
-database. **Add each custom domain to `WEB_ORIGIN` when you verify it**, and restart the API. That
-is a per-customer step, and it is the same manual DNS conversation the domain itself requires.
+**Verified custom domains are handled too, and need no configuration.** A workspace on
+`time.acme.com` is not under `ROOT_DOMAIN`, so the API keeps a cached set of the domains the control
+plane has *verified* and accepts those as origins as well. The cache refreshes every 60 seconds and
+is refreshed immediately when a domain is verified or removed, so a customer's domain works the
+moment the console says "verified" — no `WEB_ORIGIN` edit, no restart. Unverified rows are ignored,
+and the scheme and port still have to match an entry you wrote.
 
-### Known limitation: SSO across workspace subdomains
+### SSO across workspace subdomains
 
-Worth knowing before you enable multi-org routing with SSO, because the pieces are individually
-correct and the combination is not:
+Google and Microsoft require the OAuth `redirect_uri` to be **one exact string**, registered in
+advance — so every workspace's sign-in comes back to the single callback host built from
+`APP_BASE_URL`. That is fine for working out *which* workspace: `finishSsoLogin` recovers the
+organization from the signed `state`, never from the `Host` header.
 
-- The OAuth `redirect_uri` is registered once with Google/Microsoft and is built from
-  `APP_BASE_URL` — so every workspace's SSO round trip comes back to **one** callback hostname.
-  That part works: `finishSsoLogin` recovers the tenant from the signed `state`, not from `Host`.
-- But the refresh cookie is then set on *that* hostname, and the browser is redirected to the first
-  entry in `WEB_ORIGIN`. If the callback host is the apex and the user started at
-  `acme.yourdomain.com`, the cookie is on the apex and the SPA they land on is not.
+The session was the problem. A refresh cookie written for the callback host cannot be read by
+`acme.example.com`, so somebody who started at their workspace landed back on a login page having
+just signed in successfully.
 
-So **password, LDAP and SAML sign-in work across subdomains; OIDC (Google/Microsoft) needs each
-workspace on its own verified custom domain**, with that domain's callback registered at the IdP, or
-it needs to stay on a single-hostname deployment. Closing this properly means handing the session
-from the callback host to the workspace host through a one-time code, which is a feature and not a
-configuration change. It is not done.
+**It now hands off.** When the workspace's own address differs from the callback's, the API parks
+the finished session behind a one-time code and redirects the browser to
+`https://acme.example.com/sso/handoff?code=…`. That page redeems it against the workspace's own
+origin, so the cookie is written by a request whose `Host` is the workspace. The code is 32 random
+bytes, single-use, valid for **60 seconds**, hashed at rest, and **bound to the organization it was
+minted for** — redeeming it at another workspace's origin fails and burns it. The SPA strips it from
+the address bar before the request is even sent, so it does not linger in history or a `Referer`.
+
+**Nothing changes for a single-org deployment.** With no `ROOT_DOMAIN` the callback host and the
+workspace host are the same origin, so the API redirects straight to `/app` exactly as before.
+
+You still register **one** `redirect_uri` at the IdP — the one your `APP_BASE_URL` produces. There is
+no per-customer IdP configuration.
+
+> **One honest constraint.** The codes live in memory, so they do not survive a restart and do not
+> span replicas. Behind a round-robin balancer with several API pods, a sign-in will occasionally
+> mint on one process and redeem on another; the person sees it fail and retries successfully. Use
+> sticky sessions on `/api/auth/sso/*`, or accept the occasional retry. A shared store is the fix
+> when it stops being acceptable, and it is not built.
+
 
 ### On-prem with no public domain — a private CA
 

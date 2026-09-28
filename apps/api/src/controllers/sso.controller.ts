@@ -31,6 +31,8 @@ import {
   type OidcProviderType
 } from "../services/sso.service.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { issueHandoffCode } from "../services/sso-handoff.service.js";
+import { workspaceUrlForSlug } from "../services/workspace-directory.service.js";
 
 export const ssoRouter = Router();
 
@@ -77,8 +79,49 @@ async function finishSsoLogin(
   // recording it for one that then failed is exactly the false assurance the gate exists to avoid.
   await recordSsoLoginSuccess(org.id, provider);
 
-  res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
-  res.redirect(`${env.WEB_ORIGIN.split(",")[0].trim()}/app`);
+  /**
+   * WHERE THIS BROWSER ACTUALLY BELONGS, which is not necessarily where the callback landed.
+   *
+   * OAuth requires ONE registered `redirect_uri`, so every workspace's sign-in comes back to the
+   * host in `APP_BASE_URL`. Tenant resolution copes (the org comes from the signed state) but the
+   * SESSION did not: the refresh cookie was written for the callback host and the browser was then
+   * sent to `WEB_ORIGIN[0]`, so somebody who started at `acme.example.com` landed on a different
+   * origin holding a cookie it cannot read — a sign-in that succeeds and shows a login page.
+   *
+   * Single-org deployments never take the second branch: with no ROOT_DOMAIN, `workspaceUrlForSlug`
+   * IS `APP_BASE_URL`, so `sameOrigin` is true and the redirect below is byte-for-byte the one this
+   * function has always done.
+   */
+  const workspaceUrl = workspaceUrlForSlug(org.slug);
+  const landing = env.WEB_ORIGIN.split(",")[0].trim();
+  const sameOrigin = originOf(workspaceUrl) === originOf(landing);
+
+  if (sameOrigin) {
+    res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
+    res.redirect(`${landing}/app`);
+    return;
+  }
+
+  // Different origin: the cookie would be useless here. Park the session behind a one-time code and
+  // let the workspace's own hostname redeem it, so the cookie is written by a request whose Host is
+  // the workspace. See services/sso-handoff.service.ts for the code's lifetime and bindings.
+  const code = issueHandoffCode({
+    orgId: org.id,
+    accessToken: result.accessToken,
+    refreshToken: result.refreshToken,
+    refreshTokenExpiresAt: result.refreshTokenExpiresAt,
+    user: result.user
+  });
+  res.redirect(`${workspaceUrl}/sso/handoff?code=${encodeURIComponent(code)}`);
+}
+
+/** Scheme+host+port, or the input when it is not a URL — used only to compare two configured bases. */
+function originOf(value: string): string {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return value;
+  }
 }
 
 // SAML routes are registered BEFORE the parameterized `/:provider/start` + `/:provider/callback`

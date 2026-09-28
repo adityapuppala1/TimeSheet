@@ -22,6 +22,7 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import morgan from "morgan";
 import { isOriginAllowed, originLooksLikeWorkspace } from "./config/origins.js";
+import { isVerifiedCustomDomain } from "./config/custom-domain-origins.js";
 import { env } from "./config/env.js";
 import { avatarsDir, documentReadDirs, isInsideNonPublicSubtree, isOrgSegment, resolveWithin, storageRoot } from "./config/storage-paths.js";
 import { tenantContext } from "./config/tenant-context.js";
@@ -151,7 +152,7 @@ function corsRefusalMessage(origin: string | undefined): string {
 app.use(
   cors({
     origin(origin, callback) {
-      if (isOriginAllowed(origin, allowedOrigins, isDev, env.ROOT_DOMAIN)) return callback(null, true);
+      if (isOriginAllowed(origin, allowedOrigins, isDev, env.ROOT_DOMAIN, isVerifiedCustomDomain)) return callback(null, true);
       // A plain Error here falls through errorHandler.ts's generic 500 branch (logged as a
       // server error) even though this is an expected, correctly-enforced rejection, not a
       // bug — AppError gives disallowed-origin attempts their own clean 403 instead of noise

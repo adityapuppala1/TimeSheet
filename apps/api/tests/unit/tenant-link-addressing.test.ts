@@ -57,7 +57,11 @@ const ALLOWED: Record<string, string> = {
   "services/platform-alerts.service.ts": "links to /platform-admin, which is not a workspace",
   "services/sales-lead.service.ts": "marketing follow-up, sent before any workspace exists",
   "controllers/platform-admin.controller.ts": "the routing readout REPORTS the configured value",
-  "controllers/billing.controller.ts": "mentions it in a comment only"
+  "controllers/billing.controller.ts": "mentions it in a comment only",
+  "controllers/sso.controller.ts":
+    "comment only — it compares workspaceUrlForSlug() against WEB_ORIGIN to decide whether the SSO callback needs to hand the session to the workspace's own origin, and explains why APP_BASE_URL is what the callback host is built from",
+  "services/sso-handoff.service.ts":
+    "comment only — explains why the one-time handoff exists: OAuth registers ONE redirect_uri, built from APP_BASE_URL, so the callback host is not the workspace host"
 };
 
 /** Every file under src/ that mentions the variable, as a posix-style path relative to src/. */

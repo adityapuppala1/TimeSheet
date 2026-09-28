@@ -60,6 +60,7 @@ import { startReportSubscriptionWorker } from "./workers/report-subscription.wor
 import { startServiceHealthWorker } from "./workers/service-health.worker.js";
 import { startApiTelemetryRetentionWorker } from "./workers/api-telemetry-retention.worker.js";
 import { flushApiTelemetry, startApiTelemetry } from "./services/api-telemetry.service.js";
+import { refreshCustomDomainOrigins } from "./config/custom-domain-origins.js";
 
 /**
  * Fail-fast guards before the server accepts traffic.
@@ -277,6 +278,12 @@ server.on("listening", async () => {
   // How many workspaces are live, so the routing half of the check can say "the other 3 are
   // unreachable" instead of "this might be a problem". Null on failure rather than 0: a control
   // plane that cannot be counted must not produce a confident finding about workspaces.
+  // Primes the verified-custom-domain set before the first browser write arrives. Detached and
+  // never fatal: an empty set only means those workspaces fall back to WEB_ORIGIN until the first
+  // lazy refresh a minute later, which is a degraded state, not a broken one — and refusing to
+  // finish booting over it would be worse.
+  void refreshCustomDomainOrigins();
+
   const activeOrgCount = await controlPrisma.organization
     .count({ where: { status: "ACTIVE" } })
     .catch(() => null);

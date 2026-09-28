@@ -96,6 +96,39 @@ export function isWorkspaceOrigin(origin: string, allowList: string[], rootDomai
  * would break every non-browser caller while protecting nothing.
  */
 /**
+ * A workspace reached on its OWN domain (`time.acme.com`), rather than on a subdomain of
+ * `ROOT_DOMAIN`.
+ *
+ * Same trade as `isWorkspaceOrigin` and the same guard: the HOST may be anything the operator has
+ * verified, and the scheme and port must still match an entry in `WEB_ORIGIN`. Verification proves
+ * the customer controls that name (a DNS TXT record), which is the same bar `resolveCustomDomainSlug`
+ * applies before routing a request there at all — so an origin this accepts is, by definition, a
+ * page this deployment is already serving.
+ */
+function isCustomDomainOriginAllowed(
+  origin: string,
+  allowList: string[],
+  isVerifiedDomain: ((hostname: string) => boolean) | undefined
+): boolean {
+  if (!isVerifiedDomain) return false;
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (!isVerifiedDomain(url.hostname)) return false;
+  return allowList.some((entry) => {
+    try {
+      const allowed = new URL(entry);
+      return allowed.protocol === url.protocol && allowed.port === url.port;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
  * Does this origin have the SHAPE of a workspace address — three or more labels, not an IP?
  *
  * Used only to choose which refusal message to print, never to allow anything. A deployment that
@@ -120,10 +153,18 @@ export function isOriginAllowed(
   devMode: boolean,
   /** `ROOT_DOMAIN`. When set, this deployment's own workspace subdomains are allowed — see
    *  `isWorkspaceOrigin` for why a static list cannot express that. */
-  rootDomain?: string
+  rootDomain?: string,
+  /** "Is this hostname a verified custom domain?" — injected rather than imported so this module
+   *  stays pure and testable, and so `deployment-check.ts` can ask the same question at boot
+   *  without a control-plane round trip. Omitted means "no custom domains", which is correct for
+   *  every single-org install. */
+  isVerifiedDomain?: (hostname: string) => boolean
 ): boolean {
   if (!origin) return true;
   if (allowList.includes(origin)) return true;
   if (devMode && PRIVATE_LAN_RE.test(origin)) return true;
-  return isWorkspaceOrigin(origin, allowList, rootDomain);
+  if (isWorkspaceOrigin(origin, allowList, rootDomain)) return true;
+  // A workspace on its own verified domain. Consulted last because it is the only branch that reads
+  // state rather than configuration, and kept behind the same scheme/port rule as the others.
+  return isCustomDomainOriginAllowed(origin, allowList, isVerifiedDomain);
 }

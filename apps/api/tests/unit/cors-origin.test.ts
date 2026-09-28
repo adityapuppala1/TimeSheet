@@ -170,3 +170,47 @@ describe("*.localhost in development", () => {
     expect(isOriginAllowed("https://notlocalhost", [], true)).toBe(false);
   });
 });
+
+/**
+ * VERIFIED CUSTOM DOMAINS — a workspace on `time.acme.com` rather than under ROOT_DOMAIN.
+ *
+ * The last origin a static list cannot hold, and the one that appears AFTER the process started:
+ * an operator verifies a customer's domain in the platform console, and that workspace's login page
+ * then renders perfectly and cannot sign anybody in. Same silent shape as the two before it.
+ *
+ * The predicate is injected rather than imported so this module stays pure — the cache that answers
+ * it lives in config/custom-domain-origins.ts and is refreshed when a domain is verified or removed.
+ */
+describe("verified custom domains", () => {
+  const PROD = ["https://timesphere.app"];
+  const verified = (...hosts: string[]) => (h: string) => hosts.includes(h.toLowerCase());
+
+  it("accepts a domain the control plane has verified", () => {
+    expect(isOriginAllowed("https://time.acme.com", PROD, false, "timesphere.app", verified("time.acme.com"))).toBe(true);
+  });
+
+  it("refuses one it has not", () => {
+    // Verification is a DNS TXT record the customer publishes. An unverified row is a claim.
+    expect(isOriginAllowed("https://time.evil.com", PROD, false, "timesphere.app", verified("time.acme.com"))).toBe(false);
+  });
+
+  it("refuses everything when no predicate is supplied, which is every single-org install", () => {
+    expect(isOriginAllowed("https://time.acme.com", PROD, false, "timesphere.app")).toBe(false);
+  });
+
+  it("holds the transport fixed here too", () => {
+    // Same boundary as the ROOT_DOMAIN rule: the HOST is what verification vouches for, never the
+    // scheme. An https deployment must not start trusting a plain-http origin.
+    const isTime = verified("time.acme.com");
+    expect(isOriginAllowed("http://time.acme.com", PROD, false, "timesphere.app", isTime)).toBe(false);
+    expect(isOriginAllowed("https://time.acme.com:8443", PROD, false, "timesphere.app", isTime)).toBe(false);
+  });
+
+  it("matches case-insensitively, because a hostname is", () => {
+    expect(isOriginAllowed("https://TIME.Acme.COM", PROD, false, undefined, verified("time.acme.com"))).toBe(true);
+  });
+
+  it("works with no ROOT_DOMAIN at all — a single-org deployment can still have one custom domain", () => {
+    expect(isOriginAllowed("https://time.acme.com", PROD, false, undefined, verified("time.acme.com"))).toBe(true);
+  });
+});

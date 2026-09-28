@@ -10,6 +10,15 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 5.7.0 — the workspace you asked for, on the address you typed — 2026-09-28
+
+Multi-workspace routing worked in theory and not in a browser. Six defects, each found by driving a
+running server rather than reading the code that was meant to handle it, and each one silent: no
+error, no log line, and a login page that renders perfectly before refusing to sign anybody in.
+
+**Nothing in this release changes a single-workspace or on-premise install.** Every behaviour below
+is gated on `ROOT_DOMAIN`, and with it unset each value is byte-for-byte what it was in 5.6.0.
+
 ### 🏢 Multi-workspace routing, which had four ways to fail silently
 
 Every one of these was found by asking a running server what it actually did, rather than by reading
@@ -45,6 +54,26 @@ with `ROOT_DOMAIN` unset, every value below is byte-for-byte what it was.
   thing to be wrong about a cloud deployment: DEPLOYMENT.md now has a table of what eleven proxies
   and load balancers do to `Host`, and `GET /api/platform-admin/routing` reports what the header that
   actually arrived resolved to, so one authenticated request through the real load balancer settles it.
+
+### 🔐 SSO now lands on the workspace you started from
+
+- **OIDC across workspace subdomains works.** Google and Microsoft require the OAuth `redirect_uri`
+  to be one exact registered string, so every workspace's sign-in returns to a single callback host.
+  Working out *which* workspace was never the problem — the organization rides in the signed `state`.
+  The SESSION was: a refresh cookie written for the callback host cannot be read by
+  `acme.example.com`, so somebody who had just signed in successfully landed back on a login page.
+  The callback now parks the finished session behind a one-time code and sends the browser to the
+  workspace's own address to redeem it, so the cookie is written by a request whose `Host` is the
+  workspace. 32 random bytes, single-use, 60 seconds, hashed at rest, and **bound to the
+  organization it was minted for** — redeeming it at another workspace's origin fails and burns it.
+  The page strips it from the address bar before the request is sent. You still register **one**
+  `redirect_uri`; there is no per-customer IdP configuration.
+- **Verified custom domains are accepted as origins automatically.** A workspace on `time.acme.com`
+  is not under `ROOT_DOMAIN`, so this previously needed a `WEB_ORIGIN` edit and a restart per
+  customer — which nobody would discover until that customer could not sign in. The API keeps a
+  cached set of verified domains, refreshed on a minute and immediately when one is verified or
+  removed, so a domain works the moment the console says "verified". Unverified rows are ignored,
+  and the scheme and port still have to match something you wrote.
 
 ### 🔒 CORS refused every workspace it had not been told about by name
 

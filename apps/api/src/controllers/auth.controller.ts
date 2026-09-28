@@ -35,6 +35,7 @@ import { isValidTimezone, normalizePhoneNumber } from "../utils/phone.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
 import { isPrivateIpAddress, parseUserAgent } from "../utils/user-agent.js";
 import { attachDeviceId } from "../utils/device-cookie.js";
+import { redeemHandoffCode } from "../services/sso-handoff.service.js";
 
 export const authRouter = Router();
 
@@ -271,6 +272,41 @@ authRouter.post(
       });
     }
     res.status(202).json({ message: "If the account exists, reset instructions were sent." });
+  }
+);
+
+/**
+ * POST /sso/handoff — redeem a one-time code minted by the SSO callback, on the workspace's own
+ * hostname.
+ *
+ * WHY THE SESSION ARRIVES THIS WAY. OAuth requires one registered `redirect_uri`, so every
+ * workspace's sign-in returns to a single callback host. The cookie has to be written by a request
+ * whose `Host` is the workspace, or the browser cannot read it — see
+ * services/sso-handoff.service.ts. This route is the second half of that hop, and it runs behind the
+ * normal tenant middleware, so `requireTenantContext()` below is the workspace the browser is
+ * actually on.
+ *
+ * THE ORG CHECK IS THE SECURITY PROPERTY. The code is bound to the organization it was minted for,
+ * and redeeming it anywhere else fails — otherwise a code for one workspace could be redeemed at
+ * another's origin and write the first workspace's refresh cookie onto the second's hostname.
+ *
+ * ONE MESSAGE FOR BOTH FAILURES, deliberately: an expired code and a code for another workspace are
+ * both "this did not work, sign in again", and distinguishing them would tell an anonymous caller
+ * whether a code they hold is real.
+ *
+ * Not rate-limited beyond the global limiter: the code is 32 random bytes and single-use, so there
+ * is nothing to guess at a rate worth limiting.
+ */
+authRouter.post(
+  "/sso/handoff",
+  validate(z.object({ body: z.object({ code: z.string().min(1).max(200) }) })),
+  async (req, res) => {
+    const { orgId } = requireTenantContext();
+    const result = redeemHandoffCode(req.body.code, orgId);
+    if (!result.ok) throw new AppError(401, "This sign-in link has expired. Please sign in again.");
+
+    res.cookie(REFRESH_COOKIE, result.payload.refreshToken, refreshCookieOptions(result.payload.refreshTokenExpiresAt));
+    res.json({ accessToken: result.payload.accessToken, user: result.payload.user });
   }
 );
 

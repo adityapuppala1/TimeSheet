@@ -484,6 +484,10 @@ export const authApi = {
   loginLdap: async (email: string, password: string) => (await api.post<LoginResponse>("/auth/login/ldap", { email, password })).data,
   refresh: refreshAccessToken,
   ssoMethods: async () => (await api.get<SsoMethods>("/auth/sso-methods")).data,
+  /** Redeems the one-time code the SSO callback put in the redirect, ON THE WORKSPACE'S OWN ORIGIN
+   *  — which is the point: the refresh cookie has to be written by a request whose Host is the
+   *  workspace, or the browser cannot read it. See pages/SsoHandoff.tsx. */
+  ssoHandoff: async (code: string) => (await api.post<LoginResponse>("/auth/sso/handoff", { code })).data,
   me: async () => (await api.get<AuthUser>("/auth/me")).data,
   /** Self-service switch among roles the account already holds — granting a NEW role is
    *  SUPER_ADMIN-only, from User Management (userApi.create/update's `roles` field below). */

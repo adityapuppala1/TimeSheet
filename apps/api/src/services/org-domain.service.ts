@@ -20,6 +20,7 @@ import dns from "node:dns/promises";
 import { randomBytes } from "node:crypto";
 import { controlPrisma } from "../config/control-prisma.js";
 import { AppError } from "../middleware/error.js";
+import { refreshCustomDomainOrigins } from "../config/custom-domain-origins.js";
 
 /** The subdomain the proof is published at. Prefixed with an underscore by convention — RFC 8552
  *  reserves that shape for records consumed by software rather than by people, which keeps it out
@@ -157,10 +158,19 @@ export async function verifyDomain(orgId: string, domainId: string): Promise<Dom
     where: { id: row.id },
     data: { lastCheckedAt: new Date(), lastCheckError: matched ? null : error, ...(matched ? { verifiedAt: new Date() } : {}) }
   });
+  // A verified domain is also a browser ORIGIN, and CORS answers from a cached set. Refreshed here
+  // so the workspace works the moment the operator sees "verified", rather than up to a minute
+  // later — a gap that would read as "verification did not take", which is the worst way to learn
+  // about a cache. Awaited: this is one control-plane query on a manual, rare action.
+  if (matched) await refreshCustomDomainOrigins();
   return toRow(updated);
 }
 
 export async function removeDomain(orgId: string, domainId: string): Promise<void> {
   const deleted = await controlPrisma.orgDomain.deleteMany({ where: { id: domainId, organizationId: orgId } });
   if (deleted.count === 0) throw new AppError(404, "Domain not found on this workspace.");
+  // Drop it from the CORS cache now rather than leaving it accepted for up to a minute. Routing
+  // already stopped — `resolveCustomDomainSlug` reads the database — so this only closes the
+  // browser-origin half, but leaving a removed customer's domain accepted is not a state to ship.
+  await refreshCustomDomainOrigins();
 }

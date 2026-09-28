@@ -34,6 +34,7 @@ const Contact = lazy(() => import("./pages/Contact").then((m) => ({ default: m.C
 const Login = lazy(() => import("./pages/Login").then((m) => ({ default: m.Login })));
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword").then((m) => ({ default: m.ForgotPassword })));
 const FindWorkspace = lazy(() => import("./pages/FindWorkspace").then((m) => ({ default: m.FindWorkspace })));
+const SsoHandoff = lazy(() => import("./pages/SsoHandoff").then((m) => ({ default: m.SsoHandoff })));
 const Signup = lazy(() => import("./pages/Signup").then((m) => ({ default: m.Signup })));
 const ResetPassword = lazy(() => import("./pages/ResetPassword").then((m) => ({ default: m.ResetPassword })));
 const SharedAttestation = lazy(() => import("./pages/SharedAttestation").then((m) => ({ default: m.SharedAttestation })));
@@ -134,6 +135,12 @@ const router = createBrowserRouter([
   // Public and unauthenticated, like the two beside it — a person who cannot remember their
   // workspace address has, by definition, no session anywhere to prove anything with.
   { path: "/find-workspace", element: <PageShell><RedirectIfAuthenticated><FindWorkspace /></RedirectIfAuthenticated></PageShell> },
+  /* The landing half of an SSO sign-in on a multi-workspace deployment — the callback host parks
+     the session behind a one-time code and sends the browser here, on the WORKSPACE's own hostname,
+     so the refresh cookie is written for the origin that will use it. Deliberately NOT wrapped in
+     RedirectIfAuthenticated: arriving here with a stale session from another tab must still redeem
+     the code, or the person is bounced into whichever workspace they were last in. */
+  { path: "/sso/handoff", element: <PageShell><SsoHandoff /></PageShell> },
   { path: "/signup", element: <PageShell><RedirectIfAuthenticated><Signup /></RedirectIfAuthenticated></PageShell> },
   { path: "/reset-password", element: <PageShell><ResetPassword /></PageShell> },
   // Public, no-session attestation viewer. Deliberately OUTSIDE /app: the reader is a client
