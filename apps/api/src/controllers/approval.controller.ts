@@ -38,7 +38,7 @@ import { audit } from "../services/audit.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { assertPlanningCapability } from "../services/planning.service.js";
 import { assertTicketVisible } from "../services/ticket.service.js";
-import { env } from "../config/env.js";
+import { tenantBaseUrl } from "../services/workspace-directory.service.js";
 
 export const approvalRouter = Router();
 export const approvalPublicRouter = Router();
@@ -349,7 +349,7 @@ approvalRouter.post(
       }
     });
     await audit(req.user!.id, "approval.guest_link_reissued", "ApprovalStep", step.id);
-    res.json({ url: `${env.APP_BASE_URL}/shared/approval/${token}` });
+    res.json({ url: `${tenantBaseUrl()}/shared/approval/${token}` });
   }
 );
 

@@ -27,6 +27,7 @@ import { getOnboardingStatus } from "../services/onboarding.service.js";
 import { authenticateLdap, recordSsoLoginSuccess } from "../services/sso.service.js";
 import { checkVerificationCode, findWorkspacesForEmail, issueVerificationCode } from "../services/workspace-directory.service.js";
 import { withOrgTenant } from "../config/with-org-tenant.js";
+import { isRootDomainRequest } from "../middleware/tenant.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { processAvatar } from "../utils/image.js";
@@ -55,7 +56,7 @@ function refreshCookieOptions(expiresAt?: Date) {
  * already run for this route since it's a normal /api/auth/* route, unlike the SSO
  * start/callback routes which bypass it — see controllers/sso.controller.ts's header comment).
  */
-authRouter.get("/sso-methods", async (_req, res) => {
+authRouter.get("/sso-methods", async (req, res) => {
   const { orgId } = requireTenantContext();
   const [configs, authMethod] = await Promise.all([
     controlPrisma.orgSsoConfig.findMany({ where: { organizationId: orgId, isEnabled: true } }),
@@ -69,7 +70,27 @@ authRouter.get("/sso-methods", async (_req, res) => {
 
   res.json({
     passwordEnabled: (authMethod?.passwordLoginEnabled ?? true) && !authMethod?.requireSsoOnly,
-    providers: configs.filter(isFullyConfigured).map((c) => c.providerType)
+    providers: configs.filter(isFullyConfigured).map((c) => c.providerType),
+    /**
+     * TRUE when this request arrived at the deployment's BARE ROOT DOMAIN rather than at any
+     * workspace — so the login page can send the visitor to the workspace finder instead of
+     * rendering a sign-in form for a workspace they did not ask for.
+     *
+     * WHY IT RIDES ON THIS RESPONSE. The login page already awaits this call before it can decide
+     * which buttons to draw, so the answer costs nothing extra and arrives before anything is
+     * rendered. A dedicated endpoint would be a second round trip to learn something about the same
+     * request.
+     *
+     * WHY IT EXISTS AT ALL. `isRootDomainRequest` was written for exactly this, documented as "what
+     * lets the routing layer serve the finder", and had NO CALLERS anywhere in the repository — so
+     * the apex went on resolving to `DEFAULT_ORG_SLUG` and serving one specific customer's branded
+     * login page to everybody who typed the domain without a subdomain. Both `.env.example` and
+     * docs/DEPLOYMENT.md described the fixed behaviour; only the code disagreed.
+     *
+     * Always `false` on a single-org deployment, where the bare domain IS the one workspace and
+     * there is nothing to choose between.
+     */
+    apex: isRootDomainRequest(req)
   });
 });
 

@@ -305,6 +305,11 @@ export interface SessionRow {
 export interface SsoMethods {
   passwordEnabled: boolean;
   providers: Array<"GOOGLE" | "MICROSOFT" | "SAML" | "LDAP">;
+  /** True when this request reached the deployment's bare root domain instead of a workspace, so
+   *  the sign-in page should offer the workspace finder rather than one workspace's login form.
+   *  Always false on a single-org install, where the bare domain IS the workspace. Optional because
+   *  an older API does not send it, and "no opinion" must read as "not the apex". */
+  apex?: boolean;
 }
 
 /** First-run setup state. Computed server-side — a gate the browser decides for itself is a gate

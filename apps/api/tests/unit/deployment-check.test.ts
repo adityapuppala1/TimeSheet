@@ -12,11 +12,31 @@ import { describe, expect, it } from "vitest";
 
 const { inspectDeploymentConfig } = await import("../../src/config/deployment-check.js");
 
-const check = (over: Partial<{ appBaseUrl: string; webOrigin: string; nodeEnv: string }> = {}) =>
+/**
+ * The healthy baseline every case varies from.
+ *
+ * `rootDomain: "timesphere.example.com"` and an APP_BASE_URL at that apex, because the two-label
+ * default this file used to carry (`example.com`) is the ONE shape the tenant router handles
+ * correctly by accident — and a baseline that is accidentally correct cannot show which cases are
+ * deliberately correct. `activeOrgCount: 1` is the single-workspace deployment.
+ */
+const check = (
+  over: Partial<{
+    appBaseUrl: string;
+    webOrigin: string;
+    nodeEnv: string;
+    rootDomain: string | undefined;
+    defaultOrgSlug: string;
+    activeOrgCount: number | null;
+  }> = {}
+) =>
   inspectDeploymentConfig({
     appBaseUrl: "https://timesphere.example.com",
     webOrigin: "https://timesphere.example.com",
     nodeEnv: "production",
+    rootDomain: "timesphere.example.com",
+    defaultOrgSlug: "default",
+    activeOrgCount: 1,
     ...over
   });
 
@@ -30,7 +50,7 @@ describe("a correctly addressed deployment", () => {
   it("says nothing for an ordinary LAN development setup", () => {
     // The common, correct case. A check that fires here is one people learn to scroll past.
     expect(
-      check({ appBaseUrl: "https://192.168.1.20:5173", webOrigin: "https://192.168.1.20:5173", nodeEnv: "development" })
+      check({ appBaseUrl: "https://192.168.1.20:5173", webOrigin: "https://192.168.1.20:5173", nodeEnv: "development", rootDomain: undefined })
     ).toEqual([]);
   });
 });
@@ -61,9 +81,9 @@ describe("the mismatch that caused a real outage", () => {
      * rule. A guard that cries on healthy setups is worse than no guard.
      */
     expect(
-      check({ appBaseUrl: "https://192.168.4.77:5173", webOrigin: "http://localhost:5173", nodeEnv: "development" })
+      check({ appBaseUrl: "https://192.168.4.77:5173", webOrigin: "http://localhost:5173", nodeEnv: "development", rootDomain: undefined })
     ).toEqual([]);
-    expect(check({ appBaseUrl: "http://10.0.0.8:5173", webOrigin: "http://localhost:5173", nodeEnv: "development" })).toEqual([]);
+    expect(check({ appBaseUrl: "http://10.0.0.8:5173", webOrigin: "http://localhost:5173", nodeEnv: "development", rootDomain: undefined })).toEqual([]);
   });
 
   it("still catches an unlisted PUBLIC address in development, which the shortcut never covers", () => {
@@ -83,7 +103,12 @@ describe("the mismatch that caused a real outage", () => {
     expect(
       check({
         appBaseUrl: "https://app.example.com",
-        webOrigin: "http://localhost:5173, https://staging.example.com , https://app.example.com"
+        webOrigin: "http://localhost:5173, https://staging.example.com , https://app.example.com",
+        // The app IS the apex of its own root domain (workspaces would live at
+        // <slug>.app.example.com). Stated so this case stays about the allow-list: with ROOT_DOMAIN
+        // unset the label-counting fallback would read "app" as a workspace slug, and with
+        // ROOT_DOMAIN="example.com" the apex would be one level up — each a different finding.
+        rootDomain: "app.example.com"
       })
     ).toEqual([]);
   });
@@ -96,7 +121,7 @@ describe("emailed links that nobody outside can open", () => {
 
     // A laptop serving colleagues on the same Wi-Fi is correct, not a misconfiguration. Warning here
     // would fire on every healthy dev machine — which is how a check trains people to ignore it.
-    const dev = check({ appBaseUrl: "http://localhost:5173", webOrigin: "http://localhost:5173", nodeEnv: "development" });
+    const dev = check({ appBaseUrl: "http://localhost:5173", webOrigin: "http://localhost:5173", nodeEnv: "development", rootDomain: undefined });
     expect(dev).toEqual([]);
   });
 
@@ -153,5 +178,168 @@ describe("every finding is actionable", () => {
     const found = check({ appBaseUrl: "http://203.0.113.10:5173", webOrigin: "http://localhost:5173", nodeEnv: "development" });
     expect(found.length).toBeGreaterThan(1);
     for (const finding of found) expect(finding.fix.length, finding.problem).toBeGreaterThan(20);
+  });
+});
+
+/**
+ * WHICH WORKSPACE A HOSTNAME REACHES — the half of this check that did not exist until a deployment
+ * served more than one organization, and the half whose failure mode is a 404 for every request.
+ *
+ * Measured against a running server before any of this existed:
+ *
+ *     Host: timesheet.company.com  ->  404 Unknown workspace.
+ *     Host: hics.com.sg            ->  404 Unknown workspace.
+ *     Host: localhost              ->  200
+ *
+ * `middleware/tenant.ts` takes the workspace from the first DNS label when ROOT_DOMAIN is unset, so
+ * a deployment's own hostname becomes a workspace slug that was never provisioned. Nothing logs it,
+ * because from the router's point of view it was asked for a workspace that does not exist.
+ */
+describe("the hostname that resolves to no workspace at all", () => {
+  const routing = (findings: ReturnType<typeof check>) =>
+    findings.filter((f) => /workspace|ROOT_DOMAIN|organizations are ACTIVE/.test(f.problem));
+
+  it("catches a three-label production hostname with ROOT_DOMAIN unset, as an error", () => {
+    const found = routing(
+      check({ appBaseUrl: "https://timesheet.company.com", webOrigin: "https://timesheet.company.com", rootDomain: undefined })
+    );
+    expect(found[0]?.severity).toBe("error");
+    expect(found[0]?.problem).toMatch(/404 Unknown workspace/);
+    // The fix has to be copy-pasteable, which means naming the exact value. "Configure routing" is
+    // what the old silence amounted to.
+    expect(found[0]?.fix).toContain('ROOT_DOMAIN="company.com"');
+  });
+
+  it("catches a public suffix, which label counting cannot tell from a subdomain", () => {
+    // `hics.com.sg` has three labels and no subdomain at all. This is why the label rule was replaced
+    // rather than tuned: a domain's real root is not derivable from how many dots it has.
+    const found = routing(check({ appBaseUrl: "https://hics.com.sg", webOrigin: "https://hics.com.sg", rootDomain: undefined }));
+    expect(found[0]?.problem).toMatch(/first label is "hics"/);
+    expect(found[0]?.fix).toContain('ROOT_DOMAIN="com.sg"');
+  });
+
+  it("stays silent when the first label happens to BE the default workspace slug", () => {
+    /**
+     * The coincidence that makes this deployment work, and therefore must not be reported. If the
+     * org is genuinely called "timesheet", label counting resolves to it and every request succeeds.
+     * A check that fires here would be telling somebody to fix a working deployment.
+     */
+    expect(
+      routing(
+        check({
+          appBaseUrl: "https://timesheet.company.com",
+          webOrigin: "https://timesheet.company.com",
+          rootDomain: undefined,
+          defaultOrgSlug: "timesheet"
+        })
+      )
+    ).toEqual([]);
+  });
+
+  it("stays silent for the hostnames that never had a subdomain to misread", () => {
+    for (const host of ["http://localhost:5173", "https://192.168.1.20:5173", "https://timesheet.local"]) {
+      expect(
+        routing(check({ appBaseUrl: host, webOrigin: host, rootDomain: undefined, nodeEnv: "development" })),
+        host
+      ).toEqual([]);
+    }
+  });
+});
+
+describe("workspaces nobody can reach", () => {
+  it("is an error when several orgs are ACTIVE and no ROOT_DOMAIN gives them addresses", () => {
+    // The second workspace exists, bills, provisions a database, runs its workers — and answers to
+    // no hostname, because every request falls back to DEFAULT_ORG_SLUG.
+    const found = check({ appBaseUrl: "https://example.com", webOrigin: "https://example.com", rootDomain: undefined, activeOrgCount: 4 });
+    const finding = found.find((f) => /organizations are ACTIVE/.test(f.problem));
+    expect(finding?.severity).toBe("error");
+    expect(finding?.problem).toMatch(/the other 3 have no address/);
+  });
+
+  it("counts in the singular when exactly one workspace is stranded", () => {
+    // The live shape on the development machine this was found on: two orgs, one reachable. Worth an
+    // assertion because "the other 1 have no address" is what the first version printed, and a boot
+    // message that reads like a bug is a boot message people stop trusting.
+    const found = check({ appBaseUrl: "https://example.com", webOrigin: "https://example.com", rootDomain: undefined, activeOrgCount: 2 });
+    expect(found.find((f) => /organizations are ACTIVE/.test(f.problem))?.problem).toMatch(/the other 1 has no address/);
+  });
+
+  it("says nothing for the single-workspace deployment, which is every on-prem install", () => {
+    expect(
+      check({ appBaseUrl: "https://example.com", webOrigin: "https://example.com", rootDomain: undefined, activeOrgCount: 1 })
+    ).toEqual([]);
+  });
+
+  it("says nothing when the control plane could not be counted, rather than guessing", () => {
+    // `null` is "unknown". Treating it as 0 or as many would invent an input and report on it.
+    expect(
+      check({ appBaseUrl: "https://example.com", webOrigin: "https://example.com", rootDomain: undefined, activeOrgCount: null })
+    ).toEqual([]);
+  });
+
+  it("says nothing about many orgs once ROOT_DOMAIN gives each one an address", () => {
+    expect(check({ activeOrgCount: 40 })).toEqual([]);
+  });
+});
+
+describe("a ROOT_DOMAIN that cannot match anything", () => {
+  it.each([
+    ["https://timesphere.example.com", "a scheme"],
+    ["timesphere.example.com:443", "a port"],
+    ["timesphere.example.com/app", "a path"],
+    [".timesphere.example.com", "a leading dot"],
+    ["timesphere.example.com.", "a trailing dot"]
+  ])("rejects %s (%s)", (rootDomain) => {
+    /**
+     * `resolveOrgSlug` compares the lowercased hostname against `.${ROOT_DOMAIN}`. Any of these
+     * matches no request at all, so the deployment behaves as though multi-org mode were off while
+     * the routing readout reports it as on — the worst combination, because the readout is where
+     * somebody would look.
+     */
+    const found = check({ rootDomain }).filter((f) => /not a bare hostname/.test(f.problem));
+    expect(found[0]?.severity).toBe("error");
+  });
+
+  it("accepts a bare domain, and a single label for local multi-tenant testing", () => {
+    // `ROOT_DOMAIN="localhost"` is how a second workspace is reached on a development machine
+    // (`acme.localhost`), so a rule requiring a dot would reject the documented recipe.
+    expect(check({ rootDomain: "timesphere.example.com" })).toEqual([]);
+    expect(
+      check({ appBaseUrl: "http://localhost:5173", webOrigin: "http://localhost:5173", nodeEnv: "development", rootDomain: "localhost" })
+    ).toEqual([]);
+  });
+});
+
+describe("ROOT_DOMAIN set, but not to the domain being served", () => {
+  it("is an error when APP_BASE_URL is outside the root entirely", () => {
+    const found = check({
+      appBaseUrl: "https://app.elsewhere.net",
+      webOrigin: "https://app.elsewhere.net",
+      rootDomain: "timesphere.app"
+    }).filter((f) => /neither that domain nor under it/.test(f.problem));
+    expect(found[0]?.severity).toBe("error");
+    expect(found[0]?.fix).toContain("https://timesphere.app");
+  });
+
+  it("warns — not errors — when APP_BASE_URL is one workspace's own subdomain", () => {
+    /**
+     * A warning because emailed links became tenant-aware (workspace-directory.service#tenantBaseUrl),
+     * so this no longer breaks password resets. It still matters: the OAuth `redirect_uri` and the git
+     * provider callback are registered once with a third party from this exact value, so both would
+     * live on one customer's hostname.
+     */
+    const found = check({
+      appBaseUrl: "https://acme.timesphere.app",
+      webOrigin: "https://acme.timesphere.app",
+      rootDomain: "timesphere.app"
+    }).filter((f) => /workspace subdomain of ROOT_DOMAIN/.test(f.problem));
+    expect(found[0]?.severity).toBe("warning");
+  });
+
+  it("is silent for the apex and for www, which are the intended shapes", () => {
+    expect(check({ appBaseUrl: "https://timesphere.app", webOrigin: "https://timesphere.app", rootDomain: "timesphere.app" })).toEqual([]);
+    expect(
+      check({ appBaseUrl: "https://www.timesphere.app", webOrigin: "https://www.timesphere.app", rootDomain: "timesphere.app" })
+    ).toEqual([]);
   });
 });

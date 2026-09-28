@@ -10,7 +10,6 @@
 import { Router } from "express";
 import { z } from "zod";
 import { permissions, resolveHeldRoles, roles, type RoleName } from "@timesheet/shared";
-import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
@@ -26,6 +25,7 @@ import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
 import { countActiveSeats } from "../services/seat-count.service.js";
 import { syncSubscriptionSeats } from "../services/billing-sync.service.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
+import { tenantBaseUrl } from "../services/workspace-directory.service.js";
 
 export const userRouter = Router();
 userRouter.use(requireAuth, requirePermission(permissions.USERS_MANAGE));
@@ -38,7 +38,7 @@ async function sendWelcomeEmail(user: { id: string; name: string; email: string 
   const result = await dispatchTransactional({
     to: user.email,
     templateKey: "welcome",
-    vars: { name: user.name, appUrl: env.APP_BASE_URL },
+    vars: { name: user.name, appUrl: tenantBaseUrl() },
     fallback: { subject: "Welcome to TimeSphere", html: templates.welcome(user.name) }
   });
   if (result.ok) {

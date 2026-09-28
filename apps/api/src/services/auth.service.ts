@@ -19,7 +19,7 @@ import { AppError } from "../middleware/error.js";
 import { audit } from "./audit.service.js";
 import { getEffectiveSeatLimit } from "./plan-limits.service.js";
 import { countActiveSeats } from "./seat-count.service.js";
-import { rememberWorkspaceMembership } from "./workspace-directory.service.js";
+import { rememberWorkspaceMembership, tenantBaseUrl } from "./workspace-directory.service.js";
 import { isMaintenanceActive } from "./maintenance.service.js";
 import {
   DUMMY_PASSWORD_HASH,
@@ -706,7 +706,7 @@ export async function requestPasswordReset(email: string): Promise<{ resetUrl: s
     data: { userId: user.id, tokenHash: await hashToken(rawToken), expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS) }
   });
 
-  const resetUrl = `${env.APP_BASE_URL.replace(/\/$/, "")}/reset-password?token=${encodeURIComponent(rawToken)}`;
+  const resetUrl = `${tenantBaseUrl()}/reset-password?token=${encodeURIComponent(rawToken)}`;
   return { resetUrl, user: { id: user.id, name: user.name, email: user.email } };
 }
 

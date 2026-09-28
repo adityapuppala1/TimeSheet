@@ -17,12 +17,12 @@ import {
   type NotificationPreferences,
   type RoleName
 } from "@timesheet/shared";
-import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { sendMail } from "./mail.service.js";
 import { renderEmailTemplate } from "./template-store.service.js";
 import { templates } from "./mail-templates.js";
 import { lazyCreateSettings } from "../utils/lazy-create-settings.js";
+import { tenantBaseUrl } from "./workspace-directory.service.js";
 
 export type NotificationCategory =
   | "timesheet.submitted"
@@ -265,7 +265,7 @@ export async function dispatchNotification(args: DispatchArgs) {
   // propagates into the detached chain via AsyncLocalStorage, so sendMail still resolves the
   // right org's SMTP settings.
   void (async () => {
-    const enrichedVars = { ...args.email!.vars, appUrl: args.email!.vars.appUrl ?? env.APP_BASE_URL };
+    const enrichedVars = { ...args.email!.vars, appUrl: args.email!.vars.appUrl ?? tenantBaseUrl() };
     const rendered = await renderEmailTemplate(args.email!.templateKey, enrichedVars, args.email!.fallback);
     await sendMail({
       to: recipient.email,
@@ -333,7 +333,7 @@ export async function dispatchTransactional(args: {
   if (!args.to) {
     return { ok: false, status: "SKIPPED" as const, errorMessage: "Recipient missing" };
   }
-  const enrichedVars = { ...args.vars, appUrl: args.vars.appUrl ?? env.APP_BASE_URL };
+  const enrichedVars = { ...args.vars, appUrl: args.vars.appUrl ?? tenantBaseUrl() };
   const rendered = await renderEmailTemplate(args.templateKey, enrichedVars, args.fallback);
   return sendMail({
     to: args.to,

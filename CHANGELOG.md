@@ -10,6 +10,52 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🏢 Multi-workspace routing, which had four ways to fail silently
+
+Every one of these was found by asking a running server what it actually did, rather than by reading
+the code that was supposed to do it. Nothing here changes a single-workspace or on-premise install:
+with `ROOT_DOMAIN` unset, every value below is byte-for-byte what it was.
+
+- **A three-label hostname 404s the entire deployment, and now says so at boot.** With `ROOT_DOMAIN`
+  unset the workspace is taken from the first DNS label — so `timesheet.company.com` looks for a
+  workspace called "timesheet", finds none, and answers `404 Unknown workspace.` to every request
+  including the login page. Nothing in the log explained it, because as far as the router was
+  concerned it was asked for a workspace that does not exist. The boot check now prints an ERROR
+  naming the exact value to set, and catches three neighbours of the same bug: more than one ACTIVE
+  organization with no `ROOT_DOMAIN` (the extras have no address anyone can reach), a `ROOT_DOMAIN`
+  carrying a scheme or port (matches nothing, while the readout cheerfully reports multi-org mode),
+  and an `APP_BASE_URL` that is not under the root at all.
+- **Password-reset emails went to the wrong workspace's database.** Every emailed link in the app was
+  built from the one deployment-wide `APP_BASE_URL`, and every token those links carry lives in *one*
+  tenant's database. Measured: a reset requested at `acme`'s address wrote its token to Acme's
+  database and mailed a link to the *default* workspace, where the lookup found nothing and told the
+  person their link had expired — every time, for every workspace but one. Fourteen call sites across
+  nine files now address the workspace they are about. The reset link is built from configuration and
+  never from the request's own `Host`, which would be host-header injection; the reason is recorded
+  where somebody would otherwise "improve" it.
+- **The apex served one customer's login page to everybody.** `isRootDomainRequest` was written for
+  exactly this, documented as "what lets the routing layer serve the finder", and had no callers
+  anywhere — so typing the company domain without a workspace name showed one specific customer's
+  logo, name and SSO buttons. It now sends you to *Find your workspace*, which is the honest answer
+  to "I know my email, not my workspace address".
+- **Subdomain routing had never once worked in a browser on a dev machine.** The Vite proxy shipped
+  `changeOrigin: true`, which replaces `Host` — the only thing the tenant is derived from — with the
+  proxy's own address. A login sent to `localhost:5173` for Acme came back with the *default*
+  workspace's token. nginx's `proxy_pass` does the same by default, so this is the likeliest single
+  thing to be wrong about a cloud deployment: DEPLOYMENT.md now has a table of what eleven proxies
+  and load balancers do to `Host`, and `GET /api/platform-admin/routing` reports what the header that
+  actually arrived resolved to, so one authenticated request through the real load balancer settles it.
+
+### 🧪 Tests for the parts that were silently wrong
+
+- **`resolveOrgSlug` had no tests at all** — the first decision made about every request, and the one
+  a client cannot influence. 35 cases now pin it: public suffixes, the apex, `www`, IP literals, a
+  domain that merely *ends* with the root's letters, and the three-label trap in both directions.
+- **Two guards over source text**, because both defects are invisible in behaviour on a single-org
+  install: one fails if any proxy entry rewrites `Host` again, one fails if a workspace-scoped link
+  goes back to the deployment-wide address. The second found a stale comment the first pass left
+  behind, which is the shape of thing it exists for.
+
 ## 5.6.0 — the work you cannot see, and the text you could not read — 2026-09-24
 
 ### 🛡️ Two fixes found by deciding not to build something

@@ -9,7 +9,7 @@
  * WHO calls this: `services/notify.service.ts`'s `fallback.html` argument at every dispatch
  * call site across the codebase, and `template-store.service.ts` (for the variable list per key).
  */
-import { env } from "../config/env.js";
+import { tenantBaseUrl } from "./workspace-directory.service.js";
 
 const BRAND = "TimeSphere";
 const PRIMARY = "#0F9AA8";
@@ -94,7 +94,7 @@ function escape(input: string | number | undefined | null): string {
     .replace(/'/g, "&#39;");
 }
 
-const appUrl = (path = "") => `${env.APP_BASE_URL.replace(/\/$/, "")}${path}`;
+const appUrl = (path = "") => `${tenantBaseUrl()}${path}`;
 
 /**
  * A numeric field that may arrive as a `{{placeholder}}`.

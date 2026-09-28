@@ -274,7 +274,20 @@ server.on("listening", async () => {
   // How this deployment is ADDRESSED, checked before anything else is reported: an app whose
   // APP_BASE_URL is missing from WEB_ORIGIN works perfectly on localhost and refuses every sign-in
   // from the only address its users were given. Synchronous and cheap — three string comparisons.
-  reportDeploymentConfig({ appBaseUrl: env.APP_BASE_URL, webOrigin: env.WEB_ORIGIN, nodeEnv: process.env.NODE_ENV });
+  // How many workspaces are live, so the routing half of the check can say "the other 3 are
+  // unreachable" instead of "this might be a problem". Null on failure rather than 0: a control
+  // plane that cannot be counted must not produce a confident finding about workspaces.
+  const activeOrgCount = await controlPrisma.organization
+    .count({ where: { status: "ACTIVE" } })
+    .catch(() => null);
+  reportDeploymentConfig({
+    appBaseUrl: env.APP_BASE_URL,
+    webOrigin: env.WEB_ORIGIN,
+    nodeEnv: process.env.NODE_ENV,
+    rootDomain: env.ROOT_DOMAIN,
+    defaultOrgSlug: env.DEFAULT_ORG_SLUG,
+    activeOrgCount
+  });
 
   // Detached, and the first thing worth knowing at boot: a tenant left behind by a missed
   // `migrate:tenants` looks exactly like healthy code until a worker touches a table that is not

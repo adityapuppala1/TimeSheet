@@ -27,6 +27,7 @@
 import { createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { controlPrisma } from "../config/control-prisma.js";
 import { env } from "../config/env.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 
 /**
  * Keyed hash of an email address.
@@ -120,6 +121,62 @@ export async function findWorkspacesForEmail(email: string): Promise<DiscoveredW
 export function workspaceUrlForSlug(slug: string): string {
   if (!env.ROOT_DOMAIN) return env.APP_BASE_URL.replace(/\/$/, "");
   return `https://${slug}.${env.ROOT_DOMAIN}`;
+}
+
+/**
+ * The base URL for a link that will be sent to a person in the CURRENTLY ACTIVE tenant.
+ *
+ * WHY THIS EXISTS — A BUG THAT WAS MEASURED, NOT IMAGINED. Every emailed link in the application
+ * was built from the single global `APP_BASE_URL`, and every token those links carry lives in ONE
+ * tenant's database. In multi-org mode those two facts contradict each other. Reproduced on a
+ * running server: a password reset requested at `Host: acme.example.test` wrote its
+ * `PasswordResetToken` row to `acme_corp` (0 → 1 rows) while `timesheet_portal` stayed at 4 — and
+ * the emailed link pointed at `APP_BASE_URL`, whose hostname resolves to the DEFAULT workspace. The
+ * recipient would open the link, `resetPassword` would search the default org's database for a token
+ * that only exists in Acme's, and the person would be told "This reset link is invalid or has
+ * expired." Every single time, for every tenant that is not the default one.
+ *
+ * WHY IT IS BUILT FROM CONFIGURATION AND NEVER FROM `req.headers.host`, which looks like the more
+ * accurate answer and is a vulnerability. Putting a request-supplied hostname into a
+ * password-reset email is textbook host-header injection: an attacker POSTs `/forgot-password`
+ * with `Host: evil.example`, and the victim receives a genuine reset token addressed to the
+ * attacker's server. `resolveTenant` is NOT a sufficient guard against this — with `ROOT_DOMAIN`
+ * unset, any two-label hostname falls through to `DEFAULT_ORG_SLUG` and resolves perfectly well, so
+ * `Host: evil.example` would reach a handler. The org slug, by contrast, comes from the control
+ * plane. Do not "improve" this to read the request.
+ *
+ * WHAT IT COSTS. A tenant on a verified custom domain gets links on `<slug>.<ROOT_DOMAIN>` rather
+ * than their own domain. Both addresses resolve to the same workspace (custom domains are checked
+ * first, and the wildcard that multi-org mode already requires covers the other), so the link
+ * works — it is just not their branded hostname. Preferring the custom domain would mean a control
+ * plane lookup on every emailed link; that is the trade, and it is recorded here rather than
+ * rediscovered.
+ *
+ * In single-org mode — `ROOT_DOMAIN` unset, which is every on-prem install — this returns exactly
+ * what the call sites returned before, byte for byte. There is no behaviour change to inherit.
+ */
+export function tenantBaseUrl(): string {
+  let slug: string | undefined;
+  try {
+    slug = requireTenantContext().orgSlug;
+  } catch {
+    /**
+     * NO TENANT CONTEXT IS A VALID ANSWER HERE, which is why this catches rather than propagates.
+     * `requireTenantContext` throws because a `prisma` access outside a context is always a bug — a
+     * missing middleware or an unwrapped worker tick. A LINK BASE outside a context is a different
+     * question with a legitimate answer: the caller is control-plane (platform-admin mail, sales
+     * leads, the console's own alerts), those messages are about the deployment rather than about
+     * any workspace, and the deployment's own address is correct for them.
+     *
+     * AND IT READS THROUGH `requireTenantContext` RATHER THAN `tenantContext.getStore()`, which was
+     * the first version and broke seven test files. Twelve unit suites replace this module with a
+     * one-line `vi.mock` factory exporting only `requireTenantContext` — see the same constraint
+     * documented at length in `config/with-org-tenant.ts`. Reaching for a second export meant every
+     * one of those factories had to grow a copy of the store, and so would every future one. Going
+     * through the function they already stub costs nothing and keeps the hazard from recurring.
+     */
+  }
+  return slug ? workspaceUrlForSlug(slug) : env.APP_BASE_URL.replace(/\/$/, "");
 }
 
 /* ------------------------------------------------------------------ *

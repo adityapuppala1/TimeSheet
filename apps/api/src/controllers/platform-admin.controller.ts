@@ -29,6 +29,7 @@ import { getPlatformAnalytics } from "../services/platform-admin-analytics.servi
 import { provisionOrganization } from "../services/provisioning.service.js";
 import { addDomain, listDomains, removeDomain, verifyDomain } from "../services/org-domain.service.js";
 import { workspaceUrlForSlug } from "../services/workspace-directory.service.js";
+import { describeObservedRouting } from "../middleware/tenant.js";
 import { withOrgTenant } from "../config/with-org-tenant.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
@@ -510,7 +511,7 @@ platformAdminRouter.delete("/organizations/:id/domains/:domainId", requirePlatfo
  * set — a preview of what each would become. It is a read-only dry run for a change that cannot be
  * undone quietly.
  */
-platformAdminRouter.get("/routing", requirePlatformAdmin, readOnly, async (_req, res) => {
+platformAdminRouter.get("/routing", requirePlatformAdmin, readOnly, async (req, res) => {
   const orgs = await controlPrisma.organization.findMany({
     where: { status: { not: "ARCHIVED" } },
     select: { id: true, slug: true, name: true, status: true, domains: { where: { verifiedAt: { not: null } }, select: { domain: true } } },
@@ -522,6 +523,8 @@ platformAdminRouter.get("/routing", requirePlatformAdmin, readOnly, async (_req,
     rootDomain: env.ROOT_DOMAIN ?? null,
     defaultOrgSlug: env.DEFAULT_ORG_SLUG,
     appBaseUrl: env.APP_BASE_URL,
+    // WHAT ACTUALLY ARRIVED, not merely what is configured — see describeObservedRouting.
+    observed: describeObservedRouting(req),
     /** What the bare domain currently serves, which is the surprising half of the switch. */
     apexServes: env.ROOT_DOMAIN ? "the workspace finder" : `the "${env.DEFAULT_ORG_SLUG}" workspace`,
     organizations: orgs.map((org) => ({

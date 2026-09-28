@@ -43,6 +43,37 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const apiTarget = env.API_PROXY_TARGET ?? "http://localhost:4000";
 
+  /**
+   * The proxy settings for every API route — and `changeOrigin: false` is LOAD-BEARING, not style.
+   *
+   * `changeOrigin: true` rewrites the outgoing `Host` header to the proxy TARGET's host. The API
+   * resolves which tenant a request belongs to from the `Host` header and nothing else
+   * (apps/api/src/middleware/tenant.ts — there is deliberately no org id in the body, query or a
+   * header you can set, because the browser has to name the workspace before any credentials are
+   * exchanged). So with `changeOrigin: true` every request that passed through this proxy arrived
+   * at the API claiming to be for `localhost:4000`, which has one label, which falls back to
+   * `DEFAULT_ORG_SLUG`.
+   *
+   * MEASURED, not reasoned about: a login sent to `https://localhost:5173/api/auth/login` with
+   * `Host: acme.example.test` came back with a JWT whose `org` claim was the DEFAULT org's id, not
+   * Acme's. Multi-tenant routing was silently untestable in a browser for as long as this said
+   * true, and the app looked completely fine because single-org dev is the case everybody runs.
+   *
+   * Nothing else depended on the rewrite. CORS reads `Origin`, which this does not touch, and the
+   * target is plain HTTP on localhost so there is no TLS vhost or SNI to satisfy. The only
+   * behavioural change is the one we want: the hostname in the address bar reaches the API intact,
+   * so `localhost` still resolves to the default org while `acme.localhost` resolves to Acme.
+   *
+   * THE SAME TRAP EXISTS IN PRODUCTION, one layer out: nginx's `proxy_pass` defaults to
+   * `Host: $proxy_host` and needs an explicit `proxy_set_header Host $host`. See
+   * docs/DEPLOYMENT.md § "The Host header has to survive every hop".
+   *
+   * A factory rather than one shared object so the four entries can never alias each other's
+   * state, and `tests/unit/vite-proxy-preserves-host.test.ts` asserts the flag stays falsy on
+   * every entry of both servers — the guard that did not exist when this regressed.
+   */
+  const proxyToApi = () => ({ target: apiTarget, changeOrigin: false, secure: false });
+
   // The version baked into THIS bundle, from the repo-root VERSION file (the single source the
   // API also reads — see apps/api/src/config/version.ts for why one file rules them all). The
   // update-refresh flow compares this constant against the version the server reports on
@@ -107,16 +138,8 @@ export default defineConfig(({ mode }) => {
        */
       https: devHttps,
       proxy: {
-        "/api": {
-          target: apiTarget,
-          changeOrigin: true,
-          secure: false
-        },
-        "/uploads": {
-          target: apiTarget,
-          changeOrigin: true,
-          secure: false
-        }
+        "/api": proxyToApi(),
+        "/uploads": proxyToApi()
       }
     },
     // `vite preview` serves the BUILT bundle, and it is the only local way to look at what a
@@ -127,8 +150,8 @@ export default defineConfig(({ mode }) => {
       host: true,
       port: 4173,
       proxy: {
-        "/api": { target: apiTarget, changeOrigin: true, secure: false },
-        "/uploads": { target: apiTarget, changeOrigin: true, secure: false }
+        "/api": proxyToApi(),
+        "/uploads": proxyToApi()
       }
     }
   };

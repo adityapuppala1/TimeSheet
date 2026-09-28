@@ -133,8 +133,32 @@ specifically for "I want Docker for the app, but my own database."
 
 This is the one environment variable whose consequences are invisible until traffic arrives, so it
 has a read-only dry run: **Platform admin → Organizations** calls `GET /api/platform-admin/routing`,
-which reports the mode this deployment is in, what the bare domain currently serves, and the URL
-each workspace would be reachable at if `ROOT_DOMAIN` were set.
+which reports the mode this deployment is in, what the bare domain currently serves, the URL each
+workspace would be reachable at if `ROOT_DOMAIN` were set, and — under `observed` — what the `Host`
+header of *that request* actually resolved to after passing through your proxies.
+
+> **Leaving it unset can 404 your entire deployment.** With no `ROOT_DOMAIN`, the workspace is taken
+> from the **first DNS label** of the hostname. That is right for `acme.example.com` and wrong for
+> `timesheet.company.com`, which is what a real deployment's hostname looks like: it searches for a
+> workspace called `timesheet`, finds none, and answers `404 Unknown workspace.` to **every request,
+> including the login page**. Measured against a running server:
+>
+> ```
+> Host: timesheet.company.com  ->  404 Unknown workspace.
+> Host: hics.com.sg            ->  404 Unknown workspace.     # three labels, no subdomain at all
+> Host: localhost              ->  200
+> ```
+>
+> Nothing in the logs explains it, because from the router's point of view nothing went wrong — it
+> was asked for a workspace that does not exist. Two hostnames are safe: anything with **two labels**
+> (`example.com`), and a bare IP. Everything else needs `ROOT_DOMAIN` set, or an organization whose
+> slug happens to equal that first label.
+>
+> The API now says so at boot rather than letting you find out. `config/deployment-check.ts`
+> prints an `ERROR` naming the exact value to set, and it also catches the other three ways this goes
+> wrong: more than one `ACTIVE` organization with no `ROOT_DOMAIN` (the extra workspaces have no
+> address anyone can reach), a `ROOT_DOMAIN` carrying a scheme/port/path (it matches nothing while
+> the readout reports multi-org mode), and an `APP_BASE_URL` that is not under the root at all.
 
 Two things change the moment it is set, and both are correct and both surprise people:
 
@@ -591,10 +615,111 @@ timesheet.example.com {
 nginx equivalent, if you already run one, terminating TLS with certbot-issued certs and proxying
 the same two upstreams. **Whichever you use, forward `X-Forwarded-Proto`** — the API reads it to
 build absolute URLs for share links and email, and without it those links come out as `http://`
-and land users right back in the insecure context.
+and land users right back in the insecure context. **And on nginx you must also set
+`proxy_set_header Host $host`** — see the next section, which is the one thing most likely to be
+wrong about a multi-workspace deployment.
 
-On Kubernetes there is nothing to add: set `ingress.host` and `ingress.tls` in the Helm chart and
-let cert-manager or your cloud's managed certificate handle issuance (see *Kubernetes deployment*).
+On Kubernetes there is nothing to add for TLS: set `ingress.host` and `ingress.tls` in the Helm chart
+and let cert-manager or your cloud's managed certificate handle issuance (see *Kubernetes
+deployment*).
+
+### The Host header has to survive every hop
+
+**This matters only for multi-workspace deployments, and for those it is the whole ball game.**
+`middleware/tenant.ts` decides which organization a request belongs to from the `Host` header and
+from nothing else — there is no org id in the body, no query parameter, and no header a client can
+set, because the login page has to know whose SSO configuration to offer before it knows who is
+asking. Every proxy between the browser and the API is therefore carrying the tenant, whether or not
+whoever configured it knew that.
+
+A proxy that rewrites `Host` does not fail, warn, or look wrong. Every request simply arrives
+claiming to be for the proxy's own address, falls through to `DEFAULT_ORG_SLUG`, and serves the
+default workspace to everybody. On a single-org install that is invisible, because the default
+workspace is the right answer. It is discovered by a customer signing in and seeing somebody else's
+data — or, more often, by nobody, for a long time.
+
+This is not hypothetical. This repository's own Vite dev proxy shipped `changeOrigin: true`, which
+does exactly that, so subdomain routing had never once worked through a browser on a developer
+machine; a login sent to `localhost:5173` with `Host: acme.example.test` came back with the *default*
+workspace's token. It is fixed, and `apps/web/tests/unit/vite-proxy-preserves-host.test.ts` now fails
+if anyone sets it back.
+
+**nginx — the default is wrong.** `proxy_pass` sends `Host: $proxy_host` (the upstream's address)
+unless told otherwise. One line, and it is not optional here:
+
+```nginx
+location /api/ {
+    proxy_pass http://127.0.0.1:4000;
+    proxy_set_header Host $host;               # THE TENANT. Without this, every workspace is the default one.
+    proxy_set_header X-Forwarded-Host $host;   # lets the routing readout below detect a rewrite
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+**What each platform does by default**, so you know whether you have anything to do:
+
+| In front of the API | Preserves `Host`? | What to do |
+| --- | --- | --- |
+| **nginx** (`proxy_pass`) | **No** — sends the upstream's address | `proxy_set_header Host $host;` as above |
+| **Caddy** (`reverse_proxy`) | Yes | Nothing. Do *not* add `header_up Host {upstream_hostport}` |
+| **Traefik** | Yes | Nothing. Do not enable a `Host`-rewriting middleware |
+| **HAProxy** | Yes | Nothing, unless you added an explicit `http-request set-header Host` |
+| **AWS ALB / NLB** | Yes | Nothing. ALB preserves `Host` and adds `X-Forwarded-*` |
+| **AWS CloudFront** | **No** by default — forwards the *origin's* domain | Forward the `Host` header: use the `AllViewer` origin request policy, or add `Host` to the policy's header list |
+| **Cloudflare proxy** | Yes | Nothing. Wildcard proxying needs *Total TLS* or an uploaded wildcard certificate |
+| **GCP external ALB** | Yes | Nothing. Use a wildcard Google-managed certificate |
+| **Azure Front Door** | **No** by default — sends the backend host | Set *Origin host header* to blank/`Host`, or turn on "preserve incoming host name" |
+| **Azure App Gateway** | Configurable | In the backend HTTP setting, do **not** "Override with new host name" |
+| **K8s: ingress-nginx** | Yes | Nothing. Add the wildcard to `ingress.wildcardHost` and to the TLS cert |
+| **Vercel / Netlify rewrites** | **No** — send the destination's host | Not usable in front of a multi-tenant API. Point DNS at the deployment instead |
+
+The rule of thumb: anything that calls the setting *"origin host header"* or *"override host name"*
+is the thing that breaks this, and its default is usually to override.
+
+**Verify it, rather than believing the table.** One authenticated request through your real load
+balancer, from anywhere:
+
+```bash
+curl -s https://acme.yourdomain.com/api/platform-admin/routing \
+  -H "Authorization: Bearer <platform-admin token>" | jq .observed
+```
+
+```json
+{
+  "hostHeaderSeen": "acme.yourdomain.com",
+  "forwardedHost": "acme.yourdomain.com",
+  "resolvedSlug": "acme",          // ← if this is not the workspace you aimed at, Host was rewritten
+  "isApex": false,
+  "hostRewriteSuspected": false
+}
+```
+
+`resolvedSlug` is the answer. It is what the header that actually reached the API resolves to, every
+proxy included, so it cannot be fooled by a configuration file that looks correct.
+`hostRewriteSuspected` compares `Host` against `X-Forwarded-Host` and is a *hint*: a proxy that
+rewrites `Host` and sets no `X-Forwarded-Host` leaves nothing to compare, which is why the raw
+values are reported beside it. The route is platform-admin-only on purpose — a public endpoint that
+echoed a resolved slug would hand any anonymous caller a list of which workspaces exist.
+
+### Known limitation: SSO across workspace subdomains
+
+Worth knowing before you enable multi-org routing with SSO, because the pieces are individually
+correct and the combination is not:
+
+- The OAuth `redirect_uri` is registered once with Google/Microsoft and is built from
+  `APP_BASE_URL` — so every workspace's SSO round trip comes back to **one** callback hostname.
+  That part works: `finishSsoLogin` recovers the tenant from the signed `state`, not from `Host`.
+- But the refresh cookie is then set on *that* hostname, and the browser is redirected to the first
+  entry in `WEB_ORIGIN`. If the callback host is the apex and the user started at
+  `acme.yourdomain.com`, the cookie is on the apex and the SPA they land on is not.
+
+So **password, LDAP and SAML sign-in work across subdomains; OIDC (Google/Microsoft) needs each
+workspace on its own verified custom domain**, with that domain's callback registered at the IdP, or
+it needs to stay on a single-hostname deployment. Closing this properly means handing the session
+from the callback host to the workspace host through a one-time code, which is a feature and not a
+configuration change. It is not done.
 
 ### On-prem with no public domain — a private CA
 
@@ -1655,7 +1780,7 @@ summarized:
 |---|---|---|
 | `CONTROL_DATABASE_URL` | Both shapes | The control-plane database (org registry, SSO config, plan tiers, platform-admin accounts) |
 | `DEFAULT_ORG_SLUG` | Both shapes | Which org a request with no real subdomain resolves to (default: `default`) |
-| `ROOT_DOMAIN` | Multi-org only | The domain subdomains hang off (`timesphere.app`). Setting it derives the slug by stripping this suffix instead of counting DNS labels, and makes the bare domain serve the workspace finder instead of `DEFAULT_ORG_SLUG`. **Unset = today's behaviour**, which is what every single-org install wants. |
+| `ROOT_DOMAIN` | Multi-org only — **and any hostname with 3+ labels** | The domain subdomains hang off (`timesphere.app`). Setting it derives the slug by stripping this suffix instead of counting DNS labels, and makes the bare domain serve the workspace finder instead of `DEFAULT_ORG_SLUG`. Unset, the first DNS label IS the slug — so `timesheet.company.com` answers `404 Unknown workspace.` to every request. See [Turning on multi-org routing](#turning-on-multi-org-routing-root_domain); the API prints a boot ERROR naming the value to set. |
 | `TENANT_DB_PROVISION_BASE_URL` | Multi-org only | Required for self-serve signup — it is what creates each new workspace's database. Without it, `/signup` returns a clear 400 rather than half-provisioning. |
 | `PLATFORM_ADMIN_JWT_SECRET` | Both shapes | Signs `/platform-admin` tokens — must differ from `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` |
 | `TENANT_DB_PROVISION_BASE_URL` | SaaS shape, only if using in-console provisioning | The MySQL server new tenant databases get created on |
@@ -1712,3 +1837,51 @@ The Playwright suite runs entirely against Shape 1 (one `DEFAULT_ORG_SLUG` org) 
 exercise subdomain routing or a second tenant. Multi-org-specific behavior (isolation, SSO
 routing, provisioning) is verified via direct API checks against real second/third
 organizations during development, not by the automated suite yet.
+
+### Testing two workspaces on a development machine
+
+Worth doing before you enable multi-org routing in production, and it takes about a minute. The one
+thing that used to make it impossible — the dev proxy rewriting `Host` — is fixed, so browser testing
+now behaves the same way the deployed app does.
+
+Chrome, Edge and Firefox resolve **any** `*.localhost` name to `127.0.0.1` with no hosts-file entry,
+so `localhost` becomes a usable root domain:
+
+```bash
+# One variable, for this run only — no need to edit apps/api/.env.
+cd apps/api && ROOT_DOMAIN=localhost npm run dev
+```
+
+Then, with the web dev server running as usual:
+
+| Open | You get |
+| --- | --- |
+| `https://localhost:5173` | the **workspace finder** — the bare root is not a workspace |
+| `https://acme.localhost:5173` | the `acme` workspace's own login page, logo and SSO buttons |
+| `https://default.localhost:5173` | the `default` workspace |
+
+Confirm the API agrees, which is the part that cannot be faked by a redirect:
+
+```bash
+for h in localhost acme.localhost; do
+  curl -s http://localhost:4000/api/auth/sso-methods -H "Host: $h"
+done
+# {"passwordEnabled":true,"providers":["GOOGLE","LDAP","MICROSOFT"],"apex":true}
+# {"passwordEnabled":true,"providers":[],"apex":false}
+```
+
+Note the second line: `acme` returns *its own* (empty) provider list, not the default workspace's.
+That is the per-workspace login configuration working end to end.
+
+For API-only checks you don't even need the DNS names — `Host` is all that matters, so a forged
+header reaches any workspace directly, which is also how to prove two tenants are isolated:
+
+```bash
+curl -X POST http://localhost:4000/api/auth/login -H "Host: acme.example.test" \
+  -H "Content-Type: application/json" -d '{"email":"…","password":"…"}'
+```
+
+The same email and password in two workspaces returns two different `org` claims and two different
+user ids, and a token minted for one workspace answers `401` against the other. Expect
+`APP_BASE_URL` to be flagged at boot while `ROOT_DOMAIN=localhost` is set — with `APP_BASE_URL="auto"`
+it resolves to your LAN IP, which is not under `localhost`, and the boot check is right to say so.

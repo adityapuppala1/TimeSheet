@@ -71,11 +71,12 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Pick a method: Continue with Google / Microsoft / single sign-on if your admin enabled them, or the Password tab.",
       "If your workspace uses a directory (LDAP / Active Directory), switch to the Directory tab and use your directory credentials.",
       "Press the round fingerprint sensor (or Enter) to sign in — it scans while your credentials are checked, turns green on success and red on failure.",
-      "Wrong workspace? Use “Not your workspace? Find yours” at the bottom — every workspace has its own address."
+      "Wrong workspace? Use “Not your workspace? Find yours” at the bottom — every workspace has its own address.",
+      "Only know your email address? Open Find your workspace, type it, and enter the six-digit code sent to that address. You will get a list of every workspace that address can sign in to, with a link to each."
     ],
     notes:
-      "Already signed in? Opening /login sends you straight into the app. To sign in as somebody else on a shared machine, sign out first from the profile menu. The fingerprint is the submit button, not a biometric check.",
-    keywords: ["login", "log in", "sso", "google", "microsoft", "ldap", "directory", "password", "fingerprint", "workspace"]
+      "Already signed in? Opening /login sends you straight into the app. To sign in as somebody else on a shared machine, sign out first from the profile menu. The fingerprint is the submit button, not a biometric check. Your workspace address is part of who you are signing in as: the same email address can belong to two different workspaces with different names, roles and passwords, so the page always shows which workspace you are about to enter. If your company address has no workspace name in front of it, you will be taken to Find your workspace instead of a sign-in form — there is no one workspace that address belongs to.",
+    keywords: ["login", "log in", "sso", "google", "microsoft", "ldap", "directory", "password", "fingerprint", "workspace", "find workspace", "wrong workspace", "which workspace", "verification code", "two accounts", "same email"]
   },
   {
     id: "profile-and-appearance",

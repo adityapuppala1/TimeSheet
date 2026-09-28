@@ -46,6 +46,15 @@ export interface DeploymentInputs {
   /** Raw `WEB_ORIGIN`, comma-separated as the environment supplies it. */
   webOrigin: string;
   nodeEnv: string | undefined;
+  /** Raw `ROOT_DOMAIN`. Unset means single-org mode, which is what every on-prem install runs. */
+  rootDomain: string | undefined;
+  /** `DEFAULT_ORG_SLUG` — needed because a hostname whose first label happens to equal it resolves
+   *  correctly by accident, and a check that cannot tell the difference cries wolf. */
+  defaultOrgSlug: string;
+  /** How many organizations are ACTIVE, or `null` when the control plane could not be asked. Null
+   *  suppresses the multi-workspace finding rather than guessing — a boot check that invents an
+   *  input is worse than one that stays quiet about it. */
+  activeOrgCount: number | null;
 }
 
 const originOf = (url: string): string | null => {
@@ -153,6 +162,130 @@ export function inspectDeploymentConfig(input: DeploymentInputs): ConfigFinding[
       severity: "warning",
       problem: `NODE_ENV is not "production" but APP_BASE_URL is a public address (${base}) — people outside this network are being pointed at a development server.`,
       fix: "For anything beyond a demo, build and run the production image (see docs/DEPLOYMENT.md) and set NODE_ENV=production."
+    });
+  }
+
+  findings.push(...inspectTenantRouting(input, url));
+
+  return findings;
+}
+
+/**
+ * Which workspace a hostname resolves to — checked at boot, because the failure mode is a 404 for
+ * every request and there is no other warning anywhere.
+ *
+ * WHY THIS IS SEPARATE FROM THE ADDRESSING CHECKS ABOVE: those are about whether people can reach
+ * the app at all. These are about whether they reach the RIGHT WORKSPACE, which is a different
+ * question with a different reader — and one that did not exist as a question until a deployment
+ * served more than one organization.
+ *
+ * WHAT WENT WRONG, MEASURED AGAINST A RUNNING SERVER. `middleware/tenant.ts` derives the workspace
+ * from the `Host` header, and with `ROOT_DOMAIN` unset it does so by COUNTING DNS LABELS: three or
+ * more labels means the first one is a workspace slug. That rule is correct for `acme.example.com`
+ * and catastrophic for `timesheet.company.com`, which is what a real deployment's hostname looks
+ * like — it searches for a workspace called "timesheet", finds none, and answers
+ * `404 Unknown workspace.` to every single request. Three probes, one server:
+ *
+ *     Host: timesheet.company.com  ->  404 Unknown workspace.
+ *     Host: hics.com.sg            ->  404 Unknown workspace.
+ *     Host: localhost              ->  200
+ *
+ * Nothing in the logs explains it, because from the router's point of view nothing went wrong: it
+ * was asked for a workspace that does not exist. The fix is one line of configuration, and the only
+ * thing missing was somebody saying so before the traffic arrived.
+ */
+function inspectTenantRouting(input: DeploymentInputs, url: URL): ConfigFinding[] {
+  const findings: ConfigFinding[] = [];
+  const root = input.rootDomain?.trim().toLowerCase() ?? "";
+  const host = url.hostname.toLowerCase();
+  const labels = host.split(".").filter(Boolean);
+  const hostIsIp = IP_LITERAL_RE.test(host);
+
+  if (!root) {
+    /**
+     * THE 404 ABOVE. Fires on the exact shape that breaks — three or more labels, not an IP — and
+     * stays silent when the first label happens to equal `DEFAULT_ORG_SLUG`, because then the label
+     * rule resolves to the right workspace by coincidence and the deployment genuinely works.
+     */
+    if (!hostIsIp && labels.length >= 3 && labels[0] !== input.defaultOrgSlug) {
+      findings.push({
+        severity: "error",
+        problem:
+          `ROOT_DOMAIN is unset, so the workspace is taken from the FIRST LABEL of the hostname — and APP_BASE_URL is ` +
+          `${host}, whose first label is "${labels[0]}". Unless a workspace with the slug "${labels[0]}" exists, every ` +
+          `request to this address answers "404 Unknown workspace.", including the login page.`,
+        fix:
+          `Set ROOT_DOMAIN="${labels.slice(1).join(".")}" so the slug is derived by stripping that suffix instead of ` +
+          `counting labels (then ${host} is the workspace "${labels[0]}", and workspaces live at ` +
+          `<slug>.${labels.slice(1).join(".")}). If this deployment has only one workspace and should answer on this ` +
+          `exact hostname, rename that organization's slug to "${labels[0]}" instead. See docs/DEPLOYMENT.md ` +
+          `§ "Turning on multi-org routing".`
+      });
+    }
+
+    /**
+     * More than one workspace and no way to address the others. Every request falls back to
+     * `DEFAULT_ORG_SLUG`, so the second organization exists, bills, provisions a database and runs
+     * its workers — and is reachable by nobody.
+     */
+    if (input.activeOrgCount !== null && input.activeOrgCount > 1) {
+      const unreachable = input.activeOrgCount - 1;
+      findings.push({
+        severity: "error",
+        problem:
+          `${input.activeOrgCount} organizations are ACTIVE, but ROOT_DOMAIN is unset — so every request resolves to ` +
+          `"${input.defaultOrgSlug}" and the other ${unreachable} ${unreachable === 1 ? "has" : "have"} no address ` +
+          `anyone can reach.`,
+        fix:
+          "Set ROOT_DOMAIN to the domain workspace subdomains hang off, point a wildcard DNS record and a wildcard " +
+          "certificate at this deployment, and read Platform admin → Organizations first: it lists the URL each " +
+          "workspace will get. Alternatively give each workspace a verified custom domain."
+      });
+    }
+    return findings;
+  }
+
+  // A value that can never match a hostname. `resolveOrgSlug` compares against `.${ROOT_DOMAIN}`
+  // after lowercasing the host, so a scheme, a port, a path or a stray dot silently matches nothing
+  // and the deployment behaves as if multi-org mode were off — while the readout says it is on.
+  const malformed =
+    root.includes("://") || root.includes("/") || root.includes(":") || root.startsWith(".") || root.endsWith(".");
+  if (malformed) {
+    findings.push({
+      severity: "error",
+      problem: `ROOT_DOMAIN is "${input.rootDomain}", which is not a bare hostname, so it will never match any request and no subdomain will resolve to its workspace.`,
+      fix: 'Set it to a bare domain with no scheme, port, path or surrounding dots — e.g. ROOT_DOMAIN="timesphere.app".'
+    });
+    return findings;
+  }
+
+  const isApex = host === root || host === `www.${root}`;
+  const isUnderRoot = host.endsWith(`.${root}`);
+
+  if (!isApex && !isUnderRoot) {
+    findings.push({
+      severity: "error",
+      problem:
+        `ROOT_DOMAIN is "${root}" but APP_BASE_URL is ${host}, which is neither that domain nor under it. Workspace ` +
+        `addresses are built as <slug>.${root}, so the addresses this deployment hands out and the address it is ` +
+        `actually served on are different hostnames.`,
+      fix: `Point APP_BASE_URL at https://${root} (the apex), or correct ROOT_DOMAIN to the domain ${host} sits under.`
+    });
+  } else if (isUnderRoot && host !== `www.${root}`) {
+    /**
+     * APP_BASE_URL pointing at ONE workspace in a multi-workspace deployment. Emailed links are
+     * tenant-aware now (services/workspace-directory.service.ts#tenantBaseUrl), so this is no longer
+     * the outage it was — but two things are still built from APP_BASE_URL alone and must be, because
+     * they are registered with a third party and have to be a single fixed string: the OAuth
+     * `redirect_uri` (services/sso.service.ts) and the git provider callback. Registering those on
+     * one customer's hostname works, and reads to everyone else like a mistake.
+     */
+    findings.push({
+      severity: "warning",
+      problem:
+        `APP_BASE_URL (${host}) is a workspace subdomain of ROOT_DOMAIN, not the apex. The SSO redirect_uri and the ` +
+        `git provider callback are registered once from this value, so both would sit on one workspace's hostname.`,
+      fix: `Set APP_BASE_URL to https://${root} and let each workspace be reached at its own <slug>.${root}.`
     });
   }
 

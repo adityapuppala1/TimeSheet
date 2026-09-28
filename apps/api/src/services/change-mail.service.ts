@@ -18,11 +18,11 @@
  * posture as every other dispatch site in this codebase.
  */
 import { prisma } from "../config/prisma.js";
-import { env } from "../config/env.js";
 import { dispatchNotification } from "./notify.service.js";
 import { renderEmailTemplate } from "./template-store.service.js";
 import { sendMail } from "./mail.service.js";
 import { templates } from "./mail-templates.js";
+import { tenantBaseUrl } from "./workspace-directory.service.js";
 
 /** The template keys this module owns. Seeded into `EmailTemplate` so the Email templates page can
  *  edit their copy and report on their delivery. */
@@ -143,7 +143,7 @@ function baseVars(change: ChangeForMail, receivedBy: string): ChangeMailVars {
     requestedBy: change.ticket.reporter.name,
     receivedBy,
     peopleInvolved: "",
-    appUrl: `${env.APP_BASE_URL}/app/changes?open=${change.id}`
+    appUrl: `${tenantBaseUrl()}/app/changes?open=${change.id}`
   };
 }
 

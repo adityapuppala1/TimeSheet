@@ -15,11 +15,11 @@
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";
-import { env } from "../config/env.js";
 import { dispatchNotification } from "./notify.service.js";
 import { isPrivateIpAddress, parseUserAgent, type DeviceFormFactor } from "../utils/user-agent.js";
 
 import { templates } from "./mail-templates.js";
+import { tenantBaseUrl } from "./workspace-directory.service.js";
 
 const GLOBAL_ID = "global";
 /** How stale the cached settings may be. The trade is explicit: a toggle takes effect within this
@@ -347,7 +347,7 @@ export async function notifyUsersOfMaintenance(): Promise<{ notified: number }> 
       link: "/app",
       email: {
         templateKey: "maintenance.scheduled",
-        vars: { name: user.name, window: windowText, message: settings.message ?? "", appUrl: env.APP_BASE_URL },
+        vars: { name: user.name, window: windowText, message: settings.message ?? "", appUrl: tenantBaseUrl() },
         // PRE-RENDERED, not {{templated}}: renderEmailTemplate returns this fallback verbatim
         // when no DB override exists (vars are only applied to overrides), so placeholders here
         // would reach inboxes literally as "Hi {{name}}". The `vars` above still matter — they

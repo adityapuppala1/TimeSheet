@@ -83,6 +83,65 @@ export function resolveOrgSlug(req: Request): string {
   return labels[0];
 }
 
+/** What a routing readout reports about ONE real request. See describeObservedRouting. */
+export interface ObservedRouting {
+  /** The `Host` header as it reached this process, port included, or null if there was none. */
+  hostHeaderSeen: string | null;
+  /** `X-Forwarded-Host`, which a well-behaved proxy sets to the ORIGINAL host when it rewrites one. */
+  forwardedHost: string | null;
+  /** Which workspace this request resolved to — the end-to-end answer, every proxy included. */
+  resolvedSlug: string;
+  /** Whether this request would be served the workspace finder rather than a workspace. */
+  isApex: boolean;
+  /** A proxy recorded a different original host than the one that arrived. A hint, not a proof. */
+  hostRewriteSuspected: boolean;
+}
+
+/**
+ * What ACTUALLY arrived, as opposed to what is configured — the half of a routing readout that was
+ * missing, and the half that finds the bug.
+ *
+ * WHY REPORTING THE CONFIGURATION IS NOT ENOUGH. The tenant is decided from the `Host` header, and
+ * anything in front of this process can rewrite that header without failing, warning, or looking
+ * wrong. Measured on this repository's own development server: Vite's proxy shipped
+ * `changeOrigin: true`, which replaces `Host` with the proxy target, so every request arrived
+ * claiming to be for `localhost:4000` and resolved to the default workspace. Subdomain routing had
+ * therefore never once worked through a browser, while every readout reported multi-org mode
+ * correctly, because the configuration was correct. Only the request was wrong.
+ *
+ * nginx does the same thing by default — `proxy_pass` sends `Host: $proxy_host` unless told
+ * `proxy_set_header Host $host` — so this is not a development curiosity, it is the single most
+ * likely thing to be wrong about a cloud deployment. One authenticated GET through the real load
+ * balancer now answers it.
+ *
+ * WHY `X-Forwarded-Host` IS A HINT AND NOT A VERDICT. A proxy that rewrites `Host` conventionally
+ * records the original there, so a disagreement is near-proof that something rewrote it. But a proxy
+ * that rewrites `Host` and sets no `X-Forwarded-Host` leaves nothing to compare — which is why
+ * `hostHeaderSeen` and `resolvedSlug` are reported raw as well, and why the caller who knows what
+ * hostname they aimed at is the one who can tell.
+ *
+ * NEITHER VALUE IS TRUSTED FOR ANY DECISION. Both headers are caller-controlled, this function only
+ * describes them, and its one caller is behind platform-admin authentication — a public echo of the
+ * resolved slug would hand any anonymous caller the workspace-existence oracle that
+ * `resolveActiveOrgBySlug` goes out of its way to close.
+ */
+export function describeObservedRouting(req: Request): ObservedRouting {
+  const hostHeaderSeen = req.headers.host ?? null;
+  const forwarded = req.headers["x-forwarded-host"];
+  // A request that crossed two proxies can carry a list; the first entry is the original client's.
+  const forwardedHost = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim() ?? null;
+  const bareHost = (value: string | null) => value?.split(":")[0]?.toLowerCase() ?? null;
+
+  return {
+    hostHeaderSeen,
+    forwardedHost,
+    resolvedSlug: resolveOrgSlug(req),
+    isApex: isRootDomainRequest(req),
+    hostRewriteSuspected:
+      forwardedHost !== null && hostHeaderSeen !== null && bareHost(forwardedHost) !== bareHost(hostHeaderSeen)
+  };
+}
+
 /**
  * Resolves a verified CUSTOM domain to its org slug, or null.
  *

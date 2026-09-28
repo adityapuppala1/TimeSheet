@@ -22,12 +22,12 @@
 import cron from "node-cron";
 import { controlPrisma } from "../config/control-prisma.js";
 import { withOrgTenant } from "../config/with-org-tenant.js";
+import { workspaceUrlForSlug } from "../services/workspace-directory.service.js";
 import { prisma } from "../config/prisma.js";
 import { templates } from "../services/mail-templates.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { forgetOrgStatus } from "../services/org-status.service.js";
 import { isRetentionProgrammeEnabled } from "../services/retention.service.js";
-import { env } from "../config/env.js";
 
 let started = false;
 let running = false;
@@ -76,6 +76,16 @@ async function superAdminEmails(): Promise<string[]> {
   return admins.map((a) => a.email).filter(Boolean);
 }
 
+/**
+ * Where to send a workspace to pay.
+ *
+ * TAKES THE SLUG rather than reading the ambient tenant context, because two of the three callers
+ * build this string as an ARGUMENT to `mailSuperAdmins` — evaluated before `withOrgTenant` runs, so
+ * an ambient read would silently produce the deployment's default address there and the correct one
+ * inside. In multi-org mode that mailed Acme a link to somebody else's billing page.
+ */
+const billingUrlFor = (slug: string) => `${workspaceUrlForSlug(slug)}/app/settings?tab=billing`;
+
 async function mailSuperAdmins(
   slug: string,
   templateKey: string,
@@ -89,7 +99,7 @@ async function mailSuperAdmins(
       await dispatchTransactional({
         to: to.join(","),
         templateKey,
-        vars: { workspace: slug, billingUrl: `${env.APP_BASE_URL.replace(/\/$/, "")}/app/settings?tab=billing` },
+        vars: { workspace: slug, billingUrl: billingUrlFor(slug) },
         fallback: { subject, html }
       });
     });
@@ -126,7 +136,7 @@ export async function runTrialLifecycleTick(now = Date.now()): Promise<{ warned:
       org.slug,
       "billing.trial_ending",
       `Your TimeSphere trial ends in ${left} ${left === 1 ? "day" : "days"}`,
-      templates.trialEnding(org.name, left, `${env.APP_BASE_URL.replace(/\/$/, "")}/app/settings?tab=billing`)
+      templates.trialEnding(org.name, left, billingUrlFor(org.slug))
     );
     // Recorded even when the mail failed. A workspace whose SMTP is broken would otherwise be
     // re-notified on every tick forever, which is the loudest possible way to report a mail problem.
@@ -157,7 +167,7 @@ export async function runTrialLifecycleTick(now = Date.now()): Promise<{ warned:
         org.slug,
         "billing.trial_ended",
         "Your TimeSphere trial has ended",
-        templates.trialEnded(org.name, GRACE_DAYS, `${env.APP_BASE_URL.replace(/\/$/, "")}/app/settings?tab=billing`)
+        templates.trialEnded(org.name, GRACE_DAYS, billingUrlFor(org.slug))
       );
     }
     lapsed += 1;

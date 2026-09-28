@@ -7,11 +7,11 @@
  * of which live in the tenant database. This is the bridge, kept in one place so the webhook itself
  * stays free of tenant plumbing.
  */
-import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { withOrgTenant } from "../config/with-org-tenant.js";
 import { templates } from "./mail-templates.js";
 import { dispatchTransactional } from "./notify.service.js";
+import { tenantBaseUrl } from "./workspace-directory.service.js";
 
 const GRACE_DAYS = 14;
 
@@ -29,7 +29,7 @@ async function superAdminRecipients(): Promise<string> {
   return admins.map((a) => a.email).join(",");
 }
 
-const billingUrl = () => `${env.APP_BASE_URL.replace(/\/$/, "")}/app/settings?tab=billing`;
+const billingUrl = () => `${tenantBaseUrl()}/app/settings?tab=billing`;
 
 /** Tells a workspace's super admins that a renewal failed. Never throws: a webhook that 500s
  *  because an email bounced is a webhook Stripe retries forever over something already recorded. */

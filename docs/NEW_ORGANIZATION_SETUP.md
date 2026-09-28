@@ -340,7 +340,13 @@ if you want in-console automation.
    (forwarded by both compose files and the Helm chart's `env.rootDomain`) and DNS has a wildcard
    `*.<ROOT_DOMAIN>` record pointing at the platform with a wildcard TLS certificate. Without
    `ROOT_DOMAIN`, every subdomain resolves to `DEFAULT_ORG_SLUG` and the new customer sees the
-   wrong workspace's login page. On success the console shows the workspace URL and **the new
+   wrong workspace's login page. **And the `Host` header has to reach the API unchanged** — the
+   workspace is derived from it and from nothing else, so a reverse proxy that rewrites it (nginx's
+   `proxy_pass` does by default; so do CloudFront and Azure Front Door) sends every customer to
+   `DEFAULT_ORG_SLUG` without any error appearing anywhere. Verify with one authenticated request
+   rather than by reading a config file: `GET /api/platform-admin/routing` reports, under
+   `observed.resolvedSlug`, the workspace the header that actually arrived resolves to. See
+   [DEPLOYMENT.md § The Host header has to survive every hop](DEPLOYMENT.md#the-host-header-has-to-survive-every-hop). On success the console shows the workspace URL and **the new
    admin receives the welcome email** (the same one self-serve signup sends) with that link — so
    hand over only the initial password, out-of-band, and have them change it on first login.
    Outbound mail must be working for that email to arrive (Part 1 step 6); the tenant's own
@@ -393,6 +399,11 @@ Run through this for the specific organization before calling it live:
 - [ ] `npm run send-test -w apps/api` (or the in-UI "Test connection") confirms real email delivery
 - [ ] A test ticket/timesheet round-trips end-to-end (create → notify → approve/resolve)
 - [ ] TLS certificate is valid and auto-renewing (cert-manager, or your reverse proxy's renewal)
+- [ ] **Multi-workspace only:** the API booted with no `[config]` ERROR lines — they name the exact
+      variable to change, and one of them catches a hostname that would 404 every request
+- [ ] **Multi-workspace only:** `GET /api/platform-admin/routing` through the real load balancer
+      shows `observed.resolvedSlug` equal to the workspace you aimed the request at (proves no proxy
+      rewrote `Host`), and a second workspace's subdomain resolves to *its* slug, not the default
 - [ ] Backups are actually running and a test restore has been performed at least once
 - [ ] Platform-admin credentials have been rotated from the seeded defaults
 - [ ] `npm audit` has been re-run and reviewed since the last dependency update

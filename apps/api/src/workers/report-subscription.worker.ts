@@ -16,12 +16,12 @@
  * sent in the last hour", so a restart at 07:59 followed by the 08:00 tick does not double-send.
  */
 import cron from "node-cron";
-import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { resolveDashboard } from "../services/dashboard.service.js";
 import { sendMail } from "../services/mail.service.js";
 import { getPlanningSettings } from "../services/planning.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { tenantBaseUrl } from "../services/workspace-directory.service.js";
 
 let started = false;
 let running = false;
@@ -124,10 +124,14 @@ async function tickForOneOrg() {
       });
 
       const recipients = (sub.recipients as unknown as string[]) ?? [];
-      // `env.APP_BASE_URL`, never `process.env`: the raw value is allowed to be "auto" or to carry
-      // a "{lan-ip}" token, which `config/env.ts` resolves to a real address at boot. Reading the
-      // raw one put the literal string "auto" into every emailed dashboard link.
-      const html = renderHtml(sub.dashboard.name, widgets, env.APP_BASE_URL);
+      // `tenantBaseUrl()`, never `process.env` and no longer the deployment-wide address either.
+      // Two separate traps live on this one line. Reading the RAW environment put the literal string
+      // "auto" into every emailed dashboard link, because the configured value is allowed to be
+      // "auto" or to carry a "{lan-ip}" token that `config/env.ts` resolves at boot. And reading the
+      // deployment-wide value sent every workspace's scheduled report to the DEFAULT workspace's
+      // address — this tick runs inside `runForEveryOrg`, so the active tenant is the right answer
+      // and is already in scope. See services/workspace-directory.service.ts#tenantBaseUrl.
+      const html = renderHtml(sub.dashboard.name, widgets, tenantBaseUrl());
 
       for (const to of recipients) {
         // `template` names the send in EmailLog, so a scheduled report is distinguishable from

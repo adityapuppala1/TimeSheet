@@ -43,7 +43,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { useForm } from "react-hook-form";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
 import { z } from "zod";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
@@ -228,6 +228,24 @@ const MOBILE_PROOF = [
   { icon: ScanFace, text: "Faces never leave your server" }
 ];
 
+/**
+ * Which state the fingerprint sensor should show.
+ *
+ * A function of its four inputs and nothing else, hoisted out of `Login` because that component sits
+ * at the project's cognitive-complexity ceiling (`lint-baseline.json`) and the apex redirect below
+ * pushed it one over. Raising the ceiling for an early return would have been the wrong trade; this
+ * is the same logic, named, and the component lost three branches rather than gaining one.
+ *
+ * The order IS the precedence: an in-flight password submit outranks whatever the LDAP form last
+ * reported. Only one of the two forms is ever mounted, so they cannot be in flight together.
+ */
+function sealStateFor(ldapStatus: SealState, isPending: boolean, isSuccess: boolean, failure: string | undefined): SealState {
+  if (isPending) return "scanning";
+  if (isSuccess) return "success";
+  if (failure) return "error";
+  return ldapStatus;
+}
+
 export function Login() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -293,10 +311,24 @@ export function Login() {
   /* The seal shows whichever local form is actually in play; the password mutation wins because
      the LDAP form is unmounted whenever the password one is showing, so the two can never be
      mid-flight at the same time. */
-  let sealState: SealState = ldapStatus;
-  if (mutation.isPending) sealState = "scanning";
-  else if (mutation.isSuccess) sealState = "success";
-  else if (failure) sealState = "error";
+  const sealState = sealStateFor(ldapStatus, mutation.isPending, mutation.isSuccess, failure);
+
+  /**
+   * THE BARE ROOT DOMAIN IS NOT A WORKSPACE, so it must not render a workspace's sign-in page.
+   *
+   * On a multi-workspace deployment every organization lives at its own `<slug>.<root>`, and the
+   * root itself belongs to none of them. The API resolves that request to `DEFAULT_ORG_SLUG` because
+   * it has to resolve to something, which meant somebody typing the company domain without a
+   * subdomain was shown one specific customer's logo, name and SSO buttons and invited to sign in.
+   * The finder is the honest answer to "I know my email, not my workspace address".
+   *
+   * AFTER every hook, deliberately: an early return above `useState` would change the hook order
+   * between the loading render and this one, which React treats as a different component.
+   *
+   * `apex` is false on every single-org and on-prem install — there the bare domain IS the one
+   * workspace — so this branch is unreachable for them and nothing changes.
+   */
+  if (ssoMethods.data?.apex) return <Navigate to="/find-workspace" replace />;
 
   return (
     // Two panels at lg and up, one below it. The brand side is second in the DOM but painted first
