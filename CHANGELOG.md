@@ -46,6 +46,36 @@ with `ROOT_DOMAIN` unset, every value below is byte-for-byte what it was.
   and load balancers do to `Host`, and `GET /api/platform-admin/routing` reports what the header that
   actually arrived resolved to, so one authenticated request through the real load balancer settles it.
 
+### 🔒 CORS refused every workspace it had not been told about by name
+
+Found by using the browser recipe from the section above, which is the point of writing recipes
+down. The login page rendered, fetched its branding and its SSO buttons, and then answered every
+sign-in with `403 Origin https://acme.localhost:5173 is not in this server's allow-list`.
+
+- **A browser treats every workspace hostname as a separate origin**, and sends `Origin` on every
+  POST even when the request is same-origin from the page's own point of view. `WEB_ORIGIN` is a
+  fixed list written at deploy time, so it cannot name your customers — and a SaaS cannot restart
+  the API to add one. Setting `ROOT_DOMAIN` now accepts every subdomain of it, which grants no more
+  trust than the router already does: those are exactly the hostnames it accepts as naming a
+  workspace, and a name under your domain is under your DNS control. **The scheme and port must
+  still match an entry you actually wrote**, so an https deployment does not begin trusting
+  `http://acme.example.com` — the subdomain floats, the transport does not.
+- **The refusal names the right variable now.** An origin shaped like a workspace gets told about
+  `ROOT_DOMAIN`, not about a list that could never hold every customer. The old message sent the
+  reader to add one origin and meet the same wall on the next one.
+- **The failure shape is what made it confusing, and is worth recognising**: a same-origin GET sends
+  no `Origin` header at all, so everything renders and only the sign-in fails.
+- **`*.localhost` is accepted in development**, which is where the browser recipe lives. As safe as
+  the bare `localhost` it replaces — RFC 6761 reserves the name for loopback, so it cannot match a
+  stranger.
+- **`npm run certs` takes the workspace names** (`npm run certs -- acme.localhost default.localhost`).
+  A wildcard genuinely cannot do this job: mkcert issues `*.localhost` and every verifier then
+  refuses it, because a wildcard may not cover an entire top-level label. Measured against a real
+  handshake rather than assumed — with `*.localhost` in the certificate, `bob.localhost` was rejected
+  by OpenSSL and by Windows schannel alike.
+- **Custom domains remain a per-customer line in `WEB_ORIGIN`**, because the CORS check is
+  synchronous and that list lives in the control plane. Now written down rather than discovered.
+
 ### 🚀 So a one-click install can actually set it up
 
 The fix above makes multi-workspace routing correct; this makes it reachable without hand-editing a

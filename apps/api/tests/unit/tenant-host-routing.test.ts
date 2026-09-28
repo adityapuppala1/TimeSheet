@@ -24,6 +24,22 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+/**
+ * Sets (or clears) `ROOT_DOMAIN` for the next module load.
+ *
+ * `""` AND NOT `delete`, AND THAT IS THE WHOLE POINT OF THIS FUNCTION EXISTING. `config/env.ts` calls
+ * `dotenv.config()` at import time, and dotenv never overwrites a variable that is ALREADY SET but
+ * happily fills in one that is absent. So `delete process.env.ROOT_DOMAIN` followed by a fresh import
+ * hands the test whatever the developer happens to have in `apps/api/.env` — these seven cases passed
+ * for exactly as long as that file had no `ROOT_DOMAIN` line in it, and went red the moment one was
+ * added to test a second workspace locally. An empty string is set, so dotenv leaves it alone, and
+ * `ROOT_DOMAIN: z.string().optional()` makes it falsy, which is what "unset" means everywhere it is
+ * read. The test now says the same thing on every machine.
+ */
+function setRootDomain(rootDomain: string | undefined): void {
+  process.env.ROOT_DOMAIN = rootDomain ?? "";
+}
+
 type TenantModule = typeof import("../../src/middleware/tenant.js");
 
 /**
@@ -35,8 +51,7 @@ type TenantModule = typeof import("../../src/middleware/tenant.js");
  */
 async function loadWith(rootDomain?: string): Promise<TenantModule> {
   vi.resetModules();
-  if (rootDomain === undefined) delete process.env.ROOT_DOMAIN;
-  else process.env.ROOT_DOMAIN = rootDomain;
+  setRootDomain(rootDomain);
   return import("../../src/middleware/tenant.js");
 }
 
@@ -44,7 +59,9 @@ async function loadWith(rootDomain?: string): Promise<TenantModule> {
 const req = (host: string | undefined) => ({ headers: { host } }) as never;
 
 afterEach(() => {
-  delete process.env.ROOT_DOMAIN;
+  // Empty, not deleted — see setRootDomain. A deleted variable lets the developer's own .env decide
+  // what the next test in this file sees.
+  process.env.ROOT_DOMAIN = "";
 });
 
 describe("single-org / on-prem: ROOT_DOMAIN unset", () => {
@@ -138,8 +155,7 @@ describe("tenantBaseUrl — the address an emailed link should use", () => {
    *  are the same AsyncLocalStorage instance. Importing them separately would silently test nothing. */
   async function loadAddressing(rootDomain?: string) {
     vi.resetModules();
-    if (rootDomain === undefined) delete process.env.ROOT_DOMAIN;
-    else process.env.ROOT_DOMAIN = rootDomain;
+    setRootDomain(rootDomain);
     const [{ tenantBaseUrl, workspaceUrlForSlug }, { tenantContext }] = await Promise.all([
       import("../../src/services/workspace-directory.service.js"),
       import("../../src/config/tenant-context.js")

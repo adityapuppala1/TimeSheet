@@ -78,3 +78,95 @@ describe("a request with no Origin header", () => {
     expect(isOriginAllowed("", [], false)).toBe(true);
   });
 });
+
+/**
+ * WORKSPACE ORIGINS — the case a comma-separated list cannot express.
+ *
+ * WHAT BROKE, in a browser, on this machine. Every workspace is served at its own hostname, and a
+ * browser treats each as a separate origin — so `acme.example.com` sends
+ * `Origin: https://acme.example.com` on every POST even though the request is same-origin from the
+ * page's point of view. `WEB_ORIGIN` is fixed at deploy time, so CORS refused every workspace nobody
+ * had hand-listed. The shape of the failure is what made it confusing: a same-origin GET sends no
+ * `Origin` header at all, so the login page RENDERED correctly, fetched its branding and its SSO
+ * buttons, and then refused the sign-in with a message about an allow-list.
+ *
+ * Reproduced before the fix: POST with `Origin: https://acme.localhost:5173` → 403, while
+ * `https://localhost:5173` and a LAN IP → 401 (i.e. reached the handler).
+ */
+describe("workspace subdomains of ROOT_DOMAIN", () => {
+  const PROD = ["https://timesphere.app"];
+
+  it("accepts any workspace under the configured root, without listing one of them", () => {
+    // The whole point: a deployment cannot enumerate its customers, and must not have to.
+    for (const slug of ["acme", "globex", "a-very-long-hyphenated-name"]) {
+      expect(isOriginAllowed(`https://${slug}.timesphere.app`, PROD, false, "timesphere.app"), slug).toBe(true);
+    }
+  });
+
+  it("refuses them when no ROOT_DOMAIN is configured", () => {
+    // A single-org deployment gains nothing here and should keep exactly the behaviour it had.
+    expect(isOriginAllowed("https://acme.timesphere.app", PROD, false, undefined)).toBe(false);
+    expect(isOriginAllowed("https://acme.timesphere.app", PROD, false, "")).toBe(false);
+  });
+
+  it("will not accept a different domain that merely ENDS with the root's letters", () => {
+    // The leading dot in the suffix check. Without it `nottimesphere.app` matches as a string and a
+    // domain belonging to somebody else is trusted as one of this deployment's own pages.
+    expect(isOriginAllowed("https://nottimesphere.app", PROD, false, "timesphere.app")).toBe(false);
+    expect(isOriginAllowed("https://acme.nottimesphere.app", PROD, false, "timesphere.app")).toBe(false);
+    expect(isOriginAllowed("https://timesphere.app.evil.com", PROD, false, "timesphere.app")).toBe(false);
+  });
+
+  it("holds the transport fixed while the subdomain floats", () => {
+    /**
+     * THE SECURITY BOUNDARY OF THIS RULE. The subdomain is what varies; the scheme and port must
+     * still match something the operator actually wrote in WEB_ORIGIN. Without that, an https
+     * deployment would also trust `http://acme.timesphere.app`, and a network attacker who can
+     * answer plain HTTP gets an origin the API believes.
+     */
+    expect(isOriginAllowed("http://acme.timesphere.app", PROD, false, "timesphere.app")).toBe(false);
+    expect(isOriginAllowed("https://acme.timesphere.app:8443", PROD, false, "timesphere.app")).toBe(false);
+
+    // ...and it follows the list rather than hardcoding https: a deployment listed on http:8080
+    // accepts its own workspaces on http:8080 and nothing else.
+    const LAN = ["http://timesphere.internal:8080"];
+    expect(isOriginAllowed("http://acme.timesphere.internal:8080", LAN, false, "timesphere.internal")).toBe(true);
+    expect(isOriginAllowed("https://acme.timesphere.internal:8080", LAN, false, "timesphere.internal")).toBe(false);
+    expect(isOriginAllowed("http://acme.timesphere.internal:9090", LAN, false, "timesphere.internal")).toBe(false);
+  });
+
+  it("does not let an empty allow-list become a wildcard", () => {
+    // With nothing listed there is no scheme/port to match, so nothing matches. A rule that opened
+    // up when the operator configured less would be the wrong way round.
+    expect(isOriginAllowed("https://acme.timesphere.app", [], false, "timesphere.app")).toBe(false);
+  });
+
+  it("ignores a malformed origin instead of throwing", () => {
+    // `Origin` is caller-supplied, so this is reachable from the network on every request.
+    for (const junk of ["not a url", "://", "https://", "javascript:alert(1)"]) {
+      expect(isOriginAllowed(junk, PROD, false, "timesphere.app"), junk).toBe(false);
+    }
+  });
+});
+
+describe("*.localhost in development", () => {
+  it("accepts a workspace subdomain of localhost, which is how a second tenant is tested", () => {
+    // Browsers resolve every *.localhost name to loopback with no hosts entry (RFC 6761), so this
+    // is exactly as safe as the bare `localhost` the shortcut already accepted — and it is the
+    // address docs/DEPLOYMENT.md tells people to browse.
+    expect(isOriginAllowed("https://acme.localhost:5173", [], true)).toBe(true);
+    expect(isOriginAllowed("http://default.localhost:5173", [], true)).toBe(true);
+    expect(isOriginAllowed("https://localhost:5173", [], true)).toBe(true);
+  });
+
+  it("still refuses them in production, like every other development shortcut", () => {
+    expect(isOriginAllowed("https://acme.localhost:5173", [], false)).toBe(false);
+  });
+
+  it("does not let a public domain smuggle itself in by ending with the word", () => {
+    // `evil.com.localhost` IS under .localhost and is fine; `localhost.evil.com` is not, and the
+    // anchored pattern is what tells them apart.
+    expect(isOriginAllowed("https://localhost.evil.com", [], true)).toBe(false);
+    expect(isOriginAllowed("https://notlocalhost", [], true)).toBe(false);
+  });
+});

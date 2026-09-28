@@ -13,6 +13,13 @@
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\make-lan-certs.ps1
 #
+param(
+  # Extra hostnames for the certificate: `npm run certs -- acme.localhost default.localhost`.
+  # Workspace subdomains have to be named one by one - see the note above $hosts for why a
+  # "*.localhost" wildcard is issued and then refused by every verifier.
+  [Parameter(ValueFromRemainingArguments = $true)][string[]]$ExtraHosts = @()
+)
+
 $ErrorActionPreference = "Stop"
 
 # 1. mkcert present?
@@ -30,10 +37,27 @@ mkcert -install
 
 # 3. Every name/address a browser might type. IPv4 only, skipping link-local/loopback ranges
 #    (mkcert handles localhost/127.0.0.1 as explicit entries below).
+#
+#    Testing a second workspace means browsing https://acme.localhost:5173 - browsers resolve every
+#    *.localhost name to loopback with no hosts-file entry (RFC 6761; the OS resolver does NOT, which
+#    is why curl needs --resolve there and a browser does not). A certificate for "localhost" alone
+#    does not cover those names, so the address bar says "Not secure" and the camera and every Copy
+#    button stop working on exactly the pages being tested.
 $ips = Get-NetIPAddress -AddressFamily IPv4 |
   Where-Object { $_.IPAddress -notlike "169.254.*" -and $_.IPAddress -ne "127.0.0.1" } |
   Select-Object -ExpandProperty IPAddress -Unique
-$hosts = @("localhost", "127.0.0.1", "::1") + $ips
+#    WORKSPACE SUBDOMAINS MUST BE NAMED, ONE BY ONE. A wildcard does not help here and it is worth
+#    knowing why before someone adds one back: "*.localhost" is issued happily by mkcert and then
+#    REFUSED by every verifier, because a wildcard may not cover an entire top-level label. Measured
+#    against a real handshake: with "*.localhost" in the certificate, "bob.localhost" is refused by
+#    both OpenSSL and Windows schannel. So to browse https://acme.localhost:5173 without a warning,
+#    pass the names:
+#
+#        npm run certs -- acme.localhost default.localhost
+#
+#    (A wildcard DOES work one level deeper - "*.dev.localhost" matches "acme.dev.localhost" - if you
+#    would rather set ROOT_DOMAIN="dev.localhost" and never touch this list again.)
+$hosts = @("localhost", "127.0.0.1", "::1") + $ips + $ExtraHosts
 Write-Host "Issuing a certificate for: $($hosts -join ', ')"
 
 # 4. Generate once, copy to both consumers.

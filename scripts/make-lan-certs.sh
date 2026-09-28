@@ -32,7 +32,16 @@ if command -v hostname > /dev/null 2>&1 && hostname -I > /dev/null 2>&1; then
 else
   IPS=$(ifconfig 2>/dev/null | awk '/inet /{print $2}' | grep -v '^127\.' | grep -v '^169\.254\.' | sort -u)
 fi
-HOSTS="localhost 127.0.0.1 ::1 $(echo "$IPS" | tr '\n' ' ')"
+# WORKSPACE SUBDOMAINS MUST BE NAMED, ONE BY ONE, and a wildcard does not help. "*.localhost" is
+# issued happily by mkcert and then REFUSED by every verifier, because a wildcard may not cover an
+# entire top-level label - measured against a real handshake, "bob.localhost" was refused by both
+# OpenSSL and Windows schannel with "*.localhost" in the certificate. So pass the names you browse:
+#
+#     npm run certs -- acme.localhost default.localhost
+#
+# (A wildcard DOES work one level deeper: "*.dev.localhost" matches "acme.dev.localhost", if you
+# would rather set ROOT_DOMAIN="dev.localhost" and never edit this list again.)
+HOSTS="localhost 127.0.0.1 ::1 $(echo "$IPS" | tr '\n' ' ')$*"
 echo "Issuing a certificate for: $HOSTS"
 
 mkdir -p apps/web/certs deploy/caddy/certs

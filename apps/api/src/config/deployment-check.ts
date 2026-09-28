@@ -109,7 +109,10 @@ export function inspectDeploymentConfig(input: DeploymentInputs): ConfigFinding[
    * — whose entire purpose is adapting to whatever address that machine has — booted with a loud
    * error about a setup that worked fine.
    */
-  if (!isOriginAllowed(base, allowed, !isProduction)) {
+  // ROOT_DOMAIN threaded through for the same reason this function asks the rule instead of
+  // reading the list: a multi-workspace deployment accepts every subdomain of it, and a boot check
+  // that did not know would report an ERROR about a configuration that works.
+  if (!isOriginAllowed(base, allowed, !isProduction, input.rootDomain)) {
     const autoAllowed = !isProduction ? " (development also auto-accepts private LAN addresses, and this is not one)" : "";
     findings.push({
       severity: "error",

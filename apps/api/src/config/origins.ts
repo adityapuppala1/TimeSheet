@@ -20,9 +20,72 @@
  * This is what makes the development shortcut safe: "any private LAN address" cannot match a
  * stranger, because a stranger cannot reach one. A public address gets no such treatment in any
  * environment.
+ *
+ * `(?:[a-z0-9-]+\.)*localhost` AND NOT A BARE `localhost`, which is what this used to be. Testing a
+ * second workspace on a development machine means browsing `acme.localhost:5173` — browsers resolve
+ * every `*.localhost` name to loopback with no hosts-file entry, which is what RFC 6761 reserves the
+ * name for. The bare pattern refused those, so the page LOADED (a same-origin GET sends no `Origin`
+ * header at all) and then every sign-in answered 403 about an allow-list, which is a confusing place
+ * to discover that subdomain routing is the thing you were testing. It is exactly as safe as the
+ * bare form for the same reason: a name under `.localhost` cannot resolve anywhere but the machine
+ * the browser is on, so it cannot match a stranger.
  */
 export const PRIVATE_LAN_RE =
-  /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/i;
+  /^https?:\/\/((?:[a-z0-9-]+\.)*localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/i;
+
+/**
+ * Whether an origin is one of THIS deployment's own workspaces.
+ *
+ * WHY A STATIC ALLOW-LIST CANNOT COVER MULTI-WORKSPACE, which is the bug this exists to fix. Every
+ * workspace is served at its own hostname (`acme.example.com`), and a browser treats each of those
+ * as a separate origin — so each one sends `Origin: https://acme.example.com` on every POST, even
+ * though the request is same-origin from the page's point of view. `WEB_ORIGIN` is a fixed,
+ * comma-separated list written at deploy time. You cannot enumerate your customers in it, and you
+ * certainly cannot restart the API to add one. Left unfixed, CORS refuses every workspace except the
+ * handful somebody remembered to list, and refuses them only on writes: the login page renders
+ * perfectly and then cannot log anybody in.
+ *
+ * WHY THIS IS SAFE. `ROOT_DOMAIN` is operator configuration, and every name under it is under that
+ * operator's own DNS control — a stranger cannot obtain `evil.example.com` without already owning
+ * `example.com`. It grants no more trust than the router already extends: `middleware/tenant.ts`
+ * accepts exactly these hostnames as naming a workspace, so a page served at one of them is by
+ * definition one of this deployment's own pages.
+ *
+ * WHAT IS STILL CHECKED. The scheme and the port must match an entry the operator actually wrote in
+ * `WEB_ORIGIN`. Without that, an https deployment would also accept `http://acme.example.com` and a
+ * network attacker could downgrade a workspace to a plain-http origin the API then trusts. The
+ * subdomain is what floats; the transport is not.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT COVER: a workspace on a VERIFIED CUSTOM DOMAIN (`time.acme.com`).
+ * Those live in the control-plane database, and this function is synchronous and runs on every
+ * request. Add each custom domain to `WEB_ORIGIN` when you verify it — see docs/DEPLOYMENT.md.
+ */
+export function isWorkspaceOrigin(origin: string, allowList: string[], rootDomain: string | undefined): boolean {
+  const root = rootDomain?.trim().toLowerCase();
+  if (!root) return false;
+
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  // The leading dot is load-bearing: without it `notexample.com` ends with `example.com` as a
+  // string and a completely unrelated domain would be trusted as one of this deployment's own.
+  if (!url.hostname.toLowerCase().endsWith(`.${root}`)) return false;
+
+  // Scheme and port must match something the operator wrote down. `URL.port` is "" for a default
+  // port, and both sides are compared as parsed URLs so `https://x.com` and `https://x.com:443`
+  // cannot disagree about a port neither of them spells out.
+  return allowList.some((entry) => {
+    try {
+      const allowed = new URL(entry);
+      return allowed.protocol === url.protocol && allowed.port === url.port;
+    } catch {
+      return false;
+    }
+  });
+}
 
 /**
  * Whether one Origin header is allowed.
@@ -32,8 +95,35 @@ export const PRIVATE_LAN_RE =
  * different origins, and a request with no Origin at all is not a cross-origin request — refusing it
  * would break every non-browser caller while protecting nothing.
  */
-export function isOriginAllowed(origin: string | undefined, allowList: string[], devMode: boolean): boolean {
+/**
+ * Does this origin have the SHAPE of a workspace address — three or more labels, not an IP?
+ *
+ * Used only to choose which refusal message to print, never to allow anything. A deployment that
+ * has not set `ROOT_DOMAIN` refuses `acme.example.com` exactly as it always did; the difference is
+ * that it now says which variable would accept it, instead of pointing at a list that cannot hold
+ * every customer. The same distinction `config/deployment-check.ts` draws at boot.
+ */
+export function originLooksLikeWorkspace(origin: string | undefined): boolean {
+  if (!origin) return false;
+  try {
+    const { hostname } = new URL(origin);
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) return false;
+    return hostname.split(".").filter(Boolean).length >= 3 || hostname.toLowerCase().endsWith(".localhost");
+  } catch {
+    return false;
+  }
+}
+
+export function isOriginAllowed(
+  origin: string | undefined,
+  allowList: string[],
+  devMode: boolean,
+  /** `ROOT_DOMAIN`. When set, this deployment's own workspace subdomains are allowed — see
+   *  `isWorkspaceOrigin` for why a static list cannot express that. */
+  rootDomain?: string
+): boolean {
   if (!origin) return true;
   if (allowList.includes(origin)) return true;
-  return devMode && PRIVATE_LAN_RE.test(origin);
+  if (devMode && PRIVATE_LAN_RE.test(origin)) return true;
+  return isWorkspaceOrigin(origin, allowList, rootDomain);
 }

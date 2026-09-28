@@ -735,6 +735,31 @@ Three things are worth saying plainly, because each has been assumed the other w
   credentials authenticate over `Host: localhost`, `Host: acme.example.test` and even a hostname no
   workspace claims — all `200`, where a tenant user would get `404`.
 
+### Workspace origins and `WEB_ORIGIN`
+
+A browser treats every workspace hostname as a separate **origin**, and sends
+`Origin: https://acme.example.com` on every POST — even though the request is same-origin from the
+page's own point of view. `WEB_ORIGIN` is a fixed list written at deploy time, so it can never name
+your customers.
+
+**Setting `ROOT_DOMAIN` is what solves this**: every subdomain of it is accepted as one of this
+deployment's own origins, without being listed. That grants no more trust than the router already
+does — `middleware/tenant.ts` accepts exactly those hostnames as naming a workspace, and a name
+under your domain is under your DNS control. The scheme and port must still match an entry you
+actually wrote in `WEB_ORIGIN`, so an https deployment does not start trusting
+`http://acme.example.com`.
+
+The failure shape, if this is wrong, is distinctive and worth recognising: **the login page renders
+perfectly and then cannot sign anybody in.** A same-origin `GET` sends no `Origin` header at all, so
+branding and the SSO buttons load; the `POST` to `/api/auth/login` carries one and is refused with a
+403 about an allow-list. If you see that, `ROOT_DOMAIN` is the variable to look at, not `WEB_ORIGIN`
+— and the error message now says so.
+
+**Verified custom domains are the exception.** A workspace on `time.acme.com` is not under
+`ROOT_DOMAIN`, and the CORS check is synchronous while the domain list lives in the control-plane
+database. **Add each custom domain to `WEB_ORIGIN` when you verify it**, and restart the API. That
+is a per-customer step, and it is the same manual DNS conversation the domain itself requires.
+
 ### Known limitation: SSO across workspace subdomains
 
 Worth knowing before you enable multi-org routing with SSO, because the pieces are individually
@@ -1891,6 +1916,24 @@ Then, with the web dev server running as usual:
 | `https://localhost:5173` | the **workspace finder** — the bare root is not a workspace |
 | `https://acme.localhost:5173` | the `acme` workspace's own login page, logo and SSO buttons |
 | `https://default.localhost:5173` | the `default` workspace |
+
+**Two things to do once**, both of which announce themselves as confusing errors if you skip them:
+
+```bash
+# 1. Name each workspace in the dev certificate, or the address bar says "Not secure" and the
+#    camera and Copy buttons stop working on exactly the pages you are testing.
+npm run certs -- acme.localhost default.localhost
+```
+
+A `*.localhost` **wildcard does not work**, and it is worth knowing why before adding one back:
+mkcert issues it happily and every verifier then refuses it, because a wildcard may not cover an
+entire top-level label. Measured against a real handshake with `*.localhost` in the certificate,
+`bob.localhost` was rejected by both OpenSSL and Windows schannel. Name the workspaces, or set
+`ROOT_DOMAIN="dev.localhost"` and use `*.dev.localhost`, which is one level deeper and does match.
+
+Nothing needs a hosts-file entry: browsers resolve every `*.localhost` name to loopback on their own
+(RFC 6761). The OS resolver does **not**, which is why `curl` needs `--resolve acme.localhost:5173:127.0.0.1`
+against these addresses and a browser needs nothing.
 
 Confirm the API agrees, which is the part that cannot be faked by a redirect:
 

@@ -8,14 +8,23 @@
  * bug — until this machine mints its own certificate. See scripts/make-lan-certs.{ps1,sh}.
  */
 import { spawnSync } from "node:child_process";
+
+/**
+ * Extra hostnames, forwarded verbatim: `npm run certs -- acme.localhost default.localhost`.
+ *
+ * Needed because a workspace subdomain has to be NAMED in the certificate - a "*.localhost"
+ * wildcard is issued by mkcert and then refused by every verifier, since a wildcard may not cover a
+ * whole top-level label. See the note in make-lan-certs.{ps1,sh}.
+ */
+const extraHosts = process.argv.slice(2);
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const result =
   process.platform === "win32"
-    ? spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(here, "make-lan-certs.ps1")], {
+    ? spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(here, "make-lan-certs.ps1"), ...extraHosts], {
         stdio: "inherit"
       })
-    : spawnSync("bash", [join(here, "make-lan-certs.sh")], { stdio: "inherit" });
+    : spawnSync("bash", [join(here, "make-lan-certs.sh"), ...extraHosts], { stdio: "inherit" });
 process.exit(result.status ?? 1);
