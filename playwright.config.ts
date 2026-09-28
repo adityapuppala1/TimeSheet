@@ -73,6 +73,29 @@ export default defineConfig({
       // the failure was ever stored. The quota is cleared and the upload can no longer fail the
       // job (see ci.yml), so the next failure finally arrives with its trace attached. Guessing
       // again before reading it would be the fourth mistake.
+      /**
+       * SIXTY SECONDS, AND THIS TIME THERE IS EVIDENCE — the three guesses above were made without
+       * any, because every trace upload was failing on an artifact quota. The quota is cleared, and
+       * the 2026-09-28 run on main finally gave paired timings for the SAME tests on both engines:
+       *
+       *     settings.spec.ts:13    firefox 11.0s   webkit 11.7s   (1.06x)
+       *     settings.spec.ts:46    firefox 13.8s   webkit 15.1s   (1.09x)
+       *     settings.spec.ts:120   firefox 16.0s   webkit 19.9s   (1.24x)
+       *     timesheet.spec.ts:130  firefox 14.7s   webkit 23.5s   (1.60x)
+       *     tickets.spec.ts:91     firefox 17.1s   webkit 28.6s   (1.67x)  <- passed, with 1.4s spare
+       *     tickets.spec.ts:25     firefox 19.1s   webkit 31.9s   FAILED at the 30s cap
+       *
+       * WebKit is not flaky here; it is systematically slower, and it scales WORSE the more a test
+       * does — 1.06x on the lightest, 1.67x on the heaviest. So a 30s budget sized against Firefox's
+       * 19s cannot hold WebKit's 32s, and `tickets.spec.ts:25` sat just the wrong side of it while
+       * its neighbour passed with 1.4 seconds to spare. That is a budget that was going to fail
+       * whichever test drifted first, not a defect in one test.
+       *
+       * Scoped to this project rather than raised globally: Chromium and Firefox finish inside 30s
+       * with room, and a longer cap everywhere would slow down every genuine hang on every engine.
+       * A test that is truly stuck still fails here — it just takes a minute to say so.
+       */
+      timeout: 60_000,
       use: { ...devices["Desktop Safari"], viewport: VIEWPORTS.laptop },
       dependencies: ["setup"],
       testMatch: /(auth|tickets|timesheet|dashboard|settings|user-management)\.spec\.ts/

@@ -10,6 +10,30 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🧪 Two CI-only e2e failures, diagnosed rather than retried
+
+Both had been red on `main` for a while, and neither was a defect in the product. Test changes only.
+
+- **The keyboard-focus check was racing the focus ring.** It reported "Ask AI about this workspace"
+  as a control that takes focus without looking any different. It is not: measured on the running
+  app, the ring is at 17% alpha and **0.35px** at T+0, 92% at T+50ms, and the full
+  `rgb(21,121,85) 0 0 0 4px` by T+120ms — buttons carry `motion-safe:transition` and `box-shadow`
+  transitions over 150ms. The test read the computed style immediately after `Tab`, and on a control
+  that also has a resting `shadow-lg` the interpolated string at T+0 is **byte-identical** to the
+  resting one. That is why it failed only on Linux CI and passed on every developer machine: the CDP
+  round trip is slower on Windows, so it happened to sample past T+0. Reproduced in the Playwright
+  Linux image to confirm, where the old read reports invisible and the new one does not. The probe
+  now waits for the value to stop changing before judging it — which is not a sleep in disguise: a
+  control with no ring is stable from the first read and still fails, and deleting the ring from
+  `.focus-ring` still turns the test red on nine controls.
+- **WebKit's 30-second budget was sized against Firefox.** Paired timings for the same tests in one
+  run: 11.0s→11.7s, 16.0s→19.9s, 17.1s→28.6s, and 19.1s→31.9s. WebKit is not flaky here, it is
+  systematically slower and scales worse the more a test does — 1.06× on the lightest, 1.67× on the
+  heaviest. `tickets.spec.ts:25` landed at 31.9s against the cap while its neighbour passed with 1.4
+  seconds to spare, so the budget was going to fail whichever test drifted first. The webkit project
+  now gets 60s; Chromium and Firefox keep 30s, because a longer cap everywhere would slow every
+  genuine hang on every engine.
+
 ## 5.7.0 — the workspace you asked for, on the address you typed — 2026-09-28
 
 Multi-workspace routing worked in theory and not in a browser. Six defects, each found by driving a

@@ -245,10 +245,40 @@ test.describe("keyboard", () => {
     let toggleFound = false;
     for (let i = 0; i < 60; i += 1) {
       await page.keyboard.press("Tab");
-      const stop = await page.evaluate(() => {
+      const stop = await page.evaluate(async () => {
         const el = document.activeElement as HTMLElement | null;
         if (!el || el === document.body) return null;
         const key = el.getAttribute("data-focus-probe");
+
+        /**
+         * LET THE RING FINISH ARRIVING BEFORE JUDGING IT, and this is not a `waitForTimeout` in
+         * disguise — it waits for the value to STOP CHANGING, which is a different thing.
+         *
+         * Buttons carry `motion-safe:transition`, and `box-shadow` is in that list with a 150ms
+         * duration, so the ring fades in rather than appearing. Measured on the "Ask AI about this
+         * workspace" button: at T+0 the interpolated shadow is `0.35px` at 17% alpha, at T+50ms
+         * `1.84px` at 92%, and only by T+120ms the full `0 0 0 4px` ring. At T+0 on a control that
+         * also has a resting `shadow-lg`, the interpolated string is BYTE-IDENTICAL to the resting
+         * one — so reading immediately reported a perfectly visible ring as invisible.
+         *
+         * That is why this test failed only on Linux CI and passed on every developer machine: the
+         * CDP round trip is slower on Windows, so it happened to sample past T+0. A race, not a
+         * platform difference, and it cost a Docker repro to find out.
+         *
+         * Settling does NOT weaken the assertion. If a control genuinely has no ring, the value is
+         * stable from the first read and still compares equal to resting — the check below still
+         * goes red. Deleting the ring from `.focus-ring` and re-running is what proves that, and it
+         * remains the way to verify this test, exactly as the three worthless versions above needed.
+         */
+        let previous = "";
+        for (let attempt = 0; attempt < 16; attempt += 1) {
+          const s = getComputedStyle(el);
+          const snapshot = `${s.outlineWidth}|${s.outlineStyle}|${s.outlineColor}|${s.boxShadow}`;
+          if (snapshot === previous) break;
+          previous = snapshot;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+
         const cs = getComputedStyle(el);
         const resting = key ? (window as unknown as { __resting: Record<string, string> }).__resting[key] : undefined;
         const invisibleColour = (c: string) => c === "transparent" || /rgba\([^)]*,\s*0\s*\)$/.test(c);
