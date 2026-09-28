@@ -59,6 +59,38 @@ if ($ProxyWarned) {
   Write-Warn "  Not a blocker - this update continues. See docs/DEPLOYMENT.md."
 }
 
+# -- Workspace-routing check ---------------------------------------------------------------------
+# Same shape as the two checks around it - a default that is invisible to every other check here -
+# but with the most total symptom of the three. ROOT_DOMAIN defaults to empty, and while it is empty
+# the API takes the workspace name from the FIRST DNS LABEL of the request. For a deployment at
+# timesheet.company.com that means looking up a workspace called "timesheet", finding none, and
+# answering "404 Unknown workspace." to every request including the login page - with nothing in the
+# log, because the router was asked for a workspace that does not exist and answered correctly.
+#
+# This is the version that matters most, because it runs on EXISTING deployments: an .env written
+# before ROOT_DOMAIN existed is exactly the file that has this problem. Silent for localhost, a bare
+# IP or a two-label domain, where empty is the correct value.
+$envRaw = Get-Content ".env" -Raw
+$rootDomainMatch = [regex]::Match($envRaw, "(?m)^ROOT_DOMAIN=(.*)$")
+$rootDomainValue = if ($rootDomainMatch.Success) { $rootDomainMatch.Groups[1].Value.Trim().Trim('"').Trim("'") } else { "" }
+if ([string]::IsNullOrWhiteSpace($rootDomainValue)) {
+  $appBaseMatch = [regex]::Match($envRaw, "(?m)^APP_BASE_URL=(.*)$")
+  if ($appBaseMatch.Success) {
+    $baseHost = ([regex]::Replace($appBaseMatch.Groups[1].Value.Trim().Trim('"').Trim("'"), '^[a-zA-Z]+://', '') -split '[:/]')[0].ToLowerInvariant()
+    $baseIsIp = $baseHost -match '^\d{1,3}(\.\d{1,3}){3}$'
+    if ($baseHost -and (-not $baseIsIp) -and ($baseHost -split '\.').Count -ge 3) {
+      $firstLabel = ($baseHost -split '\.')[0]
+      $suggestedRoot = $baseHost.Substring($baseHost.IndexOf('.') + 1)
+      Write-Warn "ROOT_DOMAIN is unset and APP_BASE_URL is $baseHost."
+      Write-Warn "  With it unset the API reads the first label, `"$firstLabel`", as a workspace name - so"
+      Write-Warn "  unless a workspace with that slug exists, EVERY request answers 404, login page included."
+      Write-Warn "  Fix: put ROOT_DOMAIN=$suggestedRoot in .env and re-run this script. Workspaces then live"
+      Write-Warn "  at <slug>.$suggestedRoot, which needs wildcard DNS and a certificate covering it."
+      Write-Warn "  Not a blocker - this update continues. The API repeats this at startup."
+    }
+  }
+}
+
 # -- Outbound-egress posture check -------------------------------------------------------------
 # ALLOW_PRIVATE_NETWORK_EGRESS is the same shape of problem as TRUST_PROXY_HOPS above - a default
 # invisible to every other check here - but it points the OTHER way: the default is the SAFE one,

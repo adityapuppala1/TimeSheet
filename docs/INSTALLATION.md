@@ -81,13 +81,27 @@ These are the actual failure modes you're likely to hit, in the order you'd hit 
    something else on this machine, before Compose gets a chance to bind-fail on them deep in its
    own logs. 3307, not MySQL's usual 3306 — see the port-conflict row in the table above for why.
 3. **`.env` handling** (human-in-the-loop, security-relevant): 
-   - If `.env` doesn't exist yet, you're prompted for three values (web URL, API URL — both
-     default to `localhost` for a trial run — and the **reverse-proxy hop count**, see below)
+   - If `.env` doesn't exist yet, you're prompted for four values (web URL, API URL — both
+     default to `localhost` for a trial run — the **workspace root domain**, and the
+     **reverse-proxy hop count**, both below)
      and then, **optionally**, your outbound SMTP
      details (host/port/user/password/TLS) — type `N` to skip and configure email later from
      the UI. The password prompt hides your input as you type. Every other secret (DB
      password, JWT signing keys, encryption key) is generated for you with cryptographically
      strong randomness — you never have to think about them.
+   - **The workspace root domain (`ROOT_DOMAIN`) is asked because the wrong answer returns 404
+     for every request, including the login page.** The API works out which workspace a request is
+     for from the `Host` header; with `ROOT_DOMAIN` empty it does that by reading the **first DNS
+     label**. That is right for `acme.example.com` and fatal for `timesheet.company.com`, which
+     looks for a workspace called `timesheet`, finds none, and refuses everything — with nothing in
+     the log, because as far as the router is concerned it was asked for a workspace that does not
+     exist. So this is not only the multi-customer switch: a **single**-workspace install on a
+     three-label hostname needs it too. Leave it blank for `localhost`, a bare IP, or a two-label
+     domain like `example.com`. The installer reads your API URL and offers the right value, and the
+     API prints a startup `ERROR` naming it if the two disagree. Setting it also means workspace
+     subdomains need a wildcard DNS record, a certificate covering the wildcard, and a proxy that
+     passes `Host` through unchanged — see
+     [DEPLOYMENT.md § The Host header has to survive every hop](DEPLOYMENT.md#the-host-header-has-to-survive-every-hop).
    - **The proxy hop count (`TRUST_PROXY_HOPS`) defaults to `1`, and that is deliberate.** The
      `web` container's nginx proxies `/api` to the `api` container, so every browser request
      already crosses one proxy. Left at `0`, the API records nginx's address as the client IP for

@@ -211,6 +211,28 @@ if [ -f "$ENV_FILE" ]; then
     warn "  Add to .env and re-run:  TRUST_PROXY_HOPS=1   (2 with docker-compose.https.yml's Caddy;"
     warn "  add one more for anything else in front, e.g. Cloudflare). See docs/DEPLOYMENT.md."
   fi
+  # THE SAME SHAPE AGAIN, and the loudest of the three, because the symptom is total. ROOT_DOMAIN
+  # has a default (empty) so a missing one starts fine, and with it empty the API reads the FIRST DNS
+  # LABEL of the request as the workspace name. An .env written before this key existed, on a
+  # deployment whose hostname has three or more labels, therefore answers "404 Unknown workspace."
+  # to every request including the login page — and the log says nothing, because the router was
+  # asked for a workspace that does not exist and answered correctly.
+  #
+  # Checked against APP_BASE_URL rather than announced unconditionally: on localhost, a bare IP or a
+  # two-label domain the empty value is correct, and a warning there would be noise on the common
+  # case. The API repeats this at boot (config/deployment-check.ts); saying it here means the
+  # operator reads it while they still have the file open.
+  if ! grep -qE "^ROOT_DOMAIN=" "$ENV_FILE"; then
+    EXISTING_BASE="$(grep -E '^APP_BASE_URL=' "$ENV_FILE" | head -n1 | cut -d= -f2- | tr -d '"' | sed -E 's#^[a-z]+://##; s#[:/].*$##' | tr 'A-Z' 'a-z')"
+    if [ -n "$EXISTING_BASE" ] && [[ ! "$EXISTING_BASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$(printf '%s' "$EXISTING_BASE" | tr -cd '.' | wc -c)" -ge 2 ]; then
+      warn "ROOT_DOMAIN is not set in .env, and APP_BASE_URL is ${EXISTING_BASE}."
+      warn "  With ROOT_DOMAIN empty the API reads the first label, \"${EXISTING_BASE%%.*}\", as a workspace"
+      warn "  name — so unless a workspace with that slug exists, EVERY request answers 404, login"
+      warn "  page included. Add to .env and re-run:  ROOT_DOMAIN=${EXISTING_BASE#*.}"
+      warn "  Workspaces then live at <slug>.${EXISTING_BASE#*.} — needs wildcard DNS and a wildcard"
+      warn "  certificate. See docs/DEPLOYMENT.md."
+    fi
+  fi
   # Same "has a default, so a missing one starts fine — which is exactly the problem" reasoning as
   # TRUST_PROXY_HOPS above, except the default here is the SAFE value. The notice exists because an
   # .env that predates this key gets the secure behaviour silently, and an operator running an
@@ -252,6 +274,45 @@ else
   # through `ask` or sits inside a branch whose condition does, which is why only these two failed.
   WEB_ORIGIN_VALUE="$(ask "Public URL for the web app [http://localhost:5173]: " "http://localhost:5173")"
   APP_BASE_URL_VALUE="$(ask "Public URL for the API (used as the SSO callback base) [${WEB_ORIGIN_VALUE}]: " "$WEB_ORIGIN_VALUE")"
+
+  # ASKED, BECAUSE THE WRONG ANSWER 404s THE WHOLE DEPLOYMENT AND THE RIGHT ONE CANNOT BE GUESSED.
+  # `middleware/tenant.ts` resolves the workspace from the Host header. With ROOT_DOMAIN empty it
+  # does so by taking the FIRST DNS LABEL, so a perfectly ordinary hostname like
+  # timesheet.company.com looks for a workspace called "timesheet", finds none, and answers
+  # "404 Unknown workspace." to every request including the login page. Measured on a running
+  # server: Host: hics.com.sg -> 404, Host: localhost -> 200.
+  #
+  # So this is not only the multi-customer switch; it is also what a SINGLE-workspace install on a
+  # three-label hostname needs. The default offered is derived from APP_BASE_URL rather than left
+  # blank, because the operator has just typed the answer one line above and should not have to
+  # work out which part of it to repeat. Two labels or an IP need nothing, and get nothing.
+  ROOT_DOMAIN_DEFAULT=""
+  APP_BASE_HOST="$(printf '%s' "$APP_BASE_URL_VALUE" | sed -E 's#^[a-z]+://##; s#[:/].*$##' | tr 'A-Z' 'a-z')"
+  if [[ ! "$APP_BASE_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$(printf '%s' "$APP_BASE_HOST" | tr -cd '.' | wc -c)" -ge 2 ]; then
+    ROOT_DOMAIN_DEFAULT="${APP_BASE_HOST#*.}"
+    printf '
+%s has three or more labels, so without ROOT_DOMAIN the API would read
+' "$APP_BASE_HOST"
+    printf '"%s" as a workspace name and answer 404 to every request.
+' "${APP_BASE_HOST%%.*}"
+  else
+    printf '
+Serving several customer workspaces on their own subdomains (acme.example.com)?
+'
+    printf 'Needs a wildcard DNS record and a wildcard TLS certificate. Leave blank for one workspace.
+'
+  fi
+  ROOT_DOMAIN_VALUE="$(ask "Workspace root domain [${ROOT_DOMAIN_DEFAULT:-none}]: " "$ROOT_DOMAIN_DEFAULT")"
+  [ "$ROOT_DOMAIN_VALUE" = "none" ] && ROOT_DOMAIN_VALUE=""
+  # Strip what people paste by habit. A scheme, port or trailing dot in here matches no hostname at
+  # all, so the deployment behaves as if this were empty while every readout says multi-org.
+  ROOT_DOMAIN_VALUE="$(printf '%s' "$ROOT_DOMAIN_VALUE" | sed -E 's#^[a-z]+://##; s#[:/].*$##; s#^\.+##; s#\.+$##' | tr 'A-Z' 'a-z')"
+  if [ -n "$ROOT_DOMAIN_VALUE" ]; then
+    warn "ROOT_DOMAIN=${ROOT_DOMAIN_VALUE}: point *.${ROOT_DOMAIN_VALUE} at this deployment and make sure"
+    warn "  the certificate covers the wildcard, or workspace subdomains will not resolve. Whatever"
+    warn "  proxy sits in front must pass Host through unchanged — nginx needs 'proxy_set_header Host"
+    warn "  \$host'. See docs/DEPLOYMENT.md, 'The Host header has to survive every hop'."
+  fi
 
   # Asked, not assumed, and asked HERE rather than buried in docs: this is the one setting whose
   # wrong value is completely silent. Every per-IP rate limit in the app reads req.ip, and Express
@@ -396,6 +457,10 @@ CONTROL_DATABASE_URL=mysql://root:${MYSQL_ROOT_PASSWORD_VALUE}@mysql:3306/timesp
 # each of these does. ${COMPOSE_FILE} reads this file automatically.
 ${DB_ENV_LINES}
 DEFAULT_ORG_SLUG=default
+# The domain workspace subdomains hang off (acme.<ROOT_DOMAIN>). EMPTY = one workspace, and the
+# first DNS label of the request is then read as the workspace name — which 404s any hostname with
+# three or more labels. The API prints an ERROR at boot if this is wrong for the address it serves.
+ROOT_DOMAIN=${ROOT_DOMAIN_VALUE}
 JWT_ACCESS_SECRET=$(rand_b64)
 JWT_REFRESH_SECRET=$(rand_b64)
 PLATFORM_ADMIN_JWT_SECRET=$(rand_b64)

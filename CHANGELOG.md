@@ -46,6 +46,37 @@ with `ROOT_DOMAIN` unset, every value below is byte-for-byte what it was.
   and load balancers do to `Host`, and `GET /api/platform-admin/routing` reports what the header that
   actually arrived resolved to, so one authenticated request through the real load balancer settles it.
 
+### 🚀 So a one-click install can actually set it up
+
+The fix above makes multi-workspace routing correct; this makes it reachable without hand-editing a
+file. Nothing here changes a single-workspace install, which is still the default answer to every
+new prompt.
+
+- **`install.sh` and `install.ps1` now ask for the workspace root domain**, and derive the right
+  default from the API URL you just typed — so an install at `timesheet.company.com` is offered
+  `ROOT_DOMAIN=company.com` rather than left to 404. Two labels, `localhost` and bare IPs are
+  offered nothing, because empty is correct for them. Pasted schemes, ports and stray dots are
+  stripped, since any of those matches no hostname at all while every readout still claims multi-org
+  mode. Both scripts warn about the wildcard DNS record, the wildcard certificate and the `Host`
+  header while the operator is still looking at the prompt.
+- **`update.sh` and `update.ps1` say so on existing deployments**, which is where it matters most:
+  an `.env` written before this variable existed is precisely the file that has the problem. Same
+  derived suggestion, same silence on hostnames where empty is right.
+- **`deploy/caddy/Caddyfile.domain-wildcard`** — the shipped HTTPS stack declared only the apex as a
+  site address, and Caddy serves only the addresses it is given, so workspace subdomains never
+  reached the containers regardless of what the API was configured to do. Selected with
+  `CADDYFILE=Caddyfile.domain-wildcard`; a separate file rather than a flag in the existing one
+  because a wildcard certificate has a real prerequisite (Let's Encrypt will not issue one over
+  HTTP-01) and a deployment working today must not inherit that by accident. Both honest routes are
+  written out: bring your own wildcard pair, which works with the stock image, or build Caddy with
+  your DNS provider's module.
+- **DEPLOYMENT.md now answers it per shape** — local, one-click, Compose, Compose+HTTPS, Helm,
+  external-DB and CI/CD — with what each needs and what each already does. Two of those rows are
+  worth knowing without reading the table: the Compose stack's own nginx has always set
+  `proxy_set_header Host $host`, so containerised deployments were never affected by the proxy bug;
+  and CD publishes images without deploying, so a pipeline change is never the fix for a routing
+  problem.
+
 ### 🧪 Tests for the parts that were silently wrong
 
 - **`resolveOrgSlug` had no tests at all** — the first decision made about every request, and the one

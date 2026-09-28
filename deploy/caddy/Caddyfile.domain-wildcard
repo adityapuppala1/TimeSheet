@@ -1,0 +1,71 @@
+# HTTPS front for the Docker Compose stack — MULTI-WORKSPACE (Shape 2) mode.
+#
+# WHY THIS FILE EXISTS SEPARATELY FROM Caddyfile.domain. That file declares one site address,
+# `{$HTTPS_DOMAIN}`, and Caddy serves ONLY the addresses it is given — so `acme.example.com` does not
+# reach the stack at all, no matter what `ROOT_DOMAIN` says on the API. A multi-workspace deployment
+# needs the apex AND the wildcard, which is what this adds. Select it per deployment:
+#
+#     HTTPS_DOMAIN=example.com  CADDYFILE=Caddyfile.domain-wildcard  docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+#
+# It is a separate file rather than a commented block in the other one because getting a wildcard
+# certificate is a real decision with a prerequisite (below), and a deployment that is working today
+# on a single domain must not be able to inherit that prerequisite by accident.
+#
+# ── THE PREREQUISITE, STATED PLAINLY ────────────────────────────────────────────────────────────
+# Let's Encrypt will not issue a wildcard over the HTTP-01 challenge. Wildcards require DNS-01, and
+# DNS-01 requires Caddy to hold an API credential for your DNS provider — which means a Caddy build
+# containing that provider's module. The stock `caddy:2-alpine` image in docker-compose.https.yml
+# contains none, so AS SHIPPED this file's automatic path cannot obtain the certificate.
+#
+# There are two honest ways forward. Pick one before switching CADDYFILE, not after.
+#
+#   A. BRING YOUR OWN WILDCARD CERTIFICATE — works with the stock image, today. Put the pair at
+#      deploy/caddy/certs/ (already mounted read-only at /certs by docker-compose.https.yml) and
+#      uncomment the `tls` line below. Renewal is then yours to arrange, exactly as it already is
+#      for the Caddyfile.local self-signed path.
+#
+#   B. BUILD A CADDY WITH YOUR DNS PROVIDER'S MODULE and let it renew automatically:
+#
+#        FROM caddy:2-builder AS build
+#        RUN xcaddy build --with github.com/caddy-dns/cloudflare   # or route53, azure, gcloud…
+#        FROM caddy:2-alpine
+#        COPY --from=build /usr/bin/caddy /usr/bin/caddy
+#
+#      Point the `caddy` service at that image, pass the provider's token in, and replace the `tls`
+#      line with your provider's directive, e.g. `tls { dns cloudflare {env.CF_API_TOKEN} }`.
+#
+# ── AND THE TWO THINGS THE API STILL NEEDS ──────────────────────────────────────────────────────
+#  1. `ROOT_DOMAIN` in the root `.env` must equal HTTPS_DOMAIN, or the API will not derive workspace
+#     slugs from these hostnames. `install.sh` / `install.ps1` now ask for it; the API prints a boot
+#     ERROR if it disagrees with APP_BASE_URL.
+#  2. `TRUST_PROXY_HOPS=2` — this Caddy, then the web container's nginx. See docs/DEPLOYMENT.md.
+#
+# Host is NOT rewritten anywhere in this chain, and that is what makes the whole thing work: Caddy's
+# `reverse_proxy` passes Host through untouched, and the web container's nginx sets
+# `proxy_set_header Host $host` explicitly (apps/web/nginx.conf.template). The API derives the
+# workspace from that header and from nothing else, so any hop that replaced it would route every
+# customer to DEFAULT_ORG_SLUG silently. Verify after deploying, rather than trusting this comment:
+# `GET /api/platform-admin/routing` reports `observed.resolvedSlug` for the request you just made.
+
+# The apex serves the workspace finder ("I know my email, not my workspace address"); every
+# subdomain serves that workspace. Both are the same upstream — the API tells them apart by Host.
+{$HTTPS_DOMAIN}, *.{$HTTPS_DOMAIN} {
+	encode gzip
+
+	# Option A: your own wildcard certificate. Uncomment with the pair in deploy/caddy/certs/.
+	# tls /certs/cert.pem /certs/key.pem
+
+	# Option B: automatic DNS-01 with a DNS-provider module compiled in. Replace with yours.
+	# tls {
+	#	dns cloudflare {env.CF_API_TOKEN}
+	# }
+
+	# includeSubDomains is not optional here, unlike on a single-domain deployment: every customer
+	# IS a subdomain, so omitting it would leave every real customer hostname unprotected while the
+	# apex looked covered. Same reasoning and same two years as Caddyfile.domain; `preload` is
+	# likewise left off, because committing a domain to the browser-baked list is not this repo's
+	# call to make for whatever domain an operator points at it.
+	header Strict-Transport-Security "max-age=63072000; includeSubDomains"
+
+	reverse_proxy web:80
+}

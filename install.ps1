@@ -131,6 +131,44 @@ if (Test-Path $EnvFile) {
   $AppBaseUrlInput = Ask "Public URL for the API (used as the SSO callback base) [$WebOrigin]" ""
   $AppBaseUrl = if ([string]::IsNullOrWhiteSpace($AppBaseUrlInput)) { $WebOrigin } else { $AppBaseUrlInput }
 
+  # ASKED, BECAUSE THE WRONG ANSWER 404s THE WHOLE DEPLOYMENT AND THE RIGHT ONE CANNOT BE GUESSED.
+  # middleware/tenant.ts resolves the workspace from the Host header. With ROOT_DOMAIN empty it does
+  # so by taking the FIRST DNS LABEL, so an ordinary hostname like timesheet.company.com looks for a
+  # workspace called "timesheet", finds none, and answers "404 Unknown workspace." to every request
+  # including the login page. Measured on a running server: Host: hics.com.sg -> 404,
+  # Host: localhost -> 200. So this is not only the multi-customer switch - a SINGLE-workspace
+  # install on a three-label hostname needs it too. Two labels or a bare IP need nothing.
+  $AppBaseHost = ([regex]::Replace($AppBaseUrl, '^[a-zA-Z]+://', '') -split '[:/]')[0].ToLowerInvariant()
+  $IsIpLiteral = $AppBaseHost -match '^\d{1,3}(\.\d{1,3}){3}$'
+  $LabelCount = ($AppBaseHost -split '\.').Count
+  $RootDomainDefault = ""
+  if ((-not $IsIpLiteral) -and $LabelCount -ge 3) {
+    # Derived rather than left blank: the operator typed the answer one line above and should not
+    # have to work out which part of it to repeat.
+    $RootDomainDefault = $AppBaseHost.Substring($AppBaseHost.IndexOf('.') + 1)
+    Write-Host ""
+    Write-Host "$AppBaseHost has three or more labels, so without ROOT_DOMAIN the API would read"
+    Write-Host "`"$(($AppBaseHost -split '\.')[0])`" as a workspace name and answer 404 to every request."
+  } else {
+    Write-Host ""
+    Write-Host "Serving several customer workspaces on their own subdomains (acme.example.com)?"
+    Write-Host "Needs a wildcard DNS record and a wildcard TLS certificate. Leave blank for one workspace."
+  }
+  $RootDomainInput = Ask "Workspace root domain [$(if ($RootDomainDefault) { $RootDomainDefault } else { 'none' })]" $RootDomainDefault
+  $RootDomain = if ([string]::IsNullOrWhiteSpace($RootDomainInput) -or $RootDomainInput -eq "none") { "" } else { $RootDomainInput }
+  # Strip what people paste by habit. A scheme, port or stray dot here matches no hostname at all,
+  # so the deployment behaves as if this were empty while every readout reports multi-org mode.
+  if ($RootDomain) {
+    $RootDomain = (([regex]::Replace($RootDomain, '^[a-zA-Z]+://', '') -split '[:/]')[0]).Trim('.').ToLowerInvariant()
+  }
+  if ($RootDomain) {
+    Write-Warn "ROOT_DOMAIN=$RootDomain : point *.$RootDomain at this deployment and make sure the"
+    Write-Warn "  certificate covers the wildcard, or workspace subdomains will not resolve. Whatever"
+    Write-Warn "  proxy sits in front must pass Host through unchanged - nginx needs"
+    Write-Warn "  'proxy_set_header Host `$host'. See docs/DEPLOYMENT.md, 'The Host header has to"
+    Write-Warn "  survive every hop'."
+  }
+
   # Asked, not assumed, and asked HERE rather than buried in docs: this is the one setting whose
   # wrong value is completely silent. Every per-IP rate limit in the app reads req.ip, and Express
   # only derives that from X-Forwarded-For when this is set - so at 0 behind a proxy the login
@@ -267,6 +305,10 @@ if (Test-Path $EnvFile) {
 # $ComposeFile reads this file automatically.
 $DbEnvLines
 DEFAULT_ORG_SLUG=default
+# The domain workspace subdomains hang off (acme.<ROOT_DOMAIN>). EMPTY = one workspace, and the
+# first DNS label of the request is then read as the workspace name - which 404s any hostname with
+# three or more labels. The API prints an ERROR at boot if this is wrong for the address it serves.
+ROOT_DOMAIN=$RootDomain
 JWT_ACCESS_SECRET=$(New-RandomBase64 48)
 JWT_REFRESH_SECRET=$(New-RandomBase64 48)
 PLATFORM_ADMIN_JWT_SECRET=$(New-RandomBase64 48)

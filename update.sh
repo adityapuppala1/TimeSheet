@@ -71,6 +71,30 @@ if [ -z "$TRUST_PROXY_LINE" ] || [ "$TRUST_PROXY_LINE" = "0" ]; then
   warn "  Not a blocker — this update continues. See docs/DEPLOYMENT.md."
 fi
 
+# ── Workspace-routing check ──────────────────────────────────────────────────
+# Same shape as the two checks around it — a default that is invisible to every other check here —
+# but with the most total symptom of the three. `ROOT_DOMAIN` defaults to empty, and while it is
+# empty the API takes the workspace name from the FIRST DNS LABEL of the request. For a deployment
+# at `timesheet.company.com` that means looking up a workspace called "timesheet", finding none, and
+# answering "404 Unknown workspace." to every request including the login page — with nothing in the
+# log, because the router was asked for a workspace that does not exist and answered correctly.
+#
+# This is the version of the check that matters most, because it runs on EXISTING deployments: an
+# .env written before ROOT_DOMAIN existed is exactly the file that has this problem. Silent for
+# localhost, a bare IP or a two-label domain, where empty is the correct value.
+ROOT_DOMAIN_LINE="$(grep -E '^ROOT_DOMAIN=' .env | head -n1 | cut -d= -f2- | tr -d '"'"'"' [:space:]' || true)"
+if [ -z "$ROOT_DOMAIN_LINE" ]; then
+  BASE_HOST="$(grep -E '^APP_BASE_URL=' .env | head -n1 | cut -d= -f2- | tr -d '"'"'"'' | sed -E 's#^[a-z]+://##; s#[:/].*$##' | tr 'A-Z' 'a-z' || true)"
+  if [ -n "$BASE_HOST" ] && [[ ! "$BASE_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$(printf '%s' "$BASE_HOST" | tr -cd '.' | wc -c)" -ge 2 ]; then
+    warn "ROOT_DOMAIN is unset and APP_BASE_URL is ${BASE_HOST}."
+    warn "  With it unset the API reads the first label, \"${BASE_HOST%%.*}\", as a workspace name — so"
+    warn "  unless a workspace with that slug exists, EVERY request answers 404, login page included."
+    warn "  Fix: put ROOT_DOMAIN=${BASE_HOST#*.} in .env and re-run this script. Workspaces then live"
+    warn "  at <slug>.${BASE_HOST#*.}, which needs wildcard DNS and a certificate covering it."
+    warn "  Not a blocker — this update continues. The API repeats this at startup."
+  fi
+fi
+
 # ── Outbound-egress posture check ─────────────────────────────────────────────────────────────
 # ALLOW_PRIVATE_NETWORK_EGRESS is the same shape of problem as TRUST_PROXY_HOPS above — a default
 # that is invisible to every other check in this script — but it points the OTHER way: the default

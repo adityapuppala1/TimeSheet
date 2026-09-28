@@ -703,6 +703,38 @@ rewrites `Host` and sets no `X-Forwarded-Host` leaves nothing to compare, which 
 values are reported beside it. The route is platform-admin-only on purpose — a public endpoint that
 echoed a resolved slug would hand any anonymous caller a list of which workspaces exist.
 
+### Multi-workspace on each deployment shape
+
+What each way of running this needs before one deployment can serve several customers on their own
+subdomains. The only two moving parts are **`ROOT_DOMAIN` reaching the API** and **`Host` reaching
+the API unchanged**; everything below is those two, per shape.
+
+| Shape | `ROOT_DOMAIN` gets there via | `Host` preserved? | What you still have to do |
+| --- | --- | --- | --- |
+| **Local dev** (`npm run dev`) | `apps/api/.env`, or `ROOT_DOMAIN=localhost npm run dev` for one run | Yes — the Vite proxy no longer rewrites it | Nothing. Browse `acme.localhost:5173`; see *Testing two workspaces on a development machine* |
+| **One-click install** (`install.sh` / `install.ps1`) | **The installer asks for it**, and derives the right default from the API URL you typed | Yes — it writes the Compose stack, whose nginx sets `proxy_set_header Host $host` | Wildcard DNS + a certificate covering the wildcard |
+| **Docker Compose** (`docker-compose.yml`) | Root `.env` → `ROOT_DOMAIN`, forwarded to the `api` service | Yes — `apps/web/nginx.conf.template` sets it explicitly on `/api/` and `/uploads/` | Put TLS in front; wildcard DNS + wildcard cert |
+| **Compose + HTTPS** (`docker-compose.https.yml`) | Same root `.env` | Yes — Caddy's `reverse_proxy` passes Host through untouched | **Use `CADDYFILE=Caddyfile.domain-wildcard`.** The default `Caddyfile.domain` declares only the apex as a site address, so subdomains never reach the stack. Also `TRUST_PROXY_HOPS=2` |
+| **Kubernetes / Helm** | `env.rootDomain` in `values.yaml` → the configmap → the `api` pods | Yes — ingress-nginx preserves `Host`; so do GKE/ALB ingress | Set `ingress.wildcardHost: "*.example.com"`, and a cert covering the wildcard (cert-manager DNS-01, or your cloud's managed wildcard) |
+| **External MySQL** (`docker-compose.external-db.yml`) | Same root `.env` | Yes — same web container | Identical to Compose above; the database choice is unrelated to routing |
+| **CI/CD** (`.github/workflows/cd.yml`) | Not applicable — **CD builds and publishes images, it does not deploy** | — | Routing is configured wherever you run the images, not in CI. Nothing in the pipeline needs to know |
+| **Behind your own CDN/WAF** | However you already set env | **Check.** CloudFront and Azure Front Door override `Host` by default | See the table in the previous section, then verify with the one `curl` |
+
+Three things are worth saying plainly, because each has been assumed the other way:
+
+- **`ROOT_DOMAIN` is not only the multi-customer switch.** A *single*-workspace install on a
+  three-label hostname (`timesheet.company.com`) needs it too, or it 404s. The installer now offers
+  the correct value, and the API prints a startup `ERROR` if the configuration cannot work for the
+  address it is serving.
+- **CI/CD has nothing to do with this.** `cd.yml` publishes container images to GHCR. Where those
+  images run — Compose on a VM, a Helm release, your own orchestrator — is where `ROOT_DOMAIN` and
+  the proxy configuration live, so a pipeline change is never the fix for a routing problem.
+- **The platform-admin console is not affected by any of it.** `/api/platform-admin/*` is mounted
+  *before* tenant resolution, so one platform administrator serves every workspace and signs in at
+  the deployment's own address regardless of `ROOT_DOMAIN`. Verified: the same platform-admin
+  credentials authenticate over `Host: localhost`, `Host: acme.example.test` and even a hostname no
+  workspace claims — all `200`, where a tenant user would get `404`.
+
 ### Known limitation: SSO across workspace subdomains
 
 Worth knowing before you enable multi-org routing with SSO, because the pieces are individually
