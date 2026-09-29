@@ -57,7 +57,7 @@
     "mailparser": "^3.7.4",
     "mammoth": "^1.8.0",
     "morgan": "^1.10.0",
-    "multer": "^2.2.0",
+    "multer": "^2.4.0",
     "nanoid": "^5.1.5",
     "node-cron": "^4.2.1",
     "nodemailer": "^10.0.1",
