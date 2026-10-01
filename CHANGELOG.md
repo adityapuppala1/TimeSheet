@@ -82,6 +82,22 @@ For the platform:
 - Workspace settings → Single sign-on shows a super admin which domains route people to them
   (read-only).
 
+Smaller things a person would otherwise trip over:
+
+- **India's calendar, not UTC's.** The summary's day, the failing alert's hour, a trial's end date in
+  operator email, the Signups page's days and the Overview's weeks all follow the deployment's
+  timezone (`TZ`, Asia/Kolkata by default) — a workspace created at 01:00 IST counts on that day, not
+  the day before. The 08:15 summary is scheduled in that zone explicitly.
+- A double click or a second tab on "Create workspace" is told about the person's own workspace — the
+  link once it is ready, "already being set up" until then — instead of "that address is taken".
+- A company domain assigned to a suspended workspace between verify and create answers "isn't taking
+  new members", not "a colleague just created one".
+- A workspace with no active super admin tells its admins about join requests, rather than nobody.
+- The daily cap on join requests counts the requests that exist in the workspace's database.
+- A decline that cannot reach the platform database records nothing (decline again) rather than
+  saving a decision whose email never went; the approved and declined emails escape names and notes
+  for an edited template, and no longer double-escape headings in the shipped one.
+
 The funnel stores a domain and a keyed hash, never an address. Three control-plane tables
 (`OrgEmailDomain`, `SignupAttempt`, `PlatformJobClaim`), `Organization.createdVia`, and one tenant
 table (`JoinRequest`) — all additive.
@@ -89,6 +105,20 @@ table (`JoinRequest`) — all additive.
 **Upgrading:** existing workspaces own no domain until claimed. Run **Company domains → Backfill from
 signup emails** once: it claims each domain exactly one workspace could own, and lists every domain two
 workspaces share as a conflict for you to assign by hand — nothing picks one automatically.
+
+### 🩹 The range picker names the preset you chose
+
+On the 1st of a month, "This month" is the same single day as "Today", and the picker's button named
+whichever preset matched first — so choosing "This month" read back "Today" (every Monday, "This week"
+did the same). The preset you chose now names the range for as long as it still describes it. Pinned
+with the browser's clock fixed on a 1st.
+
+Three end-to-end tests that only passed on some days of the month were fixed too: the dashboard
+timeline helper found its range button by label and its day chip by a British date format the page
+never renders, and the calendar test checked for September before each "previous month" had
+rendered, so from any other month it walked back a year. The dashboard range picker, its day chips
+and the calendar's month heading now carry stable hooks (`#dashboard-range`, `data-timeline-day`,
+`data-calendar-month`).
 
 ### 🔐 SSO: Google needs a verified email, and an open Microsoft setup is flagged
 
