@@ -64,7 +64,9 @@ A sub-domain belongs to its company (`eng.acme.com` → `acme.com`, using the pu
 same moment get one workspace and one "someone just created it — verify again to join" — the domain
 claim's unique key decides. A taken workspace address no longer spends the verification: fix it and
 finish. A team that genuinely needs its own workspace is pointed at the contact form; that is a
-conversation, never a self-serve button.
+conversation, never a self-serve button. Signup's rate limit is split by cost: five verification codes
+an hour per network, and a looser budget for the steps that spend one, so colleagues behind one
+office network can all finish.
 
 For the platform:
 

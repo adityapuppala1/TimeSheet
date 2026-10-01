@@ -85,6 +85,15 @@ const control = {
       if (claims.has(data.domain)) throw Object.assign(new Error("Unique constraint failed on domain"), { code: "P2002" });
       claims.set(data.domain, data);
       return data;
+    }),
+    // Honours the relation filter the way Prisma does: a claim is deleted only when its workspace
+    // matches `organization.status`.
+    deleteMany: vi.fn(async ({ where }: { where: { domain: string; organization?: { status?: string } } }) => {
+      const claim = claims.get(where.domain);
+      if (!claim) return { count: 0 };
+      if (where.organization?.status && orgs.get(claim.organizationId)?.status !== where.organization.status) return { count: 0 };
+      claims.delete(where.domain);
+      return { count: 1 };
     })
   },
   // Interactive transaction, with the rollback a real one has: whatever the callback wrote is undone
@@ -381,6 +390,22 @@ describe("complete — creating the workspace", () => {
     // The loser left nothing behind: one workspace, one claim.
     expect(orgs.size).toBe(1);
     expect([...claims.keys()]).toEqual(["northwind.co.uk"]);
+  });
+
+  it("a company whose old workspace was ARCHIVED can sign up again — the leftover claim does not lock it out", async () => {
+    // Archived from the console, which does not release the claim the way retention deletion does.
+    addWorkspace({ id: "gone", name: "Northwind (old)", slug: "northwind-old", status: "ARCHIVED" }, "northwind.co.uk");
+    expect((await verify()).body).toEqual({ next: "create", continuation: "cont.secret" });
+    const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+    expect(res.status).toBe(201);
+    expect(claims.get("northwind.co.uk")).toMatchObject({ organizationId: "org-new" });
+  });
+
+  it("never takes a claim from a workspace that is merely suspended — that company still has one", async () => {
+    addWorkspace({ id: "nw", name: "Northwind", slug: "northwind-hq", status: "SUSPENDED" }, "northwind.co.uk");
+    const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+    expect(res.status).toBe(409);
+    expect(claims.get("northwind.co.uk")).toMatchObject({ organizationId: "nw" });
   });
 
   it("refuses an expired continuation, and creates nothing", async () => {

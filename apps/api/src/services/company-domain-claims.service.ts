@@ -69,6 +69,11 @@ export async function claimDomainInTransaction(
   organizationId: string,
   source: ClaimSource
 ): Promise<void> {
+  // A claim still held by an ARCHIVED workspace is read as free (findClaimForEmail), so it must also
+  // BE free here — or the company is told "someone just created a workspace" forever. Retention
+  // deletion releases claims itself; archiving from the console does not. Deleted inside the same
+  // transaction, so the unique key below still decides a race between two signups.
+  await tx.orgEmailDomain.deleteMany({ where: { domain, organization: { status: "ARCHIVED" } } });
   try {
     await tx.orgEmailDomain.create({ data: { domain, organizationId, source } });
   } catch (error) {

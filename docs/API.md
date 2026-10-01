@@ -2251,8 +2251,12 @@ registrable domain (public suffix list, private suffixes included): `eng.acme.co
   workspace: { name } }`; **200** `already_pending` for a repeat ask, or `member` with the workspace's
   `url` for an address that got an account in the meantime.
 
-All signup routes share a limiter of **5 per hour per IP**. Continuations are single-use, live 30
-minutes, and are bound to the signup flow like the codes.
+**Rate limits** (`middleware/signup-limits.ts`): `/start`, which sends mail, allows **5 per hour per
+IP**; `/verify`, `/complete` and `/join` share a separate **30 per hour per IP** — each needs a code or
+continuation `/start` already paid for, and the join path is often several colleagues behind one
+office network. Continuations are single-use, live 30 minutes, and are bound to the signup flow like
+the codes. A workspace that was ARCHIVED from the console leaves its claim behind; the next signup
+from that company takes it over inside the creating transaction.
 
 **The codes** live in the control plane (`EmailVerificationCode`), not in process memory, so a code
 minted on one API replica is accepted on another. Token and code are stored as keyed hashes; ten

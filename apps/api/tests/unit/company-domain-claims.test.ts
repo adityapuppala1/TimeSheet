@@ -41,9 +41,11 @@ const orgEmailDomain = {
     claims.set(where.domain, row as Claim);
     return row;
   }),
-  deleteMany: vi.fn(async ({ where }: { where: { domain?: string; organizationId?: string } }) => {
+  deleteMany: vi.fn(async ({ where }: { where: { domain?: string; organizationId?: string; organization?: { status?: string } } }) => {
     let count = 0;
     for (const [domain, claim] of claims) {
+      // The relation filter, as Prisma applies it: only claims whose workspace has that status.
+      if (where.organization?.status && orgs.get(claim.organizationId)?.status !== where.organization.status) continue;
       if ((where.domain && domain === where.domain) || (where.organizationId && claim.organizationId === where.organizationId)) {
         claims.delete(domain);
         count += 1;
@@ -110,8 +112,15 @@ describe("claiming, and the race", () => {
     expect(claims.get("acme.com")?.organizationId).toBe("first");
   });
 
+  it("takes over a claim left by an ARCHIVED workspace, inside the same transaction", async () => {
+    addOrg({ id: "old", status: "ARCHIVED" });
+    claims.set("acme.com", { id: "c1", domain: "acme.com", organizationId: "old", status: "UNVERIFIED", source: "SIGNUP", createdAt: new Date() });
+    await claimDomainInTransaction({ orgEmailDomain } as never, "acme.com", "new", "SIGNUP");
+    expect(claims.get("acme.com")).toMatchObject({ organizationId: "new", source: "SIGNUP" });
+  });
+
   it("lets any other failure through untouched — only the unique key means 'somebody else won'", async () => {
-    const tx = { orgEmailDomain: { create: vi.fn().mockRejectedValue(new Error("connection lost")) } };
+    const tx = { orgEmailDomain: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockRejectedValue(new Error("connection lost")) } };
     await expect(claimDomainInTransaction(tx as never, "acme.com", "o", "SIGNUP")).rejects.toThrow("connection lost");
   });
 

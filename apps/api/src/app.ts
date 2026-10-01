@@ -93,6 +93,7 @@ import { AppError, errorHandler, notFound } from "./middleware/error.js";
 import { recordApiRequest } from "./middleware/request-telemetry.js";
 import { resolveTenant } from "./middleware/tenant.js";
 import { signupRouter, signupStatusHandler } from "./controllers/signup.controller.js";
+import { mountSignupRoutes } from "./middleware/signup-limits.js";
 import { salesLeadRouter } from "./controllers/sales-lead.controller.js";
 
 export const app = express();
@@ -468,14 +469,9 @@ app.use("/api/git", gitConnectionRouter);
 
 // Self-serve signup, mounted BEFORE tenant resolution for the obvious reason: it is the route that
 // creates the tenant, so there is nothing yet for `resolveTenant` to resolve. It is also the only
-// public route in the product that provisions infrastructure, hence its own tight limiter — the
-// auth limiter's twenty-per-minute is generous for something whose unit of work is a database.
-const signupLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 5, standardHeaders: true });
-// Whether signup is open at all. Registered BEFORE the router so it never reaches `signupLimiter`:
-// the landing page asks on every visit, and five an hour would leave real signups with nothing.
-const signupStatusLimiter = rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: true });
-app.get("/api/signup/status", signupStatusLimiter, signupStatusHandler);
-app.use("/api/signup", signupLimiter, signupRouter);
+// public route in the product that provisions infrastructure, hence its own limits — five codes an
+// hour per network, and a looser budget for the steps that spend one (middleware/signup-limits.ts).
+mountSignupRoutes(app, { router: signupRouter, statusHandler: signupStatusHandler });
 
 // The public contact form. Mounted here for the same reason signup is — there is no tenant, and for
 // most of these rows there never will be one — and given its OWN limiter rather than a path on
