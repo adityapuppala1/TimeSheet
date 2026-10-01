@@ -57,7 +57,14 @@ const emailVerificationCode = {
 };
 vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: { emailVerificationCode } }));
 
-const { checkVerificationCode, directoryHash, issueVerificationCode } = await import("../../src/services/workspace-directory.service.js");
+const {
+  checkVerificationCode,
+  directoryHash,
+  issueSignupContinuation,
+  issueVerificationCode,
+  peekSignupContinuation,
+  redeemSignupContinuation
+} = await import("../../src/services/workspace-directory.service.js");
 
 beforeEach(() => {
   rows.clear();
@@ -179,5 +186,48 @@ describe("verification codes", () => {
     vi.setSystemTime(new Date("2026-10-01T09:30:00Z"));
     await issueVerificationCode("new@acme.com", "discover");
     expect([...rows.values()].map((r) => r.email)).toEqual(["new@acme.com"]);
+  });
+});
+
+describe("signup continuations — a verified address carried through the form", () => {
+  it("can be peeked any number of times, so a taken workspace address does not burn it", async () => {
+    const value = await issueSignupContinuation("priya@northwind.co.uk");
+    expect(await peekSignupContinuation(value)).toEqual({ ok: true, email: "priya@northwind.co.uk" });
+    expect(await peekSignupContinuation(value)).toEqual({ ok: true, email: "priya@northwind.co.uk" });
+  });
+
+  it("redeems exactly once", async () => {
+    const value = await issueSignupContinuation("priya@northwind.co.uk");
+    expect(await redeemSignupContinuation(value)).toBe(true);
+    expect(await redeemSignupContinuation(value)).toBe(false);
+    expect(await peekSignupContinuation(value)).toEqual({ ok: false });
+  });
+
+  it("refuses a wrong secret without consuming the real one", async () => {
+    const value = await issueSignupContinuation("priya@northwind.co.uk");
+    const [token] = value.split(".");
+    expect(await peekSignupContinuation(`${token}.not-the-secret`)).toEqual({ ok: false });
+    expect(await redeemSignupContinuation(`${token}.not-the-secret`)).toBe(false);
+    expect(await redeemSignupContinuation(value)).toBe(true);
+  });
+
+  it("is not a code: a SIGNUP code's token and code do not pass as a continuation", async () => {
+    const { token, code } = await issueVerificationCode("priya@northwind.co.uk", "signup");
+    expect(await peekSignupContinuation(`${token}.${code}`)).toEqual({ ok: false });
+  });
+
+  it.each(["", "abc", "a.b.c", ".", "x."])("treats the malformed value %j as nothing", async (value) => {
+    expect(await peekSignupContinuation(value)).toEqual({ ok: false });
+    expect(await redeemSignupContinuation(value)).toBe(false);
+  });
+
+  it("lasts thirty minutes — long enough to fill the form, not long enough to keep", async () => {
+    vi.useFakeTimers({ now: new Date("2026-10-01T09:00:00Z") });
+    const value = await issueSignupContinuation("priya@northwind.co.uk");
+    vi.setSystemTime(new Date("2026-10-01T09:29:00Z"));
+    expect((await peekSignupContinuation(value)).ok).toBe(true);
+    vi.setSystemTime(new Date("2026-10-01T09:31:00Z"));
+    expect((await peekSignupContinuation(value)).ok).toBe(false);
+    expect(await redeemSignupContinuation(value)).toBe(false);
   });
 });

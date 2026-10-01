@@ -219,7 +219,7 @@ function generateCode(): string {
  * real code to any address that is a member somewhere, personal Gmail included, and signup refuses
  * personal addresses when IT issues a code — so a discovery code accepted by signup would skip that.
  */
-export type VerificationPurpose = "signup" | "discover";
+export type VerificationPurpose = "signup" | "discover" | "signup_cont";
 
 export async function issueVerificationCode(email: string, purpose: VerificationPurpose): Promise<{ token: string; code: string }> {
   const now = new Date();
@@ -284,4 +284,65 @@ export async function checkVerificationCode(token: string, code: string, purpose
   const consumed = await controlPrisma.emailVerificationCode.deleteMany({ where: { tokenHash } });
   if (consumed.count !== 1) return { ok: false, reason: "expired" };
   return { ok: true, email: row.email };
+}
+
+/* ------------------------------------------------------------------ *
+ * Signup continuations
+ * ------------------------------------------------------------------ */
+
+/**
+ * What a VERIFIED address carries through the rest of signup (Phase 1).
+ *
+ * WHY NOT JUST KEEP THE CODE. Signup used to check the six-digit code only at the very end, inside
+ * the request that also checked the workspace address — and a code is single-use, so a taken
+ * address (409) burned it: the person fixed the address, resubmitted, and was told their code had
+ * expired. Now the code is checked once, up front (`/signup/verify`), and exchanged for this: a
+ * value that can be PEEKED as often as the form needs and REDEEMED once, when a workspace or a join
+ * request is actually created.
+ *
+ * It reuses the code table (`purpose: "signup_cont"`), so it inherits the hashing, the expiry index
+ * and the sweep. The secret is 32 random bytes, so — unlike a six-digit code — guessing is not a
+ * threat and peeks spend no attempts; what matters is single use and expiry.
+ */
+const CONTINUATION_TTL_MS = 30 * 60 * 1000;
+
+function splitContinuation(value: string): { token: string; secret: string } | null {
+  const parts = value.split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+  return { token: parts[0], secret: parts[1] };
+}
+
+export async function issueSignupContinuation(email: string): Promise<string> {
+  const now = new Date();
+  const token = randomBytes(24).toString("base64url");
+  const secret = randomBytes(32).toString("base64url");
+  await controlPrisma.emailVerificationCode.create({
+    data: {
+      tokenHash: codeStoreHash(token),
+      codeHash: codeStoreHash(`${secret}:${token}`),
+      email,
+      purpose: "signup_cont",
+      expiresAt: new Date(now.getTime() + CONTINUATION_TTL_MS)
+    }
+  });
+  return `${token}.${secret}`;
+}
+
+/** The address a live continuation proves, without consuming it. */
+export async function peekSignupContinuation(value: string): Promise<{ ok: true; email: string } | { ok: false }> {
+  const parts = splitContinuation(value);
+  if (!parts) return { ok: false };
+  const row = await controlPrisma.emailVerificationCode.findUnique({ where: { tokenHash: codeStoreHash(parts.token) } });
+  if (!row || row.purpose !== "signup_cont" || row.expiresAt <= new Date()) return { ok: false };
+  const expected = Buffer.from(row.codeHash, "hex");
+  const actual = Buffer.from(codeStoreHash(`${parts.secret}:${parts.token}`), "hex");
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return { ok: false };
+  return { ok: true, email: row.email };
+}
+
+/** Consumes a live continuation. True exactly once; a concurrent second redemption gets false. */
+export async function redeemSignupContinuation(value: string): Promise<boolean> {
+  if (!(await peekSignupContinuation(value)).ok) return false;
+  const consumed = await controlPrisma.emailVerificationCode.deleteMany({ where: { tokenHash: codeStoreHash(splitContinuation(value)!.token) } });
+  return consumed.count === 1;
 }
