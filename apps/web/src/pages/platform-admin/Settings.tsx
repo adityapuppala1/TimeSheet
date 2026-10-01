@@ -59,9 +59,28 @@ import { toast } from "../../components/ui/toaster";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { parseUserAgent, type ParsedUserAgent } from "../../lib/user-agent";
 import { exportCsv, type CsvColumn } from "../../utils/console-csv";
-import { platformAdminAuthApi, platformAdminConsoleApi, type PlatformAuditRow, type PlatformMailSettings, type PlatformSignupSettingsView } from "../../services/platform-admin-api";
+import {
+  platformAdminAuthApi,
+  platformAdminConsoleApi,
+  type PlatformAuditRow,
+  type PlatformMailSettings,
+  type PlatformSignupSettingsView,
+  type SignupNotifyMode
+} from "../../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../../store/platform-admin-auth";
-import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, FieldGrid, PRIMARY_BTN, SwitchField, Toolbar, shortDateTime } from "./console-ui";
+import {
+  ConsolePage,
+  ConsoleSection,
+  ConsoleTable,
+  EmptyState,
+  Field,
+  FieldGrid,
+  PRIMARY_BTN,
+  SegmentedControl,
+  SwitchField,
+  Toolbar,
+  shortDateTime
+} from "./console-ui";
 import { AiAdvisorCard } from "./AiAdvisorCard";
 
 const errorMessageOf = (error: unknown) => (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
@@ -190,6 +209,15 @@ function MailServerCard({ settings }: { settings: PlatformMailSettings }) {
 /* ----------------------------------------------------------------------------------------- */
 
 const SIGNUP_TITLE = "Self-serve signup";
+
+/** What each notification choice means, in the operator's terms. All three go to the alert
+ *  recipients on the Alerts page (every active platform admin if none are set). */
+const NOTIFY_HINT: Record<SignupNotifyMode, string> = {
+  DAILY:
+    "One email each morning: workspaces created, signups that failed, requests to join. Nothing on a quiet day. A second failed signup within an hour still warns you at once — an outage is not news for tomorrow.",
+  EACH: "An email the moment a workspace is created, and the moment one fails to provision.",
+  OFF: "No signup email at all — not even when provisioning is failing. Everything is still in the audit trail and on the console."
+};
 const SIGNUP_DESCRIPTION =
   "Whether a stranger with a company email address can create a workspace — and its own database — from the public signup page. Off unless you turn it on.";
 
@@ -208,10 +236,12 @@ const SIGNUP_DESCRIPTION =
 function SignupSettingsCard({ view }: { view: PlatformSignupSettingsView }) {
   const queryClient = useQueryClient();
   const [enabled, setEnabled] = useState(view.settings.enabled);
-  const [notify, setNotify] = useState(view.settings.notifyOnSignup);
+  const [notifyMode, setNotifyMode] = useState<SignupNotifyMode>(view.settings.notifyMode);
+  const [ttlDays, setTtlDays] = useState(String(view.settings.joinRequestTtlDays));
   const [domains, setDomains] = useState(view.settings.blockedDomains.join("\n"));
   const save = useMutation({
-    mutationFn: () => platformAdminConsoleApi.updateSignupSettings({ enabled, notifyOnSignup: notify, blockedDomains: domains }),
+    mutationFn: () =>
+      platformAdminConsoleApi.updateSignupSettings({ enabled, notifyMode, joinRequestTtlDays: Number(ttlDays), blockedDomains: domains }),
     onSuccess: (next) => {
       toast.success(next.availability.open ? "Signup is open" : "Signup settings saved");
       setDomains(next.settings.blockedDomains.join("\n"));
@@ -272,14 +302,35 @@ function SignupSettingsCard({ view }: { view: PlatformSignupSettingsView }) {
           checked={enabled}
           onCheckedChange={setEnabled}
         />
-        <SwitchField
-          label="Email me about every signup"
-          hint="Sent to the alert recipients on the Alerts page (every active platform admin if none are set) — one message per new workspace, and one for every signup that fails to provision."
-          icon={Bell}
-          checked={notify}
-          onCheckedChange={setNotify}
-        />
+        <Field
+          label={
+            <span className="flex items-center gap-1.5">
+              <Bell className="h-3.5 w-3.5" aria-hidden />
+              Tell me about signups
+            </span>
+          }
+          hint={NOTIFY_HINT[notifyMode]}
+        >
+          <SegmentedControl<SignupNotifyMode>
+            ariaLabel="How to hear about signups"
+            options={[
+              { value: "DAILY", label: "Daily summary" },
+              { value: "EACH", label: "Every signup" },
+              { value: "OFF", label: "Off" }
+            ]}
+            value={notifyMode}
+            onChange={setNotifyMode}
+          />
+        </Field>
       </FieldGrid>
+      <Field
+        label="Join requests expire after (days)"
+        htmlFor="signup-ttl"
+        hint="How long a request to join a company's existing workspace waits for its admins before it lapses. 1–90; the business default is 14."
+        className="max-w-xs"
+      >
+        <Input id="signup-ttl" type="number" min={1} max={90} value={ttlDays} onChange={(e) => setTtlDays(e.target.value)} />
+      </Field>
       <Field
         label="Also refuse these email domains"
         htmlFor="signup-blocked"

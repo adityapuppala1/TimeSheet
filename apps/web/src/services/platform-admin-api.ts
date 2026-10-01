@@ -411,9 +411,20 @@ export interface PlatformAuditRow {
   createdAt: string;
 }
 
+export type SignupNotifyMode = "DAILY" | "EACH" | "OFF";
+
 /** The deployment's self-serve signup policy — see platform-signup.service.ts. */
 export interface PlatformSignupSettingsView {
-  settings: { enabled: boolean; blockedDomains: string[]; notifyOnSignup: boolean; updatedBy: string | null; updatedAt: string | null };
+  settings: {
+    enabled: boolean;
+    blockedDomains: string[];
+    /** "DAILY" (the default) | "EACH" | "OFF" — how operators hear about signups. */
+    notifyMode: SignupNotifyMode;
+    /** Days before an unanswered join request expires; 1–90, default 14. */
+    joinRequestTtlDays: number;
+    updatedBy: string | null;
+    updatedAt: string | null;
+  };
   /** Whether signup is ACTUALLY open — the switch can be on while this says closed (no ROOT_DOMAIN). */
   availability: { open: true } | { open: false; reason: "disabled" | "single-org" | "unavailable" };
   rootDomainConfigured: boolean;
@@ -724,7 +735,12 @@ export const platformAdminConsoleApi = {
   updateMailSettings: async (payload: { host: string; port: number; secure: boolean; user?: string; password?: string; clearPassword?: boolean; fromAddress?: string; replyTo?: string; salesInboxAddress?: string }) =>
     (await platformAdminApi.put<{ ok: true; updatedAt: string; effective: PlatformMailSettings["effective"] }>("/mail-settings", payload)).data,
   signupSettings: async () => (await platformAdminApi.get<PlatformSignupSettingsView>("/signup/settings")).data,
-  updateSignupSettings: async (payload: { enabled?: boolean; notifyOnSignup?: boolean; blockedDomains?: string[] | string }) =>
+  updateSignupSettings: async (payload: {
+    enabled?: boolean;
+    notifyMode?: SignupNotifyMode;
+    joinRequestTtlDays?: number;
+    blockedDomains?: string[] | string;
+  }) =>
     (await platformAdminApi.put<PlatformSignupSettingsView>("/signup/settings", payload)).data,
   testMail: async (to: string) => (await platformAdminApi.post<{ sent: true; to: string; emailLogId: string | null }>("/mail-settings/test", { to })).data,
 

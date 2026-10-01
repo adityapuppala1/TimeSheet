@@ -24,7 +24,14 @@ const envMock: Record<string, unknown> = {
 };
 vi.mock("../../src/config/env.js", () => ({ env: new Proxy({}, { get: (_t, k) => envMock[k as string] }) }));
 
-let settingsRow: { enabled: boolean; blockedDomains: unknown; notifyOnSignup: boolean; updatedBy: string | null; updatedAt: Date } | null = null;
+let settingsRow: {
+  enabled: boolean;
+  blockedDomains: unknown;
+  notifyMode: string;
+  joinRequestTtlDays: number;
+  updatedBy: string | null;
+  updatedAt: Date;
+} | null = null;
 const control = {
   platformSignupSettings: {
     findUnique: vi.fn(async () => settingsRow),
@@ -69,7 +76,7 @@ vi.mock("../../src/services/notify.service.js", () => ({ dispatchTransactional: 
 
 const { signupRouter, signupStatusHandler } = await import("../../src/controllers/signup.controller.js");
 const { errorHandler } = await import("../../src/middleware/error.js");
-const { availabilityFrom, getSignupAvailability, normaliseDomainList, signupRefusalFor } = await import(
+const { availabilityFrom, getSignupAvailability, getSignupSettings, normaliseDomainList, signupRefusalFor, updateSignupSettings } = await import(
   "../../src/services/platform-signup.service.js"
 );
 
@@ -83,7 +90,15 @@ function buildApp() {
 }
 
 const openSignup = (extra: Partial<NonNullable<typeof settingsRow>> = {}) => {
-  settingsRow = { enabled: true, blockedDomains: null, notifyOnSignup: true, updatedBy: "ops@timesphere.test", updatedAt: new Date(), ...extra };
+  settingsRow = {
+    enabled: true,
+    blockedDomains: null,
+    notifyMode: "DAILY",
+    joinRequestTtlDays: 14,
+    updatedBy: "ops@timesphere.test",
+    updatedAt: new Date(),
+    ...extra
+  };
 };
 const completeBody = { token: "tok", code: "123456", workspaceName: "Northwind Logistics", slug: "northwind", adminName: "Priya", adminPassword: "a-long-password" };
 
@@ -181,8 +196,17 @@ describe("which addresses may start a workspace", () => {
 });
 
 describe("what the operators hear", () => {
-  it("records and announces a new workspace", async () => {
+  it("sends NO per-signup email in the default DAILY mode — the daily summary carries it", async () => {
     openSignup();
+    const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+    expect(res.status).toBe(201);
+    expect(sendPlatformTemplate.mock.calls.some(([key]) => key === "platform.signup_created")).toBe(false);
+    // ...but the record is still written, so the summary and the console have it.
+    expect(platformAudit).toHaveBeenCalledWith("CUSTOMER", expect.anything(), "org.signup_completed", "Organization", "org-new", expect.anything());
+  });
+
+  it("in EACH mode, records and announces every new workspace", async () => {
+    openSignup({ notifyMode: "EACH" });
     const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
     expect(res.status).toBe(201);
     expect(res.body.trialDays).toBe(15);
@@ -199,15 +223,15 @@ describe("what the operators hear", () => {
     expect(created[0][1]).toMatchObject({ vars: { workspaceName: "Northwind Logistics", domain: "northwind.co.uk" } });
   });
 
-  it("stays quiet when an operator switched notifications off — but still records the signup", async () => {
-    openSignup({ notifyOnSignup: false });
+  it("stays quiet when an operator switched notifications OFF — but still records the signup", async () => {
+    openSignup({ notifyMode: "OFF" });
     await request(buildApp()).post("/api/signup/complete").send(completeBody);
     expect(sendPlatformTemplate.mock.calls.some(([key]) => key === "platform.signup_created")).toBe(false);
     expect(platformAudit).toHaveBeenCalledWith("CUSTOMER", expect.anything(), "org.signup_completed", "Organization", "org-new", expect.anything());
   });
 
   it("on a failed provision: apologises to the person, and gives the DETAIL only to the operators", async () => {
-    openSignup();
+    openSignup({ notifyMode: "EACH" });
     provisionOrganization.mockRejectedValueOnce(new Error("Access denied for user 'provisioner'@'10.0.0.5' to database 'ts_northwind'"));
     const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
     expect(res.status).toBe(502);
@@ -228,7 +252,7 @@ describe("what the operators hear", () => {
   });
 
   it("never lets a broken mail relay turn a successful signup into an error", async () => {
-    openSignup();
+    openSignup({ notifyMode: "EACH" });
     sendPlatformTemplate.mockImplementation(async (key: string) => {
       if (key === "platform.signup_created") throw new Error("relay down");
       return { ok: true, status: "SENT", subject: "s" };
@@ -236,6 +260,36 @@ describe("what the operators hear", () => {
     const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
     expect(res.status).toBe(201);
     sendPlatformTemplate.mockImplementation(async () => ({ ok: true, status: "SENT", subject: "s" }));
+  });
+});
+
+describe("the settings a business decides", () => {
+  it("defaults to a daily summary and 14-day join requests when nobody has saved anything", async () => {
+    const settings = await getSignupSettings();
+    expect(settings.notifyMode).toBe("DAILY");
+    expect(settings.joinRequestTtlDays).toBe(14);
+  });
+
+  it("reads an unknown stored mode as DAILY rather than as silence", async () => {
+    openSignup({ notifyMode: "WEEKLY" });
+    expect((await getSignupSettings()).notifyMode).toBe("DAILY");
+  });
+
+  it("clamps the join-request expiry to 1–90 days", async () => {
+    expect((await updateSignupSettings({ joinRequestTtlDays: 400 }, "ops@timesphere.test")).joinRequestTtlDays).toBe(90);
+    expect((await updateSignupSettings({ joinRequestTtlDays: 0 }, "ops@timesphere.test")).joinRequestTtlDays).toBe(1);
+  });
+
+  it("records a change of mode in the audit trail", async () => {
+    await updateSignupSettings({ notifyMode: "EACH" }, "ops@timesphere.test");
+    expect(platformAudit).toHaveBeenCalledWith(
+      "PLATFORM_ADMIN",
+      "ops@timesphere.test",
+      "signup.settings_updated",
+      "PlatformSignupSettings",
+      "global",
+      expect.objectContaining({ notifyMode: "EACH" })
+    );
   });
 });
 

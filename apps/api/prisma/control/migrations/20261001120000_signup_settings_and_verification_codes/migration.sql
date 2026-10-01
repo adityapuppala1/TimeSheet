@@ -19,7 +19,8 @@
 -- WHAT EXISTING ROWS DO. Nothing: both tables are new and start EMPTY, deliberately.
 --
 -- No `PlatformSignupSettings` row is seeded. Every reader treats its absence as the shipped
--- defaults (off, no extra blocked domains, notify on), the same rule `PlatformAlertSettings` follows
+-- defaults (off, no extra blocked domains, a daily summary, 14-day join requests), the same rule
+-- `PlatformAlertSettings` follows
 -- — seeding one would record an `updatedBy` of nobody against a policy no operator has looked at.
 --
 -- No codes carry over. In-flight codes from the old in-memory store die with the process that held
@@ -36,7 +37,8 @@ CREATE TABLE IF NOT EXISTS `PlatformSignupSettings` (
     `id` VARCHAR(191) NOT NULL,
     `enabled` BOOLEAN NOT NULL DEFAULT false,
     `blockedDomains` JSON NULL,
-    `notifyOnSignup` BOOLEAN NOT NULL DEFAULT true,
+    `notifyMode` VARCHAR(8) NOT NULL DEFAULT 'DAILY',
+    `joinRequestTtlDays` INTEGER NOT NULL DEFAULT 14,
     `updatedBy` VARCHAR(255) NULL,
     `updatedAt` DATETIME(3) NOT NULL,
 

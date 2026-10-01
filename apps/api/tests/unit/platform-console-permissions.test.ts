@@ -111,7 +111,7 @@ vi.mock("../../src/services/retention.service.js", () => ({
   updateRetentionSettings: vi.fn().mockResolvedValue({})
 }));
 vi.mock("../../src/services/platform-signup.service.js", () => ({
-  getSignupSettings: vi.fn().mockResolvedValue({ enabled: false, blockedDomains: [], notifyOnSignup: true, updatedBy: null, updatedAt: null }),
+  getSignupSettings: vi.fn().mockResolvedValue({ enabled: false, blockedDomains: [], notifyMode: "DAILY", joinRequestTtlDays: 14, updatedBy: null, updatedAt: null }),
   getSignupAvailability: vi.fn().mockResolvedValue({ open: false, reason: "disabled" }),
   hasMultiOrgRouting: () => true,
   updateSignupSettings: vi.fn().mockResolvedValue({})

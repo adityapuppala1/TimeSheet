@@ -431,7 +431,9 @@ const signupSettingsSchema = z.object({
   body: z
     .object({
       enabled: z.boolean().optional(),
-      notifyOnSignup: z.boolean().optional(),
+      notifyMode: z.enum(["DAILY", "EACH", "OFF"]).optional(),
+      // Clamped to 1–90 by the service; the schema only refuses what is not a whole number.
+      joinRequestTtlDays: z.number().int().optional(),
       // Accepted as an array or as pasted text; normaliseDomainList cleans either and drops junk.
       blockedDomains: z.union([z.array(z.string().max(320)).max(1000), z.string().max(50_000)]).optional()
     })
@@ -441,7 +443,12 @@ const signupSettingsSchema = z.object({
 platformAdminConsoleRouter.put("/signup/settings", operate, validate(signupSettingsSchema), async (req, res) => {
   const body = req.body as z.infer<typeof signupSettingsSchema>["body"];
   const settings = await updateSignupSettings(
-    { enabled: body.enabled, notifyOnSignup: body.notifyOnSignup, blockedDomains: body.blockedDomains },
+    {
+      enabled: body.enabled,
+      notifyMode: body.notifyMode,
+      joinRequestTtlDays: body.joinRequestTtlDays,
+      blockedDomains: body.blockedDomains
+    },
     actorLabel(req)
   );
   res.json({ settings, availability: await getSignupAvailability(), rootDomainConfigured: hasMultiOrgRouting() });

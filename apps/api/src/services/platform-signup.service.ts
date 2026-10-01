@@ -26,20 +26,43 @@ import { getAlertSettings, resolveAlertRecipients } from "./platform-alerts.serv
 import { platformAudit } from "./platform-audit.service.js";
 import { sendPlatformTemplate } from "./platform-mail.service.js";
 
+/** How operators hear about signups — decision 6 in docs/SIGNUP_AND_DOMAINS_PLAN.md. */
+export type SignupNotifyMode = "DAILY" | "EACH" | "OFF";
+
 export interface SignupSettings {
   enabled: boolean;
   blockedDomains: string[];
-  notifyOnSignup: boolean;
+  notifyMode: SignupNotifyMode;
+  /** Days before an unanswered join request expires (decision 7). */
+  joinRequestTtlDays: number;
   /** Null until an operator first saves the policy — the defaults are not anybody's decision. */
   updatedBy: string | null;
   updatedAt: Date | null;
 }
 
-export const DEFAULT_SIGNUP_SETTINGS: Readonly<Pick<SignupSettings, "enabled" | "blockedDomains" | "notifyOnSignup">> = Object.freeze({
-  enabled: false,
-  blockedDomains: [],
-  notifyOnSignup: true
-});
+export const DEFAULT_SIGNUP_SETTINGS: Readonly<Pick<SignupSettings, "enabled" | "blockedDomains" | "notifyMode" | "joinRequestTtlDays">> =
+  Object.freeze({
+    enabled: false,
+    blockedDomains: [],
+    notifyMode: "DAILY",
+    joinRequestTtlDays: 14
+  });
+
+const NOTIFY_MODES: readonly SignupNotifyMode[] = ["DAILY", "EACH", "OFF"];
+
+/** An unknown stored value reads as the default, never as silence: a typo in the column must not
+ *  quietly stop operators hearing about customers. */
+function asNotifyMode(value: unknown): SignupNotifyMode {
+  return NOTIFY_MODES.includes(value as SignupNotifyMode) ? (value as SignupNotifyMode) : "DAILY";
+}
+
+/** 1–90 days. Shorter than a day is a request nobody can answer; longer than a quarter is a request
+ *  nobody will. A non-number reads as the default. */
+function clampTtlDays(value: unknown): number {
+  const days = Math.round(Number(value));
+  if (!Number.isFinite(days)) return DEFAULT_SIGNUP_SETTINGS.joinRequestTtlDays;
+  return Math.min(90, Math.max(1, days));
+}
 
 /** More than enough for a real deny-list; a cap so the JSON column cannot be used as storage. */
 const MAX_BLOCKED_DOMAINS = 500;
@@ -84,7 +107,8 @@ export async function getSignupSettings(): Promise<SignupSettings> {
   return {
     enabled: row.enabled,
     blockedDomains: normaliseDomainList(row.blockedDomains),
-    notifyOnSignup: row.notifyOnSignup,
+    notifyMode: asNotifyMode(row.notifyMode),
+    joinRequestTtlDays: clampTtlDays(row.joinRequestTtlDays),
     updatedBy: row.updatedBy,
     updatedAt: row.updatedAt
   };
@@ -92,14 +116,15 @@ export async function getSignupSettings(): Promise<SignupSettings> {
 
 export async function updateSignupSettings(
   /** `blockedDomains` may be a list or pasted text — normaliseDomainList cleans either. */
-  patch: Partial<Pick<SignupSettings, "enabled" | "notifyOnSignup">> & { blockedDomains?: string[] | string },
+  patch: Partial<Pick<SignupSettings, "enabled" | "notifyMode" | "joinRequestTtlDays">> & { blockedDomains?: string[] | string },
   actorLabel: string
 ): Promise<SignupSettings> {
   const current = await getSignupSettings();
   const next = {
     enabled: patch.enabled ?? current.enabled,
     blockedDomains: patch.blockedDomains === undefined ? current.blockedDomains : normaliseDomainList(patch.blockedDomains),
-    notifyOnSignup: patch.notifyOnSignup ?? current.notifyOnSignup
+    notifyMode: patch.notifyMode === undefined ? current.notifyMode : asNotifyMode(patch.notifyMode),
+    joinRequestTtlDays: patch.joinRequestTtlDays === undefined ? current.joinRequestTtlDays : clampTtlDays(patch.joinRequestTtlDays)
   };
   await controlPrisma.platformSignupSettings.upsert({
     where: { id: "global" },
@@ -111,7 +136,8 @@ export async function updateSignupSettings(
   // exactly the question somebody asks later.
   const changed: Record<string, unknown> = {};
   if (next.enabled !== current.enabled) changed.enabled = next.enabled;
-  if (next.notifyOnSignup !== current.notifyOnSignup) changed.notifyOnSignup = next.notifyOnSignup;
+  if (next.notifyMode !== current.notifyMode) changed.notifyMode = next.notifyMode;
+  if (next.joinRequestTtlDays !== current.joinRequestTtlDays) changed.joinRequestTtlDays = next.joinRequestTtlDays;
   if (next.blockedDomains.join(",") !== current.blockedDomains.join(",")) changed.blockedDomains = next.blockedDomains;
   await platformAudit("PLATFORM_ADMIN", actorLabel, "signup.settings_updated", "PlatformSignupSettings", "global", changed);
   return getSignupSettings();
@@ -181,7 +207,9 @@ const formatDay = (date: Date | null) => (date ? date.toISOString().slice(0, 10)
 export async function notifySignupOutcome(outcome: SignupOutcome): Promise<void> {
   try {
     const settings = await getSignupSettings();
-    if (!settings.notifyOnSignup) return;
+    // Per-signup email only in EACH mode. DAILY leaves it to the summary (signup-digest.service.ts),
+    // which reads the audit and funnel rows this route writes either way.
+    if (settings.notifyMode !== "EACH") return;
     const recipients = await resolveAlertRecipients(await getAlertSettings());
     if (!recipients.length) return;
 

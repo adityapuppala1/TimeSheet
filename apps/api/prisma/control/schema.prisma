@@ -1386,10 +1386,16 @@ model PlatformSignupSettings {
   /// regional provider the built-in list does not know yet; editable without a release.
   blockedDomains Json?
 
-  /// Email the console's alert recipients (see PlatformAlertSettings) when signup creates a
-  /// workspace, or fails to. On by default: a new customer is the one event an operator always
-  /// wants to hear about, and a failed one is a customer who is about to leave.
-  notifyOnSignup Boolean @default(true)
+  /// How the console's alert recipients (see PlatformAlertSettings) hear about signups: "DAILY" —
+  /// one summary a day, the default (decision 6 in docs/SIGNUP_AND_DOMAINS_PLAN.md); "EACH" — an
+  /// email per created or failed signup; "OFF". VARCHAR rather than an enum, like every enum-shaped
+  /// column in this schema. Whatever it says (except OFF), a second failed signup within an hour
+  /// still sends one immediate "provisioning is failing" email — an outage is not news for tomorrow.
+  notifyMode String @default("DAILY") @db.VarChar(8)
+
+  /// Days before an unanswered join request expires — a business setting (decision 7), so it is
+  /// editable here rather than a constant. Default 14; clamped to 1–90 where it is written.
+  joinRequestTtlDays Int @default(14)
 
   updatedBy String?  @db.VarChar(255)
   updatedAt DateTime @updatedAt
