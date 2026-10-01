@@ -25,19 +25,29 @@ import { E2E_BASE_URL } from "./helpers/base-url";
  * more than one day in the range has entries, and the timeline auto-anchors to the most recent
  * populated day otherwise, which is why the chip click is conditional rather than required.
  */
+/**
+ * Points the dashboard's day timeline at `isoDay`.
+ *
+ * Every part of this used to depend on the calendar: the range button was found by its LABEL (which
+ * reads "Today" on the 1st, when "This month" is just today), only "This month"/"Last month" were
+ * offered (an older entry was never in range), and the day chip was matched by an en-GB label
+ * ("30 Sept") the en-US page never renders — so the test passed only when the timeline's default day
+ * happened to have work. Now: the range button by its id, the narrowest preset that COVERS the day,
+ * and the chip by its date key. If that day's entries are not on the timeline (a deactivated person's,
+ * say), the timeline still opens on the latest day in range that has visible work.
+ */
 async function focusTimelineDay(page: Page, isoDay: string): Promise<void> {
-  const [year, month, day] = isoDay.split("-").map(Number);
+  const [year, month] = isoDay.split("-").map(Number);
   const now = new Date();
-  const preset = year === now.getFullYear() && month === now.getMonth() + 1 ? "This month" : "Last month";
+  const monthsAgo = (now.getFullYear() - year) * 12 + (now.getMonth() + 1 - month);
+  const preset = monthsAgo <= 0 ? "This month" : monthsAgo === 1 ? "Last month" : year === now.getFullYear() ? "This year" : "Last year";
 
-  // The trigger's label is the committed range, so match any of the presets it might currently show.
-  await page.locator("button").filter({ hasText: /^(Today|Yesterday|This week|Last week|This month|Last month|This year|Last year)$/ }).first().click();
+  await page.locator("#dashboard-range").click();
   await page.getByRole("button", { name: preset, exact: true }).click();
   await page.getByRole("button", { name: "Apply", exact: true }).click();
 
-  const label = new Date(year, month - 1, day).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-  const chip = page.getByRole("button", { name: new RegExp(`${label}`, "i") }).first();
-  if (await chip.count()) await chip.click().catch(() => undefined);
+  const chip = page.locator(`[data-timeline-day="${isoDay}"]`);
+  if (await chip.count()) await chip.click();
 }
 
 

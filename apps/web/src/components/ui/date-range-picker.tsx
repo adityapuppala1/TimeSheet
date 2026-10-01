@@ -31,6 +31,7 @@ import {
   type CalendarDayAnnotations
 } from "./calendar-primitives";
 import { cn } from "../../lib/utils";
+import { activePresetFor } from "../../utils/date-presets";
 
 export interface DateRangeValue {
   /** ISO yyyy-mm-dd, or empty for "unbounded". */
@@ -130,13 +131,21 @@ export function DateRangePicker({
 }: DateRangePickerProps) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<DateRangeValue>(value);
+  /** The preset the person chose — committed on Apply, and in the draft while the popover is open.
+   *  Several presets can describe the same range (see utils/date-presets.ts); this is which one they
+   *  MEANT. Picking dates by hand clears it. */
+  const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
+  const [draftPreset, setDraftPreset] = useState<string | null>(null);
 
   // Re-seed only when the picker OPENS. Syncing on every change to `value` would fight the user
   // mid-edit the moment a parent re-rendered — the same bug that made the face-verification
   // settings appear not to save.
   useEffect(() => {
-    if (open) setDraft(value);
-  }, [open, value]);
+    if (open) {
+      setDraft(value);
+      setDraftPreset(appliedPreset);
+    }
+  }, [open, value, appliedPreset]);
 
   const presets = useMemo(() => {
     const all = buildPresets();
@@ -161,10 +170,9 @@ export function DateRangePicker({
       ? `${formatDisplay(value.from) || "Start"} – ${formatDisplay(value.to) || "Today"}`
       : placeholder;
 
-  const activePreset = presets.find((p) => {
-    const r = p.range();
-    return r.from === value.from && r.to === value.to;
-  });
+  // The button names the COMMITTED range; the rail highlights the DRAFT.
+  const activePreset = activePresetFor(presets, value, appliedPreset);
+  const draftPresetMatch = activePresetFor(presets, draft, draftPreset);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -190,12 +198,15 @@ export function DateRangePicker({
         <div className="flex flex-col sm:flex-row">
           <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-border p-2 sm:flex-col sm:overflow-visible sm:border-b-0 sm:border-r">
             {presets.map((preset) => {
-              const isActive = activePreset?.label === preset.label;
+              const isActive = draftPresetMatch?.label === preset.label;
               return (
                 <button
                   key={preset.label}
                   type="button"
-                  onClick={() => setDraft(preset.range())}
+                  onClick={() => {
+                    setDraft(preset.range());
+                    setDraftPreset(preset.label);
+                  }}
                   className={cn(
                     "focus-ring shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-left text-sm transition",
                     isActive ? "bg-primary/10 font-medium text-primary" : "hover:bg-muted"
@@ -212,9 +223,10 @@ export function DateRangePicker({
               aria-label="Select a date range"
               value={rangeValue}
               visibleDuration={{ months: 2 }}
-              onChange={(next) =>
-                setDraft({ from: toIso(next?.start as CalendarDate), to: toIso(next?.end as CalendarDate) })
-              }
+              onChange={(next) => {
+                setDraft({ from: toIso(next?.start as CalendarDate), to: toIso(next?.end as CalendarDate) });
+                setDraftPreset(null);
+              }}
             >
               <CalendarHeader />
               <div className="flex gap-6">
@@ -240,6 +252,7 @@ export function DateRangePicker({
                     // Reset as well as close. The open-effect re-seeds anyway, but leaving a stale
                     // draft behind means any state derived from it is briefly wrong on the way out.
                     setDraft(value);
+                    setDraftPreset(appliedPreset);
                     setOpen(false);
                   }}
                 >
@@ -249,6 +262,7 @@ export function DateRangePicker({
                   size="sm"
                   onClick={() => {
                     onChange(draft);
+                    setAppliedPreset(draftPreset);
                     setOpen(false);
                   }}
                 >

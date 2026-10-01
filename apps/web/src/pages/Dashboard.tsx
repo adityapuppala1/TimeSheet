@@ -542,6 +542,7 @@ export function Dashboard() {
               of them. The same calendar the day timeline uses, so between-dates selection behaves
               identically in both places. */}
           <DateRangePicker
+            id="dashboard-range"
             value={range}
             onChange={setRange}
             allowAllTime={false}
@@ -1439,6 +1440,9 @@ function DayTimeline({
                 <button
                   key={day.key}
                   type="button"
+                  // The day's date key, for anything that must pick a chip by DATE — its visible label
+                  // is locale-formatted ("Sep 30" here, "30 Sept" elsewhere) and is no address.
+                  data-timeline-day={day.key}
                   onClick={() => setSelectedKey(day.key)}
                   aria-current={active ? "true" : undefined}
                   className={cn(

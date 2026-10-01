@@ -225,7 +225,9 @@ export function PlanCalendar({
             </span>
           </div>
           <div className="min-w-0">
-            <h2 className="truncate text-base font-semibold">
+            {/* `data-calendar-month` is the shown month as a key, for anything that must navigate to
+                a DATE rather than read a localised heading. */}
+            <h2 className="truncate text-base font-semibold" data-calendar-month={`${year}-${String(month + 1).padStart(2, "0")}`}>
               {MONTHS[month]} {year}
             </h2>
             <p className="truncate text-xs text-muted-foreground">

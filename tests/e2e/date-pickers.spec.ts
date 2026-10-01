@@ -68,6 +68,29 @@ test.describe("date pickers", () => {
     await expect(trigger).toContainText("This month");
   });
 
+  test("on the 1st, choosing This month still reads This month — not the Today it coincides with", async ({ page }) => {
+    // The browser's clock only (the server keeps its own): on the 1st, "This month" and "Today" are
+    // the same single day, and the button used to name whichever preset matched first.
+    await page.clock.setFixedTime(new Date(2026, 9, 1, 10, 0, 0));
+    await signIn(page, "superadmin");
+    await page.goto("/app/reports");
+
+    const trigger = page.locator("#report-range");
+    await expect(trigger).toBeVisible({ timeout: 15_000 });
+    await trigger.click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "This month", exact: true }).click();
+    await dialog.getByRole("button", { name: "Apply" }).click();
+    await expect(dialog).toBeHidden({ timeout: 10_000 });
+    await expect(trigger).toHaveText(/This month/);
+
+    // And choosing Today on the same day reads Today.
+    await trigger.click();
+    await dialog.getByRole("button", { name: "Today", exact: true }).click();
+    await dialog.getByRole("button", { name: "Apply" }).click();
+    await expect(trigger).toHaveText(/Today/);
+  });
+
   test("Cancel discards the draft rather than committing it", async ({ page }) => {
     await signIn(page, "superadmin");
     await page.goto("/app/reports");

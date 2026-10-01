@@ -139,9 +139,16 @@ test("4. the calendar reschedules it by drag and the server stores the new dates
   await page.goto(`/app/tickets?project=${PROJECT}`);
   await page.getByRole("tab", { name: "Calendar" }).click();
   await expect(page.locator("[data-calendar-period]")).toBeVisible({ timeout: 20_000 });
-  for (let i = 0; i < 12 && !(await page.locator("[data-calendar-day='2026-09-08']").count()); i++) {
+  // Step back to September 2026 by the month's KEY, waiting for each click to land before looking
+  // again. Checking for the day straight after the click raced the re-render, so from any month but
+  // September the loop ran straight past it and stopped a year early, in October 2025.
+  const shownMonth = page.locator("[data-calendar-month]");
+  for (let i = 0; i < 36 && (await shownMonth.getAttribute("data-calendar-month")) !== "2026-09"; i++) {
+    const before = (await shownMonth.getAttribute("data-calendar-month")) ?? "";
     await page.getByRole("button", { name: "Previous month" }).click();
+    await expect(shownMonth).not.toHaveAttribute("data-calendar-month", before);
   }
+  await expect(shownMonth).toHaveAttribute("data-calendar-month", "2026-09");
   const chip = page.locator(`[data-calendar-day='2026-09-08'] [data-calendar-chip='${ticketId}']`);
   await expect(chip).toBeVisible({ timeout: 15_000 });
   const target = page.locator("[data-calendar-day='2026-09-15']");
