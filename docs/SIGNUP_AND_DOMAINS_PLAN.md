@@ -4,7 +4,9 @@
 > [Documentation index](README.md)
 
 **Status (2026-10-01):** Phase 0 is **built** on branch `V13-signup-domains` (not merged). Phase 1
-is **specified here for review** — nothing in it is built. Phases 2 and 3 are outlines.
+is **specified and approved** — the product owner answered §8's questions the same day (recorded in
+§2) — and its build plan is [SIGNUP_PHASE1_BUILD_PLAN.md](SIGNUP_PHASE1_BUILD_PLAN.md). Phases 2 and 3
+are outlines.
 
 ## 1. The problem
 
@@ -32,6 +34,17 @@ Measured against the code on 2026-10-01 (`signup.controller.ts`, `workspace-dire
    console.
 5. Separately decided the same day: a super admin may approve a change request they raised
    themselves (`change.service.ts#canDecideChange`); nobody else can.
+6. **Operators get a daily summary**, not an email per signup. Per-signup emails and "off" stay
+   available as console options; a day with nothing to report sends nothing.
+7. **Join requests expire after 14 days** — a business setting, so it is editable in the console
+   (default 14), not a constant.
+8. **Only an ACTIVE workspace accepts join requests.** A workspace in its payment grace period or
+   suspended has a database already, so no new workspace is created for its domain either — the
+   person is told the workspace is not available and to contact its administrator. Requests resume
+   when a platform admin reactivates the workspace or it pays.
+9. **A sub-domain address belongs to its company's domain**: `eng.acme.com` is `acme.com`. Rolled up
+   to the registrable domain with the Public Suffix List (`acme.co.uk` stays `acme.co.uk`, never
+   `co.uk`) — with one exception, below.
 
 ## 3. What the industry does, and the one distinction it rests on
 
@@ -64,7 +77,7 @@ uses an **unverified** claim to stop duplicates; Phase 2 adds the **verified** o
 upgrading (Platform admin → Settings → Signup). Everything else is automatic; one additive
 control-plane migration (`20261001120000_signup_settings_and_verification_codes`).
 
-## 5. Phase 1 — one workspace per company (for review)
+## 5. Phase 1 — one workspace per company (approved 2026-10-01)
 
 ### 5.1 The decision, after the code is verified
 
@@ -79,13 +92,31 @@ proven address). Nothing about any workspace is revealed before that — the sam
 | Signup closed | `403 SIGNUP_CLOSED` (Phase 0) | "Signups are closed" — talk to us, find your workspace, sign in |
 | Personal / temporary / operator-blocked domain | `422` (Phase 0) | "Use your work email" |
 | The address is already a member of a workspace | `{ next: "member", workspaces }` | "You already have a workspace" — sign-in links. No new database |
-| The domain is claimed by a live workspace | `{ next: "join", workspace: { name } }` | "Acme already uses TimeSphere" — **Request to join** (name, optional message). Also: "Need a separate workspace?" |
+| The domain is claimed by an **ACTIVE** workspace | `{ next: "join", workspace: { name } }` | "Acme already uses TimeSphere" — **Request to join** (name, optional message). Also: "Need a separate workspace?" |
+| The domain is claimed by a workspace in grace, suspended or still provisioning | `{ next: "unavailable", workspace: { name } }` | "Acme's workspace isn't available right now — contact its administrator." No request, no new workspace. |
 | The domain is unclaimed | `{ next: "create" }` | Today's form: name, address, first admin |
 
 "Need a separate workspace?" (a subsidiary, a separate legal entity) opens a sales-lead form with
 the context attached. A platform admin decides and provisions by hand; it is never self-serve.
 
-### 5.2 Data
+### 5.2 Which domain an address belongs to
+
+`companyDomainOf(email)`: lower-case, IDN to ASCII, then the **registrable domain** from the Public
+Suffix List (`tldts`, private suffixes on). `eng.acme.com` → `acme.com`; `mail.acme.co.uk` →
+`acme.co.uk`; `team.example.github.io` → `example.github.io`.
+
+**The exception that matters:** hosts that issue one sub-domain per customer but are NOT on the
+Public Suffix List. `onmicrosoft.com` is the one that bites — every Microsoft 365 tenant gets
+`<name>.onmicrosoft.com`, and rolled up, two unrelated companies on their default addresses would be
+one company, and the second would be told to request access to the first's workspace. For those
+hosts (`SHARED_EMAIL_HOSTS`), the company domain stops one label below: `contoso.onmicrosoft.com`
+stays itself. Measured 2026-10-01 against tldts 7.4.11: `getDomain("contoso.onmicrosoft.com")` is
+`onmicrosoft.com` with private suffixes on and off.
+
+An address with no registrable domain (an IP literal, `localhost`, a bare suffix) is refused at
+signup, like a personal address.
+
+### 5.2b Data
 
 All additive. Control plane:
 
@@ -104,8 +135,8 @@ Tenant (each workspace's own database):
 
 - **`JoinRequest`** — `email`, `name`, `message?`, `status` (`PENDING` / `APPROVED` / `DECLINED` /
   `EXPIRED`), `decidedById`, `decidedAt`, `decisionNote`, `roleGranted`, `createdUserId`,
-  `expiresAt` (14 days), `createdAt`. One pending request per address, enforced in the service
-  (MySQL has no partial unique index).
+  `expiresAt` (the console's setting at the time of the request, default 14 days), `createdAt`. One
+  pending request per address, enforced in the service (MySQL has no partial unique index).
 
 ### 5.3 Join requests
 
@@ -128,8 +159,8 @@ Tenant (each workspace's own database):
 - **Backfill** for existing workspaces from `Organization.ownerEmail`, skipping personal domains.
   Where two existing workspaces share a domain, **neither** is given the claim automatically; both
   are listed for the operator as a conflict. A script, run as a dry run first.
-- A suspended or grace workspace keeps its claim (requests wait for its admins). A workspace deleted
-  under the retention policy releases it.
+- A suspended or grace workspace keeps its claim, and **refuses** join requests until it is active
+  again (decision 8). A workspace deleted under the retention policy releases it.
 - **Console → Domains**: every claim with its workspace, status and source; reassign, release, and
   the conflict list. Every change audited.
 - **Workspace Settings → Company domains** (super admin): see the claim; verification is Phase 2.
@@ -147,9 +178,14 @@ Phase 0 already sends an email per created or failed signup and writes the audit
   - failed signups with the error and a contact action;
   - top signup domains, and join-request counts per workspace (aggregates only).
 - **Overview:** the signup tile split into self-serve and console, with the 30-day funnel.
-- **Notification choice:** per signup (today), a daily digest, or off.
-- **Alerts:** repeated provisioning failures raise a fleet alert, so a broken provisioning server is
-  noticed after the second failed customer rather than the twentieth.
+- **Notification choice:** a **daily summary (the default, decision 6)**, per signup, or off. The
+  summary is the last 24 hours — workspaces created, signups that failed (with their errors), join
+  requests made, addresses refused — and is skipped when there is nothing in it. Sent once per day
+  even with several API replicas: a control-plane claim row decides which replica sends it.
+- **When provisioning is failing:** the second failed signup within an hour sends one immediate
+  email to the alert recipients — whatever the notification mode except off — so a broken provisioning
+  server is noticed after the second failed customer, not in tomorrow's summary. (Not a fleet alert:
+  fleet alerts belong to a workspace, and a failed signup has none.)
 
 ### 5.6 Security properties
 
@@ -185,9 +221,11 @@ changes for a deployment with signup closed.
 "Everyone at @acme.com must sign in through our identity provider", and claiming existing accounts
 under a verified domain.
 
-## 8. Open questions for the product owner
+## 8. Questions answered (2026-10-01)
 
-1. Notification default: an email per signup (today), or a daily digest?
-2. Join requests expire after 14 days — right length?
-3. Should a suspended workspace still collect join requests, or turn them away with a message?
-4. A sub-domain address (`eng.acme.com`): its own domain (the default here), or part of `acme.com`?
+| Question | Answer | Recorded as |
+|---|---|---|
+| Per-signup email or a daily summary? | Daily summary | Decision 6 |
+| Join requests expire after 14 days? | Yes — a business decision | Decision 7 (a console setting, default 14) |
+| Should a suspended workspace collect join requests? | No — it already has a database; nothing until it is reactivated or pays | Decision 8 (grace included) |
+| Is `eng.acme.com` part of `acme.com`? | Yes | Decision 9, with the shared-host exception in §5.2 |
