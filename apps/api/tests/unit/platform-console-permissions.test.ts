@@ -110,6 +110,12 @@ vi.mock("../../src/services/retention.service.js", () => ({
   setRetentionHold: vi.fn().mockResolvedValue({}),
   updateRetentionSettings: vi.fn().mockResolvedValue({})
 }));
+vi.mock("../../src/services/platform-signup.service.js", () => ({
+  getSignupSettings: vi.fn().mockResolvedValue({ enabled: false, blockedDomains: [], notifyOnSignup: true, updatedBy: null, updatedAt: null }),
+  getSignupAvailability: vi.fn().mockResolvedValue({ open: false, reason: "disabled" }),
+  hasMultiOrgRouting: () => true,
+  updateSignupSettings: vi.fn().mockResolvedValue({})
+}));
 vi.mock("../../src/services/sales-lead.service.js", () => ({
   resolveSalesInbox: vi.fn().mockResolvedValue("sales@example.test"),
   SALES_LEAD_STATUSES: ["NEW", "CONTACTED", "QUALIFIED", "WON", "LOST"] as const
@@ -273,6 +279,7 @@ const ROUTES: Route[] = [
   { method: "get", path: "/email-log/e-1", cap: READ },
   { method: "get", path: "/email-analytics", cap: READ },
   { method: "get", path: "/retention", cap: READ },
+  { method: "get", path: "/signup/settings", cap: READ },
   { method: "get", path: "/feedback", cap: READ },
   { method: "get", path: "/sales-leads", cap: READ },
   { method: "get", path: "/audit", cap: READ },
@@ -345,6 +352,13 @@ const ROUTES: Route[] = [
   { method: "put", path: "/email-templates/retention.feedback", cap: OPERATE, body: { subject: "Subject here", bodyHtml: "<p>a long enough body</p>" } },
   { method: "delete", path: "/email-templates/retention.feedback", cap: OPERATE },
   { method: "put", path: "/retention/settings", cap: OPERATE, body: { enabled: true } },
+  {
+    method: "put",
+    path: "/signup/settings",
+    cap: OPERATE,
+    body: { enabled: true },
+    note: "opening signup decides what this deployment CREATES for strangers — the same weight as the retention policy deciding what it deletes"
+  },
   { method: "post", path: "/retention/run", cap: OPERATE, body: { dryRun: true } },
   { method: "post", path: `/retention/${ORG}/hold`, cap: OPERATE, body: { hold: true } },
   { method: "post", path: `/retention/${ORG}/delete`, cap: OPERATE, body: { confirmSlug: "acme" } },

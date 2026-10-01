@@ -52,6 +52,8 @@ import {
   setRetentionHold,
   updateRetentionSettings
 } from "../services/retention.service.js";
+import { getSignupAvailability, getSignupSettings, hasMultiOrgRouting, updateSignupSettings } from "../services/platform-signup.service.js";
+import { DISPOSABLE_MAIL_DOMAINS, FREE_MAIL_DOMAINS } from "../utils/free-mail-domains.js";
 import { resolveSalesInbox, SALES_LEAD_STATUSES } from "../services/sales-lead.service.js";
 import { captureOrgUsageSnapshots, getPlatformAnalytics } from "../services/platform-admin-analytics.service.js";
 import { getBilledRevenueReconciliation, getFleetAccountHealth, getFleetUsageTrend, getOrgUsageProfile, getRevenueOverview } from "../services/platform-revenue.service.js";
@@ -404,6 +406,46 @@ platformAdminConsoleRouter.get(
     res.json(await getPlatformEmailAnalytics(from, to));
   }
 );
+
+/* ================================ Self-serve signup ============================== */
+
+/**
+ * The deployment's signup policy (platform-signup.service.ts). Read by anyone in the console; changed
+ * only with `operate`, the capability the retention policy uses — opening signup is a decision about
+ * what this deployment creates on a stranger's behalf, the same weight as deciding what it deletes.
+ *
+ * The response carries `availability` as well as the stored switch, because the two can disagree:
+ * switched on, but `ROOT_DOMAIN` unset, is still closed, and the card has to say why.
+ */
+platformAdminConsoleRouter.get("/signup/settings", async (_req, res) => {
+  const [settings, availability] = await Promise.all([getSignupSettings(), getSignupAvailability()]);
+  res.json({
+    settings,
+    availability,
+    rootDomainConfigured: hasMultiOrgRouting(),
+    builtInBlocked: { personal: FREE_MAIL_DOMAINS.size, temporary: DISPOSABLE_MAIL_DOMAINS.size }
+  });
+});
+
+const signupSettingsSchema = z.object({
+  body: z
+    .object({
+      enabled: z.boolean().optional(),
+      notifyOnSignup: z.boolean().optional(),
+      // Accepted as an array or as pasted text; normaliseDomainList cleans either and drops junk.
+      blockedDomains: z.union([z.array(z.string().max(320)).max(1000), z.string().max(50_000)]).optional()
+    })
+    .strict()
+});
+
+platformAdminConsoleRouter.put("/signup/settings", operate, validate(signupSettingsSchema), async (req, res) => {
+  const body = req.body as z.infer<typeof signupSettingsSchema>["body"];
+  const settings = await updateSignupSettings(
+    { enabled: body.enabled, notifyOnSignup: body.notifyOnSignup, blockedDomains: body.blockedDomains },
+    actorLabel(req)
+  );
+  res.json({ settings, availability: await getSignupAvailability(), rootDomainConfigured: hasMultiOrgRouting() });
+});
 
 /* ================================ Trial retention =============================== */
 

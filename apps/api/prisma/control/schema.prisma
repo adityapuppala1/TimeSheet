@@ -1367,3 +1367,66 @@ model SsoHandoffCode {
   /// Swept by expiry; the unique codeHash above is what redemption looks up.
   @@index([expiresAt])
 }
+
+/// The deployment's self-serve signup policy (Phase 0 of the signup-domains work, 2026-10-01).
+/// One row, `id` "global", written only by the console. No row means the shipped defaults below —
+/// the same rule `PlatformAlertSettings` follows, so a read never invents an `updatedBy` nobody set.
+model PlatformSignupSettings {
+  id String @id
+
+  /// Whether `/api/signup` will create workspaces at all. OFF BY DEFAULT: until this existed the
+  /// route was mounted on every deployment, and a manual install copied from `.env.example` (which
+  /// ships `TENANT_DB_PROVISION_BASE_URL` set) would provision a database for anyone with a company
+  /// address. Signup is ALSO refused whenever `ROOT_DOMAIN` is unset, whatever this says — without
+  /// multi-org routing a new workspace has no address of its own and nobody can reach it.
+  enabled Boolean @default(false)
+
+  /// Extra domains refused at signup, on top of the built-in free-mail list in
+  /// `utils/free-mail-domains.ts` — a JSON array of lowercased domains. Null means none. For the
+  /// regional provider the built-in list does not know yet; editable without a release.
+  blockedDomains Json?
+
+  /// Email the console's alert recipients (see PlatformAlertSettings) when signup creates a
+  /// workspace, or fails to. On by default: a new customer is the one event an operator always
+  /// wants to hear about, and a failed one is a customer who is about to leave.
+  notifyOnSignup Boolean @default(true)
+
+  updatedBy String?  @db.VarChar(255)
+  updatedAt DateTime @updatedAt
+}
+
+/// The six-digit codes that prove an email address before signup or workspace discovery answers.
+///
+/// They were an in-memory map, which does not span API replicas: on a deployment scaled past one
+/// process the code is minted on one pod and checked on another, and the person sees a correct code
+/// refused at random. The control plane, because neither caller has a tenant (signup creates one;
+/// discovery is asking which ones exist).
+model EmailVerificationCode {
+  /// Keyed hash of the opaque token handed to the browser — never the token itself.
+  tokenHash String @id @db.Char(64)
+
+  /// Keyed hash of code + token. A plaintext code here would be a live credential for somebody's
+  /// workspace list to anyone who can read the control plane.
+  codeHash String @db.Char(64)
+
+  /// The address being proven. Kept for the ten minutes the row lives, because a successful check
+  /// has to say WHICH address was proven, and it must be the one the code was sent to — never one
+  /// the second request supplies.
+  email String @db.VarChar(255)
+
+  /// Which flow minted it — "signup" or "discover". Checked on redemption, so a code cannot cross
+  /// flows: discovery emails a real code to any address that is a member SOMEWHERE (a personal
+  /// Gmail included), and without this binding that code would complete a signup and skip the
+  /// personal-mail refusal signup applies when it issues its own.
+  purpose String @db.VarChar(16)
+
+  /// Spent BEFORE the comparison, atomically, so concurrent guesses on different replicas cannot
+  /// both slip under the cap.
+  attempts Int @default(0)
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  /// Expired rows are swept opportunistically on every issue; this keeps that DELETE cheap.
+  @@index([expiresAt])
+}

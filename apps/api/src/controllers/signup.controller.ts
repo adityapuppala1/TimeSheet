@@ -20,6 +20,8 @@
  * WHAT IT DOES NOT DO: take payment. The trial is real and free; the card is asked for at the end,
  * from inside the workspace, by the same billing flow an upgrade already uses.
  */
+import { SELF_SERVE_TRIAL_DAYS, SELF_SERVE_TRIAL_TIER } from "@timesheet/shared";
+import type { Request, Response } from "express";
 import { Router } from "express";
 import { z } from "zod";
 import { controlPrisma } from "../config/control-prisma.js";
@@ -29,8 +31,10 @@ import { validate } from "../middleware/validate.js";
 import { templates } from "../services/mail-templates.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { sendPlatformTemplate } from "../services/platform-mail.service.js";
+import { platformAudit } from "../services/platform-audit.service.js";
+import { getSignupAvailability, getSignupSettings, notifySignupOutcome, signupRefusalFor } from "../services/platform-signup.service.js";
 import { provisionOrganization } from "../services/provisioning.service.js";
-import { isFreeMailAddress } from "../utils/free-mail-domains.js";
+import { emailDomainOf } from "../utils/free-mail-domains.js";
 import {
   checkVerificationCode,
   issueVerificationCode,
@@ -40,9 +44,36 @@ import {
 
 export const signupRouter = Router();
 
-/** How long a self-serve trial runs. Fifteen days, not fourteen: it survives two weekends plus the
- *  Monday somebody actually gets to it. */
-const TRIAL_DAYS = 15;
+/** How long a self-serve trial runs — `SELF_SERVE_TRIAL_DAYS` in @timesheet/shared, because the
+ *  landing page and the signup page state it too and had drifted to 14 against this route's 15. */
+const TRIAL_DAYS = SELF_SERVE_TRIAL_DAYS;
+
+/**
+ * Refuses unless signup is open on this deployment — see platform-signup.service.ts for the two
+ * conditions. Checked on BOTH steps: the switch can be turned off between someone requesting a code
+ * and returning it, and "off" has to mean no new database from that moment.
+ *
+ * 403 with a machine-readable code, so the page can show the closed state rather than an error. The
+ * message names no reason: whether this is a single-org install is not a stranger's business.
+ */
+async function assertSignupOpen(): Promise<void> {
+  const availability = await getSignupAvailability();
+  if (!availability.open) {
+    throw new AppError(403, "Self-serve signup is closed on this deployment. Contact us and we'll set up your workspace.", { code: "SIGNUP_CLOSED" });
+  }
+}
+
+/**
+ * GET /api/signup/status — whether "Start free trial" should be offered at all.
+ *
+ * Mounted in app.ts AHEAD of the signup router's own limiter (five an hour), because the landing page
+ * asks on every visit and must not spend the budget a real signup needs. Public by nature: the
+ * landing page already shows or hides the button, so this reveals nothing the page would not.
+ */
+export async function signupStatusHandler(_req: Request, res: Response): Promise<void> {
+  const availability = await getSignupAvailability();
+  res.json({ open: availability.open, trialDays: TRIAL_DAYS, trialTier: SELF_SERVE_TRIAL_TIER });
+}
 
 /* The list of "this address is a person, not an organisation" domains moved to
  * utils/free-mail-domains.ts in 4.0.0, when the sales contact form became the SECOND caller — and
@@ -71,14 +102,14 @@ signupRouter.post(
   "/start",
   validate(z.object({ body: z.object({ email: z.string().email().max(255) }) })),
   async (req, res) => {
+    await assertSignupOpen();
     const email = req.body.email.trim().toLowerCase();
-    if (isFreeMailAddress(email)) {
-      // Named plainly rather than hidden behind a generic error: this one IS worth telling the
-      // person, because it is a mistake they can fix in five seconds, not an enumeration signal.
-      throw new AppError(422, "Use your work email address — a workspace belongs to a company, not to a personal inbox.");
-    }
+    // Named plainly rather than hidden behind a generic error: this one IS worth telling the person,
+    // because it is a mistake they can fix in five seconds, not an enumeration signal.
+    const refusal = signupRefusalFor(email, (await getSignupSettings()).blockedDomains);
+    if (refusal) throw new AppError(422, refusal);
 
-    const { token, code } = issueVerificationCode(email);
+    const { token, code } = await issueVerificationCode(email, "signup");
     // `sendPlatformMail`, NOT `dispatchTransactional`. There is no workspace yet — that is what
     // this route is for — and the normal path resolves an SMTP transport per tenant and writes an
     // EmailLog row through the tenant-scoped Prisma proxy. Using it here threw "No tenant context
@@ -113,8 +144,14 @@ signupRouter.post(
     })
   ),
   async (req, res) => {
-    const check = checkVerificationCode(req.body.token, req.body.code);
+    await assertSignupOpen();
+    const check = await checkVerificationCode(req.body.token, req.body.code, "signup");
     if (!check.ok) throw new AppError(400, "That code isn't right, or it has expired. Request a new one.");
+    // Again, against the PROVEN address: an operator may have blocked its domain in the ten minutes
+    // since the code was sent, and the proven address — not anything this request supplies — is the
+    // one the workspace is created for.
+    const refusal = signupRefusalFor(check.email, (await getSignupSettings()).blockedDomains);
+    if (refusal) throw new AppError(422, refusal);
 
     const slug = req.body.slug.trim().toLowerCase();
     const problem = slugProblem(slug);
@@ -132,7 +169,7 @@ signupRouter.post(
         // planTier stays STARTER — what they have PAID for. The trial grants Team on top of it, and
         // keeping the two apart is what lets the trial expire without guessing what to fall back to.
         planTier: "STARTER",
-        trialTier: "TEAM",
+        trialTier: SELF_SERVE_TRIAL_TIER,
         // The retention programme writes to this address after the workspace is suspended, and
         // after it is deleted — neither is a moment to go looking inside the tenant database.
         ownerEmail: check.email,
@@ -157,7 +194,19 @@ signupRouter.post(
       // the physical database, if it got that far, is left for an operator, because deleting a
       // database automatically in an error path is how the wrong one gets dropped.
       await controlPrisma.organization.delete({ where: { id: org.id } }).catch(() => undefined);
-      throw new AppError(502, `Couldn't finish setting up your workspace: ${(error as Error).message}`);
+      const detail = (error as Error).message;
+      console.error(`[signup] provisioning failed for "${slug}" (${emailDomainOf(check.email)}):`, detail);
+      // The operators get the detail; the person gets an apology. The raw message used to be shown
+      // to them, and a provisioning error is infrastructure talking — database names, grants, hosts —
+      // to a stranger on a public page.
+      await platformAudit("CUSTOMER", check.email, "org.signup_failed", "Organization", null, {
+        slug,
+        workspaceName: req.body.workspaceName.trim(),
+        domain: emailDomainOf(check.email),
+        error: detail.slice(0, 500)
+      });
+      await notifySignupOutcome({ kind: "failed", workspaceName: req.body.workspaceName.trim(), slug, ownerEmail: check.email, error: detail });
+      throw new AppError(502, "We couldn't finish setting up your workspace. Our team has been notified and will be in touch — you can also try again in a few minutes.");
     }
 
     // So the finder can route them here next time without waiting for a first sign-in.
@@ -170,6 +219,26 @@ signupRouter.post(
         vars: { name: req.body.adminName.trim(), appUrl: workspaceUrlForSlug(slug) },
         fallback: { subject: "Welcome to TimeSphere", html: templates.welcome(req.body.adminName.trim()) }
       });
+    });
+
+    // So the console's Recent activity shows a new customer the moment they arrive — before this,
+    // a self-serve workspace appeared in no activity feed at all, only as one more row in the list.
+    await platformAudit("CUSTOMER", check.email, "org.signup_completed", "Organization", org.id, {
+      slug,
+      workspaceName: org.name,
+      domain: emailDomainOf(check.email),
+      trialTier: SELF_SERVE_TRIAL_TIER,
+      trialEndsAt: org.trialEndsAt?.toISOString() ?? null
+    });
+    await notifySignupOutcome({
+      kind: "created",
+      organizationId: org.id,
+      workspaceName: org.name,
+      slug,
+      ownerEmail: check.email,
+      workspaceUrl: workspaceUrlForSlug(slug),
+      trialEndsAt: org.trialEndsAt,
+      trialTier: SELF_SERVE_TRIAL_TIER
     });
 
     res.status(201).json({

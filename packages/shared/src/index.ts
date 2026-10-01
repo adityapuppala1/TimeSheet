@@ -1166,6 +1166,17 @@ export interface PlanTierLimits {
   backupPitrEnabled: boolean;
 }
 
+/**
+ * How long a SELF-SERVE trial runs, and which tier it grants on top of what was paid for.
+ *
+ * Shared because three places state it and they had already disagreed: the signup route granted 15
+ * days while the landing page's pricing card promised 14. Fifteen, not fourteen: it survives two
+ * weekends plus the Monday somebody actually gets to it. The tier is what `Organization.trialTier`
+ * is set to at signup — `planTier` stays STARTER, what the workspace has actually paid for.
+ */
+export const SELF_SERVE_TRIAL_DAYS = 15;
+export const SELF_SERVE_TRIAL_TIER: PlanTier = "TEAM";
+
 export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
   STARTER: {
     seatLimit: 10,

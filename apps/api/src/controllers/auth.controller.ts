@@ -331,7 +331,7 @@ authRouter.post(
     // The token is minted even for a miss, and is a real, unguessable token. Skipping it for
     // unknown addresses would make the RESPONSE the oracle the 202 exists to close — a client
     // could tell a hit from a miss by whether it got one.
-    const { token, code } = issueVerificationCode(req.body.email);
+    const { token, code } = await issueVerificationCode(req.body.email, "discover");
 
     if (workspaces.length > 0) {
       // Sent through the FIRST matched workspace's own tenant context, so it uses that workspace's
@@ -364,7 +364,7 @@ authRouter.post(
   "/workspaces/verify",
   validate(z.object({ body: z.object({ token: z.string().min(1).max(200), code: z.string().min(4).max(12) }) })),
   async (req, res) => {
-    const check = checkVerificationCode(req.body.token, req.body.code);
+    const check = await checkVerificationCode(req.body.token, req.body.code, "discover");
     if (!check.ok) {
       // Deliberately does NOT distinguish "wrong code" from "this address matched nothing" — the
       // two must look identical, or the failure message becomes the oracle again.

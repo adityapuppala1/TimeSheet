@@ -90,7 +90,7 @@ import { userRouter } from "./controllers/user.controller.js";
 import { AppError, errorHandler, notFound } from "./middleware/error.js";
 import { recordApiRequest } from "./middleware/request-telemetry.js";
 import { resolveTenant } from "./middleware/tenant.js";
-import { signupRouter } from "./controllers/signup.controller.js";
+import { signupRouter, signupStatusHandler } from "./controllers/signup.controller.js";
 import { salesLeadRouter } from "./controllers/sales-lead.controller.js";
 
 export const app = express();
@@ -469,6 +469,10 @@ app.use("/api/git", gitConnectionRouter);
 // public route in the product that provisions infrastructure, hence its own tight limiter — the
 // auth limiter's twenty-per-minute is generous for something whose unit of work is a database.
 const signupLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 5, standardHeaders: true });
+// Whether signup is open at all. Registered BEFORE the router so it never reaches `signupLimiter`:
+// the landing page asks on every visit, and five an hour would leave real signups with nothing.
+const signupStatusLimiter = rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: true });
+app.get("/api/signup/status", signupStatusLimiter, signupStatusHandler);
 app.use("/api/signup", signupLimiter, signupRouter);
 
 // The public contact form. Mounted here for the same reason signup is — there is no tenant, and for

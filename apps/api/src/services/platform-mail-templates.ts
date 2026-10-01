@@ -235,7 +235,7 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
       { title: "Your verification code", preheader: "Enter this code to continue." },
       heading("Your verification code") +
         paragraph(`<span style="display:inline-block;padding:14px 22px;border-radius:10px;background:#F1F5F9;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:28px;letter-spacing:.3em;font-weight:700;color:#0F172A;">{{code}}</span>`) +
-        paragraph("It expires in 15 minutes. If you did not ask for it, you can ignore this message — nothing is created without the code.")
+        paragraph("It expires in 10 minutes. If you did not ask for it, you can ignore this message — nothing is created without the code.")
     )
   },
   {
@@ -433,6 +433,60 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
         paragraph(
           `<span style="font-size:12px;color:#64748B;">Sent by the platform rather than by any workspace — the workspace whose alert this is may be the thing that is not working. Change what reaches you, or add a Slack or PagerDuty webhook, on the console's Alerts page.</span>`
         )
+    )
+  },
+  {
+    key: "platform.signup_created",
+    group: "Operator",
+    description: "Tells the console's alert recipients that self-serve signup created a workspace. Switch it off under Settings → Self-serve signup.",
+    variables: ["workspaceName", "slug", "ownerEmail", "domain", "workspaceUrl", "trialTier", "trialEndsAt", "consoleUrl"],
+    sample: {
+      workspaceName: "Northwind Logistics",
+      slug: "northwind",
+      ownerEmail: "priya@northwind.co.uk",
+      domain: "northwind.co.uk",
+      workspaceUrl: "https://northwind.timesphere.app",
+      trialTier: "TEAM",
+      trialEndsAt: "2026-10-16",
+      consoleUrl: "https://timesphere.app/platform-admin/organizations/0f8c"
+    },
+    // The domain leads the subject: an operator scanning a list wants to know WHICH company before
+    // anything else, and the workspace name is whatever the person typed.
+    subject: "New signup: {{workspaceName}} ({{domain}})",
+    html: shell(
+      { title: "New self-serve signup", preheader: "{{workspaceName}} · {{domain}} · trial ends {{trialEndsAt}}", accentColor: ACCENT },
+      heading("{{workspaceName}} signed up") +
+        paragraph(
+          `<strong>{{ownerEmail}}</strong> created <a href="{{workspaceUrl}}" style="color:${ACCENT};font-weight:600;">{{workspaceUrl}}</a> and is its first super admin.`
+        ) +
+        paragraph(`<span style="font-size:13px;color:#64748B;">Company domain {{domain}} &middot; trial of {{trialTier}} until {{trialEndsAt}} &middot; workspace address {{slug}}</span>`) +
+        paragraph(button("Open in the console", "{{consoleUrl}}", ACCENT))
+    )
+  },
+  {
+    key: "platform.signup_failed",
+    group: "Operator",
+    description: "Tells the console's alert recipients that a verified person tried to create a workspace and provisioning failed. The registration was removed; the physical database, if it got that far, was left for an operator.",
+    variables: ["workspaceName", "slug", "ownerEmail", "domain", "error", "consoleUrl"],
+    sample: {
+      workspaceName: "Northwind Logistics",
+      slug: "northwind",
+      ownerEmail: "priya@northwind.co.uk",
+      domain: "northwind.co.uk",
+      error: "Access denied for user 'provisioner'@'%' to database 'ts_northwind'",
+      consoleUrl: "https://timesphere.app/platform-admin/organizations"
+    },
+    subject: "Signup FAILED: {{workspaceName}} ({{domain}})",
+    html: shell(
+      { title: "A signup failed", preheader: "{{ownerEmail}} could not get a workspace." },
+      heading("A signup failed") +
+        // This is the message that matters more than its sibling: the person proved their address,
+        // filled in the form, and was told it did not work. Somebody should write to them today.
+        paragraph(
+          `<strong>{{ownerEmail}}</strong> verified their address and asked for <strong>{{workspaceName}}</strong> ({{slug}}), and provisioning failed. They were shown an error. The registration was removed so the address can be retried; if a database was created part-way, it is still on the server.`
+        ) +
+        alertBlock("{{error}}") +
+        paragraph(button("Open the console", "{{consoleUrl}}", ACCENT))
     )
   },
   {

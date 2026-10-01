@@ -183,33 +183,30 @@ export function tenantBaseUrl(): string {
  * The verification codes
  * ------------------------------------------------------------------ */
 
-interface PendingCode {
-  codeHash: string;
-  email: string;
-  expiresAt: number;
-  attempts: number;
-}
-
 /**
- * In-memory, deliberately.
+ * In the control plane (`EmailVerificationCode`), since 2026-10-01.
  *
- * These live for ten minutes and are worthless afterwards, so a database table would be a schema,
- * a migration and a cleanup job in exchange for surviving a restart nobody would notice. The
- * failure mode of losing them — the person requests another code — is the same thing they would do
- * if the email were slow.
+ * They were a Map in this process, chosen because they live ten minutes and losing one on a restart
+ * costs a person one resend. That reasoning held for a single process and broke the moment there
+ * were two: the Helm chart autoscales the API, and behind a round-robin balancer the code was minted
+ * on one pod and checked on another, so a CORRECT code was refused at random — the same failure the
+ * SSO handoff codes had until `SsoHandoffCode` replaced their map. A shared store was the fix that
+ * comment always named; the control plane is the one both callers can reach (signup has no tenant
+ * yet, and discovery is asking which tenants exist).
  *
- * The honest limitation: this does not survive a restart and does not span replicas, so a
- * multi-instance deployment behind a round-robin load balancer will sometimes hand a code to one
- * process and the verification to another. That is a real constraint on this being in memory, and
- * the fix when it matters is a shared store, not a bigger map.
+ * The token and the code are both stored as keyed hashes. Whoever can read the control plane must
+ * not be able to redeem a code, and the token alone is not enough to try one.
  */
-const pending = new Map<string, PendingCode>();
 const CODE_TTL_MS = 10 * 60 * 1000;
 /** Six digits is 1e6 codes; five guesses against a ten-minute window is a 1-in-200,000 chance. */
 const MAX_ATTEMPTS = 5;
 
-function sweep(now: number): void {
-  for (const [key, value] of pending) if (value.expiresAt <= now) pending.delete(key);
+/**
+ * Keyed hash for the token and the code. NOT `directoryHash`, which lowercases its input to normalise
+ * email addresses — the token is base64url, where case is part of the value.
+ */
+function codeStoreHash(value: string): string {
+  return createHmac("sha256", env.JWT_ACCESS_SECRET).update(`email-verification:${value}`).digest("hex");
 }
 
 /** Six digits, uniformly. `Math.random` is not used: this is an authentication factor. */
@@ -217,44 +214,74 @@ function generateCode(): string {
   return String(randomInt(0, 1_000_000)).padStart(6, "0");
 }
 
-export function issueVerificationCode(email: string): { token: string; code: string } {
-  const now = Date.now();
-  sweep(now);
+/**
+ * Which flow a code belongs to. A code only redeems in the flow that minted it: discovery emails a
+ * real code to any address that is a member somewhere, personal Gmail included, and signup refuses
+ * personal addresses when IT issues a code — so a discovery code accepted by signup would skip that.
+ */
+export type VerificationPurpose = "signup" | "discover";
+
+export async function issueVerificationCode(email: string, purpose: VerificationPurpose): Promise<{ token: string; code: string }> {
+  const now = new Date();
+  // Opportunistic sweep, the same as SsoHandoffCode: discovery mints a token for EVERY request, miss
+  // or hit (see auth.controller.ts — the response must not be the oracle), so expired rows accumulate
+  // unless something removes them, and this is the one call that always runs when they would.
+  await controlPrisma.emailVerificationCode.deleteMany({ where: { expiresAt: { lt: now } } });
   const token = randomBytes(24).toString("base64url");
   const code = generateCode();
-  // The CODE is hashed at rest for the same reason a password is: this map is reachable from a heap
-  // dump, and a plaintext code in it is a live credential for somebody's workspace list.
-  pending.set(token, { codeHash: directoryHash(code + token), email, expiresAt: now + CODE_TTL_MS, attempts: 0 });
+  await controlPrisma.emailVerificationCode.create({
+    data: {
+      tokenHash: codeStoreHash(token),
+      codeHash: codeStoreHash(`${code}:${token}`),
+      email,
+      purpose,
+      expiresAt: new Date(now.getTime() + CODE_TTL_MS)
+    }
+  });
   return { token, code };
 }
 
 export type CodeCheck = { ok: true; email: string } | { ok: false; reason: "expired" | "wrong" | "exhausted" };
 
-export function checkVerificationCode(token: string, code: string): CodeCheck {
-  const now = Date.now();
-  sweep(now);
-  const entry = pending.get(token);
-  if (!entry) return { ok: false, reason: "expired" };
-  if (entry.attempts >= MAX_ATTEMPTS) {
-    pending.delete(token);
-    return { ok: false, reason: "exhausted" };
+export async function checkVerificationCode(token: string, code: string, purpose: VerificationPurpose): Promise<CodeCheck> {
+  const now = new Date();
+  const tokenHash = codeStoreHash(token);
+
+  // Spend the attempt FIRST, in one conditional UPDATE. Reading the counter and then incrementing it
+  // would let two replicas each see "4 attempts" and both compare — the cap only holds if the check
+  // and the spend are the same statement. A token from the other flow matches nothing here, so it
+  // reads exactly like an expired one.
+  const spent = await controlPrisma.emailVerificationCode.updateMany({
+    where: { tokenHash, purpose, attempts: { lt: MAX_ATTEMPTS }, expiresAt: { gt: now } },
+    data: { attempts: { increment: 1 } }
+  });
+  if (spent.count === 0) {
+    const row = await controlPrisma.emailVerificationCode.findUnique({ where: { tokenHash } });
+    if (row && row.purpose === purpose && row.expiresAt > now && row.attempts >= MAX_ATTEMPTS) {
+      // Destroyed, so even the CORRECT code no longer works — an attacker who exhausts a token must
+      // not be able to keep the real recipient's code alive for a later attempt.
+      await controlPrisma.emailVerificationCode.deleteMany({ where: { tokenHash } });
+      return { ok: false, reason: "exhausted" };
+    }
+    // Unknown and expired are deliberately the same answer: "that token never existed" would tell a
+    // caller whether the address they submitted matched a workspace.
+    return { ok: false, reason: "expired" };
   }
 
-  const expected = Buffer.from(entry.codeHash, "hex");
-  const actual = Buffer.from(directoryHash(code + token), "hex");
+  const row = await controlPrisma.emailVerificationCode.findUnique({ where: { tokenHash } });
+  if (!row) return { ok: false, reason: "expired" };
+
+  const expected = Buffer.from(row.codeHash, "hex");
+  const actual = Buffer.from(codeStoreHash(`${code}:${token}`), "hex");
   // Constant-time, so the number of correct leading digits is not readable from response timing.
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
-    entry.attempts += 1;
     return { ok: false, reason: "wrong" };
   }
 
-  // Single-use: a code that still works after it has been redeemed is a code sitting in an inbox
-  // that anyone who later reads that inbox can replay.
-  pending.delete(token);
-  return { ok: true, email: entry.email };
-}
-
-/** Test-only reset, so one spec's leftover codes cannot decide another spec's outcome. */
-export function __resetVerificationCodesForTests(): void {
-  pending.clear();
+  // Single-use: a code that still works after it has been redeemed is a code sitting in an inbox that
+  // anyone who later reads that inbox can replay. The DELETE is the redemption — if a concurrent
+  // request redeemed it first, this one removed nothing and loses.
+  const consumed = await controlPrisma.emailVerificationCode.deleteMany({ where: { tokenHash } });
+  if (consumed.count !== 1) return { ok: false, reason: "expired" };
+  return { ok: true, email: row.email };
 }
