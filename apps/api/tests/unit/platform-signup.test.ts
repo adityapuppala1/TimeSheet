@@ -1,17 +1,20 @@
 /**
- * Self-serve signup's policy (Phase 0 of the signup-domains work, 2026-10-01), driven through the
- * REAL signup router and the REAL policy service with only the edges faked.
+ * Self-serve signup, driven through the REAL signup router, the REAL policy service and the REAL
+ * company-domain claims, with only the edges faked (docs/SIGNUP_AND_DOMAINS_PLAN.md).
  *
  * What is pinned, and why each is easy to break:
  *  - Signup is CLOSED unless an operator opened it AND the deployment routes workspaces by
- *    subdomain. Before this, the route provisioned a database for anyone, on every deployment, and on
- *    a single-org install it built a workspace nobody could reach.
- *  - The policy FAILS CLOSED. A control-plane hiccup must not read as "signup is open".
- *  - The switch is re-checked on the second step: "off" means no new database from that moment.
- *  - Personal, temporary and operator-blocked domains are refused — rediffmail.com and yahoo.co.in
- *    included, which the first list missed — and re-checked against the PROVEN address.
- *  - Operators are told about every created AND every failed signup; the failure detail goes to
- *    them, never to the stranger on the public page.
+ *    subdomain, and the policy FAILS CLOSED. The switch is re-checked on every step.
+ *  - Personal, temporary and operator-blocked domains are refused, and re-checked against the PROVEN
+ *    address — never one a later request supplies.
+ *  - The code is checked ONCE (/verify), before anything about any workspace is revealed, and
+ *    answers with a decision: you are already a member / ask to join your company's workspace /
+ *    it is unavailable / create one.
+ *  - A taken workspace address does NOT burn the person's verification (it used to).
+ *  - Two people from one new company finishing at the same moment get ONE workspace: the unique
+ *    domain claim decides, and the loser is told so.
+ *  - Operators hear about every created and failed signup in the mode they chose; the failure detail
+ *    goes to them, never to the stranger on the public page.
  */
 import express from "express";
 import request from "supertest";
@@ -24,6 +27,8 @@ const envMock: Record<string, unknown> = {
 };
 vi.mock("../../src/config/env.js", () => ({ env: new Proxy({}, { get: (_t, k) => envMock[k as string] }) }));
 
+/* ------------------------------- the control plane, faked ------------------------------- */
+
 let settingsRow: {
   enabled: boolean;
   blockedDomains: unknown;
@@ -32,6 +37,12 @@ let settingsRow: {
   updatedBy: string | null;
   updatedAt: Date;
 } | null = null;
+
+type Org = { id: string; name: string; slug: string; status: string; [k: string]: unknown };
+const orgs = new Map<string, Org>();
+const claims = new Map<string, { domain: string; organizationId: string; source: string }>();
+let orgSeq = 0;
+
 const control = {
   platformSignupSettings: {
     findUnique: vi.fn(async () => settingsRow),
@@ -41,22 +52,74 @@ const control = {
     })
   },
   organization: {
-    findUnique: vi.fn(async () => null),
-    create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: "org-new", ...data })),
-    delete: vi.fn(async () => ({}))
-  }
+    findUnique: vi.fn(async ({ where }: { where: { slug?: string; id?: string } }) => {
+      for (const org of orgs.values()) if ((where.slug && org.slug === where.slug) || (where.id && org.id === where.id)) return org;
+      return null;
+    }),
+    create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+      for (const org of orgs.values()) {
+        if (org.slug === data.slug) throw Object.assign(new Error("Unique constraint failed on slug"), { code: "P2002" });
+      }
+      orgSeq += 1;
+      const org = { id: orgSeq === 1 ? "org-new" : `org-${orgSeq}`, ...data } as Org;
+      orgs.set(org.id, org);
+      return org;
+    }),
+    delete: vi.fn(async ({ where }: { where: { id: string } }) => {
+      orgs.delete(where.id);
+      // ON DELETE CASCADE, as the schema declares it.
+      for (const [domain, claim] of claims) if (claim.organizationId === where.id) claims.delete(domain);
+      return {};
+    })
+  },
+  orgEmailDomain: {
+    findUnique: vi.fn(async ({ where, include }: { where: { domain: string }; include?: unknown }) => {
+      const claim = claims.get(where.domain);
+      if (!claim) return null;
+      return include ? { ...claim, organization: orgs.get(claim.organizationId) ?? null } : claim;
+    }),
+    create: vi.fn(async ({ data }: { data: { domain: string; organizationId: string; source: string } }) => {
+      if (claims.has(data.domain)) throw Object.assign(new Error("Unique constraint failed on domain"), { code: "P2002" });
+      claims.set(data.domain, data);
+      return data;
+    })
+  },
+  // Interactive transaction, with the rollback a real one has: whatever the callback wrote is undone
+  // when it throws.
+  $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
+    const orgSnapshot = new Map(orgs);
+    const claimSnapshot = new Map(claims);
+    try {
+      return await fn(control);
+    } catch (error) {
+      orgs.clear();
+      orgSnapshot.forEach((value, key) => orgs.set(key, value));
+      claims.clear();
+      claimSnapshot.forEach((value, key) => claims.set(key, value));
+      throw error;
+    }
+  })
 };
 vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: control }));
 
+/* --------------------------------- the other edges --------------------------------- */
+
 const directory = {
   issueVerificationCode: vi.fn(async () => ({ token: "tok", code: "123456" })),
-  checkVerificationCode: vi.fn(async () => ({ ok: true, email: "priya@northwind.co.uk" })),
+  checkVerificationCode: vi.fn(async (): Promise<{ ok: true; email: string } | { ok: false; reason: string }> => ({ ok: true, email: "priya@northwind.co.uk" })),
+  findWorkspacesForEmail: vi.fn(async (): Promise<Array<{ slug: string; name: string; url: string }>> => []),
+  issueSignupContinuation: vi.fn(async () => "cont.secret"),
+  peekSignupContinuation: vi.fn(async (): Promise<{ ok: true; email: string } | { ok: false }> => ({ ok: true, email: "priya@northwind.co.uk" })),
+  redeemSignupContinuation: vi.fn(async () => true),
   rememberWorkspaceMembership: vi.fn(async () => undefined),
   workspaceUrlForSlug: (slug: string) => `https://${slug}.timesphere.test`,
   // The welcome mail's fallback body builds its link through this.
   tenantBaseUrl: () => "https://northwind.timesphere.test"
 };
 vi.mock("../../src/services/workspace-directory.service.js", () => directory);
+
+const recordSignupStage = vi.fn(async () => undefined);
+vi.mock("../../src/services/signup-funnel.service.js", () => ({ recordSignupStage }));
 
 const provisionOrganization = vi.fn(async () => ({ organizationId: "org-new" }));
 vi.mock("../../src/services/provisioning.service.js", () => ({ provisionOrganization }));
@@ -100,14 +163,27 @@ const openSignup = (extra: Partial<NonNullable<typeof settingsRow>> = {}) => {
     ...extra
   };
 };
-const completeBody = { token: "tok", code: "123456", workspaceName: "Northwind Logistics", slug: "northwind", adminName: "Priya", adminPassword: "a-long-password" };
+const addWorkspace = (org: Org, domain?: string) => {
+  orgs.set(org.id, org);
+  if (domain) claims.set(domain, { domain, organizationId: org.id, source: "SIGNUP" });
+};
+const completeBody = { continuation: "cont.secret", workspaceName: "Northwind Logistics", slug: "northwind", adminName: "Priya", adminPassword: "a-long-password" };
+const verify = () => request(buildApp()).post("/api/signup/verify").send({ token: "tok", code: "123456" });
+const stages = () => recordSignupStage.mock.calls.map(([stage]) => stage);
 
 beforeEach(() => {
   vi.clearAllMocks();
   settingsRow = null;
+  orgs.clear();
+  claims.clear();
+  orgSeq = 0;
   envMock.ROOT_DOMAIN = "timesphere.test";
   directory.checkVerificationCode.mockResolvedValue({ ok: true, email: "priya@northwind.co.uk" });
+  directory.findWorkspacesForEmail.mockResolvedValue([]);
+  directory.peekSignupContinuation.mockResolvedValue({ ok: true, email: "priya@northwind.co.uk" });
+  directory.redeemSignupContinuation.mockResolvedValue(true);
   provisionOrganization.mockResolvedValue({ organizationId: "org-new" });
+  sendPlatformTemplate.mockImplementation(async () => ({ ok: true, status: "SENT", subject: "s" }));
   vi.spyOn(console, "error").mockImplementation(() => undefined);
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
 });
@@ -115,7 +191,7 @@ beforeEach(() => {
 describe("whether signup is open", () => {
   it("is CLOSED on a fresh deployment — nobody has switched it on", async () => {
     const res = await request(buildApp()).get("/api/signup/status");
-    expect(res.body).toEqual({ open: false, trialDays: 15, trialTier: "TEAM" });
+    expect(res.body).toEqual({ open: false, trialDays: 15, trialTier: "TEAM", rootDomain: "timesphere.test" });
   });
 
   it("opens only when an operator switched it on and workspaces have their own addresses", async () => {
@@ -126,7 +202,8 @@ describe("whether signup is open", () => {
   it("stays closed on a single-org install even when switched on — a new workspace would have no address", async () => {
     openSignup();
     envMock.ROOT_DOMAIN = undefined;
-    expect((await request(buildApp()).get("/api/signup/status")).body.open).toBe(false);
+    const res = await request(buildApp()).get("/api/signup/status");
+    expect(res.body).toMatchObject({ open: false, rootDomain: null });
     expect(availabilityFrom({ enabled: true }, undefined)).toEqual({ open: false, reason: "single-org" });
   });
 
@@ -143,10 +220,16 @@ describe("whether signup is open", () => {
     expect(sendPlatformTemplate).not.toHaveBeenCalled();
   });
 
-  it("refuses step two if signup was closed after the code went out — no database from that moment", async () => {
-    const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+  it("refuses to verify while closed — the code is not even checked", async () => {
+    const res = await verify();
     expect(res.status).toBe(403);
     expect(directory.checkVerificationCode).not.toHaveBeenCalled();
+  });
+
+  it("refuses to create if signup was closed after the code went out — no database from that moment", async () => {
+    const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+    expect(res.status).toBe(403);
+    expect(directory.peekSignupContinuation).not.toHaveBeenCalled();
     expect(control.organization.create).not.toHaveBeenCalled();
     expect(provisionOrganization).not.toHaveBeenCalled();
   });
@@ -161,6 +244,7 @@ describe("which addresses may start a workspace", () => {
       expect(res.status).toBe(422);
       expect(res.body.message).toMatch(/work email/);
       expect(directory.issueVerificationCode).not.toHaveBeenCalled();
+      expect(stages()).toEqual(["REFUSED"]);
     }
   );
 
@@ -178,21 +262,140 @@ describe("which addresses may start a workspace", () => {
     expect(res.body.message).toBe(signupRefusalFor("a@gmail.com", []));
   });
 
-  it("sends a SIGNUP-purpose code to a company address", async () => {
+  it("refuses an address that has no company domain at all, before sending a code", async () => {
+    openSignup();
+    const res = await request(buildApp()).post("/api/signup/start").send({ email: "admin@co.uk" });
+    expect(res.status).toBe(422);
+    expect(directory.issueVerificationCode).not.toHaveBeenCalled();
+  });
+
+  it("sends a SIGNUP-purpose code to a company address, and counts it", async () => {
     openSignup();
     const res = await request(buildApp()).post("/api/signup/start").send({ email: "Priya@Northwind.co.uk" });
     expect(res.status).toBe(202);
     expect(directory.issueVerificationCode).toHaveBeenCalledWith("priya@northwind.co.uk", "signup");
     expect(sendPlatformTemplate).toHaveBeenCalledWith("signup.verify", expect.objectContaining({ to: "priya@northwind.co.uk" }));
+    expect(stages()).toEqual(["CODE_SENT"]);
   });
 
-  it("re-checks the PROVEN address on step two — a domain blocked since the code went out is refused", async () => {
+  it("re-checks the PROVEN address at creation — a domain blocked since the code went out is refused", async () => {
     openSignup({ blockedDomains: ["northwind.co.uk"] });
     const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
     expect(res.status).toBe(422);
-    expect(directory.checkVerificationCode).toHaveBeenCalledWith("tok", "123456", "signup");
+    expect(directory.redeemSignupContinuation).not.toHaveBeenCalled();
     expect(provisionOrganization).not.toHaveBeenCalled();
   });
+});
+
+describe("verify — the code is checked once, and the answer is a decision", () => {
+  beforeEach(() => openSignup());
+
+  it("→ create, with a continuation, when the company has no workspace", async () => {
+    const res = await verify();
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ next: "create", continuation: "cont.secret" });
+    expect(directory.checkVerificationCode).toHaveBeenCalledWith("tok", "123456", "signup");
+    expect(directory.issueSignupContinuation).toHaveBeenCalledWith("priya@northwind.co.uk");
+    expect(stages()).toEqual(["VERIFIED"]);
+  });
+
+  it("→ join, naming ONLY the workspace, when an ACTIVE workspace holds the company domain", async () => {
+    addWorkspace({ id: "nw", name: "Northwind", slug: "northwind-hq", status: "ACTIVE" }, "northwind.co.uk");
+    directory.checkVerificationCode.mockResolvedValue({ ok: true, email: "sam@eng.northwind.co.uk" });
+    const res = await verify();
+    expect(res.body).toEqual({ next: "join", workspace: { name: "Northwind" }, continuation: "cont.secret" });
+    // Nothing that would help a stranger: no address, no admins, no size.
+    expect(JSON.stringify(res.body)).not.toMatch(/northwind-hq|timesphere\.test/);
+  });
+
+  it.each(["GRACE", "SUSPENDED", "PROVISIONING"])("→ unavailable for a %s workspace — no continuation, so no request and no new workspace", async (status) => {
+    addWorkspace({ id: "nw", name: "Northwind", slug: "northwind-hq", status }, "northwind.co.uk");
+    const res = await verify();
+    expect(res.body).toEqual({ next: "unavailable", workspace: { name: "Northwind" } });
+    expect(directory.issueSignupContinuation).not.toHaveBeenCalled();
+    expect(stages()).toEqual(["VERIFIED", "UNAVAILABLE"]);
+  });
+
+  it("→ member when the address already belongs to a workspace — no new database", async () => {
+    directory.findWorkspacesForEmail.mockResolvedValue([{ slug: "northwind", name: "Northwind", url: "https://northwind.timesphere.test" }]);
+    const res = await verify();
+    expect(res.body).toEqual({ next: "member", workspaces: [{ slug: "northwind", name: "Northwind", url: "https://northwind.timesphere.test" }] });
+    expect(directory.issueSignupContinuation).not.toHaveBeenCalled();
+  });
+
+  it("answers a wrong or expired code with 400 and too many guesses with 429", async () => {
+    directory.checkVerificationCode.mockResolvedValueOnce({ ok: false, reason: "wrong" });
+    expect((await verify()).status).toBe(400);
+    directory.checkVerificationCode.mockResolvedValueOnce({ ok: false, reason: "exhausted" });
+    expect((await verify()).status).toBe(429);
+  });
+});
+
+describe("complete — creating the workspace", () => {
+  beforeEach(() => openSignup());
+
+  it("creates a SELF_SERVE workspace, claims its company domain, and spends the continuation", async () => {
+    const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+    expect(res.status).toBe(201);
+    expect(res.body.trialDays).toBe(15);
+    expect(orgs.get("org-new")).toMatchObject({ slug: "northwind", createdVia: "SELF_SERVE", ownerEmail: "priya@northwind.co.uk" });
+    expect(claims.get("northwind.co.uk")).toMatchObject({ organizationId: "org-new", source: "SIGNUP" });
+    expect(directory.redeemSignupContinuation).toHaveBeenCalledWith("cont.secret");
+    expect(stages()).toContain("CREATED");
+  });
+
+  it("a taken address does NOT burn the verification — fix the address and finish", async () => {
+    addWorkspace({ id: "other", name: "Other", slug: "northwind", status: "ACTIVE" });
+    const first = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+    expect(first.status).toBe(409);
+    expect(first.body.code).toBe("SLUG_TAKEN");
+    expect(directory.redeemSignupContinuation).not.toHaveBeenCalled();
+
+    const second = await request(buildApp()).post("/api/signup/complete").send({ ...completeBody, slug: "northwind-logistics" });
+    expect(second.status).toBe(201);
+  });
+
+  it("two people from one new company at the same moment: ONE workspace, the other told DOMAIN_CLAIMED", async () => {
+    // Different addresses, different workspace names, same company domain.
+    directory.peekSignupContinuation
+      .mockResolvedValueOnce({ ok: true, email: "priya@northwind.co.uk" })
+      .mockResolvedValueOnce({ ok: true, email: "sam@eng.northwind.co.uk" });
+    const [a, b] = await Promise.all([
+      request(buildApp()).post("/api/signup/complete").send({ ...completeBody, continuation: "a.a", slug: "northwind" }),
+      request(buildApp()).post("/api/signup/complete").send({ ...completeBody, continuation: "b.b", slug: "nw-two" })
+    ]);
+    const statuses = [a.status, b.status].sort();
+    expect(statuses).toEqual([201, 409]);
+    expect([a.body.code, b.body.code]).toContain("DOMAIN_CLAIMED");
+    expect(provisionOrganization).toHaveBeenCalledTimes(1);
+    // The loser left nothing behind: one workspace, one claim.
+    expect(orgs.size).toBe(1);
+    expect([...claims.keys()]).toEqual(["northwind.co.uk"]);
+  });
+
+  it("refuses an expired continuation, and creates nothing", async () => {
+    directory.peekSignupContinuation.mockResolvedValueOnce({ ok: false });
+    const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("SIGNUP_EXPIRED");
+    expect(control.organization.create).not.toHaveBeenCalled();
+  });
+
+  it("undoes the workspace if the continuation was spent in the meantime", async () => {
+    directory.redeemSignupContinuation.mockResolvedValueOnce(false);
+    const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+    expect(res.status).toBe(400);
+    expect(orgs.size).toBe(0);
+    expect(claims.size).toBe(0);
+    expect(provisionOrganization).not.toHaveBeenCalled();
+  });
+});
+
+describe("join — completed in Task 8", () => {
+  it.todo("creates the request in the claimed workspace's database and alerts its super admins");
+  it.todo("refuses with WORKSPACE_UNAVAILABLE when the workspace stopped being ACTIVE since verify");
+  it.todo("records JOIN_REQUESTED with the organization, for the funnel and the per-day cap");
+  it.todo("a domain past its daily cap of requests gets 429");
 });
 
 describe("what the operators hear", () => {
@@ -209,7 +412,6 @@ describe("what the operators hear", () => {
     openSignup({ notifyMode: "EACH" });
     const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
     expect(res.status).toBe(201);
-    expect(res.body.trialDays).toBe(15);
     expect(platformAudit).toHaveBeenCalledWith(
       "CUSTOMER",
       "priya@northwind.co.uk",
@@ -230,7 +432,7 @@ describe("what the operators hear", () => {
     expect(platformAudit).toHaveBeenCalledWith("CUSTOMER", expect.anything(), "org.signup_completed", "Organization", "org-new", expect.anything());
   });
 
-  it("on a failed provision: apologises to the person, and gives the DETAIL only to the operators", async () => {
+  it("on a failed provision: apologises to the person, gives the DETAIL only to the operators, and frees the domain", async () => {
     openSignup({ notifyMode: "EACH" });
     provisionOrganization.mockRejectedValueOnce(new Error("Access denied for user 'provisioner'@'10.0.0.5' to database 'ts_northwind'"));
     const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
@@ -238,6 +440,8 @@ describe("what the operators hear", () => {
     // Infrastructure talking to a stranger: hosts, grants and database names stay off the public page.
     expect(res.body.message).not.toMatch(/provisioner|10\.0\.0\.5|ts_northwind/);
     expect(control.organization.delete).toHaveBeenCalledWith({ where: { id: "org-new" } });
+    // The claim went with the workspace row, so the company can try again.
+    expect(claims.has("northwind.co.uk")).toBe(false);
     expect(platformAudit).toHaveBeenCalledWith(
       "CUSTOMER",
       "priya@northwind.co.uk",
@@ -249,6 +453,7 @@ describe("what the operators hear", () => {
     const failed = sendPlatformTemplate.mock.calls.filter(([key]) => key === "platform.signup_failed");
     expect(failed).toHaveLength(2);
     expect(failed[0][1]).toMatchObject({ vars: { error: expect.stringContaining("ts_northwind") } });
+    expect(stages()).toContain("FAILED");
   });
 
   it("never lets a broken mail relay turn a successful signup into an error", async () => {
@@ -259,7 +464,6 @@ describe("what the operators hear", () => {
     });
     const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
     expect(res.status).toBe(201);
-    sendPlatformTemplate.mockImplementation(async () => ({ ok: true, status: "SENT", subject: "s" }));
   });
 });
 
