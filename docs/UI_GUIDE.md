@@ -1,8 +1,11 @@
 # UI guide — personalisation, navigation and working faster
 
-> Written for people who use TimeSphere every day. Every feature below exists in the app as of the
-> V12 line; the file and route it lives at is named so an engineer can find it too. Where a
-> behaviour was measured rather than assumed, the measurement is stated.
+> **Audience:** people who use TimeSphere every day · **Type:** how-to + reference ·
+> [Documentation index](README.md)
+>
+> Every feature below exists in the app as of the V12 line; the file and route it lives at is named
+> so an engineer can find it too. Where a behaviour was measured rather than assumed, the
+> measurement is stated. Task-by-task help for every role is the in-app manual at `/app/help`.
 
 Related: [ONBOARDING_AND_TOUR.md](ONBOARDING_AND_TOUR.md) (first sign-in, the tour) ·
 [API.md](API.md) (the endpoints behind these screens) · the in-app manual at `/app/help`, which

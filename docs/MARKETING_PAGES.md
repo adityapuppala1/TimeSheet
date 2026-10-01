@@ -1,5 +1,8 @@
 # Public marketing pages
 
+> **Audience:** engineers editing `/`, `/pitch` or `/login` · **Type:** explanation + rules ·
+> [Documentation index](README.md)
+
 The three pages an unauthenticated visitor can reach, plus the rule that governs all of them.
 
 | Route | File | Purpose |

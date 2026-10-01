@@ -1,5 +1,7 @@
 # New Organization Setup & Production Readiness Guide
 
+> **Audience:** platform operators · **Type:** runbook · [Documentation index](README.md)
+
 This is the "day 2" runbook: the platform is already deployed (see
 [docs/DEPLOYMENT.md](DEPLOYMENT.md) / [docs/INSTALLATION.md](INSTALLATION.md) for that part), and
 now you need to (1) actually harden that deployment for real customer data, and (2) bring a real
@@ -149,7 +151,7 @@ into your infrastructure. Two databases need independent backup:
 - **Control-plane database** (`CONTROL_DATABASE_URL`) — small, but losing it loses the map of
   which physical database belongs to which organization.
 - **Every tenant database** — one per organization, physically separate under the
-  database-per-tenant model (see [README § Multi-tenancy](../README.md#multi-tenancy)).
+  database-per-tenant model (see [ARCHITECTURE.md § 3.1](ARCHITECTURE.md#31-database-per-tenant-multi-tenancy)).
 
 A minimal cron-based example (adapt paths/retention to your infra):
 
@@ -198,71 +200,28 @@ The `web` service (stateless, no cron) scales freely either way.
 
 ### 10. Watch the per-tenant connection ceiling (SaaS shape only)
 
-**Verified**: `config/prisma.ts` caps each tenant's connection pool
-(`PER_TENANT_CONNECTION_LIMIT`) and LRU-evicts idle tenant clients (`MAX_CACHED_CLIENTS`).
-`MAX_CACHED_CLIENTS × PER_TENANT_CONNECTION_LIMIT` must stay comfortably under your MySQL server's
-`max_connections` as organization count grows — this is a known scaling ceiling of the
-database-per-tenant model, not a bug, but it needs monitoring (MySQL's
-`SHOW STATUS LIKE 'Threads_connected'`) as you onboard more orgs.
+Before onboarding orgs in volume, compare the worst case — 50 cached tenant clients ×
+`TENANT_DB_CONNECTION_LIMIT` × API replicas — with your MySQL server's `max_connections`, and add
+`SHOW STATUS LIKE 'Threads_connected'` to your monitoring. The arithmetic and why the ceiling exists:
+[DEPLOYMENT.md § Operational notes specific to this shape](DEPLOYMENT.md#operational-notes-specific-to-this-shape).
 
 ### 11. Get a fresh green test run
 
-```bash
-npm run lint && npm run build && npm run test:e2e
-```
-
-**The "hamburger drawer" flake was root-caused and fixed on 2026-07-30 — it was never flaky
-logic.** For weeks it failed only under full-suite load and always passed in isolation, and the
-standing theory (assertion timeouts) was wrong. The real cause: `/api/auth/login`'s rate limiter
-counted **successful** logins, and `responsive.spec.ts` signs in fresh per test across five
-viewport projects (~75 logins in one run). Late-suite specs got a 429 on login, ended up with no
-session, and failed as "element not visible" — while an isolated run never reached the limit.
-That also explains the sibling symptoms previously filed as separate load flakes: a `TypeError`
-where `projects[0]` was undefined (the API call had returned a 429 body), and assorted mid-run
-30s timeouts.
-
-Both limiters were corrected: the login limiter now uses `skipSuccessfulRequests` (only failed
-attempts count, which is the actual brute-force surface — the per-account 5-failure lockout in
-`auth.service.ts` remains the precise control), and the blanket per-IP limiter went from 300 to
-900/min because a single page load fans out ~10 React Query fetches and one office NAT is one
-IP. Latest full run: **97 passed, 2 failed**, and both failures were 30s timeouts from the host
-machine sleeping mid-run (8.8h wall clock) — both pass on a live machine.
-
-One genuine test-suite gap was found alongside this: with face verification enabled
-workspace-wide, any spec that creates a timesheet or ticket gets a 428 and fails as something
-unrelated. Specs now wrap themselves in `suspendFaceGate()`
-(`tests/e2e/helpers/face-gate.ts`), which suspends enforcement and restores the exact prior
-values.
-
-The e2e suite covers 5 spec files (auth, responsive, settings, tickets, timesheet) — broad UI/flow
-coverage, but it never exercised the AI/billing/SCIM services directly.
-
-**Update 2026-07-29 — a first unit/integration suite now covers those three** (`apps/api/tests/`,
-Vitest — see file headers for the exact mocking approach per area):
+Run the gates against the exact commit you are about to deploy:
 
 ```bash
-npm run test -w apps/api               # unit tier: 38 tests, no real DB, ~1s
-npm run test:integration -w apps/api   # integration tier: 7 tests, real throwaway MySQL, ~13s
+npm run lint && npm run build          # typecheck + SonarJS rules (0 errors, ratchet holds), then a production build
+npm test                               # both unit suites (api, then web) — no database needed
+npm run test:integration -w apps/api   # a real throwaway MySQL, created, migrated, seeded and dropped per run
+npm run test:e2e                       # Playwright, every project (it starts the dev servers if none are running)
 ```
 
-- **AI service** (`tests/unit/ai.service.test.ts`) — feature-toggle/budget gating, and a full
-  `classifyTicket` round trip with the Anthropic SDK mocked at the class level (`callChat` itself
-  is a module-private function, not an exported seam).
-- **Stripe billing** (`tests/unit/billing.webhook.test.ts` + `tests/integration/billing.webhook.integration.test.ts`)
-  — signature verification is exercised for real (`stripe.webhooks.constructEvent` is local HMAC,
-  no network call, so no mocking needed there), all three webhook event branches, and one
-  integration test confirming `Organization.planTier` is genuinely persisted, not just that a mock
-  was called correctly.
-- **SCIM** (`tests/unit/scim.controller.test.ts` + `tests/integration/scim.controller.integration.test.ts`)
-  — auth/filter/PATCH-operation parsing at the unit tier; real seat-limit enforcement,
-  duplicate-email 409, and status-transition persistence at the integration tier, against a real
-  throwaway MySQL database created/migrated/seeded/dropped per run (`tests/setup/global-setup.integration.ts`).
-
-This is a **first pass proving the pattern with representative coverage, not exhaustive branch
-coverage** — the security-findings services (`security-report.service.ts`) and the remaining 10 of
-13 AI capability functions still have no dedicated unit tests, same caveat as before for whatever
-isn't listed above. Not yet wired into `.github/workflows/ci.yml` — that's a deliberate scope
-decision, not an oversight, since this pass was about proving the harness works locally first.
+CI runs the same gates on every push, so a green run on `main` for that commit is normally the
+evidence; run them yourself when deploying a commit CI has not tested. What each tier covers, which
+pushes get which Playwright projects, and the traps that make a failure look like something else —
+the face-verification gate answering 428, the login rate limiter, a host machine that slept
+mid-run — are in [CONTRIBUTING.md § Testing](../CONTRIBUTING.md#testing). The history of how the
+suites reached their current shape is in [ENGINEERING_LOG.md](ENGINEERING_LOG.md).
 
 ---
 

@@ -27,8 +27,8 @@ services:
       # Generate with: openssl rand -base64 48
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
       # The control-plane database (org registry, SSO config, plan tiers, platform-admin
-      # accounts) — required even for this single-org shape, see README's Multi-tenancy
-      # section. A database on this same mysql container works fine.
+      # accounts) — required even for this single-org shape, see docs/ARCHITECTURE.md
+      # § 3.1. A database on this same mysql container works fine.
       CONTROL_DATABASE_URL: ${CONTROL_DATABASE_URL:?CONTROL_DATABASE_URL must be set}
       DEFAULT_ORG_SLUG: ${DEFAULT_ORG_SLUG:-default}
       # Shape 2 (SaaS) only: the apex under which every workspace is a subdomain — ROOT_DOMAIN=app.example.com

@@ -1,8 +1,11 @@
 # Installation Guide
 
-A complete, step-by-step path from "nothing installed" to a running TimeSphere instance, for
-every supported path — one-click Docker install, manual local (no Docker), and Kubernetes. Also
-covers the FAQ, self-diagnosis, and how to configure things after install without editing code.
+A complete, step-by-step path from "nothing installed" to a running TimeSphere instance — the
+one-click Docker install and the manual local install (no Docker); Kubernetes lives in
+[docs/DEPLOYMENT.md § Kubernetes](DEPLOYMENT.md#kubernetes-deployment). This file is also the one
+place for the prerequisites, the demo credentials, self-diagnosis (`npm run doctor`), handling
+`ENCRYPTION_KEY` and the other secrets, configuring things after install without editing code
+(including turning on AI), the FAQ, and troubleshooting.
 
 For architecture/deployment-shape background (on-prem vs. multi-org SaaS), see
 [docs/DEPLOYMENT.md](DEPLOYMENT.md). This guide is the "how do I actually get it running"
@@ -15,7 +18,8 @@ companion to that document.
 | The fastest way to try it, nothing but Docker installed | [One-click install](#one-click-install-recommended) |
 | Full control, no Docker, developing/debugging the app itself | [Manual local install](#manual-local-install-no-docker) |
 | Production Kubernetes with autoscaling | [docs/DEPLOYMENT.md § Kubernetes](DEPLOYMENT.md#kubernetes-deployment) |
-| Multi-org SaaS (more than one company on one deployment) | [docs/DEPLOYMENT.md § Shape 2](DEPLOYMENT.md) after either path above |
+| Multi-org SaaS (more than one company on one deployment) | [docs/DEPLOYMENT.md § Shape 2](DEPLOYMENT.md#shape-2--saas-multi-org) after either path above |
+| Something failed and you have an error message | [Troubleshooting](#troubleshooting) |
 
 ---
 
@@ -135,9 +139,9 @@ These are the actual failure modes you're likely to hit, in the order you'd hit 
 ### After it's up
 
 - Web app: the URL you entered (default `http://localhost:5173`)
-- Demo logins: `superadmin@timesheet.local` / `Admin@12345` (also `manager@...`, `employee@...`)
-- Platform admin: `<web-url>/platform-admin/login` — `platform-admin@timesphere.local` /
-  `PlatformAdmin@12345` (**change this immediately** — it has cross-org access)
+- Sign in with the seeded accounts — all four are in [§ Demo credentials](#demo-credentials), and
+  the installer prints the same ones. The platform-admin console is at
+  `<web-url>/platform-admin/login`; change its password before anything else.
 - **Configure real SMTP** (if you skipped it above) from **Workspace Settings → Mail server** —
   see [§ Configuring things after install](#configuring-things-after-install).
 - **Nothing AI-facing is listening yet.** The MCP server (`POST /api/mcp`, new in 2.3.0) ships
@@ -167,23 +171,37 @@ The one-click scripts are environment-aware and end with evidence, not hope:
   every default — bundled Docker MySQL, localhost URLs, no SMTP. CI executes exactly this on
   every PR, so installer rot is caught in review rather than by a customer.
 
-Updating later is one command — see docs/DEPLOYMENT.md's "Updating a running deployment".
-
-**Upgrading to 2.3.0 specifically** is an ordinary `./update.sh` (Windows: `.\update.cmd`). It
-carries **one** migration, `20260808120000_mcp_server`, which only creates the two new MCP tables —
-additive, no backfill, nothing dropped or narrowed, so the updater's code-only auto-rollback still
-holds. It introduces **no new environment variable** in any deployment shape, so there is nothing
-to add to `.env`, either compose file, or the Helm chart. And because the updater's fan-out step
-runs `npm run migrate:tenants` unconditionally, that migration reaches every organization's
-database, not just the default one. Details:
-[docs/DEPLOYMENT.md § What 2.3.0 adds to that dance](DEPLOYMENT.md#what-230-adds-to-that-dance-the-mcp-server).
+Updating later is one command — see
+[docs/DEPLOYMENT.md § Updating a running deployment](DEPLOYMENT.md#updating-a-running-deployment),
+which also carries the version-specific upgrade notes (what each release's migrations and new
+variables need).
 
 ## Manual local install (no Docker)
 
-Full walkthrough already lives in [README.md § Installation](../README.md#installation-local-no-docker)
-— summarized here with the decision points called out:
+The path for developing or debugging the app itself, or for a machine that won't run Docker. You
+provide what Docker Compose would have (MySQL, and the secrets in `.env`); everything else is one
+command.
 
-**One command, from a clean clone** — start MySQL first, then:
+### Prerequisites
+
+- **Node.js 20.19+ or 22.12+** — the floor Vite 8 sets. CI and both Docker images use Node 22;
+  local development has run on Node 24 (v24.18.0 / npm 11.16.0 as of 2026-10-01).
+- **A running MySQL 8 server reachable from your machine.** XAMPP's bundled server works fine (it
+  is MariaDB under the hood): a default install listens on `localhost:3306` with user `root` and
+  an **empty password**. Any other MySQL server works too — see
+  [docs/DEPLOYMENT.md § Bringing your own MySQL server](DEPLOYMENT.md#bringing-your-own-mysql-server).
+- *Optional, only if you want AI features live:* an API key for whichever provider you choose
+  (Anthropic, OpenAI, Groq, etc.), a local Ollama/LM Studio install with no key at all, or nothing
+  whatsoever — the native runtime downloads and runs a model on this server's own CPUs. See
+  [§ Turning on AI features (BYOK)](#turning-on-ai-features-byok).
+- *Optional, only if you want email-to-ticket intake live:* IMAP access to a mailbox (an app
+  password works fine, same pattern as SMTP).
+- *Optional, only if you want HTTPS on the LAN* (the camera on other devices needs it):
+  [mkcert](https://github.com/FiloSottile/mkcert) — step 10 below.
+
+### One command
+
+**From a clean clone** — start MySQL first, then:
 
 ```bash
 npm run setup
@@ -204,9 +222,12 @@ The fan-out is last because it needs the control-plane schema *and* its seeded o
 exist first. On a clean clone it finds exactly one organization, already migrated, and is a fast
 no-op — which is precisely why it is safe to run unconditionally. It earns its place on a checkout
 where you have since provisioned a second organization from `/platform-admin`: that org has its own
-physical database that `doctor:heal` never touches, and running new code against its old schema is
-the one drift the additive-only migration policy cannot excuse. Same command, same reasoning as
-`update.sh` on a deployed stack — see
+physical database, which `DATABASE_URL` never names, and running new code against its old schema is
+the one drift the additive-only migration policy cannot excuse. `doctor:heal` attempts the same
+fan-out (since 2026-08-26), but only as a warning — one unreachable tenant must not block healing
+the database `npm run dev` needs — so this last step is the one that fails loudly when an
+organization can't be brought current. Same command, same reasoning as `update.sh` on a deployed
+stack — see
 [docs/DEPLOYMENT.md § Keeping every tenant's schema current](DEPLOYMENT.md#keeping-every-tenants-schema-current).
 
 Two things it deliberately does *not* do. It never overwrites an `apps/api/.env` you already have,
@@ -215,26 +236,220 @@ destroy something you cannot get back. What it does instead, on an *upgrade*, is
 variable that has been added to `.env.example` since your `.env` was written**, so a new feature
 looks unconfigured rather than broken. Append them (commented out) with `npm run bootstrap:sync`.
 
-If the placeholder `DATABASE_URL` doesn't match this machine, `setup` stops at the `doctor:heal`
-step and names the problem — see [§ Self-diagnosis](#self-diagnosis-npm-run-doctor) below. Fix
-`apps/api/.env` and re-run `npm run setup`; it picks up where it left off.
+**On a clean clone the first `setup` stops at `doctor:heal`, by design.** `bootstrap` has just
+copied `.env.example`, whose `ENCRYPTION_KEY` is a deliberately invalid placeholder (see
+[§ Secrets](#secrets-encryption_key-and-per-environment-env-files)) — and if this machine's MySQL
+isn't XAMPP's default, its `DATABASE_URL` is wrong too. The doctor names whichever it hit first
+(see [§ Self-diagnosis](#self-diagnosis-npm-run-doctor) below). Fill in `apps/api/.env` as step 2
+below describes and re-run `npm run setup`; it picks up where it left off.
 
-Equivalent step-by-step, if you'd rather run each yourself or see what's happening:
+### Step by step
 
-1. `npm install` (builds `packages/shared` automatically via `postinstall`).
-2. `npm run bootstrap` (copies `.env.example` → `apps/api/.env` and mints dev certificates), then
-   fill in `DATABASE_URL`/`CONTROL_DATABASE_URL` (XAMPP default: `mysql://root:@localhost:3306/...`,
-   empty password), three JWT secrets, and `ENCRYPTION_KEY` (`openssl rand -hex 32`).
-3. Start MySQL (XAMPP Control Panel, or your own install).
-4. **Run `npm run doctor:heal -w apps/api` before anything else.** This is the single
-   highest-value step — validates `.env`, auto-creates both databases if they don't exist, and
-   applies every pending migration. See [§ Self-diagnosis](#self-diagnosis-npm-run-doctor) below.
-5. `npm run db:generate`
-6. `npm run db:migrate` (redundant if you ran `doctor:heal` above — safe to run either way)
-7. `npm run seed`
-8. `npm run db:migrate:tenants` (a no-op unless you have provisioned a second organization — see
-   above)
-9. `npm run dev`
+The same thing one command at a time, in `setup`'s order — if you'd rather run each yourself or
+see what's happening:
+
+1. **Install dependencies.** `postinstall` also builds `packages/shared`, which both the API and
+   the web app import at runtime.
+
+   ```bash
+   npm install
+   ```
+
+2. **Create and fill in `apps/api/.env`.** The API loads `.env` from its own working directory
+   (`apps/api/`), not the repo root — a root `.env` belongs to the Docker Compose shape, and the
+   manual install never reads it.
+
+   ```bash
+   npm run bootstrap   # .env.example → apps/api/.env (never overwrites one), plus dev certificates
+   ```
+
+   Then set at minimum the six variables that have no default (`apps/api/src/config/env.ts`):
+
+   - `DATABASE_URL` — must match a MySQL server you actually control. For XAMPP's default MySQL:
+     `mysql://root:@localhost:3306/timesheet_portal` (empty password). Percent-encode a `#` or `%`
+     in the password (`%23`, `%25`).
+   - `CONTROL_DATABASE_URL` — a second, much smaller database: the org registry, SSO config, plan
+     tiers and platform-admin accounts (see
+     [ARCHITECTURE.md § 3.1](ARCHITECTURE.md#31-database-per-tenant-multi-tenancy)). Required even
+     for a single local org; a database on the same server works fine, e.g.
+     `mysql://root:@localhost:3306/timesphere_control`.
+   - `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` / `PLATFORM_ADMIN_JWT_SECRET` — three distinct long
+     random strings. The template's placeholders pass the 16-character minimum, so a local install
+     boots on them; production refuses them (see
+     [§ Secrets](#secrets-encryption_key-and-per-environment-env-files)).
+     `PLATFORM_ADMIN_JWT_SECRET` must differ from the other two — it signs the cross-org console's
+     tokens, and a leaked tenant secret must not be able to mint one — and nothing checks that for
+     you.
+   - `ENCRYPTION_KEY` — 64 hex characters (32 bytes), the AES-256-GCM key for every secret the app
+     stores. Generate one with `openssl rand -hex 32` (no `openssl` on this machine?
+     `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` does the same).
+
+   Two optional ones worth knowing now:
+
+   - `SMTP_*` — leave `SMTP_HOST` empty to have emails logged to the console instead of actually
+     sent; **Workspace Settings → Mail server** overrides these later.
+   - `ANTHROPIC_API_KEY` — leave empty to keep the default (Anthropic-provider) AI path inert until
+     either this or a key saved in Workspace Settings is available. AI also needs an admin to flip
+     its master switch — it never turns itself on. See
+     [§ Turning on AI features (BYOK)](#turning-on-ai-features-byok).
+
+   **The template's database defaults match this path, not Docker's.** `.env.example` assumes
+   XAMPP (port `3306`, user `root`, empty password). Docker Compose's MySQL container is a
+   *different* server on a *different* port: host port `3307`, with the root password the
+   installer generated into the root `.env`'s `MYSQL_ROOT_PASSWORD`. The template used to default
+   to Compose's pair, so copying it verbatim for a local install produced an API that booted far
+   enough to look alive, then failed confusingly the first time it touched the database. Getting the
+   pairing backwards in either direction is still the #1 cause of
+   `Authentication failed against database server` — and exactly what step 5 catches.
+
+3. **Make sure MySQL is running** — start it from the XAMPP Control Panel if you're using XAMPP's
+   MySQL.
+
+4. **Generate the Prisma clients** (tenant schema + the separate control-plane schema):
+
+   ```bash
+   npm run db:generate
+   ```
+
+5. **Run the doctor before going any further** — the single highest-value step in this guide:
+
+   ```bash
+   npm run doctor -w apps/api        # diagnose only
+   npm run doctor:heal -w apps/api   # + create both databases if missing, apply every pending migration
+   ```
+
+   It validates `.env` against the schema the server boots with, then opens a real connection to
+   both databases, so a wrong host, port or password surfaces here as one specific message rather
+   than as a Prisma error three steps later. What it checks and why it exists:
+   [§ Self-diagnosis](#self-diagnosis-npm-run-doctor).
+
+6. *(Optional — redundant after `doctor:heal`)* **Create the databases and apply migrations the
+   Prisma way:**
+
+   ```bash
+   npm run db:migrate
+   ```
+
+   This is `prisma migrate dev` for both schemas: it creates `timesheet_portal` and
+   `timesphere_control` if they don't exist and applies every migration. It is also Prisma's
+   schema-*authoring* command, and on a database that has drifted from the migration history it
+   offers to reset (drop) it — answer no. `doctor:heal` runs `migrate deploy`, which never does.
+
+7. **Seed the tenant's demo data and the control plane:**
+
+   ```bash
+   npm run seed
+   ```
+
+   This runs the tenant seed, then `control:seed`. The tenant seed fills in roles/permissions,
+   three demo users, a demo project, default ticket types (Bug/Task/Improvement), and every
+   notification/ticketing/AI settings singleton at its safe default (AI **off** until you opt in).
+   `control:seed` registers one `Organization` (slug from `DEFAULT_ORG_SLUG`, default `default`)
+   pointing at `DATABASE_URL`, seeds the three plan tiers' default limits, and creates one
+   `PlatformAdminUser`. Credentials for all four accounts: [§ Demo credentials](#demo-credentials).
+   The MCP server needs no seed row at all — its settings singleton is created the first time an
+   admin opens the page, and every column of it defaults to off.
+
+8. **Fan the schema out to every organization's own database**, now that the org registry exists:
+
+   ```bash
+   npm run db:migrate:tenants
+   ```
+
+   A no-op with one organization; required the moment there are two (see the fan-out note above).
+
+9. **Run the app:**
+
+   ```bash
+   npm run dev
+   ```
+
+   - Frontend: http://localhost:5173 (https once this machine has a certificate — step 10)
+   - API: http://localhost:4000/api (health check at http://localhost:4000/health)
+   - Platform-admin console: http://localhost:5173/platform-admin/login (see
+     [ARCHITECTURE.md § 3.6](ARCHITECTURE.md#36-platform-admin-console))
+
+   The web dev server proxies `/api` and `/uploads` to the API, so there's no separate URL/CORS
+   config to manage in dev. Before it starts, `npm run dev` re-runs `npm install` if
+   `package-lock.json` has moved, and `doctor:heal` if a migration has appeared since its last run
+   (`scripts/ensure-deps.mjs`, `scripts/ensure-migrations.mjs`).
+
+10. *(Optional)* **HTTPS on the LAN — required for the camera from other devices.** The TLS
+    certificates are per-machine private keys, deliberately git-ignored, so a clone can never bring
+    them along — `npm run setup` mints this machine's own pair when there isn't one (and never
+    regenerates one you have already trusted on your devices). It needs
+    [mkcert](https://github.com/FiloSottile/mkcert) (`winget install FiloSottile.mkcert`,
+    `brew install mkcert nss`, or `sudo apt install mkcert libnss3-tools`); if that's missing,
+    setup warns and carries on serving http, and you can generate the pair later with:
+
+    ```bash
+    npm run certs        # dispatches to scripts/make-lan-certs.{ps1,sh} for your OS
+    ```
+
+    Restart `npm run dev` and it serves `https://localhost:5173` + `https://<lan-ip>:5173`
+    automatically — the presence of `apps/web/certs/` is the switch. The script prints the
+    one-time root-CA trust step for phones. Details:
+    [DEPLOYMENT.md § Serving over HTTPS](DEPLOYMENT.md#serving-over-https-required-for-the-camera-and-for-copy-buttons).
+
+11. *(Optional)* **Point this checkout at UAT or production config** instead of local: copy
+    `apps/api/.env.uat.example` → `apps/api/.env.uat`, then
+    `APP_ENV=uat npm run dev -w apps/api` (PowerShell: `$env:APP_ENV = "uat"` first). Profiles
+    layer over `.env` (the profile wins, `.env` fills gaps), real ones are git-ignored, and a
+    missing profile refuses to boot rather than silently running local config. Full runbook:
+    [DEPLOYMENT.md § Environment profiles](DEPLOYMENT.md#environment-profiles--local--uat--production).
+
+### Demo credentials
+
+Created by `npm run seed` here, and by the Docker installer's seed step:
+
+| Account | Email | Password | Sign in at |
+|---|---|---|---|
+| Super Admin | `superadmin@timesheet.local` | `Admin@12345` | `/login` |
+| Manager | `manager@timesheet.local` | `Admin@12345` | `/login` |
+| Employee | `employee@timesheet.local` | `Admin@12345` | `/login` |
+| Platform Admin | `platform-admin@timesphere.local` | `PlatformAdmin@12345` | `/platform-admin/login` |
+
+**Change the platform-admin password immediately** — it has cross-org access, and the seeded one is
+the same on every install. How: the platform-admin password question in the [FAQ](#faq).
+
+### Secrets: ENCRYPTION_KEY and per-environment .env files
+
+Two rules, for the same reason the doctor exists — a secret that is well-formed but wrong does more
+damage than one that fails loudly:
+
+- **`ENCRYPTION_KEY` has no working default, on purpose.** The schema requires an exact
+  64-character hex string (`/^[0-9a-f]{64}$/i`) and the template ships an obviously invalid
+  placeholder, so an unedited copy of `.env.example` fails loudly at boot instead of encrypting
+  real secrets (SMTP and IMAP passwords, BYOK API keys, SSO client secrets, the security-ingestion
+  token, chat and Git integration credentials, face templates, each tenant's database DSN) under a
+  key nobody wrote down. Generate a fresh one per
+  environment with `openssl rand -hex 32` and never reuse one across local/staging/production.
+- **Never copy a live `.env` between environments.** Every secret in it
+  (`JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET`/`PLATFORM_ADMIN_JWT_SECRET`/`ENCRYPTION_KEY`) should
+  be freshly generated per environment. Production additionally gets a boot-time check
+  (`server.ts#assertProductionSafety`) that refuses to start when `JWT_ACCESS_SECRET`,
+  `JWT_REFRESH_SECRET` or `ENCRYPTION_KEY` is under 32 characters, repetitive, low-entropy, or
+  contains a placeholder word such as `replace-with` or `secret`. It does **not** check
+  `PLATFORM_ADMIN_JWT_SECRET`, so generating that one well is on you. See
+  [.github/SECURITY.md](../.github/SECURITY.md).
+
+**`Unsupported state or unable to authenticate data` means the wrong key, not a corrupted
+database.** Every AES-256-GCM `decryptSecret()` call throws exactly that when the ciphertext was
+encrypted under a different `ENCRYPTION_KEY` than the one now in `.env` — for example, a key rotated
+without re-encrypting existing rows. The one row this matters for at boot is
+`OrgDatabase.encryptedDsn` in the control-plane database: `server.ts` decrypts the default
+organization's DSN to warm its Prisma client. If you rotate `ENCRYPTION_KEY` after tenant DSNs have
+been provisioned, re-encrypt every `OrgDatabase.encryptedDsn` row under the new key:
+
+- **The default organization:** re-run `npm run control:seed -w apps/api`. Its upsert rewrites that
+  row from the current `DATABASE_URL` under the current key, and it never resets a password.
+- **Every other organization:** read the old plaintext DSN out of your deploy records, or
+  reconstruct it from `host` + `databaseName` on that same row, then `encryptSecret()` it again.
+  There's no automated migration for this because the plaintext DSN is intentionally never stored
+  anywhere to migrate from.
+
+Other encrypted values (a saved SMTP password, a BYOK key) fail the same way the first time they're
+used; saving them again in Workspace Settings re-encrypts them under the current key.
 
 ---
 
@@ -246,8 +461,16 @@ npm run doctor:heal -w apps/api     # + create the databases and run migrations
 npm run doctor:fix-env -w apps/api  # + also correct a wrong host:port in .env (see below)
 ```
 
-Run this **before** `db:migrate`/`dev` on any fresh checkout, and **first** whenever something
-seems broken. It checks, in order, and stops at the first failure with a specific fix:
+**Why it exists.** Every first-run failure this project has actually hit traces back to one
+pattern: a config value that's *well-formed* (right shape, passes validation) but *wrong* (points at
+a server, port, or key that doesn't match what's actually running). The Zod schema catches the first
+kind at boot; it cannot catch the second, and the API would boot far enough to look alive before
+failing confusingly the first time it touched the database. The doctor closes that gap with real
+connections instead of string checks.
+
+Run this **before** `db:migrate`/`dev` on any fresh checkout or new environment (local, CI,
+staging, a new production host), and **first** whenever something seems broken. It checks, in
+order, and stops at the first failure with a specific fix:
 
 1. Reports the OS/architecture/Node version it's running on, so a "works on my machine" report
    carries the environment with it.
@@ -268,9 +491,9 @@ seems broken. It checks, in order, and stops at the first failure with a specifi
    directory is writable, and enough memory is free for the ~500MB the models hold per process.
    Add `--face` (`npm run doctor -w apps/api -- --face`) to also load the real ML models and
    time an inference on this hardware. If it warns about the secure context, the fix is a
-   certificate rather than a setting in this product — see **Serving over HTTPS** in
-   [DEPLOYMENT.md](DEPLOYMENT.md), which covers a public domain, a LAN with no domain, and quick
-   phone testing.
+   certificate rather than a setting in this product — see
+   [DEPLOYMENT.md § Serving over HTTPS](DEPLOYMENT.md#serving-over-https-required-for-the-camera-and-for-copy-buttons),
+   which covers a public domain, a LAN with no domain, and quick phone testing.
 
 Because step 4 runs *before* the pass/fail decision, a failure can tell you the answer instead of
 just the symptom. Configured for 3307 but MySQL is really on 3306? You get:
@@ -286,7 +509,7 @@ And if nothing is running anywhere, it looks for what this machine actually has 
 Windows services matching `mysql`/`mariadb`, a XAMPP/WAMP/MySQL install path, `brew services` on
 macOS, `systemctl` units on Linux — and prints the specific command to start it.
 
-The `:heal` variant runs three more steps once the checks above pass (and skips the advisory
+The `:heal` variant runs four more steps once the checks above pass (and skips the advisory
 face preflight, which is diagnostic rather than repair):
 
 8. Creates the `DATABASE_URL`/`CONTROL_DATABASE_URL` databases if the server's reachable but they
@@ -317,6 +540,11 @@ face preflight, which is diagnostic rather than repair):
     docker compose run --rm --no-deps --entrypoint sh api -c 'npm run doctor -w apps/api'
     ```
 
+11. **Fans the migrations out to every other registered organization's database** (since
+    2026-08-26) — the same walk as `npm run db:migrate:tenants`. Advisory: a tenant that can't be
+    reached or migrated is a warning, not a failure, because it must not block healing the one
+    database `npm run dev` needs. `npm run migrate:tenants -w apps/api` by hand shows which one.
+
 `doctor` and `doctor:heal` never modify `.env` — only DB-side state. **`doctor:fix-env` is the one
 mode that edits it**, deliberately opt-in and deliberately narrow: it rewrites *only* the
 `host:port` inside `DATABASE_URL`/`CONTROL_DATABASE_URL`, and only when discovery has proven MySQL
@@ -339,9 +567,9 @@ the admin-configurable settings surfaces this app has:
 | What | Where | Notes |
 |---|---|---|
 | Outbound email (SMTP) | Workspace Settings → **Mail server** | Overrides `.env`'s `SMTP_*` vars; leave blank to keep using `.env`. Live "Test connection" button. |
-| Email templates (subject/body per event) | **Email templates** page (sidebar) | Edit any of the 35 built-in templates, preview with sample data, send a single test, or "Send all templates as test" to smoke-test every one at once. Also shows per-template send volume, the success/failure split, and a grouped failure breakdown read from `EmailLog`. |
+| Email templates (subject/body per event) | **Email templates** page (sidebar) | Edit any built-in template, preview with sample data, send a single test, or "Send all templates as test" to smoke-test every one at once. Also shows per-template send volume, the success/failure split, and a grouped failure breakdown read from `EmailLog`. |
 | Which roles get which emails | Workspace Settings → **Email channels** | A category × role grid: every gateable email category is a row, grouped into Timesheets / Tickets / Changes / Digests / Identity / Workspace. Unticking a cell suppresses only the **email** leg for that role — the in-app bell notification always fires, so muting Manager on an escalation removes the inbox copy without hiding the escalation. `welcome`, `reset`, and the email-intake auto-reply are listed as **Always sent** and deliberately have no row: they go to one person as a direct result of an action, and a role filter over a password reset is an account lockout waiting to happen. |
-| AI provider/model/budget | Workspace Settings → **AI** | BYOK — a ranked list of Anthropic and/or OpenAI-compatible endpoints, each with its own key/model, a live status dot, a Test button, and an opt-in auto-failover circuit breaker. |
+| AI provider/model/budget | Workspace Settings → **AI** | BYOK — a ranked list of Anthropic and/or OpenAI-compatible endpoints, each with its own key/model, a live status dot, a Test button, and an opt-in auto-failover circuit breaker. Walkthrough: [§ Turning on AI features (BYOK)](#turning-on-ai-features-byok). |
 | Email-to-ticket intake | Workspace Settings → **Email intake** | IMAP mailbox + routing rules. |
 | Chat-to-ticket (Slack/Teams/Google Chat/Telegram) | Workspace Settings → **Chat integrations** | Per-platform bot tokens + routing rules. |
 | Security/CI findings ingestion (SAST/DAST/SSAT/SSCT) | Workspace Settings → **Security & DevOps** | Generate a bearer token, paste the webhook URL into your CI — see [docs/SECURITY_DEVOPS_INTEGRATIONS.md](SECURITY_DEVOPS_INTEGRATIONS.md) for GitHub Actions/GitLab CI/Jenkins/Bitbucket examples. |
@@ -369,6 +597,42 @@ cost in the environment rather than an admin flipping it from a settings page; t
 paths are process-wide while a super admin is per-tenant, and an arbitrary absolute path the app
 then writes to is close enough to arbitrary file write that it is not something one compromised
 admin account should be able to set.
+
+### Turning on AI features (BYOK)
+
+AI is off by default — the master switch and every per-feature toggle ship off, and none of them
+turns itself on — and the underlying model provider is admin-chosen per workspace: bring your own
+key for whichever vendor you already have an account with. To try it:
+
+1. Sign in as Super Admin ([demo credentials](#demo-credentials)) → **Workspace Settings → AI**.
+2. Pick a **Provider**: Anthropic (native), any OpenAI-compatible vendor — OpenAI, Groq, Mistral,
+   DeepSeek, OpenRouter, Gemini, Qwen, Kimi, Nvidia NIM, a local Ollama/LM Studio install (no key
+   needed), or **Custom endpoint** for anything else that speaks the same protocol — or
+   **Native (llama.cpp)**: a model this server downloads and runs itself on the CPUs it already
+   has, with no key, no GPU and no account anywhere (**Run a model on this server**, on the same
+   page). Sizing, the model directory and why Kubernetes runs it as a sidecar are in
+   [docs/DEPLOYMENT.md § Running a model on your own server](DEPLOYMENT.md#running-a-model-on-your-own-server).
+   Picking a preset fills in its base URL; you can still override it.
+3. Paste an **API key** and click Save (skip this for a local Ollama/LM Studio install or the
+   native runtime). The key is encrypted at rest (AES-256-GCM, under `ENCRYPTION_KEY`) and never
+   sent back to the browser once saved — only an "is a key saved" flag is. Anthropic alone also
+   honors `ANTHROPIC_API_KEY` in `apps/api/.env` as a fallback, so existing deployments keep
+   working unconfigured.
+4. Set the **Model** — a dropdown of Claude models for the Anthropic provider, or a free-text field
+   for OpenAI-compatible providers (model names vary per vendor, e.g. `gpt-4o-mini`, `llama3.1`,
+   `mixtral-8x7b`).
+5. Flip the master switch, then whichever per-feature toggles you want (auto-triage, duplicate
+   detection, writing assistant, comment summary, "Ask AI", email intake, weekly digest, email
+   failure diagnosis, and more), and optionally set a monthly budget cap. AI refine has no toggle of
+   its own — see its row in the table above.
+6. For email-to-ticket intake specifically, also fill in the mailbox connection under
+   **Workspace Settings → Email intake** and add at least one routing rule (or a fallback project)
+   so inbound mail has somewhere to land.
+
+Not every OpenAI-compatible endpoint supports the same structured-output request shape (local
+runtimes like Ollama/LM Studio in particular often don't) — triage and duplicate-detection ask for
+JSON via the prompt itself when needed and validate the response locally either way, so a provider
+that lacks native structured output degrades gracefully instead of hard-failing.
 
 ### Environment variables for storage and logs
 
@@ -442,9 +706,9 @@ directly and restart the API.
 **Is it safe to re-run `install.sh`/`install.ps1`?** Yes — it never overwrites an existing
 `.env`, and re-seeding is an upsert (safe to run again; it won't create duplicate demo data).
 
-**I get "Authentication failed against database server."** Your `DATABASE_URL` password doesn't
-match your MySQL server's actual root password. Run `npm run doctor -w apps/api` — it will say
-exactly this and tell you the XAMPP default (empty password).
+**I have a specific error message.** See [§ Troubleshooting](#troubleshooting), which is keyed by
+the error text — including `Authentication failed against database server`,
+`ENCRYPTION_KEY must be a 64-character hex string`, and AI's "No API key configured".
 
 **Can setup auto-create the databases and run migrations for me, instead of me running each
 command by hand?** Yes — `npm run setup` (fresh checkout) or `npm run doctor:heal -w apps/api`
@@ -461,14 +725,6 @@ first-boot init). If it's still not healthy after that, check `docker compose lo
 actual error — a slow first pull of the `mysql:8.4` image on a slow connection is the next most
 common cause and just needs more time.
 
-**I get `ENCRYPTION_KEY must be a 64-character hex string`.** Generate one with
-`openssl rand -hex 32` and set it in `apps/api/.env`. This key encrypts every stored secret
-(SMTP password, IMAP password, BYOK AI keys, security-ingestion token) — there's no safe default
-for it, on purpose.
-
-**AI features show "No API key configured" even though I set one.** The master AI switch in
-Workspace Settings → AI is a separate toggle from having a key — both need to be on/set.
-
 **How do I add a new SAST/DAST tool that isn't in the examples doc?** You don't need TimeSphere
 to know about your specific tool — translate its native output into the generic findings JSON
 shape yourself (a `jq` one-liner in most cases) and `curl` it to the ingestion webhook. See
@@ -476,10 +732,11 @@ shape yourself (a `jq` one-liner in most cases) and `curl` it to the ingestion w
 
 **How do I change the platform-admin password?** Signed in: **Change password** in the console
 sidebar (current password re-verified, 12+ characters, every other console session signed out).
-While the account is still on the seeded `PlatformAdmin@12345`, an amber banner across every
-console page reminds you. **Forgotten it entirely?** There is deliberately no emailed reset for
-the highest-privilege account in the system — update the `PlatformAdminUser` row in the
-control-plane database with a freshly bcrypt-hashed password, or re-run
+While the account is still on its seeded password (see [§ Demo credentials](#demo-credentials)),
+an amber banner across every console page reminds you. **Forgotten it entirely?** There is
+deliberately no emailed reset for the highest-privilege account in the system — update the
+`PlatformAdminUser` row in the control-plane database with a freshly bcrypt-hashed password, or
+re-run
 `npm run control:seed -w apps/api` against a fresh control database if you haven't put real orgs
 on it yet.
 
@@ -488,10 +745,62 @@ already planned — check there before filing something that's already tracked.
 
 ---
 
-## Troubleshooting index
+## Troubleshooting
 
-For symptom-specific fixes not covered above, see:
-- [README.md § Troubleshooting](../README.md#troubleshooting) — build/env/port/login issues.
+**First step for any of these: run `npm run doctor -w apps/api`** (or `doctor:heal` to also create
+missing databases and apply pending migrations — see
+[§ Self-diagnosis](#self-diagnosis-npm-run-doctor)). It catches the most common root cause — a
+wrong DB host/port/password in `.env`, usually Docker Compose's values used against a local server
+or vice versa — with one specific message instead of you working backward from one of the errors
+below. Installer failures (execution policy, CRLF line endings, Docker not running, ports
+3307/4000/5173 taken) have their own table:
+[§ Common errors when running the installer](#common-errors-when-running-the-installer).
+
+- **`Error: Cannot find package '...packages/shared/dist/index.js'`** — `packages/shared` hasn't
+  been built. Run `npm install` (which builds it via `postinstall`) or, directly,
+  `npm run build -w packages/shared`. A `Cannot find package` naming some *other* package right
+  after a `git pull` is a dependency the release added: `npm run dev` and `npm run build`
+  re-install on their own when `package-lock.json` has moved; for anything else, run
+  `npm install`.
+- **`Environment variable not found: DATABASE_URL` / Zod "Required" errors on boot** — your `.env`
+  is in the wrong place. The manual install reads `apps/api/.env`, not the repo root.
+- **`Authentication failed against database server, the provided database credentials for 'root' are not valid.`**
+  — the password in `DATABASE_URL` doesn't match the MySQL server it actually reached. For a stock
+  XAMPP install it is empty; for the Docker Compose container (host port 3307) it is the generated
+  `MYSQL_ROOT_PASSWORD` in the root `.env`. `npm run doctor -w apps/api` says exactly this and
+  prints the XAMPP default; if the port is what's wrong, `npm run doctor:fix-env -w apps/api`
+  corrects it.
+- **`ENCRYPTION_KEY must be a 64-character hex string` on boot** — generate one with
+  `openssl rand -hex 32` and set it in `apps/api/.env`. This key encrypts every stored secret at
+  rest, so there is no safe default for it, on purpose — see
+  [§ Secrets](#secrets-encryption_key-and-per-environment-env-files).
+- **`Unsupported state or unable to authenticate data`** — something was encrypted under a
+  different `ENCRYPTION_KEY` than the one now in `.env`; the database isn't corrupted. Recovery,
+  including the one row that blocks boot:
+  [§ Secrets](#secrets-encryption_key-and-per-environment-env-files).
+- **Port already in use (4000 or 5173)** — both ports are strict on purpose, so a second
+  `npm run dev` stops instead of drifting to another port; often the other process is an earlier
+  TimeSphere stack you forgot was running. Stop it, or move a port: `API_PORT` in `apps/api/.env`
+  (then point the web proxy at it with `API_PROXY_TARGET=http://localhost:<port>`), or
+  `npm run dev -w apps/web -- --port <port>` for the web app (its port is set in
+  `apps/web/vite.config.ts`).
+- **AI features show "No API key configured"** — two separate things must both be true. A key: for
+  the Anthropic provider, set `ANTHROPIC_API_KEY` in `apps/api/.env` or save a key in
+  **Workspace Settings → AI**; for any other provider, save a key there directly (or leave it blank
+  for a keyless local provider like Ollama/LM Studio). And the master AI switch on that same page,
+  which is a separate toggle from having a key. See
+  [§ Turning on AI features (BYOK)](#turning-on-ai-features-byok).
+- **Email intake isn't picking anything up** — check three things: the master AI switch **and** the
+  "Email-to-ticket intake" toggle are both on, the mailbox connection test in **Workspace Settings →
+  Email intake** succeeds, and at least one routing rule or a fallback project is configured
+  (otherwise matched-but-unrouted mail is intentionally dropped, logged as a warning).
+- **Logged in but immediately bounced back to `/login` after a refresh** — the refresh token is an
+  httpOnly cookie scoped to `/api/auth`; if you're serving the API and web app from different
+  origins in a custom setup, confirm the API's CORS config allows your origin with
+  `credentials: true` and that the cookie's `Secure` flag (production-only) matches your protocol
+  (HTTPS in production).
+
+Covered elsewhere:
 - [docs/DEPLOYMENT.md](DEPLOYMENT.md) — Docker Compose / Kubernetes-specific issues.
 - [docs/SECURITY_DEVOPS_INTEGRATIONS.md § 7](SECURITY_DEVOPS_INTEGRATIONS.md#7-troubleshooting) — ingestion webhook 401/404/429s.
 

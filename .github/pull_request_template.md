@@ -13,7 +13,7 @@ exists without re-deriving it from the diff.
 
 - [ ] `npm run lint` (typecheck api + web, then the SonarQube rules — 0 errors; warnings are tracked debt)
 - [ ] `npm run build`
-- [ ] `npm run test -w apps/api` (unit)
+- [ ] `npm test` (both unit suites — api, then web)
 - [ ] `npm run test:integration -w apps/api` (real MySQL — only if you touched DB behaviour)
 - [ ] `npm run test:e2e` (Playwright — only if you touched a user-facing flow)
 - [ ] Manually exercised in a browser
@@ -26,14 +26,17 @@ exists without re-deriving it from the diff.
 <!--
 `docs/ARCHITECTURE.md` is treated as a bug when out of date. If this PR adds a
 service/controller/worker, changes what a module depends on, or adds a data flow, it belongs in
-the same PR — not a follow-up.
+the same PR — not a follow-up. Unsure which doc owns a topic? `docs/README.md` maps them.
 -->
 
 - [ ] `docs/ARCHITECTURE.md` (new/changed module, dependency, or data flow)
 - [ ] `docs/API.md` (new/changed endpoint)
 - [ ] `docs/DATABASE.md` (schema change)
-- [ ] `README.md` (user-visible capability)
+- [ ] `docs/INSTALLATION.md` / `docs/DEPLOYMENT.md` (install, config, env var or upgrade step)
+- [ ] `README.md` feature table (headline capability)
 - [ ] `docs/ROADMAP.md` (resolved a tracked item, or found something worth tracking)
+- [ ] `docs/ENGINEERING_LOG.md` (a dated write-up of what was found/fixed)
+- [ ] `docs/README.md` (added a new doc)
 - [ ] Not needed — this changes no behaviour, interface, or schema
 
 ## Anything a reviewer should look at closely

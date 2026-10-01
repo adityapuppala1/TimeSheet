@@ -23,7 +23,7 @@
  * - PER PROCESS. Two Node processes behind a load balancer keep independent sets, so a delivery
  *   replayed against the other process is not caught, and a restart forgets everything. A
  *   schema-backed table would fix both; it is deliberately not built, because this app runs as a
- *   single Node process (see the database-per-organization note in the root README) and a table
+ *   single Node process (see docs/ARCHITECTURE.md § 3.1, database-per-tenant multi-tenancy) and a table
  *   with a row per webhook delivery is a real write-amplification cost for a guarantee nothing
  *   currently needs.
  * - BOUNDED. Past `MAX_ENTRIES` the oldest ids are dropped, so an attacker who can flood the

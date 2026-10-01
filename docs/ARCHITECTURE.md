@@ -29,14 +29,16 @@ flowchart TB
     end
 
     subgraph API["apps/api (Express)"]
-        MW["Tenant resolution + auth middleware"]
+        MW["Tenant resolution (Host header → org)\n+ JWT/RBAC auth middleware"]
         Ctrl["Controllers"]
-        Svc["Services"]
-        AI["ai.service.ts\n(single AI choke point)"]
+        Svc["Services\n(business rules, audit log writes)"]
+        AI["ai.service.ts\n(single AI choke point, BYOK)"]
+        Workers["node-cron workers\n(SLA sweeps, reminders, IMAP poll,\ndigests — once per org)"]
+        PA["Platform-admin console\n(own auth, aggregate-only\ncross-org reads)"]
     end
 
     subgraph Data["Data plane"]
-        Control[("Control-plane DB\norgs, SSO/chat config,\nplan tiers, platform admins")]
+        Control[("Control-plane DB\norgs + encrypted DSNs, SSO config,\nplan tiers, platform admins")]
         T1[("Tenant DB — Org A")]
         T2[("Tenant DB — Org B")]
         T3[("Tenant DB — Org N")]
@@ -44,12 +46,14 @@ flowchart TB
 
     subgraph External["External systems"]
         LLM["Anthropic / OpenAI-compatible LLM"]
-        Mail["SMTP + IMAP"]
+        Mail["SMTP (email templates)\n+ IMAP inbound mailbox"]
         Chat["Slack / Teams / Google Chat / Telegram"]
         IdP["Google / Microsoft / SAML IdP / LDAP"]
     end
 
     Web -->|HTTPS, Host header carries org subdomain| MW
+    Web -.->|"/platform-admin"| PA
+    PA -->|own JWT secret + admin table| Control
     MW -->|resolves org, decrypts DSN,\nattaches tenant Prisma client| Ctrl
     MW -->|reads org → DSN mapping| Control
     Ctrl --> Svc
@@ -61,6 +65,9 @@ flowchart TB
     Svc <--> Mail
     Svc <--> Chat
     MW <--> IdP
+    Workers -->|loops every ACTIVE org| Control
+    Workers --> Svc
+    Workers -->|IMAP poll| Mail
 ```
 
 **The one idea everything else follows from**: every tenant (`Organization`) gets its own
@@ -74,26 +81,77 @@ database is my company" needed almost no changes to become multi-tenant — see 
 
 ## 2. Monorepo layout
 
+An npm-workspaces monorepo (`apps/*`, `packages/*`).
+
 | Path | Purpose |
 |---|---|
-| `apps/api` | Express + TypeScript API. Two Prisma schemas: `prisma/schema.prisma` (tenant data) and `prisma/control/schema.prisma` (control plane). |
-| `apps/web` | React + TypeScript SPA (Vite). Talks to `apps/api` over `/api/*`. |
-| `packages/shared` | Types and constants imported by both `apps/api` and `apps/web` (e.g. `GlobalAISettings`, `ChatPlatform`, permission keys) — the one place a cross-cutting type is defined once instead of drifting between frontend/backend copies. |
-| `deploy/helm/timesphere` | Kubernetes Helm chart (see §8). |
-| `.github/workflows` | CI (`ci.yml`) and CD (`cd.yml`) — see §8. |
-| `docs/` | This file, `DEPLOYMENT.md` (operational how-to), and diagrams. |
-| `install.sh` / `install.ps1` | One-click Docker Compose installers (Shape 1 — see §8). |
+| `apps/api` | Express + TypeScript API: `controllers/` (one per resource), `services/` (business logic + external integrations), `workers/` (cron jobs — SLA sweeps, reminders, email-intake polling, digests), `middleware/`. Two Prisma schemas: `prisma/schema.prisma` (tenant data) and `prisma/control/schema.prisma` (control plane), with their migrations. |
+| `apps/web` | React + TypeScript SPA (Vite): `pages/`, `layouts/`, reusable `components/`, Zustand stores (`store/`), and the typed API client (`services/api.ts`). Talks to `apps/api` over `/api/*`. |
+| `packages/shared` | Types and constants imported by both `apps/api` and `apps/web` (e.g. `GlobalAISettings`, `ChatPlatform`, permission keys, status enums) — built to `dist/`, and the one place a cross-cutting type is defined once instead of drifting between frontend/backend copies. |
+| `deploy/helm/timesphere` | Kubernetes Helm chart (see §6 *DevOps / deployment* and §7.4). |
+| `.github/workflows` | CI (`ci.yml`) and CD (`cd.yml`) — see §6 *DevOps / deployment*. |
+| `docs/` | Every other document, indexed by [`docs/README.md`](README.md). |
+| `install.sh` / `install.ps1` | One-click Docker Compose installers (Shape 1 — see §6 *DevOps / deployment* and §7.4). |
 | `tests/e2e` | Playwright end-to-end suite (repo root — exercises both `apps/api` and `apps/web` together). |
 | `apps/api/tests` | Vitest unit (`tests/unit`, mocked, no real DB) + integration (`tests/integration`, real throwaway MySQL) tests, scoped to `apps/api` alone — AI service, Stripe billing, SCIM, face verification. |
 | `tsconfig.base.json` | The compiler options every workspace extends — `strict`, and `noUnusedLocals` so dead imports and locals are build errors rather than silent accumulation. |
 | `lint-baseline.json` + `scripts/lint-ratchet.mjs` | The per-rule warning ceiling and the script that enforces it as the last step of `npm run lint`. Warnings may fall, never rise; a rule disappearing from the report is also a failure, so nobody lowers the count by switching a rule off. Exists because the count went from ~400 to ~700 with nobody deciding to allow it. `--update` lowers the ceiling after a genuine improvement. |
 | `eslint.config.mjs` | The SonarJS rule set (`eslint-plugin-sonarjs` is the analyzer SonarQube runs for JS/TS) plus the React Rules of Hooks, so the same findings a Sonar dashboard would report are reproducible offline and in CI without a server URL or token. Run by `npm run lint` after the typechecks; **errors gate at zero, warnings are tracked debt** — the rationale, and which rules are deliberately demoted, are written in the config itself and in `sonar-project.properties`. |
 
+### Stack
+
+- **Frontend** — React 19, TypeScript, Vite, Tailwind CSS, shadcn-style Radix components, Zustand,
+  TanStack Query, React Hook Form, Framer Motion, Recharts, `@dnd-kit` (Kanban drag-and-drop),
+  Tiptap 3 (rich text), and `react-aria-components` + `@internationalized/date` behind every date
+  input (§6, *Shared date & calendar UI*). `three` and `ogl` load only on the public pages and the
+  portfolio — dynamically imported behind capability gates and governed by the render-loop policy in
+  `apps/web/src/lib/render-loop.ts`.
+- **Backend** — Node.js, Express 5, TypeScript, Zod request validation, Prisma ORM over MySQL (two
+  schemas, two clients — §3.1), JWT access/refresh auth with httpOnly-cookie rotation and session
+  revocation, RBAC (§3.2). `openid-client` + `@node-saml/node-saml` + `ldapts` for SSO;
+  `@anthropic-ai/sdk` + `openai` for the BYOK provider adapter (§3.3); `@modelcontextprotocol/sdk` for
+  TimeSphere *as* an MCP server (§3.11); `imapflow` + `mailparser` for email intake; `jwks-rsa` for
+  Teams' Bot Framework JWTs; Nodemailer; `node-cron` for workers; `@vladmandic/human` on pure-JS
+  TensorFlow.js for server-side face matching with no native build step (§3.7).
+- **Infra** — Docker Compose or Kubernetes (the Helm chart, HPA/VPA autoscaling), GitHub Actions
+  CI/CD, Zod-validated environment config with production-safety boot checks, Helmet secure headers,
+  rate limiting plus per-account login lockout, request logging, centralized error middleware, and
+  AES-256-GCM encryption at rest for stored secrets.
+- **Testing** — Playwright across seven projects: Chromium at five viewport sizes (phone → 4K) plus
+  Firefox (Gecko) and WebKit (Safari/iOS), including computed-style contrast checks in both colour
+  themes; Vitest for unit and real-MySQL integration tests (the `tests/e2e` and `apps/api/tests` rows
+  above).
+
+### Why the code is organized this way
+
+- **Controllers stay thin; services own the logic.** A controller's job is auth/permission gates,
+  request validation (Zod) and wiring a response. The business rules — SLA math, AI gating, email
+  routing, access-control predicates — live in the matching `services/*.ts` file so they cannot drift
+  between the two or three routes that need them. Where a rule still lives in a controller it is
+  exported, never copied (`saveTimesheet` in `timesheet.controller.ts`, shared with the MCP server and
+  Ask AI); a rule that gains a second caller moves into a service, as the change gates did (§3.13).
+- **One choke point per external integration.** Every model call goes through `ai.service.ts` (§3.3);
+  every outbound email through `mail.service.ts`/`notify.service.ts`. That is what makes admin
+  toggles, budget caps and per-category email opt-ins enforceable — every caller is forced through
+  the same gate.
+- **Workers are separate from the request/response cycle.** Anything that should happen on a
+  schedule whether or not anyone is using the app right now (SLA sweeps, reminders, IMAP polling,
+  digests) is a `node-cron` job in `apps/api/src/workers/`, started once from `server.ts` on boot and
+  run per org through `run-for-every-org.ts` (§3.1) — never something a request handler kicks off
+  inline.
+
 ---
 
 ## 3. Core architectural concepts
 
 ### 3.1 Database-per-tenant multi-tenancy
+
+One codebase, two deployment shapes: a single-org on-prem install, or a multi-org SaaS platform where
+every organization has its own physically separate database (§1). Both shapes share every
+controller, service and page; what differs is whether more than one `Organization` row exists in the
+control plane. Setting up either shape — env vars, the control-plane migration and seed, provisioning
+a second org, keeping every tenant's schema current with `npm run migrate:tenants` — is in
+[DEPLOYMENT.md](DEPLOYMENT.md).
 
 - **Control plane** (`apps/api/prisma/control/schema.prisma`): `Organization`, `OrgDatabase`
   (encrypted DSN), `OrgSsoConfig`, `OrgAuthMethod`, `PlatformAdminUser`/`PlatformAdminSession`,
@@ -102,10 +160,15 @@ database is my company" needed almost no changes to become multi-tenant — see 
   workspace per day. Nothing here is tenant *content* — only metadata about tenants, and the
   snapshot is counts, sums and timestamps by the same rule.
 - **Tenant resolution** (`apps/api/src/middleware/tenant.ts`): resolves which org a request
-  belongs to from the `Host` header's subdomain (falls back to `DEFAULT_ORG_SLUG` when there's no
-  real subdomain — the on-prem shape), decrypts that org's DSN, and wraps the rest of the request
-  in an `AsyncLocalStorage` context (`apps/api/src/config/tenant-context.ts`) carrying the active
-  tenant's Prisma client.
+  belongs to from the `Host` header — before authentication runs — decrypts that org's DSN, and
+  wraps the rest of the request in an `AsyncLocalStorage` context
+  (`apps/api/src/config/tenant-context.ts`) carrying the active tenant's Prisma client. Walked
+  through step by step below.
+- **Provisioning** (`services/provisioning.service.ts`) is how a tenant comes into existence — from
+  the platform-admin console, or from self-serve signup once the address is verified. It creates the
+  physical database, migrates it, seeds baseline data plus the one real admin account requested (no
+  demo data), registers the encrypted DSN as `OrgDatabase`, and flips the org `ACTIVE` only on full
+  success — so a half-finished org stays visibly `PROVISIONING`, and provisioning it again is safe.
 - **The `prisma` Proxy** (`apps/api/src/config/prisma.ts`): every one of the ~30 existing
   `import { prisma } from "../config/prisma.js"` call sites across controllers/services/workers
   is untouched — `prisma` is a `Proxy` that forwards every property access to whichever tenant
@@ -115,6 +178,82 @@ database is my company" needed almost no changes to become multi-tenant — see 
   `apps/api/src/workers/run-for-every-org.ts` loops over every `ACTIVE` org from the control
   plane and re-runs the worker's existing body once per org, each inside that org's own tenant
   context — one org's failure is caught and logged, never blocking the rest.
+
+#### How a request resolves to its organization
+
+Concretely, for a user at `acme.timesphere.app` (§4 shows the same path call by call):
+
+1. **The `Host` header names the org before any credential does.** `resolveOrgSlug()`
+   (`middleware/tenant.ts`) turns the hostname into a slug — no login has happened yet, and none is
+   needed for this step. With `ROOT_DOMAIN` set it strips that suffix (`acme.timesphere.app` →
+   `acme`), and `resolveTenant` first checks for a verified custom domain
+   (`resolveCustomDomainSlug`, the control-plane `OrgDomain` table — only `verifiedAt` rows count).
+   With `ROOT_DOMAIN` unset, the first label of a hostname of three or more labels is the slug. A host
+   with no real subdomain — `localhost`, an IP, too few labels, or the `ROOT_DOMAIN` apex itself —
+   falls back to `DEFAULT_ORG_SLUG`. That fallback is the entire mechanism that makes a single-org
+   on-prem deployment a SaaS deployment with one org in it rather than a separate code path; for the
+   apex, `isRootDomainRequest` lets the routing layer serve the workspace finder instead of one
+   tenant's login page. Anything in front of the API must pass `Host` through unchanged —
+   [DEPLOYMENT.md](DEPLOYMENT.md#turning-on-multi-org-routing-root_domain).
+2. **The slug is looked up in the control plane** (`CONTROL_DATABASE_URL`). `resolveActiveOrgBySlug()`
+   loads the `Organization` and its `OrgDatabase` connection record (the physical DSN, AES-256-GCM
+   encrypted). `ACTIVE` and `GRACE` orgs resolve — a lapsed workspace stays reachable so its super
+   admin can sign in and pay, and `middleware/auth.ts` shuts everything else past authentication. An
+   unknown, suspended or still-provisioning org is refused here, before any query against tenant
+   data, and for a caller without a valid access token for that org all three answer the same 404 —
+   a forged `Host` or a guessed webhook slug cannot learn which workspaces are suspended or brand
+   new. A caller holding a session there still gets the real 403/503.
+3. **The org's own connection is decrypted and opened, or reused.** `getTenantClient()`
+   (`config/prisma.ts`) keeps one cached client per org (LRU-capped, connection-limited per tenant),
+   and `tenantContext.run(...)` makes it the active client for the rest of the request — which is what
+   the `prisma` Proxy above forwards to. There is no `WHERE organizationId = ?` anywhere in
+   tenant-facing queries, because no other tenant's rows exist on that connection to query by
+   accident.
+4. **Login runs entirely inside that org's context.** Password auth reads `User` rows in *that* org's
+   database only, so the same email can be two unrelated accounts in two orgs with no collision —
+   different databases, not different rows in a shared `User` table. SSO and LDAP work the same way:
+   each org's admin turns on and configures its own providers under **Workspace Settings → Single
+   sign-on** (stored per org as `OrgSsoConfig`/`OrgAuthMethod` in the control plane), so `acme`'s
+   Google SSO and `beta`'s are two unrelated OAuth clients that happen to share a protocol.
+5. **The resulting tokens are org-bound, not just user-bound.** `signAccessToken`/`signRefreshToken`
+   (`utils/security.ts`) embed the resolving org's id as an `org` claim. `requireAuth`
+   (`middleware/auth.ts`) refuses an access token whose claim is not the org this request resolved
+   to, and the refresh path in `auth.service.ts` does the same for refresh tokens — so a token minted
+   at `acme.timesphere.app` is rejected outright at `beta.timesphere.app`, before any per-user
+   permission check runs. The claim exists because every org shares the same tenant JWT secrets; it
+   is the defense-in-depth layer §3.2 describes, not the boundary. Tokens minted before the claim
+   existed carry none and skip the check.
+
+#### Per-org settings cannot leak across tenants
+
+By construction, not by filter — a materially stronger guarantee than the usual multi-tenant SaaS
+pattern. **`GlobalAISettings` — provider, model, the BYOK API key, which per-feature toggles are on,
+the monthly budget cap, the confidence threshold — is a table in the tenant's own schema**
+(`apps/api/prisma/schema.prisma`), not a row in a shared settings table keyed by `organizationId`.
+The same is true of every other admin-configurable surface: ticket types, labels, SLA hours,
+email-intake routing rules, chat-connector config (`ChatIntegration`), notification settings. There
+is structurally no shared table for any of it to leak through: reading `beta`'s AI config while a
+request is scoped to `acme` is not a permission check that could have a bug in it, it is a different
+physical MySQL connection that `acme`'s request never opens. Concretely:
+
+- Org A's provider API key is encrypted at rest in Org A's own database under the deployment-wide
+  `ENCRYPTION_KEY` — but even with that key there is nothing of Org A's to decrypt in Org B's
+  database; Org B's key, if any, is a separate encrypted value in a separate database behind its own
+  connection credentials.
+- Org A's AI usage and spend (`AIUsageLog`, checked against `GlobalAISettings.monthlyBudgetUsd`) is
+  Org A's own data — one org's usage can never push another org's budget cap.
+- Turning AI, SSO or a chat connector on or off, choosing a provider, or hitting a plan-tier
+  seat/AI-budget ceiling (§3.5) is entirely per-org. One org's admin has no code path that reaches
+  another org's settings, because no such code path takes an org-selector parameter at all — the
+  active tenant is fixed for the lifetime of the request by step 3 above. SSO config, the one such
+  surface stored in the control plane, is edited from Workspace Settings only through the resolved
+  org's id (`requireTenantContext().orgId`), never a caller-supplied one.
+
+The one place that legitimately sees across every org is the `/platform-admin` console (§3.6): its
+own login, and its own JWT secret (`PLATFORM_ADMIN_JWT_SECRET`, deliberately distinct from the two
+tenant JWT secrets so a leaked tenant secret cannot mint a platform-admin token). Its endpoints
+return aggregate numbers — seat counts, plan tier, suspend/archive status — rather than row-level
+tenant content such as ticket bodies or timesheet entries.
 
 ### 3.2 Authentication — 4 SSO methods + password
 
@@ -161,7 +300,8 @@ real `User` row, while the real sender lives in separate free-text fields
 ### 3.5 Plan-tier enforcement
 
 `services/plan-limits.service.ts` re-reads (never caches) an org's effective seat limit, AI
-budget ceiling, allowed SSO providers, and allowed chat platforms on every relevant check —
+budget ceiling, allowed SSO providers, and allowed chat platforms (the `PlanTierLimit`
+`allowedSsoProviders` / `allowedChatPlatforms` allow-lists) on every relevant check —
 seat creation, AI calls, and the "enable this provider/platform" toggle in Workspace Settings.
 Enforced live, not just validated once at signup, so a platform admin's change takes effect on
 the very next request.
@@ -628,6 +768,8 @@ field (`change_draft_assist`, `change_pir_assist`), through the same `AiProposal
 describes. The allowlist is six prose fields; no state, risk score, schedule or outcome is reachable
 however a model replies. Reasoning in `docs/AI_AND_AUTOMATION_FOR_CHANGE.md`.
 
+The lifecycle state machine, the submit gate and the submit-to-decision sequence are drawn in §7.5.
+
 ### 3.14 Ask AI — an answer loop with two filters and one predicate
 
 `askWorkspaceChat` answers a question by consulting a tool registry, up to five steps, then
@@ -668,7 +810,8 @@ that the caller can see the project or ticket, because a workspace-wide permissi
 boundary.
 
 Two behaviours here were established by measurement and are load-bearing rather than stylistic;
-both are recorded in `docs/ROADMAP.md` under V9. **Only exchanges that consulted a tool become
+both are recorded in [ENGINEERING_LOG.md](ENGINEERING_LOG.md#v9--change-management-and-an-assistant-that-knows-who-is-asking-2026-08-19--2026-08-20)
+under *V9 — Change Management, and an assistant that knows who is asking*. **Only exchanges that consulted a tool become
 context for the next question** — fed its own failures back, the model copies them. And **the
 prompt is written in positives, with the read-first rule repeated at the decision point** — as
 prohibitions in the preamble it produced the refusals it forbade.
@@ -750,7 +893,7 @@ service depends on `config/prisma.ts`; not repeated below unless it's the point 
 | `config/prisma.ts` | The `prisma` Proxy + `getTenantClient(orgId, dsn)` factory (LRU-capped, per-tenant connection-limited). | `tenant-context.ts` | Every controller/service (unchanged import) |
 | `middleware/tenant.ts` | Resolves org from Host header, attaches tenant context. Exports `resolveOrgSlug`/`resolveActiveOrgBySlug` reused by SSO/chat-webhook routes that can't use the middleware directly. | `control-prisma.ts`, `config/prisma.ts`, `utils/encryption.ts` | `app.ts` (global), `sso.controller.ts`, `chat-webhook.controller.ts` |
 | `workers/run-for-every-org.ts` | Cron-worker equivalent of tenant resolution — loops every `ACTIVE` org, runs a callback per-org inside its tenant context. | `control-prisma.ts`, `config/prisma.ts` | Every `workers/*.ts` cron file |
-| `services/provisioning.service.ts` | Full org provisioning flow: create physical DB → migrate → seed → register `OrgDatabase`. Every step idempotent/retry-safe. | `prisma/seed.ts#seedTenant`, `scripts` (invokes Prisma CLI directly via `node`, not `npx.cmd`, to avoid a Windows spawn restriction — see its own comment) | `controllers/platform-admin.controller.ts`, `scripts/migrate-all-tenants.ts` |
+| `services/provisioning.service.ts` | Full org provisioning flow: create physical DB → migrate → seed → register `OrgDatabase`. Every step idempotent/retry-safe. | `prisma/seed.ts#seedTenant`, `scripts` (invokes Prisma CLI directly via `node`, not `npx.cmd`, to avoid a Windows spawn restriction — see its own comment) | `controllers/platform-admin.controller.ts`, `controllers/signup.controller.ts` (self-serve trial, after email verification), `scripts/migrate-all-tenants.ts` |
 | `scripts/migrate-all-tenants.ts` | Fans a new migration out across every tenant DB, skipping already-current ones, isolating one org's failure from the rest. | `provisioning.service.ts` | Run manually after merging a migration (`npm run migrate:tenants`) |
 | `services/plan-limits.service.ts` | Effective (org-override-or-tier-default) seat limit / AI budget / allowed SSO providers / allowed chat platforms — always re-read, never cached. | `control-prisma.ts` | `ai.service.ts`, `user.controller.ts`, `auth.service.ts`, `settings.controller.ts`, `chat-integrations.controller.ts` |
 | `services/platform-admin-analytics.service.ts` | **The sole cross-tenant-loop file** — aggregate-only reporting for `/platform-admin`. | `run-for-every-org.ts`-style loop | `controllers/platform-admin.controller.ts` |
@@ -1024,14 +1167,16 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    In["Inbound message\n(email or chat)"] --> Route["Route via *RoutingRule\n(first active match wins)\nor fall back to default project"]
-    Route --> Classify["ai.service.ts classifier\n(untrusted-content framing,\nconfidence score)"]
+    Mail["Email (text + image attachments):\ninbound-email.worker.ts polls\nthe mailbox's unseen messages over IMAP"] --> In
+    Chat["Chat: webhook receiver (§5)\nor Telegram long-poll worker"] --> In
+    In["Inbound message"] --> Route["Route via *RoutingRule\n(first active match wins)\nor fall back to default project"]
+    Route --> Classify["ai.service.ts classifier —\nclassifyTicket (email) / classifyChatMessage (chat)\n(untrusted-content framing) → type, priority,\nmodule, confidence, reasoning"]
     Classify --> Cap["Cap confidence at 0.85\nbefore gating needsReview"]
     Cap --> Create["Create Ticket\n(system reporter user,\nreal sender in free-text fields)"]
-    Create --> Gate{needsReview?}
+    Create --> Gate{"needsReview?\n(capped confidence below\nthe org's threshold)"}
     Gate -->|No + module resolved| Assign["Auto-assign via\nModuleAssigneeRule"]
     Gate -->|Yes| Notify["Notify SUPER_ADMIN/ADMIN\n+ project MANAGER/TEAM_LEAD"]
-    Assign --> Reply["Reply/confirm to sender\n(email) or chat (Slack/Teams/\nGoogle Chat/Telegram)"]
+    Assign --> Reply["Confirm to the sender with the ticket key —\nby email, or in chat (Slack/Teams/\nGoogle Chat/Telegram)"]
     Notify --> Reply
     Reply --> Audit["audit() — surfaces in the\nticket's own Activity tab"]
 ```
@@ -1072,6 +1217,129 @@ flowchart TB
     CD -->|publishes images| Helm
 ```
 
+### 7.5 Change lifecycle — raised to closed
+
+The design is §3.13; the routes, what submission requires and why it is not advisory, approval
+routing and the dependency gate are in [API.md](API.md#change-management-v8). This is the shape.
+
+The lifecycle is its own state machine (`changeStateTransitions` in `packages/shared`). Two things are
+deliberately **not** states: `FAILED` and `ROLLED_BACK` are **outcomes**, because a change that failed
+still has to be validated, reviewed and closed — modelling failure as a state strands it outside the
+process that exists to learn from it. `APPROVED` and `REJECTED` are written only by a recorded
+decision: `AWAITING_APPROVAL` has no manual edge to either, so the transition route cannot reach them
+however it is called.
+
+```mermaid
+stateDiagram-v2
+  [*] --> DRAFT
+  DRAFT --> AWAITING_APPROVAL: submit (gated)
+  AWAITING_APPROVAL --> APPROVED: manager or super admin
+  AWAITING_APPROVAL --> REJECTED: with comments
+  REJECTED --> DRAFT: rework opens a NEW round
+  APPROVED --> SCHEDULED
+  SCHEDULED --> APPROVED: unscheduled
+  APPROVED --> IMPLEMENTING: same dependency gate
+  SCHEDULED --> IMPLEMENTING: refused while a predecessor is OPEN
+  IMPLEMENTING --> VALIDATION
+  VALIDATION --> IMPLEMENTING: checks failed
+  VALIDATION --> PIR: outcome required
+  PIR --> CLOSED
+  DRAFT --> CANCELLED
+  AWAITING_APPROVAL --> CANCELLED
+  APPROVED --> CANCELLED
+  SCHEDULED --> CANCELLED
+  IMPLEMENTING --> CANCELLED
+  CANCELLED --> DRAFT: reopened
+  CLOSED --> [*]
+  REJECTED --> [*]
+  CANCELLED --> [*]
+```
+
+The gate on `submit` is the module's whole point, so the API enforces it at the moment approval is
+asked for — not a hopeful placeholder in a form. Every gap is collected and returned in one 422, so
+the diamonds below are a reading order, not a short circuit:
+
+```mermaid
+flowchart TD
+  S["Submit for approval"] --> R{"Risk assessment<br/>COMPLETE?"}
+  R -- "no" --> X["422 — names every gap at once"]
+  R -- "yes" --> J{"Justification,<br/>implementation plan,<br/>planned window?"}
+  J -- "missing" --> X
+  J -- "yes" --> B{"Backout plan owed?<br/>(HIGH risk, MAJOR,<br/>or a data migration)"}
+  B -- "yes, and absent" --> X
+  B -- "satisfied" --> T{"Above LOW risk<br/>without a test plan?"}
+  T -- "yes" --> X
+  T -- "no" --> D{"Downtime declared<br/>without a comms plan<br/>or a duration?"}
+  D -- "yes" --> X
+  D -- "no" --> A["AWAITING_APPROVAL<br/>→ routed, mailed, clock started"]
+```
+
+**Why a *complete* risk assessment is required, and not merely encouraged.** The score normalises
+across every active parameter, so a blank contributes zero — correct (a blank is not "low"), but a
+half-filled assessment therefore *under-reports*. Measured during the build: high business impact plus
+high data risk, with the other nine parameters blank, scored **27 and banded LOW** — and the band
+decides whether a backout plan is mandatory, so leaving fields empty was a way to skip the module's
+central rule. A draft still saves with any subset; only submission demands the full set.
+
+```mermaid
+sequenceDiagram
+  actor Requester
+  participant UI as Change page
+  participant API as REST API
+  participant Rules as change.service.ts
+  participant DB as MySQL
+  participant Mail as SMTP
+  actor Approver as Manager / Super admin
+
+  Requester->>UI: Fill the twelve sections, add a runbook
+  UI->>API: POST /changes/:id/transition {to: AWAITING_APPROVAL}
+  API->>Rules: missingForSubmit(change, activeRiskKeys)
+  alt anything missing
+    Rules-->>API: ["Backout plan", "Test plan"]
+    API-->>UI: 422 — every gap in one response
+  else complete
+    API->>Rules: resolveChangeApprovers(requesterId)
+    Rules-->>API: the requester's manager, else all active super admins — never the requester
+    API->>DB: open approval round N, write state + Ticket.status together
+    API->>Mail: to requester + implementer + approvers, BCC every super admin
+  end
+
+  Approver->>API: POST /changes/:id/decision {APPROVED, comments}
+  API->>API: canDecideChange — a pending approver in this round, or any super admin
+  API->>DB: settle the round, write state + Ticket.status, stamp approvedAt (starts the next SLA clock)
+  API->>Mail: decision mail, adding who decided and why
+```
+
+**Why every state write also writes `Ticket.status`.** A change *is* a ticket plus an extension row,
+so about forty existing readers already query `Ticket.status`. `CHANGE_STATE_TO_TICKET_STATUS` is the
+same compatibility hinge `WorkflowStatus.legacyStatus` provides for custom ticket statuses (§3.9) —
+the pair is never written apart (both the transition and the decision route write them in one
+transaction), which is what lets comments, attachments, watchers, links, the audit trail, search and
+project-scoped visibility keep working with no second implementation to keep in step.
+
+### 7.6 Logging time
+
+```mermaid
+sequenceDiagram
+  actor Employee
+  participant UI as Timesheet UI
+  participant API as REST API (saveTimesheet)
+  participant DB as MySQL
+  Employee->>UI: Select project/module/activity and time
+  UI->>UI: Validate overlap, future date, max hours
+  UI->>API: Submit timesheet
+  API->>API: RBAC + DTO validation, no future date, 12h cap per entry
+  API->>API: Identity gate (face check, when required) + project assignment
+  API->>DB: Serializable transaction — overlap re-check + insert
+  API->>DB: Audit log
+  API-->>UI: 201 — the saved entry (SUBMITTED, approval deadline set)
+```
+
+The browser's checks are a convenience; `saveTimesheet` (`timesheet.controller.ts`) is the authority
+and re-runs every one, which is why the MCP server and Ask AI log time through it rather than beside
+it (§3.11, §3.14). The overlap check sits inside a Serializable transaction because two concurrent
+submits for the same day could otherwise each see "no overlap" and both insert.
+
 ---
 
 ## 8. Glossary
@@ -1091,4 +1359,7 @@ flowchart TB
 
 ---
 
-*Last updated: 2026-08-20, for V9 — change management (§3.13) and the Ask AI answer loop (§3.14).*
+*Last updated: 2026-10-01 — now the canonical home of the stack summary (§2), the tenant-resolution
+walk-through (§3.1), the system diagram (§1) and the change/timesheet workflow diagrams (§7.5–7.6),
+all formerly in the root README. Before that: 2026-08-20, for V9 — change management (§3.13) and the
+Ask AI answer loop (§3.14).*

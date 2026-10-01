@@ -1,5 +1,8 @@
 # Security & DevOps Integrations
 
+> **Audience:** DevOps and security engineers wiring CI to TimeSphere · **Type:** how-to ·
+> [Documentation index](README.md)
+
 How to connect GitHub, GitLab, Jenkins, Bitbucket, or any internal/self-hosted git+CI setup to
 TimeSphere's security-assessment ingestion pipeline — see
 [docs/ROADMAP.md § Security assessment suite](ROADMAP.md)
@@ -276,11 +279,17 @@ curl -sf -X POST "$HOST/api/devops/$ORG_SLUG/findings" \
 ## 4. VAPT is different, on purpose
 
 VAPT (Vulnerability Assessment & Penetration Testing) is a periodic, human-led assessment — not
-something a CI job produces on every push. It isn't ingested through this webhook. Phase 2 of
-this feature (tracked in `docs/ROADMAP.md`) adds a structured report upload for VAPT that parses
-into the same `SecurityFinding` table; until then, track VAPT findings the same way this app's
-own VAPT report is published (see [README § Security](../README.md#security)) — as a standalone
-report, optionally logged as manual tickets for anything actionable.
+something a CI job produces on every push — so it isn't ingested through this webhook. A super
+admin uploads it instead, from **Workspace Settings → Security & DevOps → VAPT report upload**
+(`POST /api/settings/security-ingestion/vapt-report`, `settings.controller.ts`).
+
+The upload is **structured JSON, not the assessor's PDF**: extracting findings from an arbitrary
+report layout is unreliable without a fixed template, so convert the deliverable first. The body is
+an `assessor` (free text — the firm, the consultant, or an internal red team; stored as the
+finding's `tool`) and 1–500 `findings`, each with a `title`, a `severity` (`LOW` / `MEDIUM` / `HIGH`
+/ `CRITICAL`) and optionally a `description`, `cwe`, `filePath`, `lineNumber` and a `ticketKey` to
+attach it to an existing ticket. The rows land in the same `SecurityFinding` table as the automated
+types, so the ticket's Security tab, the PDF report and the digests render them identically.
 
 ## 5. Supported scanner categories (bring your own tool)
 

@@ -1,12 +1,22 @@
 # V8 — Agentic Work Management
 
-Research and plan, written 2026-08-17 on branch V8. Nothing here is built yet. This document is the
-argument for what to build and, more importantly, what **not** to rebuild: most of the hard
-machinery this theme needs already exists and is listed below by name.
+> **Audience:** engineers changing the agentic layer · **Type:** design record ·
+> [Documentation index](README.md)
 
-Companion documents: [ROADMAP.md](ROADMAP.md) (the dated audit trail — V6's planning-layer entry is
-the direct predecessor of this one), [ARCHITECTURE.md](ARCHITECTURE.md), [API.md](API.md),
-[DATABASE.md](DATABASE.md).
+**Status (2026-10-01): phases 1–5 are built** and shipped in 2.5.0 (2026-08-18) — Goals, the Inbox
+and daily brief, the agent roster, the Workflow Studio and the agent ledger. Phase 6 was scoped and
+never committed to, and still is not. The text below is the plan as written on 2026-08-17, kept as
+the design record: it is the reasoning behind the shape of what shipped, and migrations and schema
+comments cite its section numbers (§4, §5, §7), so those stay stable. How each phase actually went is
+in [ENGINEERING_LOG.md](ENGINEERING_LOG.md) (the "V8 phase …" entries).
+
+Research and plan, written 2026-08-17 on branch V8. This document is the argument for what to build
+and, more importantly, what **not** to rebuild: most of the hard machinery this theme needs already
+exists and is listed below by name.
+
+Companion documents: [ENGINEERING_LOG.md](ENGINEERING_LOG.md) (the dated record — V6's
+planning-layer entry is the direct predecessor of this one), [AGENTIC_UX_PLAN.md](AGENTIC_UX_PLAN.md)
+(the screens), [ARCHITECTURE.md](ARCHITECTURE.md), [API.md](API.md), [DATABASE.md](DATABASE.md).
 
 ---
 

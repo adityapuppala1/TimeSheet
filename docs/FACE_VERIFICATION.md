@@ -1,5 +1,8 @@
 # Face (identity) verification
 
+> **Audience:** super admins enabling it, operators running it · **Type:** how-to + explanation ·
+> [Documentation index](README.md)
+
 Confirms the person submitting a timesheet, creating or progressing a ticket, or **approving** a
 timesheet is actually the account holder — closing the "buddy punching" gap where one employee
 acts on a colleague's behalf using a borrowed or shared session.

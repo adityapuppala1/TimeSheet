@@ -1,5 +1,12 @@
 # V8 — the agentic surfaces, designed for the super admin
 
+> **Audience:** engineers changing the agentic screens · **Type:** design record ·
+> [Documentation index](README.md)
+
+**Status: complete** — every item in §3 shipped, and the three gaps it carried forward closed in
+V8 phase 10 (2026-08-18); see §5. Kept as the design record. Migrations cite its section numbers
+(§3.2, §3.4), so those stay stable.
+
 Plan written 2026-08-17, after the product owner answered the open questions. Companion to
 [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md), which covers the mechanism; this covers the
 screens and the work still outstanding.
@@ -197,7 +204,7 @@ list plus a seed change — say so and it is done.
 5. ~~**Workload/budget merge** (§3.5) and **mobile ergonomics** (§3.6)~~ — shipped.
 
 **This plan is complete, and so are the three gaps it carried forward** — all closed in phase 10
-(2026-08-18), recorded in [ROADMAP.md](ROADMAP.md):
+(2026-08-18), recorded in [ENGINEERING_LOG.md](ENGINEERING_LOG.md#v8-phase-10--the-audit-and-the-gaps-it-found-2026-08-18):
 
 - The `FORM_SUBMISSION` trigger has its own dispatcher, hooked into the public intake rather than the
   event bus, because a flow on this trigger matches on a FORM and a `ticket.created` payload has no

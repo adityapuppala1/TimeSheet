@@ -1,6 +1,19 @@
 # API Documentation
 
-Base URL: `/api`
+> **Audience:** integrators and engineers · **Type:** reference · [Documentation index](README.md)
+
+Base URL: `/api`. Sections follow the product's areas, roughly in the order they were built. Three
+surfaces have their own authentication and are the ones an external system usually wants:
+
+- [Public API](#public-api) — bearer API keys (READ or WRITE scope) and signed outbound webhooks,
+  for integrations.
+- [MCP server](#mcp-server) — `POST /api/mcp`, for an AI assistant acting as one specific user.
+- [Platform-admin console](#platform-admin-console) — the operator API, with its own login and its
+  own JWT secret, never a tenant session.
+
+Everything else is the tenant API the web app itself calls: a short-lived access token plus an
+httpOnly refresh cookie, resolved to an organization by the request's `Host` header
+([ARCHITECTURE.md § 4](ARCHITECTURE.md#4-request-lifecycle-a-normal-tenant-resolved-api-call)).
 
 ## Auth
 
@@ -2002,7 +2015,7 @@ twice. A period in which nothing at all was recorded is skipped: an update full 
 people to stop opening it.
 
 **Email registration.** The template key is `digest.practice_update`, so it appears in
-[Email templates](#email-templates) with preview, test send and revert, and in Email analytics with
+Email templates ([`/email-templates`](#email-delivery-analytics)) with preview, test send and revert, and in Email analytics with
 per-template delivery figures — no special-casing. **No new environment variables.**
 
 ## AI usage

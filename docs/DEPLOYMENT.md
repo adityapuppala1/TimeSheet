@@ -18,6 +18,17 @@ Once the platform itself is deployed, see
 [docs/NEW_ORGANIZATION_SETUP.md](NEW_ORGANIZATION_SETUP.md) for the production-hardening
 checklist and the repeatable runbook for bringing a real organization online.
 
+## Three ways to run it
+
+Fastest first. Each is a complete deployment rather than a stepping stone, and each has its own
+section below.
+
+| | Command | What you get |
+|---|---|---|
+| **1. One-click installer** (Docker is the only prerequisite) | `./install.sh` (Linux/macOS) · `.\install.cmd` (Windows) | The Compose stack with a generated root `.env`, a health-checked boot and the one-time seed. [One-click install](#one-click-install-fastest-path--docker-required) |
+| **2. Docker Compose by hand** | `docker compose up --build` | The same stack with every value under your control. [Manual setup](#manual-setup), step 5, and the variables under [Required at boot](#required-at-boot) |
+| **3. Kubernetes (Helm chart)** | `helm install my-release deploy/helm/timesphere -f my-values.yaml` | Both deployment shapes through chart values, and the only path with real autoscaling. [Kubernetes deployment](#kubernetes-deployment) |
+
 ---
 
 ## Shape 1 — On-prem / single-org
@@ -98,7 +109,10 @@ specifically for "I want Docker for the app, but my own database."
    - `ENCRYPTION_KEY` — 64 hex chars (`openssl rand -hex 32`).
    - `WEB_ORIGIN` / `APP_BASE_URL` — your real domain.
    - Leave `TENANT_DB_PROVISION_BASE_URL` unset — this deployment shape never provisions a
-     second organization, so in-app provisioning isn't relevant.
+     second organization, so in-app provisioning isn't relevant. The template ships it *set* (for
+     local development), so blank it here: a set value is also what lets the public self-serve
+     signup route create workspaces on this server (see the
+     [reference row](#core-settings-with-defaults)).
 3. `npm ci && npm run build`.
 4. Run migrations + seed the control plane and the one tenant:
    ```bash
@@ -111,9 +125,10 @@ specifically for "I want Docker for the app, but my own database."
    ```
 5. Deploy `apps/api/dist` behind HTTPS, `apps/web/dist` behind a static host/Nginx, or just run
    `docker compose up --build` — its `api` service already runs both schemas' `prisma migrate
-   deploy` automatically on every boot (see `docker-compose.yml`'s `command:`), and it needs the
-   same `CONTROL_DATABASE_URL`/`ENCRYPTION_KEY`/`PLATFORM_ADMIN_JWT_SECRET` env vars set as step 2
-   above (Compose reads them from your shell or a `.env` file next to `docker-compose.yml`).
+   deploy` automatically on every boot (see `docker-compose.yml`'s `command:`). Compose does
+   **not** read `apps/api/.env`: it takes values from your shell or a `.env` file next to
+   `docker-compose.yml`, and refuses to start without the variables listed under
+   [Required at boot](#required-at-boot).
 6. **Seed once, after first boot** — migrations run automatically every restart, but seeding
    (roles/permissions, the control-plane plan tiers + platform-admin account, this org's demo
    data) is a one-time bootstrap step, run from your own machine against the database directly
@@ -312,17 +327,14 @@ provisioning of new organizations from that console.
 
 ### Provisioning a new organization
 
-From the `/platform-admin` console's Organizations page:
+Two clicks in the `/platform-admin` console's Organizations page: **New organization** registers a
+control-plane row in `PROVISIONING` status, and **Provision** — which needs
+`TENANT_DB_PROVISION_BASE_URL` — creates and migrates the organization's own database, seeds it
+without demo data, creates its first admin and flips it `ACTIVE`. Every step is safe to retry
+(`services/provisioning.service.ts`). The org is then reachable at `<slug>.yourdomain.com`.
 
-1. **New organization** — registers a control-plane row (`PROVISIONING` status) with a name,
-   subdomain slug, and plan tier. No physical database yet.
-2. **Provision** (shown on any `PROVISIONING` org, requires `TENANT_DB_PROVISION_BASE_URL` to be
-   configured) — physically creates the tenant's MySQL database, runs every migration against
-   it, seeds baseline roles/settings/ticket-types (no demo data), creates the one real admin
-   account you specify, and flips the org `ACTIVE`. Every step here is safe to retry if
-   something fails partway through (see `services/provisioning.service.ts`'s header comment).
-3. The new org is immediately reachable at `<slug>.yourdomain.com` with the admin account you
-   just created.
+The step-by-step runbook, with what to check before and after, is
+[NEW_ORGANIZATION_SETUP.md § Shape 2](NEW_ORGANIZATION_SETUP.md#shape-2--saas-multi-org-adding-one-more-organization-to-a-live-platform).
 
 ### Provisioning without the automation
 
@@ -391,11 +403,16 @@ beyond what's documented elsewhere:
 ### Operational notes specific to this shape
 
 - **Connection ceiling**: each tenant database connection pool is capped
-  (`PER_TENANT_CONNECTION_LIMIT` in `config/prisma.ts`) and idle clients are evicted after 10
-  minutes, with an LRU cap (`MAX_CACHED_CLIENTS`) on how many tenant clients stay warm at once.
-  `MAX_CACHED_CLIENTS × PER_TENANT_CONNECTION_LIMIT` must stay comfortably under your MySQL
-  server's `max_connections` — this is a known scaling ceiling of the database-per-tenant model,
-  not something this phase solved; monitor it as organization count grows.
+  (`PER_TENANT_CONNECTION_LIMIT` in `config/prisma.ts`, set by `TENANT_DB_CONNECTION_LIMIT`,
+  default 5) and idle clients are evicted after 10 minutes, with an LRU cap (`MAX_CACHED_CLIENTS`,
+  50) on how many tenant clients stay warm at once — **per API process**. So one replica can hold
+  up to 50 × 5 = 250 tenant connections, and N replicas N times that, while MySQL 8's default
+  `max_connections` is 151. Keep the product comfortably under your server's
+  `SHOW VARIABLES LIKE 'max_connections'`, and watch `SHOW STATUS LIKE 'Threads_connected'` as the
+  organization count grows. This is a known scaling ceiling of the database-per-tenant model, not
+  a bug. The 20 that the Compose files and the chart ship is sized for a single-org install, where
+  only one tenant client is ever live — see the `TENANT_DB_CONNECTION_LIMIT` row in the
+  [environment variable reference](#environment-variable-reference) before reusing it here.
 - **Backups**: back up the control-plane database (small, but losing it means losing the map of
   which tenant database is which) and every tenant database independently.
 - **The platform-admin console never loops over tenant content**: the only file in this codebase
@@ -921,7 +938,9 @@ address to be public, because a hostname's text proves nothing — `internal.att
 
 Set it via the root `.env` (Compose forwards `ALLOW_PRIVATE_NETWORK_EGRESS`), `env.allowPrivateNetworkEgress`
 in `values.yaml` (Helm), or `apps/api/.env` for a manual/systemd install. Read once at boot, so
-changing it needs an api restart.
+changing it needs an api restart. `install.sh` / `install.ps1` ask on a fresh install (default no),
+and `npm run doctor` warns when it is on and the deployment looks internet-facing — a public
+`WEB_ORIGIN`, or `NODE_ENV=production`.
 
 > A rejected target surfaces as a readable 422 on the settings form, and for a live webhook as
 > `blocked` in that webhook's delivery status with the reason attached — not a silent failure.
@@ -966,23 +985,37 @@ guaranteed to be serving over TLS.
 `.github/workflows/ci.yml` runs in two tiers, because the repository is private and every job
 minute is billed (Windows minutes twice over):
 
-- **Every push to every branch — the cheap tier (~11 minutes).** On `ubuntu-latest` (GitHub
-  Actions' `services:` containers only run on Linux runners): lint + typecheck, the production
-  dependency audit, the build of all three packages, both unit suites, then a real MySQL service
-  container, both schemas migrated and seeded, and the integration suite against it. Alongside:
-  the changelog-tag check, the Helm/compose manifest validation, and the syntax checks of
-  `install.sh` (`bash -n`) and `install.ps1` (the PowerShell parser, on Windows, seconds).
-- **`main`, version tags and pull requests — the full tier (~90 more minutes).** The Playwright
-  suite in four shards, each on its own runner with its own MySQL and seed; `install.sh` executed
-  end to end (a real Docker build of both images); and a `windows-latest` typecheck + build,
-  because this codebase is developed on Windows day-to-day (see this doc's own history) and that
-  job catches anything that happens to build on Linux but not Windows. To run the full tier on
-  any other branch, put `[full-ci]` in the commit message or start the workflow by hand from the
-  Actions tab (`workflow_dispatch`).
+- **Every push to every branch, and every pull request — the cheap tier (~11 minutes).** On
+  `ubuntu-latest` (GitHub Actions' `services:` containers only run on Linux runners): lint +
+  typecheck, the production dependency audit, the build of all three packages, both unit suites,
+  then a real MySQL service container, both schemas migrated and seeded, and the integration suite
+  against it. Alongside: the changelog-tag check, the Helm/compose manifest validation, and
+  `bash -n` over `install.sh` and `update.sh`.
+- **`main`, a hand-started run, or `[full-ci]` — the full tier (~90 more minutes).** The whole
+  Playwright suite (619 tests, every browser project) in four shards, each on its own runner with
+  its own MySQL and seed; `install.sh` executed end to end (a real Docker build of both images);
+  and — on `main` and `[full-ci]`, but not a hand-started run — the two Windows jobs: a
+  `windows-latest` typecheck + build, because this codebase is developed on Windows day-to-day
+  (see this doc's own history) and that job catches anything that happens to build on Linux but
+  not Windows, and the PowerShell parse of `install.ps1`. To get the full tier on any other
+  branch, put `[full-ci]` in the commit message or start the workflow by hand from the Actions tab
+  (`workflow_dispatch`).
+- **Pull requests get a lighter cut of it:** the installer run, and e2e over two shards on
+  `desktop` + `responsive-phone` only (348 tests) — the body of the suite, and the width where this
+  repo's layout bugs have actually been found. Firefox, WebKit and both Windows jobs wait for
+  `main`; they answer a pre-release question, not a per-push one.
 
-A newer push to the same branch cancels the run still in flight (`concurrency`); `main` and tags
-are exempt. A failing e2e shard uploads its Playwright report for three days, traces rather than
-videos — the trace carries the DOM, network and a screenshot per action at a tenth of the size.
+**Tag pushes run no CI at all**, on purpose. A release tag points at a commit `main` has already
+tested, and re-running everything against it cost 120 billed minutes each for `v5.6.0` and
+`v5.7.0` on 2026-09-28 — 58% of that day's 414 — for no new information. CD still runs on tags,
+because publishing the images is what a tag is for. The trade, stated in `ci.yml`: a tag placed on
+a commit that is *not* on `main` would ship without CI, which is one reason the release process
+pushes the branch and the tag in one command (`git push origin main v1.2.0`).
+
+A newer push to the same ref cancels the run still in flight (`concurrency`), **`main` included**:
+releases arrive in bursts, and only the last run describes the code that shipped. A failing e2e
+shard uploads its Playwright report for three days, traces rather than videos — the trace carries
+the DOM, network and a screenshot per action at a tenth of the size.
 
 `.github/workflows/cd.yml` builds and pushes `apps/api`/`apps/web`'s Docker images to GHCR
 (`ghcr.io/<owner>/<repo>-api` / `-web`) on every push to `main` (as `latest`) and on version
@@ -1040,27 +1073,37 @@ number that matters is billable-equivalent minutes, not wall-clock. Measured fro
 
 | What | Wall-clock | Billable-equivalent | When it runs |
 |---|---|---|---|
-| Cheap tier (build, typecheck, unit + integration, manifest checks) | ~11 min | **~11** | every push that touches code |
-| e2e, 4 shards | 23 + 12 + 17 + 15 | **67** | full tier only |
-| `install.sh` end-to-end | 4 min | **4** | full tier only |
-| Typecheck + build on Windows | 8 min | **16** (×2) | main, tags, `[full-ci]` |
+| Cheap tier (build, typecheck, unit + integration, manifest checks) | ~11 min | **~11** | every push that touches code, every PR |
+| e2e, 4 shards | 23 + 12 + 17 + 15 | **67** | full tier (pull requests run 2 shards of a narrower set) |
+| `install.sh` end-to-end | 4 min | **4** | full tier and pull requests |
+| Typecheck + build on Windows | 8 min | **16** (×2) | `main`, `[full-ci]` |
 | **A full-tier run** | | **~97** | |
 
 So a full run is **5% of the month's allowance**. Two dispatched runs in one afternoon is 10%, and
 that is exactly how 90% got used with a week of the cycle left.
 
+The month itself, measured the same way for 2026-09-01..28: **4,412 billed minutes against the
+2,000 allowance**, 99% of it this repository. The four e2e shards were 2,350 (53%), the Windows
+typecheck 714 (16%, from 415 wall-clock minutes), the ubuntu build/unit/integration job 464, the
+installer run 179. Those numbers are what the tag, `main`-cancellation and pull-request changes
+above were cut against. `node scripts/actions-usage.mjs [--since YYYY-MM-DD]` reproduces them: the
+billing API needs a scope a normal `gh` login lacks, and the per-run `timing` endpoint answers zero
+for this account, so the script sums each job's own start and finish, rounds each job up to the
+minute and doubles Windows — the way GitHub bills.
+
 **What keeps it down, in order of how much it saves:**
 
-1. **Do not dispatch a full-tier run to "just check"** — 97 minutes each. Push and let the cheap
-   tier answer; ask for the full tier when you are about to merge or tag.
+1. **Do not dispatch a full-tier run to "just check"** — ~82 minutes each by the table above (a
+   dispatched run skips only the Windows jobs). Push and let the cheap tier answer; ask for the
+   full tier when you are about to merge or tag.
 2. **Documentation-only pushes are skipped entirely** (`paths-ignore` on the push trigger). A prose
    commit cannot break a build and no longer spends 11 minutes proving it. Pull requests are
    deliberately exempt — a PR with no checks at all reads worse than one that cost 11 minutes.
-3. **Both Windows jobs run on main, tags and `[full-ci]` only.** They are 8 and ~1 minutes, but
+3. **Both Windows jobs run on `main` and `[full-ci]` only.** They are 8 and ~1 minutes, but
    they bill as 16 and 2. What they protect against — path handling, case sensitivity, line
    endings — reaches a user through a release, not through a branch push.
-4. **`concurrency` cancels superseded branch runs**, so three pushes ten minutes apart cost one
-   run and not three.
+4. **`concurrency` cancels superseded runs on every ref, `main` included**, so three pushes ten
+   minutes apart cost one run and not three.
 5. **`[full-ci]` in a commit message** pulls the expensive jobs in on a branch when you genuinely
    need them, without dispatching a whole run.
 
@@ -1130,6 +1173,39 @@ this upgrade command whenever a newer release exists on GitHub (checked hourly; 
 helm upgrade timesphere deploy/helm/timesphere --reuse-values --set image.tag=v1.2.0
 kubectl rollout status deploy/timesphere-api     # and `helm rollback timesphere` to go back
 ```
+
+### Version-specific upgrade notes
+
+Most releases need nothing beyond the command above. This is the index of the ones that need an
+operator to do something — or that look as though they might and don't — newest first. It is an
+index of actions, not a second changelog: the release notes are in [CHANGELOG.md](../CHANGELOG.md).
+
+One rule covers every release that carries a tenant migration, so it is not repeated per row: the
+migration reaches organizations beyond the default one only through the fan-out
+([Keeping every tenant's schema current](#keeping-every-tenants-schema-current)). `update.sh` /
+`update.ps1` run it for you; manual and Kubernetes deployments run it themselves.
+
+| Version | What to do | Detail |
+|---|---|---|
+| **5.7.0** | Set `ROOT_DOMAIN` if the address people type has three or more labels (`timesheet.company.com`): unset, every request — the login page included — answers `404 Unknown workspace.`, and the API now says so with a boot `ERROR` naming the value. Multi-workspace deployments also need every proxy to preserve `Host`, and Compose + HTTPS needs `CADDYFILE=Caddyfile.domain-wildcard`. The SSO hand-off table arrives through `migrate deploy`; nothing to run for it. | [Turning on multi-org routing](#turning-on-multi-org-routing-root_domain), [per shape](#multi-workspace-on-each-deployment-shape), [the Host header](#the-host-header-has-to-survive-every-hop) |
+| **5.6.0** | Upload virus scanning can now be configured in a container: `CLAMAV_HOST`/`CLAMAV_PORT` are forwarded by both compose files and the chart. Images are now published as `latest` and per version only — no `sha-…` tags — and retention keeps the last two releases plus `latest`, so pull by version and expect to rebuild anything older from its git tag. | [Operational settings](#operational-settings), [retention](#the-retention-that-keeps-it-that-way) |
+| **5.4.0** | Nothing to run, one behaviour change: sprints now require the plan that includes timelines. A workspace on a plan without it sees sprints refuse with an upgrade message; its data is kept and returns on upgrade. | CHANGELOG 5.4.0 |
+| **5.3.0** | Nothing switches on: sprints stay off until a super admin enables them under Workspace settings → Planning. Two visible defaults moved — a darker brand teal, and derived project colour marks until someone picks one. | CHANGELOG 5.3.0 |
+| **5.1.1** | Manual and bare-metal installs need **Node 20 or newer** (nodemailer 10). The images and CI already run Node 22. | CHANGELOG 5.1.1 |
+| **5.0.0** | Breaking: auto-created security-finding and CI-failure tickets are no longer assigned through the first module with a `ModuleAssigneeRule`. If you relied on that, add path rules under Workspace Settings → Security & DevOps → *Route findings by file path*; until then finding tickets fall through to CODEOWNERS or arrive unassigned, and CI-failure tickets arrive unassigned. Every existing platform admin is backfilled to OWNER — enrol two-factor before demoting anyone from Platform → Access. | CHANGELOG 5.0.0 |
+| **4.0.0** | Nothing, despite the major: a maintenance window armed from the platform console is now read-only inside the workspace (`409 MAINTENANCE_PLATFORM_MANAGED`). No environment variable moved. | CHANGELOG 4.0.0 |
+| **3.11.0** | If the console shows an amber banner, the bootstrap platform admin is still on the seeded password: rotate it with **Change password** in the console sidebar. | [One-time platform setup](#one-time-platform-setup), step 5 |
+| **3.10.1** | Containerised multi-org deployments: `ROOT_DOMAIN` now actually reaches the container (both compose files; `env.rootDomain` in the chart). Before this every subdomain silently resolved to the default organization, so check the value is set where the container reads it. | [Per shape](#multi-workspace-on-each-deployment-shape) |
+| **3.3.0** | Nothing to configure. Scheduled email is now judged on the recipient's clock, and the Monday digest (now also reaching managers and admins) and the security digest moved to 10:00 / 10:30 — expect different send times, not a fault. | CHANGELOG 3.3.0 |
+| **3.2.0** | Set `ALLOW_PRIVATE_NETWORK_EGRESS=true` only if webhook receivers (or a BYOK model) genuinely live on your LAN — admin-typed URLs now refuse private targets. A split deployment (SPA on a different origin from the API) must set `CSP_CONNECT_SRC` to the API origin, or the browser blocks every call. Its one migration is additive and NULL-defaulted: no public API key stops working. | [Outbound requests](#outbound-request-restrictions-allow_private_network_egress), [security headers](#browser-security-headers) |
+| **3.1.0** | Nothing: no migration, no environment variable, nothing to switch on. Ask AI can now raise tickets, comment, and draft change requests — each only for someone holding the matching permission — and nothing can start or settle an approval. | CHANGELOG 3.1.0 |
+| **3.0.0** | Change management ships **off**: a super admin enables it in Workspace Settings → Change management, and the org's tier must include it. Set `managerId` on your users first — approval routes to the requester's manager and, with none set, to every active super admin. Six tenant migrations and one control-plane migration; no new environment variable. | CHANGELOG 3.0.0 |
+| **2.5.0** | Multi-org: run the fan-out once after upgrading — `docker compose exec api npm run migrate:tenants -w apps/api`. It had never run inside a container, so organizations beyond the default one may still be on an old schema with no update having said so. | [Fan-out](#keeping-every-tenants-schema-current) |
+| **2.4.0** | Multi-org: run the fan-out once by hand. Until this release the image lacked `apps/api/scripts/`, so the fan-out could not run in a container and failed quietly as a warning. Its one migration revokes each user's live sessions beyond their 10 most recent, and all four deployment paths now recover a migration stranded mid-apply (P3009). | [What 2.4.0 adds](#what-240-adds-to-that-dance-session-device-identity--and-the-first-migration-that-can-strand-a-database) |
+| **2.3.0** | Nothing: an ordinary update, one additive migration (two new MCP tables), and no environment variable in any deployment shape. The MCP server ships disabled and its write tools disabled individually — read the operating notes before a super admin turns it on. | [What 2.3.0 adds](#what-230-adds-to-that-dance-the-mcp-server), [Operating the MCP server](#operating-the-mcp-server) |
+| **2.2.0** | Set `TRUST_PROXY_HOPS` to the real number of proxies in front of the API — `1` for the Compose stack as shipped. At the default `0`, every per-IP rate limit is one shared global bucket. Its one migration hashes guest and public tokens and keeps the plaintext columns, so a rollback stays safe. | [`TRUST_PROXY_HOPS`](#reverse-proxies-and-client-ip-attribution-trust_proxy_hops), [the 2026-08-07 batch](#what-the-2026-08-07-batch-adds-to-that-dance-email-channel-matrix--api-telemetry--token-hashing) |
+| **2.1.0** | Nothing beyond the update: two additive migrations, and request telemetry stays off in production until you set `API_TELEMETRY_ENABLED=true`. | [The 2026-08-07 batch](#what-the-2026-08-07-batch-adds-to-that-dance-email-channel-matrix--api-telemetry--token-hashing), [telemetry](#operating-api-request-telemetry) |
+| **2.0.0** | Nothing: the planning layer ships off by default, so users see no change until an admin turns it on. | CHANGELOG 2.0.0 |
 
 ### What the 2026-08-07 batch adds to that dance (email channel matrix + API telemetry + token hashing)
 
@@ -1365,14 +1441,14 @@ split, and a capped drill-down of individual requests) behind Workspace Settings
 **API performance**. It is worth understanding what it costs before turning it on, because unlike
 almost everything else in that tab it is *not* an admin toggle.
 
-**It is off by default, and enabling it is an environment change plus a restart** — not a UI
+**It is off by default in production, and enabling it is an environment change plus a restart** — not a UI
 switch. `API_TELEMETRY_ENABLED` is read at boot (`config/env.ts`), so the panel can tell you it is
 off but cannot turn it on. The full variable list, with the wording those defaults were chosen
 under, is in the root `.env.example`; the short version:
 
 | Variable | Default | What it controls |
 |---|---|---|
-| `API_TELEMETRY_ENABLED` | `false` | Master switch. The disabled path is one boolean test and `next()`. |
+| `API_TELEMETRY_ENABLED` | `false` with `NODE_ENV=production` (as Compose and the chart run); `true` otherwise | Master switch. The disabled path is one boolean test and `next()`. Development defaults it on so the panel has something to show the person building it; setting it explicitly wins either way. |
 | `API_TELEMETRY_SAMPLE_RATE` | `1` | Fraction of requests recorded, `0`–`1`. |
 | `API_TELEMETRY_FLUSH_MS` | `5000` | How often the in-memory buffer drains to the database. |
 | `API_TELEMETRY_MAX_BUFFER` | `5000` | Ceiling on buffered rows before new samples are dropped. |
@@ -1786,6 +1862,11 @@ model on this server** fetches a `llama.cpp` build and a GGUF model, supervises 
 OpenAI-compatible endpoint, and registers it as one more provider in the same ranked list — same
 fallback chain, same budget, same `AIUsageLog`. No key, no GPU, and no request leaving the machine.
 
+The panel leads with what the machine *is* rather than asking you to guess: CPU model and physical
+cores, the memory this process may actually use, free disk under the model directory, and the
+environment it detected **with the evidence attached** — "Kubernetes, detected from
+KUBERNETES_SERVICE_HOST is set" — because a label nobody can check is a label nobody should trust.
+
 Everything below is about *where the pieces live*. The feature stays off until a workspace turns it
 on, so an install that never touches the AI tab is unaffected by any of it.
 
@@ -1793,7 +1874,7 @@ on, so an install that never touches the AI tab is unaffected by any of it.
 
 | Variable | Default | What it decides |
 |---|---|---|
-| `NATIVE_AI_RUNTIME_MODE` | `auto` | `embedded` — this process supervises its own `llama-server`. `external` — something else runs it and we only speak to it. `off`. `auto` asks the hardware probe. |
+| `NATIVE_AI_RUNTIME_MODE` | `auto` | `embedded` — this process supervises its own `llama-server`. `external` — something else runs it and we only speak to it. `off`. `auto` asks the hardware probe: inside a Docker container or a Kubernetes pod it means `external`, anywhere else `embedded` (see [Containers](#containers-the-engine-runs-beside-the-api-not-inside-it)). |
 | `NATIVE_AI_SERVER_BIN` | *(empty)* | Absolute path to `llama-server`. Empty searches the model directory, then `PATH`. |
 | `NATIVE_AI_ENGINE_RELEASE` | *(empty)* | Which llama.cpp release the **Install the engine** button fetches. Empty uses the release this build pins — the one its checks were written against. |
 | `NATIVE_AI_HOST` / `NATIVE_AI_PORT` | `127.0.0.1` / `8080` | Where the runtime listens, and in `external` mode where to find it. |
@@ -1813,11 +1894,12 @@ A GGUF is measured in gigabytes. Left on a container's own filesystem it is re-d
 
 ### Sizing, and why Kubernetes defaults to a sidecar
 
-**A model is memory-resident, and it is resident per process.** The panel in the app computes the
-requirement before you download anything — weights at the chosen quantisation, plus the KV cache
-for the chosen context window, plus a reserve for the rest of the application — and reads a cgroup
-limit where one exists, so a container capped at 4 GB is not told it has 32. That number is the one
-to trust; it is arithmetic about your machine rather than a published minimum.
+**A model is memory-resident, and it is resident per process** — so sizing is per machine, not per
+workspace. The panel judges each model in a small curated catalogue before you download a gigabyte,
+and shows the arithmetic — weights at the chosen quantisation, plus the KV cache for the chosen
+context window, plus a reserve for the rest of the application — and reads a cgroup limit where one
+exists, so a container capped at 4 GB is not told it has 32. That number is the one to trust; it is
+arithmetic about your machine rather than a published minimum.
 
 The consequence in a cluster is what `nativeAi.mode` defaults to `external` for: the api Deployment
 runs two replicas and autoscales to ten, an embedded runtime is loaded once **per replica**, and a
@@ -1836,7 +1918,22 @@ So:
   with memory limits that fit the model plus its cache. Fine for a single-node on-prem install,
   which is the shape most people asking for this actually have.
 
-Compose is the easy case: one api container, one model, one volume.
+Compose has no replica arithmetic to worry about — one api container, one volume — but see the next
+section for where the engine itself runs.
+
+### Containers: the engine runs beside the API, not inside it
+
+Under Docker or Kubernetes, `auto` resolves to `external`
+(`services/native-runtime.service.ts#resolveNativeRuntimeMode`), and that is about more than
+replicas: the API image is `node:22-alpine`, which is musl, and llama.cpp publishes only
+glibc-linked Linux builds. **Install the engine** detects the libc
+(`services/hardware-probe.service.ts`) and refuses inside the shipped image, with the sidecar
+instructions attached, rather than handing over a binary that fails with the loader's misleading
+"no such file or directory". Neither compose file ships that sidecar: run `llama-server` as its own
+container on the compose network, point `NATIVE_AI_HOST` at its service name, and never publish its
+port — the compose file's own comment says the same, for the same no-authentication reason as the
+chart. `embedded` inside the shipped image would therefore need a musl-compatible `llama-server`
+supplied through `NATIVE_AI_SERVER_BIN`.
 
 ### Verifying it
 
@@ -1848,35 +1945,65 @@ API key; the application does not stop.
 
 ## Environment variable reference
 
-See `.env.example` for the full list with inline comments. The multi-tenancy-specific ones,
-summarized:
+`.env.example` is the complete list, with the reasoning behind each default inline; this section is
+the operator's map of it, grouped by what a value decides. Where the values come from depends on how
+the API runs: the process reads `apps/api/.env` — or an `APP_ENV` profile layered over it, see
+[Environment profiles](#environment-profiles--local--uat--production) — while Compose reads the root
+`.env` beside `docker-compose.yml`, and the Helm chart reads `values.yaml` plus the Secret you
+create. Unless a row says otherwise, both compose files and the chart forward every variable below.
 
-| Variable | Required for | Purpose |
+### Required at boot
+
+Six variables have no default, and `config/env.ts` refuses to boot without them. Compose is stricter
+still: its `${VAR:?}` guards also refuse to start without `WEB_ORIGIN` and `APP_BASE_URL`, and
+`docker-compose.yml` without `MYSQL_ROOT_PASSWORD` for its bundled MySQL.
+
+| Variable | Validated as | What it is |
 |---|---|---|
-| `CONTROL_DATABASE_URL` | Both shapes | The control-plane database (org registry, SSO config, plan tiers, platform-admin accounts) |
-| `DEFAULT_ORG_SLUG` | Both shapes | Which org a request with no real subdomain resolves to (default: `default`) |
-| `ROOT_DOMAIN` | Multi-org only — **and any hostname with 3+ labels** | The domain subdomains hang off (`timesphere.app`). Setting it derives the slug by stripping this suffix instead of counting DNS labels, and makes the bare domain serve the workspace finder instead of `DEFAULT_ORG_SLUG`. Unset, the first DNS label IS the slug — so `timesheet.company.com` answers `404 Unknown workspace.` to every request. See [Turning on multi-org routing](#turning-on-multi-org-routing-root_domain); the API prints a boot ERROR naming the value to set. |
-| `TENANT_DB_PROVISION_BASE_URL` | Multi-org only | Required for self-serve signup — it is what creates each new workspace's database. Without it, `/signup` returns a clear 400 rather than half-provisioning. |
-| `PLATFORM_ADMIN_JWT_SECRET` | Both shapes | Signs `/platform-admin` tokens — must differ from `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` |
-| `TENANT_DB_PROVISION_BASE_URL` | SaaS shape, only if using in-console provisioning | The MySQL server new tenant databases get created on |
-| `APP_BASE_URL` | Both shapes | Also doubles as the one fixed OIDC/SAML callback URL for every org's SSO |
+| `DATABASE_URL` | non-empty | The default organization's tenant database — in Shape 1, the only one. Still required in Shape 2, where it is [functionally unused once more than one org exists](#one-time-platform-setup). |
+| `CONTROL_DATABASE_URL` | non-empty | The control-plane database (org registry, SSO config, plan tiers, platform-admin accounts). Both shapes — see [why even a single org has one](#why-a-control-plane-exists-even-in-this-single-org-shape). |
+| `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` | ≥ 16 characters | Sign every tenant's access and refresh tokens. With `NODE_ENV=production`, a weak or template-looking value is also fatal at boot (`server.ts#assertProductionSafety`). |
+| `PLATFORM_ADMIN_JWT_SECRET` | ≥ 16 characters | Signs `/platform-admin` tokens, which administer every organization — so it **must differ** from the two above. The production weak-secret check does not cover this one; generate it as carefully anyway. |
+| `ENCRYPTION_KEY` | exactly 64 hex characters | The AES-256-GCM key for every stored secret, tenant DSNs included. The template's placeholder fails validation on purpose, so an unedited copy cannot encrypt anything under a key nobody wrote down. `openssl rand -hex 32`, fresh per environment; production applies the same weak-secret check as to the JWT secrets. |
 
-The operational ones this guide has its own sections for — all optional, all inert when unset,
-and all forwarded by both compose files and the Helm chart:
+### Core settings with defaults
 
-| Variable | Default | Section |
+| Variable | Default | What it decides |
+|---|---|---|
+| `NODE_ENV` | `development` | `production` switches on the production-only checks — secret strength (above), the cookie `Secure` flag, CORS strictness. Both compose files and the chart set it; a manual deployment must set it itself, and the API warns at boot when it is not `production` while `WEB_ORIGIN` looks public. |
+| `WEB_ORIGIN` | `http://localhost:5173` (the template adds `http://127.0.0.1:5173`) | The comma-separated CORS allow-list; it must contain `APP_BASE_URL`'s origin. Development also accepts private-LAN origins, never a public one. With `ROOT_DOMAIN` set, its subdomains and verified custom domains are accepted without being listed — see [Workspace origins](#workspace-origins-and-web_origin). |
+| `APP_BASE_URL` | `http://localhost:5173` (the template ships `"auto"`) | The base of every emailed link, and the one fixed OIDC/SAML callback URL every org's SSO uses. `"auto"` or a `{lan-ip}` token resolves to this machine's LAN address at boot — right for development, warned about in production. See [How this product should be addressed](#how-this-product-should-be-addressed--the-decision). |
+| `DEFAULT_ORG_SLUG` | `default` | Which org a request with no real subdomain resolves to. |
+| `ROOT_DOMAIN` | unset — required for multi-org, **and for any hostname with 3+ labels** | The domain subdomains hang off (`timesphere.app`). Setting it derives the slug by stripping this suffix instead of counting DNS labels, and makes the bare domain serve the workspace finder instead of `DEFAULT_ORG_SLUG`. Unset, the first DNS label IS the slug — so `timesheet.company.com` answers `404 Unknown workspace.` to every request. See [Turning on multi-org routing](#turning-on-multi-org-routing-root_domain); the API prints a boot ERROR naming the value to set. |
+| `TENANT_DB_PROVISION_BASE_URL` | unset (the template sets a local one for development) | A DSN with credentials and **no database name** (`mysql://root:***@db-host:3306`) naming the MySQL server new tenant databases are physically created on. Read by the console's **Provision** action, by self-serve signup (`/api/signup`, which calls the same provisioning function), and by the console's backup snapshot restore and test restore. Unset, Provision answers `400` naming the variable — the button stays; [provision manually](#provisioning-without-the-automation) instead — signup answers `502` and removes the half-made registration, and both restores answer `409`. **Set, it arms public signup on any deployment whose outbound mail works**: anyone who can receive a code at a non-free-mail address can create a workspace on this server, which is why a single-org install leaves it blank. Compose forwards it (without that line it did not exist inside the container even when the host `.env` set it); the chart carries it in the Secret. |
+
+### Operational settings
+
+All optional, and all inert or safe when unset — except the first, whose default is wrong for most
+real deployments.
+
+| Variable | Default | What it decides |
 |---|---|---|
 | `TRUST_PROXY_HOPS` | `0` | [Reverse proxies and client IP attribution](#reverse-proxies-and-client-ip-attribution-trust_proxy_hops) — **the default is wrong for every proxied deployment, including the shipped Compose stack** |
-| `RATE_LIMIT_PER_MINUTE` | `900` | The blanket per-IP request budget. Per **egress** IP — an office NAT or corporate proxy is ONE bucket, and a 9 am rush across a hundred people behind it exceeds 900/min easily. Raise it for NAT-heavy deployments; the strict per-surface limiters (auth 20/min-failed, public share links, webhooks, AI) are deliberately not affected. Load-validated: the cut lands at exactly the configured budget. |
-| `TENANT_DB_CONNECTION_LIMIT` | `5` (code) / `20` (shipped by Compose + chart) | Connections per tenant Prisma client. 5 is multi-tenant arithmetic — 50 cached tenant clients × 5 must stay under MySQL `max_connections` (151). A single-org install has ONE live tenant, and load testing measured what 5 costs it: the authed path pinned near 90 req/s at every concurrency while p50 scaled with queue depth alone (51 ms → 480 ms). SaaS fleets with many live tenant databases should set it back toward 5 and mind the ceiling arithmetic in `config/prisma.ts`. A `connection_limit` already present in the DSN still wins. |
+| `ALLOW_PRIVATE_NETWORK_EGRESS` | `false` | Whether the server may fetch private, loopback or link-local addresses for the four URLs a workspace admin can type. `true` only for a self-hosted box whose webhook receivers (or BYOK model) genuinely live on the LAN; development permits private targets regardless. [Outbound request restrictions](#outbound-request-restrictions-allow_private_network_egress) |
+| `CSP_CONNECT_SRC` | empty | Extra origins appended to the SPA's `connect-src`, read by the **web** container's nginx, not the API. Empty is right for every topology this repo ships; a **split** deployment (SPA on another origin) sets it to its `VITE_API_URL` origin or the browser blocks every API call. [Browser security headers](#browser-security-headers). **Neither compose file nor the chart forwards it** — it is a runtime `ENV` of the web image (`apps/web/Dockerfile`), so set it on the `web` service or container. |
+| `RATE_LIMIT_PER_MINUTE` | `900` | The blanket per-IP request budget, validated 60–1,000,000 at boot. Per **egress** IP — an office NAT or corporate proxy is ONE bucket, and a 9 am rush across a hundred people behind it exceeds 900/min easily. Raise it for NAT-heavy deployments; the strict per-surface limiters (auth 20/min-failed, public share links, webhooks, AI) are deliberately not affected. Load-validated: the cut lands at exactly the configured budget. |
+| `TENANT_DB_CONNECTION_LIMIT` | `5` (code) / `20` (shipped by Compose + chart) | Connections per tenant Prisma client. 5 is multi-tenant arithmetic — 50 cached tenant clients × 5 must stay under MySQL `max_connections` (151). A single-org install has ONE live tenant, and load testing measured what 5 costs it: the authed path pinned near 90 req/s at every concurrency while p50 scaled with queue depth alone (51 ms → 480 ms). SaaS fleets with many live tenant databases should set it back toward 5 and mind the ceiling arithmetic in `config/prisma.ts`. A `connection_limit` already present in the DSN still wins. Read outside the boot-time schema, so a value that is not an integer from 1 to 100 silently means 5 rather than failing. |
+| `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL_DAYS` | `15m` / `14` | Token lifetimes. Surfaced in the chart as `env.accessTokenTtl` / `env.refreshTokenTtlDays` because shortening the access-token TTL is a standard security-review request. |
+| `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_SECURE` | empty / `587` / `false` | Outbound email. A **fallback only** — `GlobalMailSettings` in the tenant database (Workspace Settings → Mail server) wins whenever it is configured. With no `SMTP_HOST` anywhere, mail is written to the log instead of sent, which on Kubernetes means a password reset that only ever reached `kubectl logs`. Now carried by the Helm chart too (`mail.*` in values.yaml, `SMTP_PASS` in the Secret) — it previously was not, so a chart install had no way to configure mail at all. |
+| `SLA_ENABLED`, `SLA_CRON_SCHEDULE`, `SLA_DEFAULT_APPROVAL_HOURS`, `TICKET_SLA_*` | on / `*/15 * * * *` / `48` / `168`·`72`·`24`·`4` h (low → critical) | Approval and ticket escalation. The `*_ENABLED` switches stop the workers, and the cron values are how often they scan. The hour values are where deadlines *start*, not live settings: `TICKET_SLA_*_HOURS` seed `GlobalTicketSettings` the first time a workspace reads it and are edited at runtime from Workspace Settings after that, while `SLA_DEFAULT_APPROVAL_HOURS` is only the fallback for a project with no positive approval window — new projects take the `slaApprovalHours` column's own default of 48, editable per project. Now forwarded by both compose files and the chart (`sla.*`). |
 | `STORAGE_ROOT`, `STORAGE_DOCUMENTS_DIR`, `STORAGE_AVATARS_DIR`, `STORAGE_FACE_DIR` | empty (today's layout under `UPLOAD_DIR`) | [Relocating file storage](#relocating-file-storage) |
 | `LOG_DIR`, `LOG_ROTATE_HOURS`, `LOG_RETENTION_DAYS`, `LOG_COMPRESS_ON_ROLLOVER` | empty / `4` / `30` / `true` | [Log files](#log-files) |
-| `API_TELEMETRY_*`, `POD_NAME`, `POD_NAMESPACE`, `CLUSTER_NAME` | off / unset | [Operating API request telemetry](#operating-api-request-telemetry) |
-| `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_SECURE` | empty / `587` / `false` | Outbound email. A **fallback only** — `GlobalMailSettings` in the tenant database (Workspace Settings → Mail server) wins whenever it is configured. With no `SMTP_HOST` anywhere, mail is written to the log instead of sent, which on Kubernetes means a password reset that only ever reached `kubectl logs`. Now carried by the Helm chart too (`mail.*` in values.yaml, `SMTP_PASS` in the Secret) — it previously was not, so a chart install had no way to configure mail at all. |
-| `SLA_ENABLED`, `SLA_CRON_SCHEDULE`, `SLA_DEFAULT_APPROVAL_HOURS`, `TICKET_SLA_*` | on / `*/15 * * * *` / `48` / per-priority hours | Approval and ticket escalation. The cron values are how often the workers scan; the hour values are the deadlines they measure against. Now forwarded by both compose files and the chart (`sla.*`). |
-| `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL_DAYS` | `15m` / `14` | Token lifetimes. Surfaced in the chart as `env.accessTokenTtl` / `env.refreshTokenTtlDays` because shortening the access-token TTL is a standard security-review request. |
-| `TENANT_DB_PROVISION_BASE_URL` | unset | The MySQL server new tenant databases are created on. Unset disables the `/platform-admin` console's Provision button rather than guessing a server. Now forwarded by both compose files — without the line the variable did not exist inside the container even when the host `.env` set it. |
-| `UPDATE_CHECK`, `UPDATE_CHECK_REPO`, `UPDATE_CHECK_TOKEN` | `on` / this repo / unset | The hourly GitHub release check behind the **What's new** page. `UPDATE_CHECK=off` is the air-gapped posture — the page then lists the history bundled in the image's own `CHANGELOG.md`. **Only the literal `off` disables it**; any other value, `false` included, leaves it on. The token (read-only Contents PAT) is needed only for a private repo. Chart equivalent: `updateCheck.enabled` / `updateCheck.repo`, with the token in the Secret. |
+| `API_TELEMETRY_*`, `POD_NAME`, `POD_NAMESPACE`, `CLUSTER_NAME` | off in production (on when `NODE_ENV` is anything else) / unset | [Operating API request telemetry](#operating-api-request-telemetry) |
+| `CLAMAV_HOST`, `CLAMAV_PORT` | unset (= `127.0.0.1`) / `3310` | Where clamd listens, for upload malware scanning. Consulted only once a workspace switches scanning on (`GlobalTicketSettings.virusScanEnabled`), and scanning then fails **closed**: uploads are refused while no scanner answers. Chart: `clamav.*`. |
+| `UPDATE_CHECK`, `UPDATE_CHECK_REPO`, `UPDATE_CHECK_TOKEN` | `on` / this repo / unset | The hourly GitHub release check behind the **What's new** page. `UPDATE_CHECK=off` is the air-gapped posture — the page then lists the history bundled in the image's own `CHANGELOG.md`. **Only `off` disables it** (in any letter case); any other value, `false` included, leaves it on. The token (read-only Contents PAT) is needed only for a private repo. Chart equivalent: `updateCheck.enabled` / `updateCheck.repo`, with the token in the Secret. |
+
+### AI
+
+| Variable | Default | What it decides |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | empty | A server-wide fallback for the **Anthropic provider only**: used when a workspace's Anthropic provider has no stored key, and as the implicit provider when a workspace has configured none (`services/ai.service.ts#resolveApiKey`). Everything else about AI — which providers, models, base URLs, BYOK keys, budget, confidence threshold — lives in each tenant's database and is edited at runtime from Workspace Settings → AI. |
+| `NATIVE_AI_*` | nothing runs until a workspace enables a native provider | The managed llama.cpp runtime. [Running a model on your own server](#running-a-model-on-your-own-server) has its own table. |
 
 **Not in this table, on purpose:** the MCP server has **no environment variable at all**. It is
 configured entirely from the database and admin-edited at runtime — see

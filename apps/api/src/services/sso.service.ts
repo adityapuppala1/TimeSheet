@@ -242,7 +242,7 @@ export async function getEnabledSamlConfig(orgId: string): Promise<SamlConfig> {
  * - PER PROCESS. A second Node process behind a load balancer has its own map, so an AuthnRequest
  *   issued by one and answered at the other fails to validate. Unlike the webhook store, that is
  *   a FAILED LOGIN rather than a missed replay catch — this is safe here only because the app
- *   runs as a single Node process (see the database-per-organization note in the root README),
+ *   runs as a single Node process (see docs/ARCHITECTURE.md § 3.1, database-per-tenant multi-tenancy),
  *   and it is the thing to revisit first if that ever stops being true.
  * - A RESTART mid-login costs the user one retry, for the same reason.
  */

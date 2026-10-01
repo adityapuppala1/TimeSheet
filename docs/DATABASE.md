@@ -1,6 +1,25 @@
 # Database Design
 
-The Prisma schema in `apps/api/prisma/schema.prisma` defines the MySQL model.
+> **Audience:** engineers writing migrations or reading the schema · **Type:** how-to + reference ·
+> [Documentation index](README.md)
+
+There are two schemas, and **they are the reference**: `apps/api/prisma/schema.prisma` (the tenant
+database — one physical MySQL database per organization, 135 models) and
+`apps/api/prisma/control/schema.prisma` (the control plane — the organization registry, SSO,
+plan tiers, platform-admin accounts, 30 models). 128 of those 165 models carry a `///` doc comment
+explaining why they are shaped the way they are (counted 2026-10-01), so this file does not repeat
+them table by table. Why there
+is one database per organization is explained in
+[ARCHITECTURE.md § 3.1](ARCHITECTURE.md#31-database-per-tenant-multi-tenancy).
+
+This file holds what a schema file cannot say:
+
+1. **The migration workflow** — replaying a migration into an empty database before committing it,
+   fanning it out to every tenant after merging it, and writing backfills. Read this before writing
+   a migration: migrations here are additive only, and MySQL DDL is not transactional.
+2. **Notes by domain** — the reasoning behind a group of tables (planning, goals, agents, change
+   management, face verification, telemetry, MCP), and a running record of smaller columns added
+   since the last full pass.
 
 ## Before committing a migration: replay it into an EMPTY database
 

@@ -1,9 +1,12 @@
 # AI, agents and workflows for Tickets and Change Management — a plan
 
+> **Audience:** engineers changing change management or its automation · **Type:** design record ·
+> [Documentation index](README.md)
+
 Status: **built — all five steps.** Kept as the design record rather than a to-do list; every
 section below says what shipped and why it is shaped that way. Written against the seams that already
 exist, so every item below says which of them it extends and what it would cost. Read
-[ARCHITECTURE.md §3.12](ARCHITECTURE.md) and [API.md](API.md#change-management-v8) first.
+[ARCHITECTURE.md §3.12](ARCHITECTURE.md#312-the-agentic-layer-v8--composition-over-a-runtime-that-already-existed) and [API.md](API.md#change-management-v8) first.
 
 ---
 

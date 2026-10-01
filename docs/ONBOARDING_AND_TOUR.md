@@ -1,5 +1,7 @@
 # First-run gate and the product tour
 
+> **Audience:** engineers · **Type:** explanation · [Documentation index](README.md)
+
 Two separate features that both fire when someone new arrives, and are easy to confuse.
 
 | | First-run gate | Product tour |

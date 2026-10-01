@@ -8,7 +8,10 @@ npm run dev      # api on :4000, web on :5173
 ```
 
 `npm run setup` is self-healing — it creates both databases if they don't exist and applies every
-migration. If anything about the environment looks wrong, **run `npm run doctor -w apps/api`
+migration. On a **clean clone** the first run stops after creating `apps/api/.env`, because the
+template's `ENCRYPTION_KEY` is a deliberately invalid placeholder: fill that file in and run `setup`
+again ([INSTALLATION.md § Manual local install](docs/INSTALLATION.md#manual-local-install-no-docker)
+walks through every variable). If anything about the environment looks wrong, **run `npm run doctor -w apps/api`
 first**: it validates `.env`, scans the machine for running MySQL servers (identifying each by its
 actual handshake, not just an open port), and tells you the specific fix. `npm run doctor:fix-env
 -w apps/api` will correct a wrong host/port in `.env` for you.
@@ -33,28 +36,26 @@ the seeded three as fixtures.
 ## Before you open a PR
 
 ```bash
-npm run lint                        # typecheck api + web, then the SonarQube rules
+npm run lint                         # typecheck api + web, then the SonarQube rules and the ratchet
 npm run build
-npm test                            # BOTH unit suites (api, then web) — mocked, no DB
-npm run test -w apps/api            # just the api tier (~1s)
-npm run test -w apps/web            # just the web tier (jsdom, ~2s)
-npm run test:integration -w apps/api # integration (real throwaway MySQL, ~13s)
-npm run test:e2e                    # Playwright (needs the dev servers, or it starts them)
+npm test                             # BOTH unit suites (api, then web) — mocked, no DB
+npm run test -w apps/api             # just the api tier
+npm run test -w apps/web             # just the web tier (jsdom)
+npm run test:integration -w apps/api # integration (real throwaway MySQL)
+npm run test:e2e                     # Playwright (needs the dev servers, or it starts them)
 ```
 
-CI runs all of these. Run at least `lint`, `build`, and the unit tier locally — they're fast, and
-they catch most of what CI would.
+What each of these covers, and which e2e variant to run when, is in [Testing](#testing) below. Run
+at least `lint`, `build`, and the unit suites locally — they're fast, and they catch most of what CI
+would.
 
-**Why there are two unit tiers.** `apps/api`'s vitest runs in `node`; `apps/web`'s runs in `jsdom`,
-because the one thing it currently covers — `src/lib/safe-html.ts` — is a sanitizer, and DOMPurify
-needs a DOM. That file is the *only* sanitizer for two of its callers (Ask AI's model-authored
-markdown, and the What's-new page's release notes fetched from GitHub), so it is a security control
-rather than a formatting helper.
-
-If you touch a security control, **mutation-test the suite before trusting it**: break the control on
-purpose and confirm the tests go red. Disabling `safe-html`'s hook fails 12 of its 27. This is not
-ceremony — the first version of that suite ran under `happy-dom`, where DOMPurify strips *every*
-element, so "the dangerous thing is absent" assertions passed while proving nothing at all.
+CI runs the same commands, but not all of them on every push. Lint, build, both unit suites and the
+integration tier run on every push to every branch. End-to-end runs as a light tier on pull requests
+(the `desktop` and `responsive-phone` projects only) and in full on `main` — or on any branch whose
+pushed commit message contains `[full-ci]`; a push to any other branch gets no e2e at all. So
+Firefox, WebKit and the tablet/laptop/4K widths are first exercised by CI after you merge: run them
+yourself when a change could differ there. The reasoning, and the billed minutes behind it, is at the
+top of `.github/workflows/ci.yml`.
 
 ### Reading `npm run lint`
 
@@ -110,9 +111,103 @@ globally; `utils/security.ts` and `middleware/request-telemetry.ts` show the com
 Unused *parameters* are deliberately still allowed — Express handlers and React callbacks
 legitimately name arguments they don't use.
 
-**The long-standing "hamburger drawer" flake is fixed** (2026-07-30) — it was never flaky logic.
-`/api/auth/login`'s rate limiter counted *successful* logins, and `responsive.spec.ts` signs in
-per test across five viewport projects (~75 logins), so late-suite specs 429'd on login and
+## Testing
+
+There are two kinds of suite, and they answer different questions. **Unit tests** check the rules
+— the schedule solver, the change risk score, the SLA clocks, the CSV escaper, the changelog parser
+— against no database at all, which is why the api suite's thousands of tests finish in under a
+minute and why a failure points at a rule rather than a fixture. **End-to-end specs** drive a real
+browser against a real seeded database, and are where anything needing one belongs. A small
+**integration tier** sits between them for the few behaviours a mock cannot prove.
+
+Current test and spec counts are in README's [By the numbers](README.md#by-the-numbers), which is
+recounted each release; they are deliberately not repeated here.
+
+### Unit tests
+
+```bash
+npm test                             # both suites: apps/api (node), then apps/web (jsdom)
+npm run test:coverage -w apps/api    # the api suite with v8 coverage (text + lcov, which Sonar reads)
+```
+
+`apps/api/vitest.config.ts` points `DATABASE_URL` at a database that must never be reached, so a
+unit test that forgets to mock something fails fast and loudly rather than quietly touching real
+data. The mocking approach differs by area and is written in each test file's header — read the
+neighbouring file's before adding one.
+
+**Why there are two unit tiers.** `apps/api`'s vitest runs in `node`; `apps/web`'s runs in `jsdom`,
+because it was created for `src/lib/safe-html.ts` — a sanitizer, and DOMPurify needs a DOM. It has
+since grown to cover other web-side logic, but it is still deliberately not a component-testing
+harness (see the header of `apps/web/vitest.config.ts`). `safe-html.ts` is the *only* sanitizer for
+two of its callers (Ask AI's model-authored markdown, and the What's-new page's release notes
+fetched from GitHub), so it is a security control rather than a formatting helper.
+
+If you touch a security control, **mutation-test the suite before trusting it**: break the control on
+purpose and confirm the tests go red. Disabling `safe-html`'s hook fails 12 of its 27. This is not
+ceremony — the first version of that suite ran under `happy-dom`, where DOMPurify strips *every*
+element, so "the dangerous thing is absent" assertions passed while proving nothing at all.
+
+### Integration tier
+
+```bash
+npm run test:integration -w apps/api
+```
+
+Runs against a real throwaway MySQL: the tenant and control-plane test databases are dropped,
+recreated, migrated and seeded at the start of every run and dropped at the end
+(`apps/api/tests/setup/global-setup.integration.ts`). It is for what a mock assertion can't prove —
+that the Stripe webhook really persists `Organization.planTier`, and that SCIM's seat limit,
+duplicate-email 409 and status transitions hold against real unique constraints and real counts.
+`multi-workspace-routing.integration.test.ts` lives here too: it drives the real CORS and
+tenant-resolution middleware over HTTP, because the pure-function tests of each had passed
+throughout the period when subdomain routing didn't work in a browser at all. Files run serially
+(`fileParallelism: false`) since they share one pair of databases.
+
+### End-to-end (Playwright)
+
+```bash
+npm run test:e2e             # everything: 7 projects — 5 viewports + Firefox + WebKit
+npm run test:e2e:quick       # day-to-day loop: every FUNCTIONAL spec once, desktop project only
+npm run test:e2e:responsive  # layout-only matrix: responsive.spec.ts at phone/tablet/laptop/4K, 2 workers in parallel
+npm run test:e2e:browsers    # engine coverage: a functional subset on Firefox (Gecko) + WebKit (Safari/iOS)
+npm run test:e2e:report      # open the last run's HTML report
+```
+
+**Cross-browser needs a one-time download:** `npx playwright install firefox webkit`. Three engines
+cover every browser this product gets asked about — Chrome, Edge, Opera, Brave and Arc are all
+Chromium; Firefox is Gecko; Safari is WebKit, **as is every browser on iOS**, whatever its icon
+says. Testing "Chrome on iPhone" is testing WebKit. The two engine projects run a subset (auth,
+tickets, timesheet, dashboard, settings, user-management — see `playwright.config.ts`), because the
+question there is whether the app *functions* on each engine, not whether viewport assertions pass
+three times.
+
+**Which one to run:** `test:e2e:quick` while iterating (it exercises every feature spec once —
+the viewport projects only re-run `responsive.spec.ts` at other sizes); `test:e2e` before a push.
+Three things keep the clock down and are worth knowing:
+
+- **Keep `npm run dev` running between test runs.** `webServer.reuseExistingServer` is on, so a
+  live dev stack skips booting both servers on every invocation.
+- **The responsive matrix is parallel (2 workers) on purpose, and the functional suite is
+  serial on purpose.** `responsive.spec.ts` is read-mostly, so its four viewport projects can
+  overlap safely. The functional specs CANNOT be parallelised: they share one seeded MySQL
+  database, one login rate-limiter, and several deliberately mutate workspace-wide state
+  (maintenance mode locks the workspace; force-logout revokes sessions) — two of those running
+  at once would fail each other in ways that look nothing like their cause.
+- **Never run `quick` and `responsive` at the same time** for the same reason: the maintenance
+  spec's lockout window would 503 every page the layout sweep is measuring.
+
+A one-time `setup` project logs in as each demo role and saves the resulting session for the
+other specs to reuse. Some specs deliberately log in fresh instead, and `tests/e2e/auth.setup.ts`
+explains why: every refresh rotates the session's secret, and an older secret is accepted only if
+it is the immediately-previous one and still inside the rotation grace window (see session handling
+in [.github/SECURITY.md](.github/SECURITY.md)). Two specs sharing a snapshot can revoke each other,
+and a spec with many tests exhausts its own snapshot partway through — so a multi-test spec signs
+in per test.
+
+That costs nothing against the login rate limiter, which counts only failed attempts — and that
+is also why **the long-standing "hamburger drawer" flake is fixed** (2026-07-30). It was never flaky
+logic. `/api/auth/login`'s rate limiter counted *successful* logins, and `responsive.spec.ts` signs
+in per test across five viewport projects (~75 logins), so late-suite specs 429'd on login and
 failed as "element not visible". The limiter now uses `skipSuccessfulRequests` (only failed
 attempts count — the actual brute-force surface), which also stops ~20 colleagues behind one
 office NAT from locking out the 21st.
@@ -121,6 +216,18 @@ If a spec creates timesheets or tickets, wrap it with `suspendFaceGate()` from
 `tests/e2e/helpers/face-gate.ts` — with face verification enabled workspace-wide those
 creations return 428, and the failure surfaces as something unrelated (a detail sheet whose
 ticket never loads).
+
+### Face verification
+
+```bash
+npm run verify:face -w apps/api       # ML layer: embeddings, anti-spoof/liveness, encryption round-trip
+npm run verify:face:e2e -w apps/api   # full HTTP flow against a RUNNING API, incl. challenge–response and the approval gate
+```
+
+These sit outside the unit suite because the ML half can't be unit-tested: it needs the real ~10MB
+models and real face images. What each script checks — plus the presentation-attack self-test
+(`verify:face:pad`) and the `/api/face` rate limit that trips two back-to-back runs — is in
+[docs/FACE_VERIFICATION.md](docs/FACE_VERIFICATION.md#verifying-it-works).
 
 ## How this codebase expects to be extended
 
@@ -139,25 +246,46 @@ place for each kind of thing.
 
 ## Code comments
 
-This repo comments *why*, not *what*. A comment that restates the code earns nothing; a comment
-explaining a non-obvious constraint, a rejected alternative, or a bug that a "simplification"
-would reintroduce is worth a lot. Several files carry load-bearing header comments of exactly
-this kind (`services/face.service.ts`'s model-loading notes,
+**Every non-trivial file opens with a header comment** answering four questions: **what** it does,
+**why** it exists (the actual reason, not a restatement of the filename), **how** it fits into the
+surrounding system, and **who** calls it. New files get one too.
+
+Below the header, this repo comments *why*, not *what*. A comment that restates the code earns
+nothing; a comment explaining a non-obvious constraint, a rejected alternative, or a bug that a
+"simplification" would reintroduce is worth a lot. Several files carry load-bearing header comments
+of exactly this kind (`services/face.service.ts`'s model-loading notes,
 `middleware/upload.ts#preserveTenantContext`, `controllers/sso.controller.ts`'s mount-order
 warning) — please don't strip them.
 
-Match the density around you. Most functions need nothing.
+Individual functions get inline comments only where the logic itself is genuinely non-obvious —
+clear naming and the file header cover the rest, and a function-by-function narration rots into
+noise as the code changes around it. Match the density around you: most functions need nothing,
+and a new file should be neither undocumented nor commented line by line.
 
 ## Keeping docs current
+
+**[docs/README.md](docs/README.md) is the map of which document owns which topic.** Check it before
+writing, and give a new doc a row there. Two rules keep the set navigable:
+
+- **One canonical home per topic.** Every other doc — `README.md` included — links to it rather
+  than restating it, because a fact written in two places eventually disagrees with itself.
+  `README.md` stays a front door: the overview, the feature table, "By the numbers", the quick start
+  and links, and nothing a doc in `docs/` already explains.
+- **`docs/` is flat, and doc file names are permanent.** Their paths are referenced from code
+  comments, CI, the UI and applied migrations, so a rename or a move breaks links in places no
+  reviewer will look. When a topic outgrows its doc, add a new file and link to it.
 
 `docs/ARCHITECTURE.md` is treated as a bug when out of date. If your change adds a
 service/controller/worker, changes what a module depends on, or introduces a data flow, update it
 in the **same** PR. Same for `docs/API.md` (endpoints), `docs/DATABASE.md` (schema), and
-`README.md` (user-visible capability).
+`README.md`'s feature table (a headline capability).
 
-`docs/ROADMAP.md` is a living audit trail, not a changelog: resolved items stay (struck through)
-alongside open ones, with dates and file references, so the history of what was found and fixed
-stays visible.
+**Three records, three jobs.** `docs/ROADMAP.md` looks forward: themes, and a backlog that is a
+living audit trail — resolved items stay (struck through) alongside open ones, with dates and file
+references, so the history of what was found and fixed stays visible. `docs/ENGINEERING_LOG.md` is
+the dated narrative of a unit of work — what was found, decided, measured and fixed — with new
+entries appended at the **end**, oldest first. `CHANGELOG.md` is the user-facing release notes,
+which the in-app What's-new page parses (see [Releasing a version](#releasing-a-version)).
 
 ### Regenerating README's "By the numbers"
 
