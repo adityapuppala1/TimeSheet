@@ -51,6 +51,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Textarea } from "../components/ui/textarea";
 import { salesLeadApi } from "../services/platform-admin-api";
 import { useSignupStatus } from "../hooks/use-signup-status";
+import { contactPrefill } from "../utils/signup-flow";
 
 /**
  * "One of these, and you have to pick" — as a string rather than `z.enum`, so the field can start
@@ -125,7 +126,9 @@ export function Contact() {
       deploymentInterest: "",
       timeline: "",
       interests: [],
-      message: ""
+      // `?reason=separate-workspace` from signup: their company already has a workspace, and a second
+      // one for the same domain is a conversation, never a self-serve button. A closed set of reasons.
+      message: contactPrefill(new URLSearchParams(window.location.search).get("reason"))
     }
   });
   const { errors } = form.formState;

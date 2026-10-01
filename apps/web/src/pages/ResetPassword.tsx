@@ -3,7 +3,9 @@
  * param and submits the new password via `authApi.resetPassword`.
  * WHY the token lives in the URL, not a form field: it's the link emailed to the user by
  * `auth.controller.ts`'s `/forgot-password` flow — this page just consumes it.
- * WHO links here: the "reset your password" email (`services/mail-templates.ts#reset`).
+ * WHO links here: the "reset your password" email (`services/mail-templates.ts#reset`), and the
+ * "your request to join was approved" email (`#joinApproved`), whose link carries `welcome=1`: the same
+ * single-use token machinery, for someone choosing their FIRST password — so it says "set", not "reset".
  */
 import { useMutation } from "@tanstack/react-query";
 import { motion } from "framer-motion";
@@ -18,17 +20,36 @@ import { Label } from "../components/ui/label";
 import { toast } from "../components/ui/toaster";
 import { authApi } from "../services/api";
 
+/** The same page, two jobs: a reset, or the first password of someone a join request just admitted. */
+const COPY = {
+  reset: {
+    title: "Choose a new password",
+    intro: "Enter and confirm your new password below.",
+    done: "Password updated",
+    doneHint: "Sign in with your new password.",
+    submit: "Update password"
+  },
+  welcome: {
+    title: "Set your password",
+    intro: "Choose a password to finish joining your workspace.",
+    done: "Password set",
+    doneHint: "Sign in to your workspace.",
+    submit: "Set password"
+  }
+} as const;
+
 export function ResetPassword() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const token = searchParams.get("token") ?? "";
+  const copy = searchParams.get("welcome") === "1" ? COPY.welcome : COPY.reset;
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const mutation = useMutation({
     mutationFn: () => authApi.resetPassword(token, password),
     onSuccess: () => {
-      toast.success("Password updated", { description: "Sign in with your new password." });
+      toast.success(copy.done, { description: copy.doneHint });
       setTimeout(() => navigate("/login"), 1500);
     },
     onError: (err: any) =>
@@ -53,8 +74,8 @@ export function ResetPassword() {
       >
         <Card>
           <CardContent className="pt-6">
-            <h1 className="text-2xl font-black tracking-tight">Choose a new password</h1>
-            <p className="mt-2 text-sm text-muted-foreground">Enter and confirm your new password below.</p>
+            <h1 className="text-2xl font-black tracking-tight">{copy.title}</h1>
+            <p className="mt-2 text-sm text-muted-foreground">{copy.intro}</p>
 
             {!token ? (
               <Alert variant="destructive" className="mt-6">
@@ -70,7 +91,7 @@ export function ResetPassword() {
             ) : mutation.isSuccess ? (
               <Alert variant="success" className="mt-6">
                 <CheckCircle2 className="h-4 w-4" />
-                <AlertTitle>Password updated</AlertTitle>
+                <AlertTitle>{copy.done}</AlertTitle>
                 <AlertDescription>Redirecting you to sign in...</AlertDescription>
               </Alert>
             ) : (
@@ -119,7 +140,7 @@ export function ResetPassword() {
                   )}
                 </div>
                 <Button type="submit" disabled={mutation.isPending || !passwordsMatch} size="lg">
-                  {mutation.isPending ? "Updating..." : "Update password"}
+                  {mutation.isPending ? "Saving..." : copy.submit}
                 </Button>
               </form>
             )}

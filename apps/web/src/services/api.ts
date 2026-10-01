@@ -1,4 +1,5 @@
 import axios, { type AxiosRequestConfig } from "axios";
+import type { SignupVerifyResult } from "../utils/signup-flow";
 import type { BulkUploadResult } from "../components/CsvBulkUploadDialog";
 import type {
   AiProposalTargetType,
@@ -513,17 +514,20 @@ export const authApi = {
   /** Whether "Start free trial" should be offered at all — closed unless an operator opened it and
    *  the deployment gives each workspace its own address (2026-10-01). Never rate-limited against
    *  the signup budget; see app.ts. */
-  signupStatus: async () => (await api.get<{ open: boolean; trialDays: number; trialTier: string }>("/signup/status")).data,
+  signupStatus: async () =>
+    (await api.get<{ open: boolean; trialDays: number; trialTier: string; rootDomain: string | null }>("/signup/status")).data,
   signupStart: async (email: string) =>
     (await api.post<{ token: string; message: string }>("/signup/start", { email })).data,
-  signupComplete: async (payload: {
-    token: string;
-    code: string;
-    workspaceName: string;
-    slug: string;
-    adminName: string;
-    adminPassword: string;
-  }) => (await api.post<{ slug: string; url: string; trialEndsAt: string; trialDays: number }>("/signup/complete", payload)).data,
+  /** The code is checked HERE, once, and the answer is a decision (utils/signup-flow.ts): sign in,
+   *  ask to join the company's workspace, wait for it, or create one. */
+  signupVerify: async (token: string, code: string) => (await api.post<SignupVerifyResult>("/signup/verify", { token, code })).data,
+  signupComplete: async (payload: { continuation: string; workspaceName: string; slug: string; adminName: string; adminPassword: string }) =>
+    (await api.post<{ slug: string; url: string; trialEndsAt: string; trialDays: number }>("/signup/complete", payload)).data,
+  /** Ask the company's existing workspace to let you in. Its admins decide on Users → Requests. */
+  signupJoin: async (payload: { continuation: string; name: string; message?: string }) =>
+    (
+      await api.post<{ status: "requested" | "already_pending" | "member"; workspace: { name: string; url?: string } }>("/signup/join", payload)
+    ).data,
   resetPassword: async (token: string, password: string) => (await api.post("/auth/reset-password", { token, password })).data,
   changePassword: async (currentPassword: string, nextPassword: string) =>
     api.post("/auth/change-password", { currentPassword, nextPassword }),

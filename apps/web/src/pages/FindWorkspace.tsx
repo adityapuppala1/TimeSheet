@@ -24,27 +24,23 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { Link } from "react-router";
 import { z } from "zod";
+import { WorkspaceLinkList } from "../components/WorkspaceLinkList";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { toast } from "../components/ui/toaster";
 import { authApi } from "../services/api";
+import type { SignupWorkspaceLink } from "../utils/signup-flow";
 
 const emailSchema = z.object({ email: z.string().email("Enter a valid work email") });
 const codeSchema = z.object({ code: z.string().regex(/^\d{6}$/, "Enter the 6-digit code") });
-
-interface Workspace {
-  slug: string;
-  name: string;
-  url: string;
-}
 
 export function FindWorkspace() {
   const [step, setStep] = useState<"email" | "code" | "done">("email");
   const [token, setToken] = useState("");
   const [sentTo, setSentTo] = useState("");
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspaces, setWorkspaces] = useState<SignupWorkspaceLink[]>([]);
   const [busy, setBusy] = useState(false);
 
   const emailForm = useForm<z.infer<typeof emailSchema>>({ resolver: zodResolver(emailSchema), defaultValues: { email: "" } });
@@ -156,22 +152,7 @@ export function FindWorkspace() {
 
             {step === "done" && (
               <div className="grid gap-2">
-                {workspaces.map((workspace) => (
-                  // A plain anchor, not a router Link: each workspace is a DIFFERENT ORIGIN, and a
-                  // client-side navigation would keep the browser on this host and resolve the
-                  // wrong tenant.
-                  <a
-                    key={workspace.slug}
-                    href={`${workspace.url}/login`}
-                    className="focus-ring flex items-center justify-between gap-3 rounded-lg border border-border bg-card p-3.5 text-left transition hover:border-primary/40 hover:shadow-sm"
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-semibold">{workspace.name}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{workspace.url.replace(/^https?:\/\//, "")}</span>
-                    </span>
-                    <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  </a>
-                ))}
+                <WorkspaceLinkList workspaces={workspaces} />
 
                 {workspaces.length === 0 && (
                   <p className="text-sm leading-6 text-muted-foreground">
