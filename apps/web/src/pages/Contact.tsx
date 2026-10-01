@@ -50,6 +50,7 @@ import { Label } from "../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Textarea } from "../components/ui/textarea";
 import { salesLeadApi } from "../services/platform-admin-api";
+import { useSignupStatus } from "../hooks/use-signup-status";
 
 /**
  * "One of these, and you have to pick" — as a string rather than `z.enum`, so the field can start
@@ -98,6 +99,7 @@ export function Contact() {
   const [busy, setBusy] = useState(false);
   const [serverError, setServerError] = useState("");
   const [sent, setSent] = useState<{ responseWindow: string } | null>(null);
+  const { open: signupOpen } = useSignupStatus();
 
   /**
    * When the form appeared, on the monotonic clock. `performance.now()` and not `Date.now()`: the
@@ -193,9 +195,13 @@ export function Contact() {
                     Nothing else is needed from you. If it is urgent, reply to the confirmation email — it reaches the same person, and it is not a no-reply address.
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    <Button asChild>
-                      <Link to="/signup">Start a free trial while you wait</Link>
-                    </Button>
+                    {/* Only when signup is known to be open: on a deployment where it is closed this
+                        would send the person to a page that tells them so. */}
+                    {signupOpen === true && (
+                      <Button asChild>
+                        <Link to="/signup">Start a free trial while you wait</Link>
+                      </Button>
+                    )}
                     <Button asChild variant="outline">
                       <Link to="/">Back to the site</Link>
                     </Button>

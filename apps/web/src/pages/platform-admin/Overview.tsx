@@ -51,7 +51,11 @@ const ACTION_LABEL: Record<string, string> = {
   "platform_email.resent": "Email resent",
   "platform_admin.created": "Platform admin created",
   "platform_admin.inactive": "Platform admin deactivated",
-  "platform_admin.active": "Platform admin reactivated"
+  "platform_admin.active": "Platform admin reactivated",
+  // Self-serve signup (2026-10-01). Before these, a new customer appeared in no activity feed at all.
+  "org.signup_completed": "New workspace from self-serve signup",
+  "org.signup_failed": "Self-serve signup FAILED to provision",
+  "signup.settings_updated": "Self-serve signup settings changed"
 };
 
 /**

@@ -26,7 +26,7 @@
  *
  * WHO renders this: `App.tsx`'s `/` (public, unauthenticated) route.
  */
-import { PLAN_TIER_LIMITS, planTierPriceLabel, type PlanTier, type PlanTierLimits } from "@timesheet/shared";
+import { PLAN_TIER_LIMITS, planTierPriceLabel, SELF_SERVE_TRIAL_DAYS, type PlanTier, type PlanTierLimits } from "@timesheet/shared";
 import {
   Brain,
   Activity,
@@ -82,6 +82,7 @@ import type { ReactNode } from "react";
 import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Link } from "react-router";
 import { Badge } from "../components/ui/badge";
+import { useSignupStatus } from "../hooks/use-signup-status";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { DeploymentDialog } from "../components/marketing/DeploymentDialog";
@@ -680,7 +681,8 @@ const PRICING = [
     cadence: "per seat / month",
     description: "The default for growing engineering and consulting teams.",
     highlight: true,
-    cta: "Start 14-day trial",
+    // Derived: the signup route grants SELF_SERVE_TRIAL_DAYS, and this card promised 14 against its 15.
+    cta: `Start ${SELF_SERVE_TRIAL_DAYS}-day trial`,
     bullets: [
       "Unlimited users",
       "Google + Microsoft sign-in",
@@ -768,6 +770,8 @@ export function Landing() {
   const [tourId, setTourId] = useState(TOUR[0].id);
   const [menuOpen, setMenuOpen] = useState(false);
   const heroParallax = useParallax<HTMLElement>();
+  // Whether the trial buttons lead anywhere — see hooks/use-signup-status.ts.
+  const { open: signupOpen } = useSignupStatus();
 
   const activeTour = TOUR.find((t) => t.id === tourId) ?? TOUR[0];
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -1415,7 +1419,7 @@ export function Landing() {
                         question (which of the three ways to run it fits) and a buyer who wanted
                         that answer should not have to send an email to get it. Primary is the
                         conversation; secondary is the reading. */}
-                    {tier.name === "Enterprise" ? (
+                    {tier.name === "Enterprise" && (
                       <div className="mt-6 grid gap-2">
                         <Button asChild className="w-full">
                           <Link to="/contact">{tier.cta}</Link>
@@ -1424,9 +1428,14 @@ export function Landing() {
                           Compare deployment models
                         </Button>
                       </div>
-                    ) : (
+                    )}
+                    {/* Signup can be closed on this deployment (the operator's switch, or a single-org
+                        install), and then the trial button would lead to a page saying so — offer the
+                        door that exists. Unknown (loading, or the check failed) keeps the trial button:
+                        the signup page states the truth either way. */}
+                    {tier.name !== "Enterprise" && (
                       <Button asChild className="mt-6 w-full" variant={tier.highlight ? "default" : "outline"}>
-                        <Link to="/signup">{tier.cta}</Link>
+                        {signupOpen === false ? <Link to="/contact">Talk to us</Link> : <Link to="/signup">{tier.cta}</Link>}
                       </Button>
                     )}
                   </CardContent>

@@ -1,6 +1,7 @@
 /**
- * Platform settings: the relay the deployment sends from, who can sign in to this console, the
- * sessions this account holds elsewhere, and the control-plane audit trail. Stripe lives with the
+ * Platform settings: the relay the deployment sends from, whether strangers may create workspaces
+ * (self-serve signup, 2026-10-01), who can sign in to this console, the sessions this account holds
+ * elsewhere, and the control-plane audit trail. Stripe lives with the
  * plan tiers it prices; the retention policy lives on the retention page next to its queue.
  *
  * LAYOUT (3.12.x). Each tab is one `ConsoleSection`, and every card OWNS its section rather than
@@ -23,10 +24,12 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Bell,
   Brain,
   ChevronLeft,
   ChevronRight,
   Copy,
+  DoorOpen,
   Download,
   KeyRound,
   ListChecks,
@@ -39,13 +42,16 @@ import {
   ShieldCheck,
   Smartphone,
   Tablet,
-  TerminalSquare
+  TerminalSquare,
+  TriangleAlert
 } from "lucide-react";
 import { useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
+import { Textarea } from "../../components/ui/textarea";
 import { Skeleton } from "../../components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
@@ -53,7 +59,7 @@ import { toast } from "../../components/ui/toaster";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { parseUserAgent, type ParsedUserAgent } from "../../lib/user-agent";
 import { exportCsv, type CsvColumn } from "../../utils/console-csv";
-import { platformAdminAuthApi, platformAdminConsoleApi, type PlatformAuditRow, type PlatformMailSettings } from "../../services/platform-admin-api";
+import { platformAdminAuthApi, platformAdminConsoleApi, type PlatformAuditRow, type PlatformMailSettings, type PlatformSignupSettingsView } from "../../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../../store/platform-admin-auth";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, FieldGrid, PRIMARY_BTN, SwitchField, Toolbar, shortDateTime } from "./console-ui";
 import { AiAdvisorCard } from "./AiAdvisorCard";
@@ -175,6 +181,120 @@ function MailServerCard({ settings }: { settings: PlatformMailSettings }) {
           {test.isPending ? "Sending…" : "Send test"}
         </Button>
       </div>
+    </ConsoleSection>
+  );
+}
+
+/* ----------------------------------------------------------------------------------------- */
+/* Self-serve signup                                                                          */
+/* ----------------------------------------------------------------------------------------- */
+
+const SIGNUP_TITLE = "Self-serve signup";
+const SIGNUP_DESCRIPTION =
+  "Whether a stranger with a company email address can create a workspace — and its own database — from the public signup page. Off unless you turn it on.";
+
+/**
+ * The switch for `/api/signup` (platform-signup.service.ts).
+ *
+ * WHY THE CARD SHOWS "OPEN" SEPARATELY FROM THE SWITCH. They can disagree: switched on, but the
+ * deployment has no `ROOT_DOMAIN`, is still closed — a workspace created there would have no address
+ * of its own. An operator who flips the switch and sees nothing change deserves the reason on the
+ * same screen, not a support ticket.
+ *
+ * WHY THE DOMAIN LIST IS A TEXTAREA. People paste: one per line, comma-separated, with an `@`, whole
+ * addresses. The server normalises all of those and drops junk, so the box accepts what people
+ * actually have on their clipboard and the saved list comes back clean.
+ */
+function SignupSettingsCard({ view }: { view: PlatformSignupSettingsView }) {
+  const queryClient = useQueryClient();
+  const [enabled, setEnabled] = useState(view.settings.enabled);
+  const [notify, setNotify] = useState(view.settings.notifyOnSignup);
+  const [domains, setDomains] = useState(view.settings.blockedDomains.join("\n"));
+  const save = useMutation({
+    mutationFn: () => platformAdminConsoleApi.updateSignupSettings({ enabled, notifyOnSignup: notify, blockedDomains: domains }),
+    onSuccess: (next) => {
+      toast.success(next.availability.open ? "Signup is open" : "Signup settings saved");
+      setDomains(next.settings.blockedDomains.join("\n"));
+      queryClient.invalidateQueries({ queryKey: ["platform-admin", "signup-settings"] });
+    },
+    onError: (e) => toast.error("Could not save", { description: errorMessageOf(e) })
+  });
+  const availability = view.availability;
+  const reason = availability.open ? null : availability.reason;
+  const builtIn = view.builtInBlocked ? `${view.builtInBlocked.personal} personal and ${view.builtInBlocked.temporary} temporary, including ` : "";
+  return (
+    <ConsoleSection
+      title={SIGNUP_TITLE}
+      description={SIGNUP_DESCRIPTION}
+      actions={
+        <Toolbar>
+          <Button size="sm" className={PRIMARY_BTN} onClick={() => save.mutate()} disabled={save.isPending}>
+            {save.isPending ? "Saving…" : "Save signup settings"}
+          </Button>
+        </Toolbar>
+      }
+      bodyClassName="grid gap-5"
+    >
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 p-3 text-sm">
+        <DoorOpen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="min-w-0 break-words">Right now, the public signup page is</span>
+        <Badge variant={availability.open ? "success" : "muted"}>{availability.open ? "open" : "closed"}</Badge>
+        {view.settings.updatedBy && (
+          <span className="text-xs text-muted-foreground">
+            Last changed by {view.settings.updatedBy}
+            {view.settings.updatedAt ? ` · ${shortDateTime(view.settings.updatedAt)}` : ""}
+          </span>
+        )}
+      </div>
+      {reason === "single-org" && (
+        <Alert variant="warning">
+          <TriangleAlert className="h-4 w-4" />
+          <AlertTitle>Closed whatever the switch says: this deployment is single-org</AlertTitle>
+          <AlertDescription>
+            <span className="font-mono">ROOT_DOMAIN</span> is not set, so a new workspace would have no address of its own — its owner would be sent
+            to the main workspace, where their account does not exist. Set <span className="font-mono">ROOT_DOMAIN</span> (DEPLOYMENT.md, “Turning on
+            multi-org routing”) before opening signup.
+          </AlertDescription>
+        </Alert>
+      )}
+      {reason === "unavailable" && (
+        <Alert variant="warning">
+          <TriangleAlert className="h-4 w-4" />
+          <AlertTitle>The signup policy could not be read</AlertTitle>
+          <AlertDescription>Signup stays closed until it can — it fails closed, because what it guards creates a database.</AlertDescription>
+        </Alert>
+      )}
+      <FieldGrid cols={2}>
+        <SwitchField
+          label="Allow self-serve signup"
+          hint="Each signup creates a workspace with its own database and a trial of the Team plan. Turning this off stops new ones immediately; existing workspaces are untouched."
+          icon={DoorOpen}
+          checked={enabled}
+          onCheckedChange={setEnabled}
+        />
+        <SwitchField
+          label="Email me about every signup"
+          hint="Sent to the alert recipients on the Alerts page (every active platform admin if none are set) — one message per new workspace, and one for every signup that fails to provision."
+          icon={Bell}
+          checked={notify}
+          onCheckedChange={setNotify}
+        />
+      </FieldGrid>
+      <Field
+        label="Also refuse these email domains"
+        htmlFor="signup-blocked"
+        hint={`Personal and temporary providers are refused already (${builtIn}gmail.com, rediffmail.com, yahoo.co.in and mailinator.com). Add any others here — one per line, or comma-separated. People who use one are asked for their work email; the list itself is never shown to them.`}
+      >
+        <Textarea
+          id="signup-blocked"
+          rows={4}
+          value={domains}
+          onChange={(e) => setDomains(e.target.value)}
+          placeholder={"examplemail.in\nanother-provider.com"}
+          className="font-mono text-sm"
+          spellCheck={false}
+        />
+      </Field>
     </ConsoleSection>
   );
 }
@@ -664,8 +784,9 @@ function AuditCard() {
 
 export function PlatformAdminSettings() {
   const mail = useQuery({ queryKey: ["platform-admin", "mail-settings"], queryFn: platformAdminConsoleApi.mailSettings });
+  const signup = useQuery({ queryKey: ["platform-admin", "signup-settings"], queryFn: platformAdminConsoleApi.signupSettings });
   return (
-    <ConsolePage eyebrow="Platform" title="Settings" description="The relay the platform sends from, the advisor's own model, your own second factor and sessions, and everything the control plane has recorded. Who can open this console moved to Access, where roles live.">
+    <ConsolePage eyebrow="Platform" title="Settings" description="The relay the platform sends from, whether strangers can sign up, the advisor's own model, your own second factor and sessions, and everything the control plane has recorded. Who can open this console moved to Access, where roles live.">
       {/* `mt-0` on every panel: `TabsContent` ships its own `mt-3`, which on top of this grid's
           `gap-4` made the gap between the tab strip and the card different from the gap the rest of
           the console uses. One gap, owned by the grid. */}
@@ -673,6 +794,9 @@ export function PlatformAdminSettings() {
         <TabsList className="flex w-full min-w-0 justify-start overflow-x-auto sm:w-fit">
           <TabsTrigger value="mail" className="gap-1.5">
             <ServerCog className="h-3.5 w-3.5" />Mail server
+          </TabsTrigger>
+          <TabsTrigger value="signup" className="gap-1.5">
+            <DoorOpen className="h-3.5 w-3.5" />Signup
           </TabsTrigger>
           <TabsTrigger value="advisor" className="gap-1.5">
             <Brain className="h-3.5 w-3.5" />AI advisor
@@ -694,6 +818,14 @@ export function PlatformAdminSettings() {
             </ConsoleSection>
           )}
           {mail.data && <MailServerCard key={mail.data.updatedAt ?? "initial"} settings={mail.data} />}
+        </TabsContent>
+        <TabsContent value="signup" className="mt-0">
+          {signup.isLoading && (
+            <ConsoleSection title={SIGNUP_TITLE} description={SIGNUP_DESCRIPTION}>
+              <Skeleton className="h-48 w-full" />
+            </ConsoleSection>
+          )}
+          {signup.data && <SignupSettingsCard key={signup.data.settings.updatedAt ?? "initial"} view={signup.data} />}
         </TabsContent>
         <TabsContent value="advisor" className="mt-0">
           <AiAdvisorCard />

@@ -15,9 +15,15 @@
  *
  * The last step is slow — it creates a database and runs every migration — so it says so, rather
  * than showing a spinner that reads as a hang.
+ *
+ * CLOSED IS A STATE, NOT AN ERROR (2026-10-01). Signup is off unless the operator opened it, and is
+ * always off on a single-org install. A visitor who arrives anyway gets a page that says so and
+ * offers the doors that DO exist — talk to us, find an existing workspace, sign in — instead of a
+ * form that fails on submit. The server is the authority: a 403 `SIGNUP_CLOSED` mid-flow (the switch
+ * flipped while they were typing) lands on the same page.
  */
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ArrowLeft, ArrowRight, CheckCircle2, Mail, Sparkles } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, DoorClosed, Mail, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { Link } from "react-router";
@@ -26,6 +32,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import { useSignupStatus } from "../hooks/use-signup-status";
 import { authApi } from "../services/api";
 
 const emailSchema = z.object({ email: z.string().email("Enter a valid work email") });
@@ -58,6 +65,10 @@ export function Signup() {
   const [created, setCreated] = useState<{ url: string; trialDays: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [serverError, setServerError] = useState("");
+  const { open, trialDays } = useSignupStatus();
+  /** Set when the server refuses mid-flow — it is the authority, whatever the status query said. */
+  const [closedByServer, setClosedByServer] = useState(false);
+  const closed = (open === false || closedByServer) && step !== "done";
 
   const emailForm = useForm<z.infer<typeof emailSchema>>({ resolver: zodResolver(emailSchema), defaultValues: { email: "" } });
   const codeForm = useForm<z.infer<typeof codeSchema>>({ resolver: zodResolver(codeSchema), defaultValues: { code: "" } });
@@ -75,6 +86,10 @@ export function Signup() {
       setSentTo(email);
       setStep("code");
     } catch (err: any) {
+      if (err?.response?.data?.code === "SIGNUP_CLOSED") {
+        setClosedByServer(true);
+        return;
+      }
       // Shown inline rather than as a toast: the free-mail refusal is about the field directly
       // above it, and a toast would vanish before they read it.
       //
@@ -99,6 +114,10 @@ export function Signup() {
       setCreated({ url: result.url, trialDays: result.trialDays });
       setStep("done");
     } catch (err: any) {
+      if (err?.response?.data?.code === "SIGNUP_CLOSED") {
+        setClosedByServer(true);
+        return;
+      }
       const message = err?.response?.data?.message ?? "Couldn't create the workspace. Try again.";
       // A taken address belongs on the field that caused it, not in a banner at the bottom.
       if (err?.response?.status === 409) wsForm.setError("slug", { message });
@@ -107,6 +126,42 @@ export function Signup() {
       setBusy(false);
     }
   };
+
+  if (closed) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4 py-10">
+        <div className="w-full max-w-md">
+          <Link to="/" className="focus-ring mb-4 inline-flex items-center gap-1.5 rounded text-sm text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="h-4 w-4" />
+            Back
+          </Link>
+          <Card>
+            <CardHeader>
+              <div className="mb-1 grid h-10 w-10 place-items-center rounded-lg bg-muted text-muted-foreground">
+                <DoorClosed className="h-5 w-5" aria-hidden />
+              </div>
+              <CardTitle>Signups are closed here</CardTitle>
+              <CardDescription>
+                New workspaces on this service are set up with us rather than on your own. Tell us about your team and we'll get you
+                started.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-2">
+              <Button asChild className="w-full">
+                <Link to="/contact">Talk to us</Link>
+              </Button>
+              <Button asChild variant="outline" className="w-full">
+                <Link to="/find-workspace">Find your company's workspace</Link>
+              </Button>
+              <Button asChild variant="ghost" className="w-full">
+                <Link to="/login">Sign in</Link>
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4 py-10">
@@ -123,7 +178,7 @@ export function Signup() {
             </div>
             <CardTitle>{step === "done" ? "Your workspace is ready" : "Start your free trial"}</CardTitle>
             <CardDescription>
-              {step === "email" && "15 days of the Team plan. No card, and nothing is charged when it ends."}
+              {step === "email" && `${trialDays} days of the Team plan. No card, and nothing is charged when it ends.`}
               {step === "code" && `We sent a 6-digit code to ${sentTo}. It expires in 10 minutes.`}
               {step === "workspace" && "Name your workspace and create the first admin account."}
               {step === "done" && created && `You have ${created.trialDays} days on the Team plan. We've emailed you the link too.`}

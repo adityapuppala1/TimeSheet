@@ -510,6 +510,10 @@ export const authApi = {
   /* --- Self-serve signup (3.6.0) ------------------------------------------------------------
      Two steps for the same verify-first reason discovery has, and one more besides: `complete`
      provisions a database, so nothing should reach it that has not proven an inbox first. */
+  /** Whether "Start free trial" should be offered at all — closed unless an operator opened it and
+   *  the deployment gives each workspace its own address (2026-10-01). Never rate-limited against
+   *  the signup budget; see app.ts. */
+  signupStatus: async () => (await api.get<{ open: boolean; trialDays: number; trialTier: string }>("/signup/status")).data,
   signupStart: async (email: string) =>
     (await api.post<{ token: string; message: string }>("/signup/start", { email })).data,
   signupComplete: async (payload: {

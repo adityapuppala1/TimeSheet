@@ -12,10 +12,12 @@ import { ArrowRight, CalendarClock, CheckCircle2, Loader2, RotateCcw } from "luc
 import { useParams } from "react-router";
 import { Button } from "../components/ui/button";
 import { platformPublicApi } from "../services/platform-admin-api";
+import { useSignupStatus } from "../hooks/use-signup-status";
 
 export function ReactivatePage() {
   const { token = "" } = useParams();
   const info = useQuery({ queryKey: ["reactivate", token], queryFn: () => platformPublicApi.reactivateInfo(token), retry: false });
+  const { open: signupOpen } = useSignupStatus();
   const restore = useMutation({ mutationFn: () => platformPublicApi.reactivate(token) });
 
   if (info.isLoading) {
@@ -32,11 +34,25 @@ export function ReactivatePage() {
         <div className="max-w-md">
           <h1 className="text-xl font-bold text-foreground">This link isn't valid any more</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Restore links expire, and a workspace that has passed its retention date cannot be restored — deletion is permanent. You can always{" "}
-            <a href="/signup" className="font-medium text-accent underline">
-              start a new workspace
-            </a>
-            .
+            Restore links expire, and a workspace that has passed its retention date cannot be restored — deletion is permanent.
+            {/* Offered only when signup is known to be open — otherwise the way back is a conversation. */}
+            {signupOpen === true ? (
+              <>
+                {" "}You can always{" "}
+                <a href="/signup" className="font-medium text-accent underline">
+                  start a new workspace
+                </a>
+                .
+              </>
+            ) : (
+              <>
+                {" "}
+                <a href="/contact" className="font-medium text-accent underline">
+                  Talk to us
+                </a>{" "}
+                about setting one up again.
+              </>
+            )}
           </p>
         </div>
       </div>

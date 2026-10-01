@@ -411,6 +411,16 @@ export interface PlatformAuditRow {
   createdAt: string;
 }
 
+/** The deployment's self-serve signup policy — see platform-signup.service.ts. */
+export interface PlatformSignupSettingsView {
+  settings: { enabled: boolean; blockedDomains: string[]; notifyOnSignup: boolean; updatedBy: string | null; updatedAt: string | null };
+  /** Whether signup is ACTUALLY open — the switch can be on while this says closed (no ROOT_DOMAIN). */
+  availability: { open: true } | { open: false; reason: "disabled" | "single-org" | "unavailable" };
+  rootDomainConfigured: boolean;
+  /** Sizes of the built-in lists, so the card can say what is refused before any domain is added. */
+  builtInBlocked?: { personal: number; temporary: number };
+}
+
 export interface PlatformMailSettings {
   host: string;
   port: number;
@@ -713,6 +723,9 @@ export const platformAdminConsoleApi = {
   mailSettings: async () => (await platformAdminApi.get<PlatformMailSettings>("/mail-settings")).data,
   updateMailSettings: async (payload: { host: string; port: number; secure: boolean; user?: string; password?: string; clearPassword?: boolean; fromAddress?: string; replyTo?: string; salesInboxAddress?: string }) =>
     (await platformAdminApi.put<{ ok: true; updatedAt: string; effective: PlatformMailSettings["effective"] }>("/mail-settings", payload)).data,
+  signupSettings: async () => (await platformAdminApi.get<PlatformSignupSettingsView>("/signup/settings")).data,
+  updateSignupSettings: async (payload: { enabled?: boolean; notifyOnSignup?: boolean; blockedDomains?: string[] | string }) =>
+    (await platformAdminApi.put<PlatformSignupSettingsView>("/signup/settings", payload)).data,
   testMail: async (to: string) => (await platformAdminApi.post<{ sent: true; to: string; emailLogId: string | null }>("/mail-settings/test", { to })).data,
 
   emailTemplates: async () => (await platformAdminApi.get<PlatformEmailTemplateRow[]>("/email-templates")).data,
