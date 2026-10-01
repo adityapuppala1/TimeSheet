@@ -373,6 +373,8 @@ const ROUTES: Route[] = [
   { method: "post", path: `/monitoring/${ORG}/operation`, cap: OPERATE, body: { operation: "ANALYZE", tables: [] } },
   { method: "put", path: "/alerts/settings", cap: OPERATE, body: { digestEnabled: true, minSeverity: "warning", recipients: [] } },
   { method: "post", path: "/alerts/digest/run", cap: OPERATE, body: { dryRun: true } },
+  // The daily signup summary's Run now: a real run claims the day and mails people.
+  { method: "post", path: "/signups/digest/run", cap: OPERATE, body: { dryRun: true } },
   { method: "post", path: "/alerts/webhook/test", cap: OPERATE },
   {
     method: "put",

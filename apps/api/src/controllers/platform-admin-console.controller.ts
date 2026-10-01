@@ -53,6 +53,7 @@ import {
   updateRetentionSettings
 } from "../services/retention.service.js";
 import { getSignupAvailability, getSignupSettings, hasMultiOrgRouting, updateSignupSettings } from "../services/platform-signup.service.js";
+import { runSignupDigest } from "../services/signup-digest.service.js";
 import { DISPOSABLE_MAIL_DOMAINS, FREE_MAIL_DOMAINS } from "../utils/free-mail-domains.js";
 import { resolveSalesInbox, SALES_LEAD_STATUSES } from "../services/sales-lead.service.js";
 import { captureOrgUsageSnapshots, getPlatformAnalytics } from "../services/platform-admin-analytics.service.js";
@@ -452,6 +453,15 @@ platformAdminConsoleRouter.put("/signup/settings", operate, validate(signupSetti
     actorLabel(req)
   );
   res.json({ settings, availability: await getSignupAvailability(), rootDomainConfigured: hasMultiOrgRouting() });
+});
+
+/**
+ * Run the daily signup summary now. `dryRun: true` is the console's Preview — it reports what would
+ * be sent, claims nothing and sends nothing, so it is safe to press repeatedly. A real run claims the
+ * day (the 08:15 job then stands down), so it is `platform:operate`, like the alert digest's.
+ */
+platformAdminConsoleRouter.post("/signups/digest/run", operate, async (req, res) => {
+  res.json(await runSignupDigest(new Date(), { dryRun: Boolean(req.body?.dryRun) }));
 });
 
 /* ================================ Trial retention =============================== */

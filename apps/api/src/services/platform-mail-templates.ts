@@ -490,6 +490,69 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
     )
   },
   {
+    key: "platform.signup_digest",
+    group: "Operator",
+    description:
+      "The daily signup summary (signup Phase 1) — the default notify mode. Sent each morning to the alert recipients, only on a day when a workspace was created, a signup failed, or someone asked to join. Refusals are counted but never send it on their own.",
+    variables: ["day", "createdCount", "failedCount", "joinCount", "refusedCount", "createdList", "failedList", "joinList", "consoleUrl", "appUrl"],
+    sample: {
+      day: "2026-10-02",
+      createdCount: "2",
+      failedCount: "1",
+      joinCount: "3",
+      refusedCount: "7",
+      createdList: "Northwind Logistics (northwind) — northwind.co.uk — trial ends 2026-10-17\nGlobex (globex) — globex.com — trial ends 2026-10-17",
+      failedList: "initech.com — Access denied for user 'provisioner'@'%' to database 'ts_initech'",
+      joinList: "Northwind Logistics: 2 requests\nAcme Corp: 1 request",
+      consoleUrl: "https://timesphere.app/platform-admin/signups",
+      appUrl: "https://timesphere.app"
+    },
+    subject: "Signups {{day}}: {{createdCount}} new, {{failedCount}} failed, {{joinCount}} asked to join",
+    html: shell(
+      { title: "Daily signup summary", preheader: "{{createdCount}} new workspaces, {{failedCount}} failed, {{joinCount}} join requests.", accentColor: ACCENT },
+      heading("Self-serve signup, the last 24 hours") +
+        paragraph(
+          `<strong>{{createdCount}}</strong> new &middot; <strong>{{failedCount}}</strong> failed &middot; <strong>{{joinCount}}</strong> asked to join an existing workspace &middot; {{refusedCount}} refused (personal or blocked addresses).`
+        ) +
+        paragraph(`<strong>New workspaces ({{createdCount}})</strong>`) +
+        alertBlock("{{createdList}}") +
+        // A failure is somebody who proved their address, filled in the form, and was told it did not
+        // work. They are the people to write to today.
+        paragraph(`<strong>Failed ({{failedCount}})</strong>`) +
+        alertBlock("{{failedList}}") +
+        paragraph(`<strong>Asked to join ({{joinCount}})</strong>`) +
+        alertBlock("{{joinList}}") +
+        paragraph(button("Open Signups in the console", "{{consoleUrl}}", ACCENT)) +
+        paragraph(
+          `<span style="font-size:12px;color:#64748B;">Switch to one email per signup, or to none, under Settings → Self-serve signup. A day with nothing new sends nothing.</span>`
+        )
+    )
+  },
+  {
+    key: "platform.signup_failing",
+    group: "Operator",
+    description:
+      "Sent at once when self-serve provisioning fails twice inside an hour — an outage, not news for tomorrow's summary. At most once per hour, in every notify mode except Off.",
+    variables: ["failedCount", "recentFailures", "consoleUrl", "appUrl"],
+    sample: {
+      failedCount: "3",
+      recentFailures: "globex.com — connect ECONNREFUSED db-2.internal:3306\ninitech.com — connect ECONNREFUSED db-2.internal:3306",
+      consoleUrl: "https://timesphere.app/platform-admin/signups",
+      appUrl: "https://timesphere.app"
+    },
+    subject: "Signup provisioning is failing: {{failedCount}} failures in the last hour",
+    html: shell(
+      { title: "Signup provisioning is failing", preheader: "{{failedCount}} signups failed in the last hour." },
+      heading("New workspaces are failing to provision") +
+        paragraph(
+          `<strong>{{failedCount}}</strong> verified people tried to create a workspace in the last hour and were told it did not work. Until this is fixed, everyone who signs up is turned away. The most recent:`
+        ) +
+        alertBlock("{{recentFailures}}") +
+        paragraph(button("Open Signups in the console", "{{consoleUrl}}", ACCENT)) +
+        paragraph(`<span style="font-size:12px;color:#64748B;">Sent at most once an hour while it continues. The daily summary lists every failure too.</span>`)
+    )
+  },
+  {
     key: "platform.smtp_test",
     group: "Operator",
     description: "What the “Send test” button on Platform mail settings sends. Proves the relay, the From address and the reply-to.",

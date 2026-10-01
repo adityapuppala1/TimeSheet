@@ -139,6 +139,8 @@ vi.mock("../../src/services/platform-alerts.service.js", () => ({
 }));
 vi.mock("../../src/config/with-org-tenant.js", () => ({ withOrgTenant: vi.fn(async (_s: string, fn: () => Promise<unknown>) => fn()) }));
 vi.mock("../../src/services/notify.service.js", () => ({ dispatchTransactional: vi.fn(async () => ({})) }));
+const alertIfProvisioningFailing = vi.fn(async () => false);
+vi.mock("../../src/services/signup-digest.service.js", () => ({ alertIfProvisioningFailing }));
 const createJoinRequest = vi.fn(async (): Promise<{ status: string; id?: string }> => ({ status: "requested", id: "jr-1" }));
 vi.mock("../../src/services/join-request.service.js", () => ({ createJoinRequest }));
 const withOrgTenantMock = (await import("../../src/config/with-org-tenant.js")).withOrgTenant as unknown as ReturnType<typeof vi.fn>;
@@ -529,6 +531,8 @@ describe("what the operators hear", () => {
     expect(failed).toHaveLength(2);
     expect(failed[0][1]).toMatchObject({ vars: { error: expect.stringContaining("ts_northwind") } });
     expect(stages()).toContain("FAILED");
+    // …and asks whether this is the second failure inside the hour — an outage, not tomorrow's news.
+    expect(alertIfProvisioningFailing).toHaveBeenCalledTimes(1);
   });
 
   it("never lets a broken mail relay turn a successful signup into an error", async () => {

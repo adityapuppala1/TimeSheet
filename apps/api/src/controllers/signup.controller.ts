@@ -42,6 +42,7 @@ import { platformAudit } from "../services/platform-audit.service.js";
 import { sendPlatformTemplate } from "../services/platform-mail.service.js";
 import { getSignupAvailability, getSignupSettings, notifySignupOutcome, signupRefusalFor } from "../services/platform-signup.service.js";
 import { provisionOrganization } from "../services/provisioning.service.js";
+import { alertIfProvisioningFailing } from "../services/signup-digest.service.js";
 import { recordSignupStage } from "../services/signup-funnel.service.js";
 import {
   checkVerificationCode,
@@ -322,6 +323,9 @@ signupRouter.post(
       });
       await recordSignupStage("FAILED", { email, detail });
       await notifySignupOutcome({ kind: "failed", workspaceName: req.body.workspaceName.trim(), slug, ownerEmail: email, error: detail });
+      // The second failure inside an hour is an outage, not news for tomorrow's summary: it mails the
+      // alert recipients now, once an hour (signup-digest.service.ts). Never throws.
+      await alertIfProvisioningFailing(new Date());
       throw new AppError(502, "We couldn't finish setting up your workspace. Our team has been notified and will be in touch — you can also try again in a few minutes.");
     }
 

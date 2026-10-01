@@ -57,6 +57,7 @@ const ALLOWED: Record<string, string> = {
   "services/platform-alerts.service.ts": "links to /platform-admin, which is not a workspace",
   "services/sales-lead.service.ts": "marketing follow-up, sent before any workspace exists",
   "services/platform-signup.service.ts": "the operator's console link in the new-signup email — the console lives on the deployment, not on any workspace",
+  "services/signup-digest.service.ts": "the Signups page link in the operators' daily summary and provisioning-failing alert — the console lives on the deployment, not on any workspace",
   "controllers/platform-admin.controller.ts": "the routing readout REPORTS the configured value",
   "controllers/billing.controller.ts": "mentions it in a comment only",
   "controllers/sso.controller.ts":

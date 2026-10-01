@@ -46,6 +46,7 @@ import { startTenantDbSampleWorker } from "./workers/tenant-db-sample.worker.js"
 import { startOrgUsageSnapshotWorker } from "./workers/org-usage-snapshot.worker.js";
 import { startBilledRevenueReconcileWorker } from "./workers/billed-revenue-reconcile.worker.js";
 import { startPlatformAlertDigestWorker } from "./workers/platform-alert-digest.worker.js";
+import { startSignupDigestWorker } from "./workers/signup-digest.worker.js";
 import { startAIRetentionWorker } from "./workers/ai-retention.worker.js";
 import { runForEveryOrg } from "./workers/run-for-every-org.js";
 import { registerFlowDispatch } from "./services/automation-dispatch.service.js";
@@ -260,6 +261,9 @@ server.on("listening", async () => {
   // Every six hours — the fleet's alerts, to the people who are not looking at the console. Sends
   // only when something has CHANGED, so running it four times a day costs nothing in noise.
   startPlatformAlertDigestWorker();
+  // 08:15 daily — the self-serve signup summary, in DAILY notify mode and only on a day with news.
+  // Every replica schedules it; a PlatformJobClaim row makes it one email.
+  startSignupDigestWorker();
   startApiTelemetryRetentionWorker();
 
   // The Studio's event triggers. Registered once, for the whole internal event vocabulary — which
