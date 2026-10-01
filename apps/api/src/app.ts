@@ -78,6 +78,7 @@ import { reportRouter } from "./controllers/report.controller.js";
 import { attestationRouter } from "./controllers/attestation.controller.js";
 import { attestationPublicRouter } from "./controllers/attestation-public.controller.js";
 import { settingsRouter } from "./controllers/settings.controller.js";
+import { companyDomainsRouter } from "./controllers/company-domains.controller.js";
 import { maintenanceRouter } from "./controllers/maintenance.controller.js";
 import { ssoRouter } from "./controllers/sso.controller.js";
 import { teamRouter } from "./controllers/team.controller.js";
@@ -604,6 +605,8 @@ app.use("/api/shared/approvals", rateLimit({ windowMs: 60_000, limit: 15, standa
 app.use("/api/notifications", notificationRouter);
 app.use("/api/audit", auditRouter);
 app.use("/api/team", teamRouter);
+// Ahead of settingsRouter, which would otherwise answer the path first (company-domains.controller.ts).
+app.use("/api/settings/company-domains", companyDomainsRouter);
 app.use("/api/settings", settingsRouter);
 // Carries an unauthenticated read surface (GET /status — the lockout page's poll), but unlike
 // the attestation links its availability IS the feature: during a real window, every locked-out

@@ -120,7 +120,8 @@ const CATEGORY_PREFIXES: Array<[string, string]> = [
   ["approval.", "Approval"],
   ["digest.", "Digest"],
   ["goal.", "Goal"],
-  ["security.", "Security"]
+  ["security.", "Security"],
+  ["join.", "Join request"]
 ];
 
 const categoryLabel = (category?: string | null) => {

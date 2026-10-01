@@ -1496,6 +1496,35 @@ export const statusPageApi = {
   runNow: async () => (await api.post<{ ranAt: string }>("/maintenance/status-page/run")).data
 };
 
+/** A request to join this workspace from someone at the company's domain (signup Phase 1). */
+export interface JoinRequestRow {
+  id: string;
+  email: string;
+  name: string;
+  message: string | null;
+  status: "PENDING" | "APPROVED" | "DECLINED" | "EXPIRED";
+  expiresAt: string;
+  createdAt: string;
+  decidedAt: string | null;
+  decisionNote: string | null;
+  roleGranted: string | null;
+  createdUserId: string | null;
+  decidedBy?: { id: string; name: string } | null;
+}
+
+/** Users → Requests — see join-request.controller.ts. Needs `users:manage`. */
+export const joinRequestApi = {
+  list: async (filter: "pending" | "decided") => (await api.get<JoinRequestRow[]>("/join-requests", { params: { filter } })).data,
+  approve: async (id: string, role?: string) => (await api.post<{ userId: string; linked: boolean }>(`/join-requests/${id}/approve`, { role })).data,
+  decline: async (id: string, note?: string) => api.post(`/join-requests/${id}/decline`, { note: note || undefined })
+};
+
+/** The email domains that route people to this workspace — read-only, super admin only. */
+export const companyDomainApi = {
+  list: async () =>
+    (await api.get<Array<{ domain: string; status: string; source: string; createdAt: string }>>("/settings/company-domains")).data
+};
+
 export const userApi = {
   list: async () => (await api.get<UserRow[]>("/users")).data,
   /** The management table's list: server-side filtering, sorting and pagination. Separate from

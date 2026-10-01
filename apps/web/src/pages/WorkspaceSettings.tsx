@@ -98,6 +98,7 @@ import { BillingSettingsCard } from "./settings/BillingSettingsCard";
 import { ImapMark } from "../components/ui/connector-marks";
 import { IntegrationsSettingsCard } from "./settings/IntegrationsSettingsCard";
 import { SsoSettingsCard } from "./settings/SsoSettingsCard";
+import { CompanyDomainsCard } from "./settings/CompanyDomainsCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
 import { BrandingSettingsCard } from "./settings/BrandingSettingsCard";
@@ -362,8 +363,9 @@ export function WorkspaceSettingsPage() {
           <McpServerSettingsCard readOnly={!isSuperAdmin} />
         </TabsContent>
 
-        <TabsContent value="sso">
+        <TabsContent value="sso" className="grid gap-5">
           <SsoSettingsCard readOnly={!isSuperAdmin} />
+          <CompanyDomainsCard />
         </TabsContent>
 
         <TabsContent value="maintenance">

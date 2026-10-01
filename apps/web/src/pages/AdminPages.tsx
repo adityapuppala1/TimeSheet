@@ -108,6 +108,7 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard } from "../components/ui/stat-card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { safeHtml } from "../lib/safe-html";
@@ -117,6 +118,7 @@ import {
   attestationApi,
   faceApi,
   fileUrl,
+  joinRequestApi,
   projectApi,
   reportApi,
   timesheetApi,
@@ -129,6 +131,7 @@ import {
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
 import { useAuthStore } from "../store/auth";
+import { JoinRequestsPanel, PENDING_JOIN_REQUESTS_KEY } from "./JoinRequestsPanel";
 import { PageHeader } from "../components/PageHeader";
 import { ProjectMark } from "../components/ProjectMark";
 import { IDENTITY_COLORS } from "../lib/identity-colors";
@@ -235,7 +238,7 @@ function formatLoginTime(iso: string | null): string {
   });
 }
 
-export function UsersPage() {
+function UsersPeopleTab() {
   const queryClient = useQueryClient();
   const currentUserId = useAuthStore((s) => s.user?.id);
   // Granting more than one held role is super-admin-only — an ADMIN sees exactly today's
@@ -674,7 +677,7 @@ export function UsersPage() {
   );
 
   return (
-    <Workspace title="User Management" subtitle="Create, edit, deactivate, reset, and map users into the manager hierarchy." icon={<Users2 className="h-5 w-5" />}>
+    <div className="grid gap-5">
       {/* Collapsed by default. This page's JOB is managing the people who are already here; adding
           one is an action taken occasionally, and a hundred lines of form above the table pushed
           the actual subject below the fold on every visit. */}
@@ -1010,6 +1013,40 @@ export function UsersPage() {
           </Button>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+/**
+ * User Management: the people already here, and — since signup Phase 1 — the people from the
+ * company's email domain asking to be let in. `?tab=requests` is where the "asked to join" bell entry
+ * and email link land, so it is honoured on load.
+ */
+export function UsersPage() {
+  const [tab, setTab] = useState(() => (new URLSearchParams(globalThis.location?.search ?? "").get("tab") === "requests" ? "requests" : "people"));
+  const pendingRequests = useQuery({ queryKey: PENDING_JOIN_REQUESTS_KEY, queryFn: () => joinRequestApi.list("pending"), refetchInterval: 60_000 });
+  const waiting = pendingRequests.data?.length ?? 0;
+  return (
+    <Workspace title="User Management" subtitle="Create, edit, deactivate, reset, and map users into the manager hierarchy." icon={<Users2 className="h-5 w-5" />}>
+      <Tabs value={tab} onValueChange={setTab} className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
+        <TabsList className="w-full justify-start sm:w-auto">
+          <TabsTrigger value="people">People</TabsTrigger>
+          <TabsTrigger value="requests" className="gap-1.5">
+            Requests
+            {waiting > 0 && (
+              <Badge variant="warning" className="h-5 min-w-5 justify-center px-1.5 text-[11px]" aria-label={`${waiting} waiting`}>
+                {waiting}
+              </Badge>
+            )}
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="people">
+          <UsersPeopleTab />
+        </TabsContent>
+        <TabsContent value="requests">
+          <JoinRequestsPanel />
+        </TabsContent>
+      </Tabs>
     </Workspace>
   );
 }
