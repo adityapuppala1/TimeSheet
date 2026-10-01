@@ -330,13 +330,32 @@ server new databases are created on); the card says plainly when the first is mi
 
 - **Who may sign up:** company addresses only. Personal and throwaway providers are refused already;
   add any others (a regional provider, a competitor) in **Also refuse these email domains**.
-- **What you hear:** an email for every new workspace and for every signup that fails to provision —
-  to the alert recipients on the Alerts page, or every active platform admin if none are set. Each
-  also appears in Overview → Recent activity. A **failed** signup means a person proved their address,
-  filled in the form and was shown an error: write to them the same day.
-- **Not yet:** a second signup from a company that already has a workspace still creates a second
-  one. Routing those people to the existing workspace as a join request is Phase 1 of
-  [SIGNUP_AND_DOMAINS_PLAN.md](SIGNUP_AND_DOMAINS_PLAN.md).
+- **What you hear:** by default **one summary a day** (08:15) listing new workspaces, failed signups
+  and join requests — or one email per signup, or nothing (**Notify** on the same card). It goes to the
+  alert recipients on the Alerts page, or every active platform admin if none are set. Whatever the
+  setting except Off, a second provisioning failure inside an hour emails at once. Everything also
+  appears in Overview → Recent activity and on **Growth → Signups**. A **failed** signup means a person
+  proved their address, filled in the form and was shown an error: write to them the same day.
+- **One workspace per company.** The second person from a company whose domain a workspace already
+  holds is offered a **request to join** it instead of a new workspace; that workspace's admins decide on
+  User management → Requests. Requests expire after **Join requests expire after** days (14 by
+  default) and are only taken while the workspace is ACTIVE.
+
+#### Company domains
+
+**Tenants → Company domains** lists which workspace each company's people are sent to. A self-serve
+signup claims its domain; a workspace you provision in the console does not, until you assign one.
+
+- **After upgrading to the release that introduced this, run *Backfill from signup emails* once.**
+  Preview first: it claims each domain that exactly one workspace's owner address implies, and lists
+  every domain two workspaces share as a **conflict**. Nothing picks a side — a wrong guess sends the
+  next person from that company into the other company's workspace. Settle each conflict with
+  **Assign a domain** once you know which workspace is whose.
+- **Reassign** and **Release** ask for a reason; the audit row keeps it and the previous holder.
+  Release when a company leaves, or when a domain was claimed by the wrong workspace.
+- Claims are on the company domain only: `eng.acme.com` is covered by `acme.com`. Personal providers
+  can never be claimed. Proving a domain by DNS is a later phase; until then every claim reads
+  *Unverified*.
 
 ---
 

@@ -495,15 +495,52 @@ Two additive control-plane tables, migration `20261001120000_signup_settings_and
 (marked `@rerunnable`: both statements are `CREATE TABLE IF NOT EXISTS`).
 
 - **`PlatformSignupSettings`** — one row, `id` "global", written only by the console: `enabled`
-  (default **false**), `blockedDomains` (JSON list, extra domains refused at signup), `notifyOnSignup`
-  (default true), `updatedBy`. No row is seeded: every reader treats absence as the defaults, so
-  `updatedBy` never names somebody who did not decide anything.
+  (default **false**), `blockedDomains` (JSON list, extra domains refused at signup), `notifyMode`
+  (`DAILY` default, `EACH`, `OFF`), `joinRequestTtlDays` (default 14, clamped 1–90 on read and write),
+  `updatedBy`. No row is seeded: every reader treats absence as the defaults, so `updatedBy` never
+  names somebody who did not decide anything.
 - **`EmailVerificationCode`** — the six-digit codes for signup and "Find your workspace", moved out
   of process memory so they work across API replicas. `tokenHash` (primary key) and `codeHash` are
   keyed hashes; `purpose` (`signup` / `discover`) binds a code to its flow; `attempts` is spent in the
   same conditional UPDATE that checks the cap; rows are swept by `expiresAt` on every issue.
 
 Why these exist and what reads them: [API.md § Self-serve signup](API.md#self-serve-signup).
+
+## One workspace per company domain (signup Phase 1, 2026-10-02)
+
+All additive; both migrations are `@rerunnable` and guarded the house way (`IF NOT EXISTS`, and the
+information_schema + PREPARE pattern for every index and foreign key).
+
+**Control plane** — migration `20261002090000_company_domains_and_signup_funnel`:
+
+- **`OrgEmailDomain`** — `domain` (registrable domain, **unique**) → `organizationId`
+  (`ON DELETE CASCADE`), `status` (`UNVERIFIED` until DNS proof exists), `source`
+  (`SIGNUP` / `BACKFILL` / `ADMIN`). The unique key IS the arbiter of the signup race: two people from
+  one new company insert the same domain inside the transaction that creates their workspace, and the
+  loser's whole transaction rolls back. Workspace deletion releases the claim in the same transaction
+  (`retention.service.ts`); a snapshot restore re-claims it only if still free.
+- **`SignupAttempt`** — one row per funnel stage (`CODE_SENT`, `REFUSED`, `VERIFIED`, `CREATED`,
+  `JOIN_REQUESTED`, `UNAVAILABLE`, `FAILED`): `domain`, `emailHash` (keyed), `organizationId` when
+  there is one, `detail` (a failure's error, truncated). **Never the address.** Indexed for the
+  console's period queries and for the per-workspace daily cap on join requests.
+- **`PlatformJobClaim`** — primary key `(job, periodKey)`. A replica that inserts the row owns that
+  period of that job (the daily signup summary, the hourly provisioning-failing alert); every other
+  replica hits the key and stands down. No lock to hold or leak.
+- **`Organization.createdVia`** — `SELF_SERVE` or `CONSOLE`. **Backfilled in the migration**:
+  `SELF_SERVE` where `trialStartedAt` is set, otherwise `CONSOLE`. Readers treat `NULL` as console.
+
+**Tenant** — migration `20261002100000_join_requests` (fan out with `npm run db:migrate:tenants`):
+
+- **`JoinRequest`** — `email`, `name`, `message`, `status` (`PENDING` / `APPROVED` / `DECLINED` /
+  `EXPIRED`), `expiresAt`, `decidedById` (→ `User`, `SET NULL`), `decidedAt`, `decisionNote`,
+  `roleGranted`, `createdUserId`. It lives in the workspace's own database because its admins decide
+  it and it leaves with the workspace. **No password is ever stored here**: approval creates the
+  account with an unusable password and mails a single-use link (a `PasswordResetToken` row with a
+  72-hour life).
+
+The claims are not filled by the migration — that needs the public suffix list and a person to settle
+conflicts. Run **Company domains → Backfill** in the console once after upgrading
+([NEW_ORGANIZATION_SETUP.md](NEW_ORGANIZATION_SETUP.md#company-domains)).
 
 ## API request telemetry (`ApiRequestSample`)
 

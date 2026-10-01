@@ -2213,20 +2213,46 @@ including what is planned next, is in [SIGNUP_AND_DOMAINS_PLAN.md](SIGNUP_AND_DO
 deployment routes workspaces by subdomain (`ROOT_DOMAIN` set — without it a new workspace would have
 no address of its own). The check **fails closed**: if the policy cannot be read, signup is closed.
 
-- `GET /signup/status` — `{ open, trialDays, trialTier }`. Public, and mounted ahead of the signup
-  limiter (it has its own, 60 a minute) because the landing page asks on every visit.
+**One workspace per company domain** (signup Phase 1, 2026-10-02). The code is checked once, at
+`/verify`, and only then does the person learn anything about any workspace — telling anyone who types
+an `@acme.com` address that Acme has a workspace would enumerate customers. A company's domain is its
+registrable domain (public suffix list, private suffixes included): `eng.acme.com` → `acme.com`,
+`acme.co.uk` stays itself, and `*.onmicrosoft.com` is never one company.
+
+- `GET /signup/status` — `{ open, trialDays, trialTier, rootDomain }`. Public, and mounted ahead of the
+  signup limiter (it has its own, 60 a minute) because the landing page asks on every visit.
+  `rootDomain` is what a new workspace's address hangs off — the page shows `<slug>.<rootDomain>`
+  rather than guessing from its own host.
 - `POST /signup/start` `{ email }` — **403** `code: "SIGNUP_CLOSED"` while closed; **422** for a
   personal address (97 providers, `rediffmail.com` and `yahoo.co.in` among them), a throwaway inbox
-  (22 services, its own message), or a domain an operator blocked in the console (same message as a
-  personal address, so the list stays private). Otherwise **202** `{ token }` and a six-digit code by
-  platform mail.
-- `POST /signup/complete` `{ token, code, workspaceName, slug, adminName, adminPassword }` —
-  re-checks that signup is still open and that the **proven** address is still allowed, then
-  provisions. **201** `{ slug, url, trialEndsAt, trialDays }`. **409** for a taken address. **502** if
-  provisioning fails, with a generic message: the error detail goes to the operators, never to the
-  public page.
+  (22 services, its own message), a domain an operator blocked in the console (same message as a
+  personal address, so the list stays private), or an address with no company domain at all.
+  Otherwise **202** `{ token }` and a six-digit code by platform mail.
+- `POST /signup/verify` `{ token, code }` — spends the code and answers with a decision:
+  - `{ next: "member", workspaces: [{ slug, name, url }] }` — the address already belongs to one;
+  - `{ next: "join", workspace: { name }, continuation }` — an ACTIVE workspace holds the domain; only
+    its name is returned;
+  - `{ next: "unavailable", workspace: { name } }` — the domain's workspace is in grace, suspended or
+    provisioning: no request and no second workspace;
+  - `{ next: "create", continuation }` — nobody from the company is here yet.
+  **400** for a wrong or expired code, **429** after five wrong guesses.
+- `POST /signup/complete` `{ continuation, workspaceName, slug, adminName, adminPassword }` — the
+  continuation is **peeked** first, so a correctable refusal (a taken or reserved address) costs
+  nothing; the workspace row and its domain claim are written in one transaction, and the continuation
+  is spent only once they exist. **201** `{ slug, url, trialEndsAt, trialDays }`. **409**
+  `SLUG_TAKEN` (fix the address and resubmit) or `DOMAIN_CLAIMED` (somebody from the company won the
+  race a moment ago — verify again and ask to join). **400** `SIGNUP_EXPIRED` when the continuation is
+  gone. **502** if provisioning fails, with a generic message: the error detail goes to the
+  operators, never to the public page.
+- `POST /signup/join` `{ continuation, name, message? }` — writes a join request into the claimed
+  workspace's own database. Refusals come before the continuation is spent: **409** `NO_WORKSPACE`
+  (the domain lost its workspace since verify), **409** `WORKSPACE_UNAVAILABLE` (no longer ACTIVE),
+  **429** `JOIN_CAP` (25 requests to one workspace in 24 hours). **201** `{ status: "requested",
+  workspace: { name } }`; **200** `already_pending` for a repeat ask, or `member` with the workspace's
+  `url` for an address that got an account in the meantime.
 
-Both signup routes share a limiter of **5 per hour per IP**.
+All signup routes share a limiter of **5 per hour per IP**. Continuations are single-use, live 30
+minutes, and are bound to the signup flow like the codes.
 
 **The codes** live in the control plane (`EmailVerificationCode`), not in process memory, so a code
 minted on one API replica is accepted on another. Token and code are stored as keyed hashes; ten
@@ -2236,8 +2262,34 @@ and the reverse, exactly as if it had expired.
 
 **What operators get:** a platform audit row for every created workspace (`org.signup_completed`,
 actor `CUSTOMER`) and every failed one (`org.signup_failed`, with the error), shown in the console's
-Recent activity; and, unless switched off on the same settings card, an email per event
-(`platform.signup_created`, `platform.signup_failed`) to the console's alert recipients.
+Recent activity; a funnel row per stage (`SignupAttempt` — a domain and a keyed hash, never the
+address); and email to the console's alert recipients by `PlatformSignupSettings.notifyMode`: `DAILY`
+(the default — `platform.signup_digest` at 08:15, sent once however many replicas run, only on a day
+with news), `EACH` (`platform.signup_created` / `platform.signup_failed` per event) or `OFF`. In every
+mode but `OFF`, the second provisioning failure inside an hour sends `platform.signup_failing` at
+once, at most hourly.
+
+### Join requests (tenant)
+
+`/api/join-requests` — `requireAuth` + `users:manage`, because approving creates an account.
+
+- `GET /join-requests?filter=pending|decided` — pending oldest first; decided (approved, declined,
+  expired) newest first with `decidedBy`. A pending request past `expiresAt` is written `EXPIRED` when
+  read — no job has to run.
+- `POST /join-requests/:id/approve` `{ role? }` — `EMPLOYEE` unless the caller is a super admin.
+  Re-checks the workspace is ACTIVE (**409** `WORKSPACE_UNAVAILABLE`) and the seat limit (**402**);
+  an address that already has an active account is **linked** (`{ linked: true }`, no seat used); an
+  archived or deactivated one is **409** — restore it from Users. A new account gets an unusable
+  password and a `workspace.join_approved` email with a single-use 72-hour link to
+  `/reset-password?welcome=1`. **200** `{ userId, linked }`.
+- `POST /join-requests/:id/decline` `{ note? }` (≤ 500) — **204**; mails `workspace.join_declined`
+  with the note.
+
+Two admins deciding at once: the decision is a conditional update on `PENDING`, so one wins and the
+other gets **409**.
+
+`GET /api/settings/company-domains` (super admin) — the domains that route people to this workspace,
+read-only: `[{ domain, status, source, createdAt }]`.
 
 ## Contact and the sales pipeline (5.0.0)
 
@@ -2441,8 +2493,9 @@ carries says so rather than relying on the method to imply safety.
 
 Same prefix and auth, different router (`platform-admin-console.controller.ts`).
 
-- `GET /overview` — tenants by status and tier, trials running, signups per week for twelve weeks,
-  retention counts, 30-day platform-mail health, feedback totals, and the last twelve audit rows.
+- `GET /overview` — tenants by status and tier, trials running, signups in the last 30 days and per
+  week for twelve weeks — each split `{ selfServe, console }` by `Organization.createdVia` — retention
+  counts, 30-day platform-mail health, feedback totals, and the last twelve audit rows.
 - `GET /mail-settings`, `PUT /mail-settings`, `POST /mail-settings/test` `{ to }` — the platform's
   own SMTP account (`PlatformMailSettings`, `SMTP_*` in `.env` as the fallback). The password is
   write-only and encrypted at rest; `passwordSet` reports whether one exists.
@@ -2462,11 +2515,26 @@ Same prefix and auth, different router (`platform-admin-console.controller.ts`).
   forced to a dry run); `POST /retention/:orgId/hold` `{ hold }`;
   `POST /retention/:orgId/send/:marker`; `POST /retention/:orgId/delete` `{ confirmSlug }` — which
   refuses a paying customer and a workspace that is not lapsed, whatever is typed.
-- `GET /signup/settings` — the self-serve signup policy (`enabled`, `blockedDomains`,
-  `notifyOnSignup`, who last changed it), plus `availability` (whether signup is ACTUALLY open, and
-  if not, why: `disabled`, `single-org` or `unavailable`) and the sizes of the built-in personal and
-  temporary lists. `PUT /signup/settings` `{ enabled?, notifyOnSignup?, blockedDomains? }`
-  (`platform:operate`) — `blockedDomains` takes a list or pasted text and is normalised server-side.
+- `GET /signup/settings` — the self-serve signup policy (`enabled`, `blockedDomains`, `notifyMode`
+  `DAILY|EACH|OFF`, `joinRequestTtlDays`, who last changed it), plus `availability` (whether signup is
+  ACTUALLY open, and if not, why: `disabled`, `single-org` or `unavailable`) and the sizes of the
+  built-in personal and temporary lists. `PUT /signup/settings`
+  `{ enabled?, notifyMode?, joinRequestTtlDays?, blockedDomains? }` (`platform:operate`) —
+  `joinRequestTtlDays` is clamped to 1–90; `blockedDomains` takes a list or pasted text and is
+  normalised server-side.
+- `GET /signups?days=7|30|90` — the Signups page: the funnel by stage, new workspaces per day
+  self-serve vs console, recent self-serve workspaces (status, trial days left, seats from the latest
+  usage snapshot or `null`, `converted`), failures with their error, and the top domains (refusals
+  left out). `days` is clamped to the nearest of 7, 30, 90.
+- `POST /signups/digest/run` `{ dryRun? }` (`platform:operate`) — the daily summary now. A dry run
+  reports what would go out and claims nothing; a real run claims the day.
+- `GET /company-domains` — every claim with its workspace. `POST /company-domains`
+  `{ domain, organizationId }` and `DELETE /company-domains/:domain` (`platform:operate` **and a
+  reason**) assign — taking it from another workspace if held — and release; the audit row carries the
+  previous holder and the reason. A sub-domain is refused with the domain that covers it; a personal
+  provider and an archived workspace are refused. `POST /company-domains/backfill` `{ dryRun? }`
+  (`platform:operate`) claims each domain exactly one workspace's owner address implies; a dry run
+  returns `{ toClaim, conflicts, skipped }`, and conflicts are never resolved automatically.
 - `GET /feedback` — trial feedback with the rating distribution and the would-you-return split.
 - `GET /audit` — the control-plane audit trail (`PlatformAuditLog`).
 - `GET /admins`, `POST /admins` `{ email, name }` (returns a generated one-time password, shown

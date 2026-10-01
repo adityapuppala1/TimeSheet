@@ -3,9 +3,11 @@
 > **Audience:** the product owner and engineers building signup · **Type:** plan + design record ·
 > [Documentation index](README.md)
 
-**Status (2026-10-01):** Phase 0 is **built** on branch `V13-signup-domains` (not merged). Phase 1
-is **specified and approved** — the product owner answered §8's questions the same day (recorded in
-§2) — and its build plan is [SIGNUP_PHASE1_BUILD_PLAN.md](SIGNUP_PHASE1_BUILD_PLAN.md). Phases 2 and 3
+**Status (2026-10-02):** Phases 0 and 1 are **built** on branch `V13-signup-domains` (not merged —
+awaiting the product owner's review). Phase 1 followed [SIGNUP_PHASE1_BUILD_PLAN.md](SIGNUP_PHASE1_BUILD_PLAN.md);
+the decisions taken while building it, and where the code differs from the plan, are listed in the
+session log of [V12_UiUx_ClickUp_PLAN.md](V12_UiUx_ClickUp_PLAN.md). What shipped is described in
+[API.md § Self-serve signup](API.md#self-serve-signup) and [DATABASE.md](DATABASE.md). Phases 2 and 3
 are outlines.
 
 ## 1. The problem

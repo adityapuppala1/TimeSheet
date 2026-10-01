@@ -33,11 +33,60 @@ default workspace, where the new account does not exist.
   reaches any address that belongs to a workspace, personal Gmail included — can no longer complete a
   signup and skip the personal-address check.
 - **Operators hear about every signup.** Each new workspace and each failed one writes a platform
-  audit row (now visible in the console's Recent activity) and emails the alert recipients — switch
-  that off on the same card. A failed provision no longer shows its raw error, database names and all,
-  to the person on the public page.
+  audit row (now visible in the console's Recent activity) and reaches the alert recipients — in a
+  daily summary by default, or one email each, or not at all (see the next section). A failed
+  provision no longer shows its raw error, database names and all, to the person on the public page.
 - The pricing card promised a 14-day trial against the route's 15; both now read one constant. The
   code email said 15 minutes for a code that lasts 10.
+
+### ✨ One workspace per company: the second person from acme.com asks to join
+
+Self-serve signup used to give every verified company address a workspace — and a new database — of
+its own, so the third person from the same company opened the third workspace. Now a company's email
+domain belongs to one workspace, and the signup page asks who you are before it offers anything.
+
+After the six-digit code, the answer is one of four, decided at the server:
+
+- **You already belong to a workspace** — its sign-in link, and nothing is created.
+- **Your company already uses TimeSphere** — only its name is shown, and you can ask to join it. The
+  request lands in that workspace's own database; its super admins get a bell notification and an
+  email, and anyone who can manage users decides on **User management → Requests**. Approval re-checks
+  the seat limit and the workspace's status, never creates a second account for someone who already
+  has one, makes an Employee unless a super admin chooses more, and emails a single-use link to choose
+  a password (72 hours). Requests expire after 14 days (1–90, set by the platform) and are taken only
+  while the workspace is ACTIVE.
+- **Your company's workspace isn't available** (grace, suspended or still provisioning) — no request,
+  and no second workspace either.
+- **Nobody from your company is here yet** — create the workspace, as before.
+
+A sub-domain belongs to its company (`eng.acme.com` → `acme.com`, using the public suffix list, so
+`acme.co.uk` and `*.onmicrosoft.com` are handled). Two people from a new company signing up at the
+same moment get one workspace and one "someone just created it — verify again to join" — the domain
+claim's unique key decides. A taken workspace address no longer spends the verification: fix it and
+finish. A team that genuinely needs its own workspace is pointed at the contact form; that is a
+conversation, never a self-serve button.
+
+For the platform:
+
+- **Growth → Signups** — the funnel (codes sent, verified, created, asked to join, unavailable,
+  refused, failed), new workspaces per day self-serve against console-made, who signed up and how each
+  is doing (trial left, seats, paying), failures with their error, and the domains trying hardest.
+- **Tenants → Company domains** — every claim and the workspace it routes to. Reassign and Release ask
+  for a reason and are audited with the previous holder.
+- **A daily signup summary** (the new default) at 08:15, sent once however many replicas run, and only
+  on a day with news. The second provisioning failure inside an hour emails at once — an outage is not
+  news for tomorrow. Choose daily, one email per signup, or off under Settings → Self-serve signup.
+- The Overview counts self-serve signups apart from workspaces made in the console.
+- Workspace settings → Single sign-on shows a super admin which domains route people to them
+  (read-only).
+
+The funnel stores a domain and a keyed hash, never an address. Three control-plane tables
+(`OrgEmailDomain`, `SignupAttempt`, `PlatformJobClaim`), `Organization.createdVia`, and one tenant
+table (`JoinRequest`) — all additive.
+
+**Upgrading:** existing workspaces own no domain until claimed. Run **Company domains → Backfill from
+signup emails** once: it claims each domain exactly one workspace could own, and lists every domain two
+workspaces share as a conflict for you to assign by hand — nothing picks one automatically.
 
 ### 🔐 SSO: Google needs a verified email, and an open Microsoft setup is flagged
 

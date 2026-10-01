@@ -409,6 +409,25 @@ export const HELP_ARTICLES: HelpArticle[] = [
     ],
     keywords: ["roles", "permissions", "rbac", "switch role", "admin", "manager", "employee", "access"]
   },
+  {
+    id: "join-requests",
+    category: "People & roles",
+    title: "Approving people who ask to join",
+    roles: ADMIN,
+    where: "Sidebar → User management → Requests",
+    when: "Someone at your company tried to sign up for TimeSphere and was offered a request to join this workspace instead of opening a second one.",
+    steps: [
+      "Super admins get a bell notification and an email when a request arrives. Open User management → Requests — the tab shows how many are waiting.",
+      "Each request shows the person's name, the address they proved they own, their message, when they asked and how long it has left.",
+      "Approve: choose a role — Employee, unless you are a super admin and pick another. The line under the role says how many seats approving uses; at your plan's limit, free a seat or upgrade first.",
+      "They are emailed a link to choose their own password. It works once and expires after 72 hours; after that, Forgot password on the sign-in page still works.",
+      "Decline: optionally leave a note. It is emailed to them with the decision.",
+      "Decided requests — approved, declined and expired — stay listed below with who decided and when."
+    ],
+    notes:
+      "Requests expire after 14 days unless the TimeSphere team set a different length, and are only taken while the workspace is active. Someone who already has an account is never given a second one: approving them links the existing account and uses no seat. Super admins can see which email domains send people here under Workspace settings → Single sign-on → Company domains; ask the TimeSphere team to change one.",
+    keywords: ["join", "request", "approve", "domain", "decline"]
+  },
 
   /* ── AI ──────────────────────────────────────────────────────────────────────────────────── */
   {
@@ -599,7 +618,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     title: "Email: sending, templates and intake",
     roles: SA,
     where: "Workspace settings → Mail server / Email channels / Email intake",
-    when: "Outbound mail, the 39 editable templates, and the mailbox that turns bug reports into tickets.",
+    when: "Outbound mail, every editable email template, and the mailbox that turns bug reports into tickets.",
     steps: [
       "Mail server: your SMTP credentials override the install defaults; the connection test sends a real message.",
       "Email channels & templates: per-template enable, preview, test-send, revert and delivery analytics.",
