@@ -81,7 +81,8 @@ const control = {
   platformAlertState: table(),
   platformMaintenanceBroadcast: table(),
   trialFeedback: table(),
-  salesLead: table()
+  salesLead: table(),
+  orgEmailDomain: table()
 };
 vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: control }));
 
@@ -281,6 +282,12 @@ const ROUTES: Route[] = [
   { method: "get", path: "/retention", cap: READ },
   { method: "get", path: "/signup/settings", cap: READ },
   { method: "get", path: "/signups?days=30", cap: READ },
+  // Company domains: who strangers from a company are sent to. Seeing them is a read; moving one can
+  // strand a company's people, so every write is OPERATE.
+  { method: "get", path: "/company-domains", cap: READ },
+  { method: "post", path: "/company-domains", cap: OPERATE, body: { domain: "acme.com", organizationId: ORG } },
+  { method: "delete", path: "/company-domains/acme.com", cap: OPERATE },
+  { method: "post", path: "/company-domains/backfill", cap: OPERATE, body: { dryRun: true } },
   { method: "get", path: "/feedback", cap: READ },
   { method: "get", path: "/sales-leads", cap: READ },
   { method: "get", path: "/audit", cap: READ },
@@ -550,7 +557,7 @@ describe("the role comes from the database row, not from the token", () => {
 });
 
 describe("reason-for-access is enforced at the door", () => {
-  const noReason = (method: "get" | "post", path: string, body?: object) => {
+  const noReason = (method: "get" | "post" | "delete", path: string, body?: object) => {
     const req = request(app)[method](`/api/platform-admin${path}`).set("Authorization", `Bearer ${tokenFor.OWNER}`);
     return body ? req.send(body) : req;
   };
@@ -563,6 +570,11 @@ describe("reason-for-access is enforced at the door", () => {
 
   it("refuses a tenant rescue with no reason", async () => {
     expect((await noReason("post", `/organizations/${ORG}/reset-admin-password`, { email: "a@b.test" })).status).toBe(400);
+  });
+
+  it("refuses to reassign or release a company domain with no reason — it decides where a company's people go", async () => {
+    expect((await noReason("post", "/company-domains", { domain: "acme.com", organizationId: ORG })).body.code).toBe("REASON_REQUIRED");
+    expect((await noReason("delete", "/company-domains/acme.com")).body.code).toBe("REASON_REQUIRED");
   });
 
   it("refuses a reason that is too short to mean anything", async () => {

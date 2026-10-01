@@ -101,6 +101,7 @@ const PlatformAdminRetention = lazy(() => import("./pages/platform-admin/Retenti
 const PlatformAdminEmails = lazy(() => import("./pages/platform-admin/Emails").then((m) => ({ default: m.PlatformAdminEmails })));
 const PlatformAdminFeedback = lazy(() => import("./pages/platform-admin/Feedback").then((m) => ({ default: m.PlatformAdminFeedback })));
 const PlatformAdminSignups = lazy(() => import("./pages/platform-admin/Signups").then((m) => ({ default: m.PlatformAdminSignups })));
+const PlatformAdminCompanyDomains = lazy(() => import("./pages/platform-admin/CompanyDomains").then((m) => ({ default: m.PlatformAdminCompanyDomains })));
 const PlatformAdminSalesLeads = lazy(() => import("./pages/platform-admin/SalesLeads").then((m) => ({ default: m.PlatformAdminSalesLeads })));
 const PlatformAdminSettings = lazy(() => import("./pages/platform-admin/Settings").then((m) => ({ default: m.PlatformAdminSettings })));
 const PlatformAdminAccess = lazy(() => import("./pages/platform-admin/Access").then((m) => ({ default: m.PlatformAdminAccess })));
@@ -273,6 +274,7 @@ const router = createBrowserRouter([
       { path: "emails", element: <PageShell><PlatformAdminEmails /></PageShell> },
       { path: "feedback", element: <PageShell><PlatformAdminFeedback /></PageShell> },
       { path: "signups", element: <PageShell><PlatformAdminSignups /></PageShell> },
+      { path: "company-domains", element: <PageShell><PlatformAdminCompanyDomains /></PageShell> },
       { path: "sales-leads", element: <PageShell><PlatformAdminSalesLeads /></PageShell> },
       { path: "backups", element: <PageShell><PlatformAdminBackups /></PageShell> },
       { path: "monitoring", element: <PageShell><PlatformAdminMonitoring /></PageShell> },

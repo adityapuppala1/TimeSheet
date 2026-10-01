@@ -63,6 +63,7 @@ const PAGES = [
   ["/emails", "emails"],
   ["/feedback", "feedback"],
   ["/signups", "signups"],
+  ["/company-domains", "company-domains"],
   ["/sales-leads", "sales-leads"],
   ["/plan-tiers", "plan-tiers"],
   ["/analytics", "analytics"],

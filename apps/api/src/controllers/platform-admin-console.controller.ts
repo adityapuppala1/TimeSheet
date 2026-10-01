@@ -53,6 +53,7 @@ import {
   updateRetentionSettings
 } from "../services/retention.service.js";
 import { getSignupAvailability, getSignupSettings, hasMultiOrgRouting, updateSignupSettings } from "../services/platform-signup.service.js";
+import { applyBackfill, assignClaim, listClaims, planBackfill, releaseClaim } from "../services/company-domain-claims.service.js";
 import { getSignupAnalytics } from "../services/signup-analytics.service.js";
 import { runSignupDigest } from "../services/signup-digest.service.js";
 import { DISPOSABLE_MAIL_DOMAINS, FREE_MAIL_DOMAINS } from "../utils/free-mail-domains.js";
@@ -473,6 +474,45 @@ platformAdminConsoleRouter.get("/signups", async (req, res) => {
 platformAdminConsoleRouter.post("/signups/digest/run", operate, async (req, res) => {
   res.json(await runSignupDigest(new Date(), { dryRun: Boolean(req.body?.dryRun) }));
 });
+
+/* ================================ Company domains =============================== */
+/*
+ * Which workspace a stranger from a company is sent to (signup Phase 1, §5.4). Reading the list is
+ * anyone's; every write is `platform:operate`. Reassigning or releasing a claim also asks WHY — it
+ * decides where a company's people go, and a wrong move strands them in another company's workspace.
+ * The backfill needs no reason: it only claims domains exactly one workspace could own, never takes a
+ * domain from anyone, and names every conflict for an operator rather than choosing.
+ */
+
+platformAdminConsoleRouter.get("/company-domains", async (_req, res) => {
+  res.json(await listClaims());
+});
+
+const assignClaimSchema = z.object({ body: z.object({ domain: z.string().min(3).max(253), organizationId: z.string().min(1).max(191) }).strict() });
+
+platformAdminConsoleRouter.post("/company-domains", operate, requirePlatformReason, validate(assignClaimSchema), async (req, res) => {
+  const body = req.body as z.infer<typeof assignClaimSchema>["body"];
+  await assignClaim(body.domain, body.organizationId, actorLabel(req), { reason: req.platformReason, ipAddress: req.ip });
+  res.json(await listClaims());
+});
+
+platformAdminConsoleRouter.delete("/company-domains/:domain", operate, requirePlatformReason, async (req, res) => {
+  await releaseClaim(String(req.params.domain), actorLabel(req), { reason: req.platformReason, ipAddress: req.ip });
+  res.status(204).end();
+});
+
+platformAdminConsoleRouter.post(
+  "/company-domains/backfill",
+  operate,
+  validate(z.object({ body: z.object({ dryRun: z.boolean().optional() }).strict().optional() })),
+  async (req, res) => {
+    if (req.body?.dryRun) {
+      res.json({ dryRun: true, plan: await planBackfill() });
+      return;
+    }
+    res.json({ dryRun: false, result: await applyBackfill(actorLabel(req)) });
+  }
+);
 
 /* ================================ Trial retention =============================== */
 

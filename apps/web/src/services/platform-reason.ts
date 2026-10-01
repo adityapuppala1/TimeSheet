@@ -50,6 +50,8 @@ const REASON_ROUTES: { method: string; pattern: RegExp; label: string; snapshotO
   { method: "DELETE", pattern: /^\/backups\/[^/]+$/, label: "Delete this snapshot", snapshotOnly: true },
   { method: "POST", pattern: /^\/backups\/run\//, label: "Take a backup of this workspace now" },
   { method: "POST", pattern: /^\/backups\/sweep\//, label: "Sweep this workspace's old backups" },
+  { method: "POST", pattern: /^\/company-domains$/, label: "Point this company domain at a workspace — its people will be sent there" },
+  { method: "DELETE", pattern: /^\/company-domains\/[^/]+$/, label: "Release this company domain — its people will no longer be sent to any workspace" },
   { method: "POST", pattern: /^\/admins$/, label: "Create a platform admin account" },
   { method: "PATCH", pattern: /^\/admins\/[^/]+$/, label: "Change a platform admin's role or status" }
 ];

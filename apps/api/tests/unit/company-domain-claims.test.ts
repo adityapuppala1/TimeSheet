@@ -24,8 +24,10 @@ const orgEmailDomain = {
     if (!claim) return null;
     return include ? { ...claim, organization: orgs.get(claim.organizationId) ?? null } : { ...claim };
   }),
-  findMany: vi.fn(async ({ where }: { where?: { organizationId?: string } } = {}) =>
-    [...claims.values()].filter((c) => !where?.organizationId || c.organizationId === where.organizationId)
+  findMany: vi.fn(async ({ where, include }: { where?: { organizationId?: string }; include?: unknown } = {}) =>
+    [...claims.values()]
+      .filter((c) => !where?.organizationId || c.organizationId === where.organizationId)
+      .map((c) => (include ? { ...c, organization: orgs.get(c.organizationId) ?? null } : c))
   ),
   create: vi.fn(async ({ data }: { data: Omit<Claim, "id" | "createdAt" | "status"> & { status?: string } }) => {
     if (claims.has(data.domain)) throw Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
@@ -65,6 +67,7 @@ const {
   claimDomainInTransaction,
   claimsForOrg,
   findClaimForEmail,
+  listClaims,
   planBackfill,
   reclaimAfterRestore,
   releaseClaim
@@ -172,7 +175,8 @@ describe("operator actions", () => {
       "company_domain.assigned",
       "OrgEmailDomain",
       "acme.com",
-      expect.objectContaining({ organizationId: "B", previousOrganizationId: "A" })
+      expect.objectContaining({ organizationId: "B", previousOrganizationId: "A" }),
+      undefined
     );
   });
 
@@ -187,6 +191,25 @@ describe("operator actions", () => {
     await expect(assignClaim("not a domain", "A", "ops")).rejects.toMatchObject({ statusCode: 422 });
   });
 
+  it("lists every claim with the workspace it points at, by domain", async () => {
+    addOrg({ id: "A", name: "Acme", slug: "acme" });
+    addOrg({ id: "B", name: "Globex", slug: "globex", status: "SUSPENDED" });
+    await assignClaim("globex.com", "B", "ops");
+    await assignClaim("acme.com", "A", "ops");
+    const rows = await listClaims();
+    expect(rows.map((r) => r.domain)).toEqual(["acme.com", "globex.com"]);
+    expect(rows[1]).toMatchObject({ domain: "globex.com", source: "ADMIN", organization: { id: "B", name: "Globex", slug: "globex", status: "SUSPENDED" } });
+  });
+
+  it("records the operator's reason and address with an assignment and a release", async () => {
+    addOrg({ id: "A" });
+    const provenance = { reason: "TS-4192 — customer moved to the parent company", ipAddress: "10.0.0.9" };
+    await assignClaim("acme.com", "A", "ops", provenance);
+    expect(platformAudit).toHaveBeenLastCalledWith("PLATFORM_ADMIN", "ops", "company_domain.assigned", "OrgEmailDomain", "acme.com", expect.anything(), provenance);
+    await releaseClaim("acme.com", "ops", provenance);
+    expect(platformAudit).toHaveBeenLastCalledWith("PLATFORM_ADMIN", "ops", "company_domain.released", "OrgEmailDomain", "acme.com", expect.anything(), provenance);
+  });
+
   it("refuses to give a domain to an ARCHIVED workspace", async () => {
     addOrg({ id: "old", status: "ARCHIVED" });
     await expect(assignClaim("acme.com", "old", "ops")).rejects.toMatchObject({ statusCode: 422 });
@@ -198,7 +221,7 @@ describe("operator actions", () => {
     expect(claims.has("acme.com")).toBe(false);
     expect(platformAudit).toHaveBeenCalledWith("PLATFORM_ADMIN", "ops@timesphere.test", "company_domain.released", "OrgEmailDomain", "acme.com", {
       organizationId: "A"
-    });
+    }, undefined);
   });
 });
 

@@ -55,7 +55,12 @@ const ACTION_LABEL: Record<string, string> = {
   // Self-serve signup (2026-10-01). Before these, a new customer appeared in no activity feed at all.
   "org.signup_completed": "New workspace from self-serve signup",
   "org.signup_failed": "Self-serve signup FAILED to provision",
-  "signup.settings_updated": "Self-serve signup settings changed"
+  "signup.settings_updated": "Self-serve signup settings changed",
+  // Company domains (signup Phase 1) — which workspace a company's people are sent to.
+  "company_domain.assigned": "Company domain pointed at a workspace",
+  "company_domain.released": "Company domain released",
+  "company_domain.backfilled": "Company domains backfilled from signup emails",
+  "signup.digest_sent": "Daily signup summary sent"
 };
 
 /**

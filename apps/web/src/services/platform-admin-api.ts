@@ -109,6 +109,20 @@ export interface SignupAnalytics {
   topDomains: Array<{ domain: string; attempts: number; created: number; joinRequested: number }>;
 }
 
+export interface CompanyDomainClaim {
+  domain: string;
+  status: string;
+  source: "SIGNUP" | "BACKFILL" | "ADMIN" | string;
+  createdAt: string;
+  organization: { id: string; name: string; slug: string; status: OrgStatus } | null;
+}
+
+export interface CompanyDomainBackfillPlan {
+  toClaim: Array<{ domain: string; organizationId: string; orgName: string }>;
+  conflicts: Array<{ domain: string; orgs: Array<{ id: string; name: string; slug: string }> }>;
+  skipped: number;
+}
+
 export interface SignupDigestResult {
   sent: boolean;
   reason: string;
@@ -803,6 +817,14 @@ export const platformAdminConsoleApi = {
   /** The Signups page — funnel, self-serve vs console by day, recent workspaces, failures, domains. */
   signups: async (days: 7 | 30 | 90) => (await platformAdminApi.get<SignupAnalytics>("/signups", { params: { days } })).data,
   /** The daily signup summary, now. `dryRun` reports what would go out and claims nothing. */
+  /** Company domains — which workspace strangers from a company are sent to. */
+  companyDomains: async () => (await platformAdminApi.get<CompanyDomainClaim[]>("/company-domains")).data,
+  /** Point a domain at a workspace, taking it from another if held. Asks for a reason (platform-reason.ts). */
+  assignCompanyDomain: async (domain: string, organizationId: string) =>
+    (await platformAdminApi.post<CompanyDomainClaim[]>("/company-domains", { domain, organizationId })).data,
+  releaseCompanyDomain: async (domain: string) => platformAdminApi.delete(`/company-domains/${encodeURIComponent(domain)}`),
+  backfillPreview: async () => (await platformAdminApi.post<{ dryRun: true; plan: CompanyDomainBackfillPlan }>("/company-domains/backfill", { dryRun: true })).data.plan,
+  backfillApply: async () => (await platformAdminApi.post<{ dryRun: false; result: { claimed: number; conflicts: number } }>("/company-domains/backfill", { dryRun: false })).data.result,
   runSignupDigest: async (dryRun: boolean) => (await platformAdminApi.post<SignupDigestResult>("/signups/digest/run", { dryRun })).data,
 
   salesLeads: async () => (await platformAdminApi.get<SalesLeadListing>("/sales-leads")).data,

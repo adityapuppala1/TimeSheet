@@ -521,6 +521,7 @@ test.describe("platform-admin console", () => {
     "/platform-admin/emails",
     "/platform-admin/feedback",
     "/platform-admin/signups",
+    "/platform-admin/company-domains",
     "/platform-admin/backups",
     "/platform-admin/monitoring",
     "/platform-admin/maintenance",

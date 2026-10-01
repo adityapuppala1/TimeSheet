@@ -20,7 +20,7 @@ import { controlPrisma } from "../config/control-prisma.js";
 import { AppError } from "../middleware/error.js";
 import { companyDomainOf } from "../utils/company-domain.js";
 import { isDisposableAddress, isFreeMailAddress } from "../utils/free-mail-domains.js";
-import { platformAudit } from "./platform-audit.service.js";
+import { platformAudit, type PlatformProvenance } from "./platform-audit.service.js";
 
 export type ClaimSource = "SIGNUP" | "BACKFILL" | "ADMIN";
 
@@ -84,6 +84,18 @@ export async function claimsForOrg(organizationId: string) {
   return rows.map((row) => ({ domain: row.domain, status: row.status, source: row.source, createdAt: row.createdAt }));
 }
 
+/** Every claim on the deployment, with the workspace it points at — the console's Company domains
+ *  page. Sorted here rather than by the query: one row per company, and the order must not depend on
+ *  the collation of whichever database this runs on. */
+export async function listClaims() {
+  const rows = await controlPrisma.orgEmailDomain.findMany({
+    include: { organization: { select: { id: true, name: true, slug: true, status: true } } }
+  });
+  return rows
+    .map((row) => ({ domain: row.domain, status: row.status, source: row.source, createdAt: row.createdAt, organization: row.organization }))
+    .sort((a, b) => a.domain.localeCompare(b.domain));
+}
+
 /** The canonical form of a domain an operator typed, or a 422 that says what would be accepted. */
 function canonicalDomain(typed: string): string {
   const domain = companyDomainOf(`x@${typed.trim().replace(/^@+/, "")}`);
@@ -98,8 +110,9 @@ function canonicalDomain(typed: string): string {
 }
 
 /** Gives `domain` to a workspace, taking it from another if necessary. An operator decision, audited
- *  with the previous holder so a reassignment can be traced and undone. */
-export async function assignClaim(typedDomain: string, organizationId: string, actorLabel: string): Promise<void> {
+ *  with the previous holder so a reassignment can be traced and undone — and with the reason the
+ *  console asked for, which is the only record of WHY a company's people were sent elsewhere. */
+export async function assignClaim(typedDomain: string, organizationId: string, actorLabel: string, provenance?: PlatformProvenance): Promise<void> {
   const domain = canonicalDomain(typedDomain);
   const org = await controlPrisma.organization.findUnique({ where: { id: organizationId }, select: { id: true, status: true } });
   if (!org) throw new AppError(404, "That workspace does not exist.");
@@ -113,15 +126,15 @@ export async function assignClaim(typedDomain: string, organizationId: string, a
   await platformAudit("PLATFORM_ADMIN", actorLabel, "company_domain.assigned", "OrgEmailDomain", domain, {
     organizationId,
     previousOrganizationId: previous?.organizationId ?? null
-  });
+  }, provenance);
 }
 
-export async function releaseClaim(typedDomain: string, actorLabel: string): Promise<void> {
+export async function releaseClaim(typedDomain: string, actorLabel: string, provenance?: PlatformProvenance): Promise<void> {
   const domain = typedDomain.trim().toLowerCase();
   const previous = await controlPrisma.orgEmailDomain.findUnique({ where: { domain } });
   if (!previous) throw new AppError(404, `No workspace holds ${domain}.`);
   await controlPrisma.orgEmailDomain.deleteMany({ where: { domain } });
-  await platformAudit("PLATFORM_ADMIN", actorLabel, "company_domain.released", "OrgEmailDomain", domain, { organizationId: previous.organizationId });
+  await platformAudit("PLATFORM_ADMIN", actorLabel, "company_domain.released", "OrgEmailDomain", domain, { organizationId: previous.organizationId }, provenance);
 }
 
 export interface BackfillPlan {

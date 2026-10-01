@@ -22,7 +22,7 @@
  * bug. Read the AccountFooter and column comments below before "simplifying" a `min-w-0` away —
  * each one is load-bearing and each one is there because something visibly broke without it.
  */
-import { Activity, Banknote, BarChart3, BellRing, Building2, Command, DatabaseBackup, GitPullRequestArrow, Handshake, HeartHandshake, KeyRound, LayoutDashboard, LogOut, Mails, Menu, MessageSquareHeart, Radio, Settings2, ShieldAlert, ShieldCheck, SlidersHorizontal, UserPlus, UsersRound } from "lucide-react";
+import { Activity, AtSign, Banknote, BarChart3, BellRing, Building2, Command, DatabaseBackup, GitPullRequestArrow, Handshake, HeartHandshake, KeyRound, LayoutDashboard, LogOut, Mails, Menu, MessageSquareHeart, Radio, Settings2, ShieldAlert, ShieldCheck, SlidersHorizontal, UserPlus, UsersRound } from "lucide-react";
 import { useCallback, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { useMutation } from "@tanstack/react-query";
@@ -67,6 +67,7 @@ export const CONSOLE_NAV: Array<{ heading?: string; items: ConsoleNavItem[] }> =
     heading: "Tenants",
     items: [
       { to: "/platform-admin/organizations", label: "Organizations", icon: Building2 },
+      { to: "/platform-admin/company-domains", label: "Company domains", icon: AtSign },
       { to: "/platform-admin/plan-tiers", label: "Plan tiers", icon: SlidersHorizontal },
       { to: "/platform-admin/analytics", label: "Analytics", icon: BarChart3 },
       { to: "/platform-admin/revenue", label: "Revenue", icon: Banknote }
