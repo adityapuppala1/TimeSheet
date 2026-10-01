@@ -560,6 +560,10 @@ export async function deleteWorkspaceUnderPolicy(orgId: string, opts: { actorLab
     controlPrisma.orgUserDirectory.deleteMany({ where: { organizationId: org.id } }),
     controlPrisma.orgDomain.deleteMany({ where: { organizationId: org.id } }),
     controlPrisma.orgSsoConfig.deleteMany({ where: { organizationId: org.id } }),
+    // And its company's email-domain claim, so the company can sign up again. A leftover row would
+    // trip the unique key on that next signup — "your company already has a workspace", pointing
+    // at the one just deleted. In this transaction, so a crash cannot strand it.
+    controlPrisma.orgEmailDomain.deleteMany({ where: { organizationId: org.id } }),
     controlPrisma.organization.update({
       where: { id: org.id },
       data: { status: "ARCHIVED", retentionDeletedAt: now, suspendedAt: now, suspendedReason: `Deleted under the ${settings.retentionDays}-day trial retention policy.`, retentionHold: false }

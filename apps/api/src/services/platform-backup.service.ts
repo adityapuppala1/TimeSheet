@@ -37,6 +37,7 @@ import { controlPrisma } from "../config/control-prisma.js";
 import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
 import { encryptSecret } from "../utils/encryption.js";
+import { reclaimAfterRestore } from "./company-domain-claims.service.js";
 import { getRetentionSettings } from "./retention.service.js";
 import { platformAudit } from "./platform-audit.service.js";
 
@@ -192,6 +193,9 @@ export interface RestoreResult {
   slug: string;
   databaseName: string;
   status: string;
+  /** Its company-domain claim, released at deletion: re-made if still free ("claimed"), left with the
+   *  workspace that took it since ("taken"), or nothing to claim ("none"). */
+  domainClaim: "claimed" | "taken" | "none";
 }
 
 /**
@@ -251,6 +255,16 @@ export async function restoreSnapshot(id: string, orgId: string, confirmSlug: st
     select: { status: true }
   });
 
-  await platformAudit("PLATFORM_ADMIN", actorLabel, "backup.snapshot_restored", "Organization", org.id, { slug: org.slug, snapshot: id, databaseName });
-  return { restored: true, organizationId: org.id, slug: org.slug, databaseName, status: updated.status };
+  // The claim went with the deletion. Re-made only if the domain is still free — a company that has
+  // signed up again since owns it now, and the restored workspace is the newcomer (the operator sees
+  // "taken" in the result and can reassign on Company domains if that is wrong).
+  const domainClaim = await reclaimAfterRestore({ id: org.id, ownerEmail: org.ownerEmail });
+
+  await platformAudit("PLATFORM_ADMIN", actorLabel, "backup.snapshot_restored", "Organization", org.id, {
+    slug: org.slug,
+    snapshot: id,
+    databaseName,
+    domainClaim
+  });
+  return { restored: true, organizationId: org.id, slug: org.slug, databaseName, status: updated.status, domainClaim };
 }
