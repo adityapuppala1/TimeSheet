@@ -43,7 +43,10 @@ const orgs = new Map<string, Org>();
 const claims = new Map<string, { domain: string; organizationId: string; source: string }>();
 let orgSeq = 0;
 
+let joinRequestsToday = 0;
 const control = {
+  // The per-workspace daily cap on join requests counts the funnel's JOIN_REQUESTED rows.
+  signupAttempt: { count: vi.fn(async () => joinRequestsToday) },
   platformSignupSettings: {
     findUnique: vi.fn(async () => settingsRow),
     upsert: vi.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => {
@@ -136,6 +139,9 @@ vi.mock("../../src/services/platform-alerts.service.js", () => ({
 }));
 vi.mock("../../src/config/with-org-tenant.js", () => ({ withOrgTenant: vi.fn(async (_s: string, fn: () => Promise<unknown>) => fn()) }));
 vi.mock("../../src/services/notify.service.js", () => ({ dispatchTransactional: vi.fn(async () => ({})) }));
+const createJoinRequest = vi.fn(async (): Promise<{ status: string; id?: string }> => ({ status: "requested", id: "jr-1" }));
+vi.mock("../../src/services/join-request.service.js", () => ({ createJoinRequest }));
+const withOrgTenantMock = (await import("../../src/config/with-org-tenant.js")).withOrgTenant as unknown as ReturnType<typeof vi.fn>;
 
 const { signupRouter, signupStatusHandler } = await import("../../src/controllers/signup.controller.js");
 const { errorHandler } = await import("../../src/middleware/error.js");
@@ -177,6 +183,8 @@ beforeEach(() => {
   orgs.clear();
   claims.clear();
   orgSeq = 0;
+  joinRequestsToday = 0;
+  createJoinRequest.mockResolvedValue({ status: "requested", id: "jr-1" });
   envMock.ROOT_DOMAIN = "timesphere.test";
   directory.checkVerificationCode.mockResolvedValue({ ok: true, email: "priya@northwind.co.uk" });
   directory.findWorkspacesForEmail.mockResolvedValue([]);
@@ -391,11 +399,78 @@ describe("complete — creating the workspace", () => {
   });
 });
 
-describe("join — completed in Task 8", () => {
-  it.todo("creates the request in the claimed workspace's database and alerts its super admins");
-  it.todo("refuses with WORKSPACE_UNAVAILABLE when the workspace stopped being ACTIVE since verify");
-  it.todo("records JOIN_REQUESTED with the organization, for the funnel and the per-day cap");
-  it.todo("a domain past its daily cap of requests gets 429");
+describe("join — asking the company's workspace", () => {
+  const joinBody = { continuation: "cont.secret", name: "Sam Patel", message: "Priya said to ask here." };
+  const join = (body: Record<string, unknown> = joinBody) => request(buildApp()).post("/api/signup/join").send(body);
+  beforeEach(() => {
+    openSignup({ joinRequestTtlDays: 21 });
+    directory.peekSignupContinuation.mockResolvedValue({ ok: true, email: "sam@eng.northwind.co.uk" });
+    addWorkspace({ id: "nw", name: "Northwind", slug: "northwind-hq", status: "ACTIVE" }, "northwind.co.uk");
+  });
+
+  it("creates the request in the claimed workspace's database, with the configured expiry", async () => {
+    const res = await join();
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ status: "requested", workspace: { name: "Northwind" } });
+    expect(withOrgTenantMock).toHaveBeenCalledWith("northwind-hq", expect.any(Function));
+    expect(createJoinRequest).toHaveBeenCalledWith({
+      email: "sam@eng.northwind.co.uk",
+      name: "Sam Patel",
+      message: "Priya said to ask here.",
+      ttlDays: 21,
+      workspaceName: "Northwind"
+    });
+    expect(directory.redeemSignupContinuation).toHaveBeenCalledWith("cont.secret");
+  });
+
+  it("refuses with WORKSPACE_UNAVAILABLE when the workspace stopped being ACTIVE since verify — and keeps the continuation", async () => {
+    orgs.get("nw")!.status = "GRACE";
+    const res = await join();
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("WORKSPACE_UNAVAILABLE");
+    expect(createJoinRequest).not.toHaveBeenCalled();
+    expect(directory.redeemSignupContinuation).not.toHaveBeenCalled();
+  });
+
+  it("records JOIN_REQUESTED with the organization, for the funnel and the per-day cap", async () => {
+    await join();
+    expect(recordSignupStage).toHaveBeenCalledWith("JOIN_REQUESTED", { email: "sam@eng.northwind.co.uk", organizationId: "nw" });
+  });
+
+  it("does not count a repeat ask, and tells the person it is still waiting", async () => {
+    createJoinRequest.mockResolvedValueOnce({ status: "already_pending", id: "jr-1" });
+    const res = await join();
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("already_pending");
+    expect(stages()).not.toContain("JOIN_REQUESTED");
+  });
+
+  it("a workspace past its daily cap of requests gets 429, before the continuation is spent", async () => {
+    joinRequestsToday = 25;
+    const res = await join();
+    expect(res.status).toBe(429);
+    expect(control.signupAttempt.count).toHaveBeenCalledWith({
+      where: { stage: "JOIN_REQUESTED", organizationId: "nw", createdAt: { gte: expect.any(Date) } }
+    });
+    expect(createJoinRequest).not.toHaveBeenCalled();
+    expect(directory.redeemSignupContinuation).not.toHaveBeenCalled();
+  });
+
+  it("refuses an expired continuation, and when the company's workspace has gone since verify", async () => {
+    directory.peekSignupContinuation.mockResolvedValueOnce({ ok: false });
+    expect((await join()).body.code).toBe("SIGNUP_EXPIRED");
+    claims.clear();
+    const gone = await join();
+    expect(gone.status).toBe(409);
+    expect(gone.body.code).toBe("NO_WORKSPACE");
+    expect(createJoinRequest).not.toHaveBeenCalled();
+  });
+
+  it("refuses while signup is closed", async () => {
+    settingsRow!.enabled = false;
+    expect((await join()).status).toBe(403);
+    expect(directory.peekSignupContinuation).not.toHaveBeenCalled();
+  });
 });
 
 describe("what the operators hear", () => {

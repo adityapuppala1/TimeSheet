@@ -87,6 +87,7 @@ import { sprintRouter } from "./controllers/sprint.controller.js";
 import { ticketTypeRouter } from "./controllers/ticket-type.controller.js";
 import { timesheetRouter } from "./controllers/timesheet.controller.js";
 import { userRouter } from "./controllers/user.controller.js";
+import { joinRequestRouter } from "./controllers/join-request.controller.js";
 import { AppError, errorHandler, notFound } from "./middleware/error.js";
 import { recordApiRequest } from "./middleware/request-telemetry.js";
 import { resolveTenant } from "./middleware/tenant.js";
@@ -532,6 +533,9 @@ app.use("/api/auth", authRouter);
 app.use("/api/branding", brandingRouter);
 app.use("/api/billing", billingRouter);
 app.use("/api/users", userRouter);
+// Users → Requests: people from the company's domain asking to join (signup Phase 1). Same gate as
+// /api/users, because approving one creates an account.
+app.use("/api/join-requests", joinRequestRouter);
 app.use("/api/projects", projectRouter);
 app.use("/api/timesheets", timesheetRouter);
 app.use("/api/tickets", ticketRouter);

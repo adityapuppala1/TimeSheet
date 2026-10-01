@@ -114,7 +114,11 @@ export type NotificationCategory =
   /** An approval has sat undecided past the workspace's approval SLA. */
   | "change.overdue_approval"
   /** Monday digest to change managers: next week's calendar, last week's outcomes. */
-  | "digest.change_weekly";
+  | "digest.change_weekly"
+  /** Somebody from the company's domain asked to join this workspace (signup Phase 1). In-app only
+   *  here; the super admins' email is a transactional `workspace.join_request`, sent by the
+   *  join-request service, because a request a person is waiting on must not be mutable away. */
+  | "join.requested";
 
 interface EmailPayload {
   templateKey: string;
@@ -177,6 +181,7 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "timesheet.updated": null,
   "release.published": null,
   "workflow.attention": null,
+  "join.requested": null,
   "workflow.approval": "emailWorkflowApproval",
   "goal.digest": "emailGoalDigest",
   "change.submitted": "emailChangeSubmitted",

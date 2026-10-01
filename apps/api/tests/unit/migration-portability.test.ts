@@ -258,7 +258,10 @@ describe("the @rerunnable marker", () => {
     // behind `WHERE revokedAt IS NULL` is the shape. This cannot be proven statically, so the
     // check is that SOME such guard exists and a reviewer had to write it.
     for (const migration of marked) {
-      const statements = migration.code.split(";").filter((statement) => /(^|\s)(update|insert\s+into)\s/.test(statement));
+      // A write is a statement that STARTS with UPDATE or INSERT. Matching the word anywhere flagged a
+      // foreign key's `ON UPDATE CASCADE` — DDL inside a guarded PREPARE — the first time a marked
+      // migration added one (20261002100000_join_requests).
+      const statements = migration.code.split(";").filter((statement) => /^\s*(update|insert\s+into)\s/.test(statement));
       for (const statement of statements) {
         // Writes into a scratch table are exempt — it is created and dropped inside the file.
         if (/(update|insert\s+into)\s+`?_/.test(statement)) continue;

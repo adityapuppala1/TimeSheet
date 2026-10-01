@@ -21,6 +21,15 @@ enum UserStatus {
   PENDING_VERIFICATION
 }
 
+/// Where a request to join this workspace stands (signup Phase 1). EXPIRED is written lazily — a
+/// PENDING row past `expiresAt` is read as expired and stored so the moment anyone looks.
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  DECLINED
+  EXPIRED
+}
+
 enum TimesheetStatus {
   DRAFT
   SUBMITTED
@@ -246,6 +255,8 @@ model User {
 
   sessions               Session[]
   resetTokens            PasswordResetToken[]
+  /// Join requests this person decided (signup Phase 1).
+  decidedJoinRequests    JoinRequest[]          @relation("JoinRequestDecider")
   projectAssignments     UserProjectAssignment[]
   timesheets             Timesheet[]
   notifications          Notification[]
@@ -5970,4 +5981,36 @@ model ChangeApproval {
 
   @@index([changeId, round])
   @@index([approverId, status])
+}
+
+/// Somebody from this workspace's company domain asking to join it (signup Phase 1,
+/// docs/SIGNUP_AND_DOMAINS_PLAN.md §5.3). Lives in the workspace's OWN database, with the people who
+/// decide it — never in a cross-tenant table. Created by the public signup route after the person has
+/// proven their address; decided on Users → Requests by someone who may create users.
+///
+/// No password is ever collected here: approval creates the account with an unusable password and
+/// mails a single-use set-password link (72 hours).
+model JoinRequest {
+  id            String            @id @default(uuid())
+  /// The PROVEN address — taken from the signup continuation, never from the request body.
+  email         String            @db.VarChar(255)
+  name          String            @db.VarChar(120)
+  message       String?           @db.VarChar(1000)
+  status        JoinRequestStatus @default(PENDING)
+  /// From PlatformSignupSettings.joinRequestTtlDays at the time of the request (default 14 days).
+  expiresAt     DateTime
+  decidedById   String?
+  decidedBy     User?             @relation("JoinRequestDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt     DateTime?
+  decisionNote  String?           @db.VarChar(500)
+  /// The role granted on approval — EMPLOYEE unless a super admin chose otherwise.
+  roleGranted   RoleName?
+  /// The account approval created or linked. Not a relation: a user can be deleted later and the
+  /// request must stay as the record of what was decided.
+  createdUserId String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([status, createdAt])
+  @@index([email, status])
 }

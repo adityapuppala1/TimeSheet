@@ -62,7 +62,10 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "face.entitlement_lost": ["targetName", "graceDays", "appUrl"],
   "digest.identity_weekly": ["targetName", "weekLabel", "total", "passed", "failed", "flaggedPending", "notes", "appUrl"],
   "change.submitted": ["changeKey", "projectName", "title", "changeType", "riskLevel", "riskScore", "activityWindow", "description", "requestedBy", "receivedBy", "peopleInvolved", "appUrl"],
-  "change.decided": ["changeKey", "projectName", "title", "changeType", "riskLevel", "riskScore", "activityWindow", "requestedBy", "decision", "decidedBy", "comments", "peopleInvolved", "appUrl"]
+  "change.decided": ["changeKey", "projectName", "title", "changeType", "riskLevel", "riskScore", "activityWindow", "requestedBy", "decision", "decidedBy", "comments", "peopleInvolved", "appUrl"],
+  "workspace.join_request": ["requesterName", "requesterEmail", "message", "workspaceName", "reviewUrl", "appUrl"],
+  "workspace.join_approved": ["name", "workspaceName", "actionUrl", "actionLabel", "appUrl"],
+  "workspace.join_declined": ["name", "workspaceName", "note", "appUrl"]
 };
 
 export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
@@ -112,7 +115,12 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "change.submitted":
     "Sent the moment a change is submitted — to its approver, the requester, and everyone tagged on it. Super admins are BCC'd.",
   "change.decided":
-    "Sent when a change is approved or rejected, carrying who decided and the comments they left."
+    "Sent when a change is approved or rejected, carrying who decided and the comments they left.",
+  "workspace.join_request":
+    "To the workspace's super admins when someone from the company's email domain asks to join instead of opening a second workspace.",
+  "workspace.join_approved":
+    "To the person whose join request was approved — with a single-use, 72-hour link to choose a password, or a sign-in link if they already had an account.",
+  "workspace.join_declined": "To the person whose join request was declined, with the decider's note if they left one."
 };
 
 export const TEMPLATE_KEYS = Object.keys(TEMPLATE_VARIABLES);
@@ -341,7 +349,21 @@ export function sampleVariables(key: string): Record<string, string> {
       comments: "Window is outside the billing run. Please confirm the snapshot completed before starting.",
       peopleInvolved: "Dev Patel (requester), Mira Kapoor (approver), Aditya Teja",
       appUrl: "https://timesphere.local/app/changes"
-    }
+    },
+    "workspace.join_request": {
+      requesterName: "Sam Patel",
+      requesterEmail: "sam@eng.northwind.co.uk",
+      message: "I'm on the platform team — Priya said to ask here.",
+      workspaceName: "Northwind",
+      reviewUrl: "https://northwind.timesphere.local/app/users?tab=requests"
+    },
+    "workspace.join_approved": {
+      name: "Sam Patel",
+      workspaceName: "Northwind",
+      actionUrl: "https://northwind.timesphere.local/reset-password?token=demo&welcome=1",
+      actionLabel: "Choose your password"
+    },
+    "workspace.join_declined": { name: "Sam Patel", workspaceName: "Northwind", note: "Please use your client's workspace instead." },
   };
   return samples[key] ?? {};
 }
@@ -377,6 +399,24 @@ const V = (name: string) => `{{${name}}}`;
 
 export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }> = {
   welcome: { subject: "Welcome to TimeSphere", html: compiledTemplates.welcome(V("name")) },
+  "workspace.join_request": {
+    subject: "{{requesterName}} asked to join {{workspaceName}}",
+    html: compiledTemplates.joinRequest({
+      requesterName: V("requesterName"),
+      requesterEmail: V("requesterEmail"),
+      message: V("message"),
+      workspaceName: V("workspaceName"),
+      reviewUrl: V("reviewUrl")
+    })
+  },
+  "workspace.join_approved": {
+    subject: "You're in: {{workspaceName}} approved your request",
+    html: compiledTemplates.joinApproved({ name: V("name"), workspaceName: V("workspaceName"), actionUrl: V("actionUrl"), actionLabel: V("actionLabel") })
+  },
+  "workspace.join_declined": {
+    subject: "Your request to join {{workspaceName}}",
+    html: compiledTemplates.joinDeclined({ name: V("name"), workspaceName: V("workspaceName"), note: V("note") })
+  },
   reset: { subject: "Reset your TimeSphere password", html: compiledTemplates.reset(V("resetUrl")) },
   "workspace.find": {
     // THE CODE IS NOT IN THE SUBJECT, deliberately. `sensitive: true` keeps the rendered BODY out

@@ -35,6 +35,7 @@ import { withOrgTenant } from "../config/with-org-tenant.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { claimDomainInTransaction, DomainAlreadyClaimedError, findClaimForEmail } from "../services/company-domain-claims.service.js";
+import { createJoinRequest } from "../services/join-request.service.js";
 import { templates } from "../services/mail-templates.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { platformAudit } from "../services/platform-audit.service.js";
@@ -370,8 +371,71 @@ signupRouter.post(
  * Step 3b — ask to join the company's workspace
  * ------------------------------------------------------------------ */
 
-/** Join requests land in Task 8 of docs/SIGNUP_PHASE1_BUILD_PLAN.md; until then the route says so
- *  rather than pretending, so a page built against the contract fails loudly instead of quietly. */
-signupRouter.post("/join", (_req, res) => {
-  res.status(501).json({ message: "Asking to join an existing workspace is not available yet." });
-});
+/** Join requests one workspace may receive in a day. A real company does not send twenty-five
+ *  strangers in a day; a script that has found a way to prove addresses at its domain might, and every
+ *  request mails every super admin. */
+const JOIN_REQUESTS_PER_WORKSPACE_PER_DAY = 25;
+
+/**
+ * The request is written into the company workspace's OWN database (join-request.service.ts), where
+ * its admins decide it on Users → Requests. Everything that can refuse — the workspace has gone, it is
+ * no longer ACTIVE, it has had its day's share of requests — is checked BEFORE the continuation is
+ * spent, the same peek-then-redeem order /complete follows.
+ *
+ * Nothing about the workspace beyond its name reaches the person, exactly as at /verify: not its
+ * address, not its admins. A `member` answer is the exception — somebody whose account was created
+ * between verify and now is a member, and may know where to sign in.
+ */
+signupRouter.post(
+  "/join",
+  validate(
+    z.object({
+      body: z.object({
+        continuation: z.string().min(3).max(200),
+        name: z.string().trim().min(2).max(120),
+        message: z.string().max(1000).optional()
+      })
+    })
+  ),
+  async (req, res) => {
+    await assertSignupOpen();
+    const proof = await peekSignupContinuation(req.body.continuation);
+    if (!proof.ok) throw EXPIRED();
+    const email = proof.email;
+    await refuseIfNotACompany(email);
+
+    const claim = await findClaimForEmail(email);
+    if (!claim) {
+      throw new AppError(409, "Your company no longer has a workspace here. Verify your email again and you can create one.", { code: "NO_WORKSPACE" });
+    }
+    const org = claim.organization;
+    // Decision 3: requests only while the workspace is ACTIVE. In grace or suspended it already has a
+    // database; whether it takes new people is for a payment or a platform admin to settle first.
+    if (org.status !== "ACTIVE") {
+      await recordSignupStage("UNAVAILABLE", { email, organizationId: org.id, detail: org.status });
+      throw new AppError(409, `${org.name}'s workspace isn't taking new members right now. Ask your administrator.`, { code: "WORKSPACE_UNAVAILABLE" });
+    }
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const today = await controlPrisma.signupAttempt.count({ where: { stage: "JOIN_REQUESTED", organizationId: org.id, createdAt: { gte: since } } });
+    if (today >= JOIN_REQUESTS_PER_WORKSPACE_PER_DAY) {
+      throw new AppError(429, `${org.name} has had a lot of requests today. Try again tomorrow, or ask your administrator to add you.`, { code: "JOIN_CAP" });
+    }
+
+    if (!(await redeemSignupContinuation(req.body.continuation))) throw EXPIRED();
+
+    const { joinRequestTtlDays } = await getSignupSettings();
+    const result = await withOrgTenant(org.slug, () =>
+      createJoinRequest({ email, name: req.body.name.trim(), message: req.body.message, ttlDays: joinRequestTtlDays, workspaceName: org.name })
+    );
+    if (result.status === "member") {
+      res.json({ status: "member", workspace: { name: org.name, url: workspaceUrlForSlug(org.slug) } });
+      return;
+    }
+    if (result.status === "already_pending") {
+      res.json({ status: "already_pending", workspace: { name: org.name } });
+      return;
+    }
+    await recordSignupStage("JOIN_REQUESTED", { email, organizationId: org.id });
+    res.status(201).json({ status: "requested", workspace: { name: org.name } });
+  }
+);

@@ -962,6 +962,44 @@ export const templates = {
         (params.message ? paragraph(escape(params.message)) : "") +
         paragraph(button("Open your workspace", appUrl("/app"), ACCENT)) +
         paragraph(`<span style="color:${MUTED};">Super admins stay signed in to run the maintenance. You'll be able to sign back in the moment the window ends.</span>`)
+    ),
+
+  /** To a workspace's super admins: somebody from the company's email domain asked to join instead of
+   *  opening a second workspace (signup Phase 1). The name and message are a STRANGER's free text —
+   *  escaped here, and the caller escapes them in `vars` too, for an admin-edited override. */
+  joinRequest: (params: { requesterName: string; requesterEmail: string; message: string; workspaceName: string; reviewUrl: string }) =>
+    shell(
+      { title: "Someone asked to join your workspace", preheader: `${escape(params.requesterName)} asked to join ${escape(params.workspaceName)}.`, accentColor: ACCENT },
+      heading(`${escape(params.requesterName)} asked to join ${escape(params.workspaceName)}`) +
+        paragraph(
+          `They proved they own <strong>${escape(params.requesterEmail)}</strong> — an address at your company's domain — and asked to join this workspace rather than open a separate one.`
+        ) +
+        (params.message ? infoCard([["Their message", escape(params.message)]], ACCENT) : "") +
+        paragraph(button("Review the request", params.reviewUrl, ACCENT)) +
+        paragraph(
+          `<span style="color:${MUTED};">Nothing happens until someone approves. Approving adds them as an Employee unless you choose a different role, and uses one seat on your plan. Unanswered requests expire on their own.</span>`
+        )
+    ),
+
+  /** To the requester, when a workspace approved them. `actionUrl` is a single-use set-password link
+   *  for a new account, or the sign-in page for someone who already had one. */
+  joinApproved: (params: { name: string; workspaceName: string; actionUrl: string; actionLabel: string }) =>
+    shell(
+      { title: `You're in: ${escape(params.workspaceName)}`, preheader: `Your request to join ${escape(params.workspaceName)} was approved.` },
+      heading(`Welcome to ${escape(params.workspaceName)}`) +
+        paragraph(`Hi ${escape(params.name.split(" ")[0])}, your request to join <strong>${escape(params.workspaceName)}</strong> was approved.`) +
+        paragraph(button(escape(params.actionLabel), params.actionUrl)) +
+        paragraph(`<span style="color:${MUTED};">If you are choosing a password, the link works once and expires in 72 hours. If it has expired, use "Forgot password" on the sign-in page.</span>`)
+    ),
+
+  /** To the requester, when a workspace declined. `note` is the decider's own words, if they left any. */
+  joinDeclined: (params: { name: string; workspaceName: string; note: string }) =>
+    shell(
+      { title: `Your request to join ${escape(params.workspaceName)}`, preheader: "An administrator reviewed your request." },
+      heading(`Your request to join ${escape(params.workspaceName)}`) +
+        paragraph(`Hi ${escape(params.name.split(" ")[0])}, an administrator of <strong>${escape(params.workspaceName)}</strong> reviewed your request and did not add you.`) +
+        (params.note ? infoCard([["Their note", escape(params.note)]], MUTED) : "") +
+        paragraph(`<span style="color:${MUTED};">If you think this is a mistake, ask your manager or the workspace's administrator directly.</span>`)
     )
 };
 
