@@ -86,6 +86,36 @@ platformAdminApi.interceptors.response.use(
 );
 
 export type PlanTier = "STARTER" | "TEAM" | "ENTERPRISE";
+/** GET /signups — see signup-analytics.service.ts. Addresses never appear except a workspace's owner. */
+export interface SignupAnalytics {
+  days: 7 | 30 | 90;
+  funnel: { codeSent: number; verified: number; created: number; joinRequested: number; unavailable: number; refused: number; failed: number };
+  byDay: Array<{ day: string; selfServe: number; console: number }>;
+  recent: Array<{
+    orgId: string;
+    name: string;
+    slug: string;
+    domain: string | null;
+    ownerEmail: string | null;
+    createdAt: string;
+    status: OrgStatus;
+    planTier: string;
+    trialEndsAt: string | null;
+    trialDaysLeft: number | null;
+    converted: boolean;
+    activeSeats: number | null;
+  }>;
+  failures: Array<{ at: string; domain: string | null; detail: string | null }>;
+  topDomains: Array<{ domain: string; attempts: number; created: number; joinRequested: number }>;
+}
+
+export interface SignupDigestResult {
+  sent: boolean;
+  reason: string;
+  recipients: number;
+  counts: { created: number; failed: number; joinRequested: number; refused: number };
+}
+
 export type OrgStatus = "PROVISIONING" | "ACTIVE" | "GRACE" | "SUSPENDED" | "ARCHIVED";
 export type SsoProvider = "GOOGLE" | "MICROSOFT" | "SAML" | "LDAP";
 export type ChatPlatform = "SLACK" | "MICROSOFT_TEAMS" | "GOOGLE_CHAT" | "TELEGRAM";
@@ -770,6 +800,10 @@ export const platformAdminConsoleApi = {
     (await platformAdminApi.post<{ deleted: boolean; databaseName: string | null; snapshot?: { taken: boolean; path?: string; reason?: string }; confirmationSent?: boolean }>(`/retention/${orgId}/delete`, { confirmSlug })).data,
 
   feedback: async () => (await platformAdminApi.get<TrialFeedbackAnalytics>("/feedback")).data,
+  /** The Signups page — funnel, self-serve vs console by day, recent workspaces, failures, domains. */
+  signups: async (days: 7 | 30 | 90) => (await platformAdminApi.get<SignupAnalytics>("/signups", { params: { days } })).data,
+  /** The daily signup summary, now. `dryRun` reports what would go out and claims nothing. */
+  runSignupDigest: async (dryRun: boolean) => (await platformAdminApi.post<SignupDigestResult>("/signups/digest/run", { dryRun })).data,
 
   salesLeads: async () => (await platformAdminApi.get<SalesLeadListing>("/sales-leads")).data,
   /** Pipeline only. Nothing the customer submitted is editable — see the handler's comment. */

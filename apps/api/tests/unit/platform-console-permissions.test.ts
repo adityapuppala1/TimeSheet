@@ -280,6 +280,7 @@ const ROUTES: Route[] = [
   { method: "get", path: "/email-analytics", cap: READ },
   { method: "get", path: "/retention", cap: READ },
   { method: "get", path: "/signup/settings", cap: READ },
+  { method: "get", path: "/signups?days=30", cap: READ },
   { method: "get", path: "/feedback", cap: READ },
   { method: "get", path: "/sales-leads", cap: READ },
   { method: "get", path: "/audit", cap: READ },

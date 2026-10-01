@@ -62,6 +62,7 @@ const PAGES = [
   ["/retention", "retention"],
   ["/emails", "emails"],
   ["/feedback", "feedback"],
+  ["/signups", "signups"],
   ["/sales-leads", "sales-leads"],
   ["/plan-tiers", "plan-tiers"],
   ["/analytics", "analytics"],

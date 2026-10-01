@@ -53,6 +53,7 @@ import {
   updateRetentionSettings
 } from "../services/retention.service.js";
 import { getSignupAvailability, getSignupSettings, hasMultiOrgRouting, updateSignupSettings } from "../services/platform-signup.service.js";
+import { getSignupAnalytics } from "../services/signup-analytics.service.js";
 import { runSignupDigest } from "../services/signup-digest.service.js";
 import { DISPOSABLE_MAIL_DOMAINS, FREE_MAIL_DOMAINS } from "../utils/free-mail-domains.js";
 import { resolveSalesInbox, SALES_LEAD_STATUSES } from "../services/sales-lead.service.js";
@@ -453,6 +454,15 @@ platformAdminConsoleRouter.put("/signup/settings", operate, validate(signupSetti
     actorLabel(req)
   );
   res.json({ settings, availability: await getSignupAvailability(), rootDomainConfigured: hasMultiOrgRouting() });
+});
+
+/**
+ * The Signups page: the funnel, self-serve vs console by day, who signed up and how each is doing.
+ * Read-only and address-free (the funnel keeps domains and hashes), so every console role may see it.
+ * `?days=` is clamped to 7, 30 or 90 by the service.
+ */
+platformAdminConsoleRouter.get("/signups", async (req, res) => {
+  res.json(await getSignupAnalytics(Number(req.query.days ?? 30), new Date()));
 });
 
 /**
