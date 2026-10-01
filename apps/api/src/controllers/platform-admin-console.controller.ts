@@ -54,7 +54,7 @@ import {
 } from "../services/retention.service.js";
 import { getSignupAvailability, getSignupSettings, hasMultiOrgRouting, updateSignupSettings } from "../services/platform-signup.service.js";
 import { applyBackfill, assignClaim, listClaims, planBackfill, releaseClaim } from "../services/company-domain-claims.service.js";
-import { getSignupAnalytics } from "../services/signup-analytics.service.js";
+import { getSignupAnalytics, overviewSignups } from "../services/signup-analytics.service.js";
 import { runSignupDigest } from "../services/signup-digest.service.js";
 import { DISPOSABLE_MAIL_DOMAINS, FREE_MAIL_DOMAINS } from "../utils/free-mail-domains.js";
 import { resolveSalesInbox, SALES_LEAD_STATUSES } from "../services/sales-lead.service.js";
@@ -149,7 +149,7 @@ platformAdminConsoleRouter.get("/overview", async (_req, res) => {
   const since30 = new Date(now.getTime() - 30 * DAY_MS);
   const [orgs, emails30, feedback, audit, queue, settings, transport] = await Promise.all([
     controlPrisma.organization.findMany({
-      select: { id: true, status: true, planTier: true, trialTier: true, trialEndsAt: true, createdAt: true, retentionDeletedAt: true, retentionHold: true }
+      select: { id: true, status: true, planTier: true, trialTier: true, trialEndsAt: true, createdAt: true, createdVia: true, retentionDeletedAt: true, retentionHold: true }
     }),
     controlPrisma.platformEmailLog.groupBy({ by: ["status"], where: { createdAt: { gte: since30 }, isTest: false }, _count: { _all: true } }),
     controlPrisma.trialFeedback.aggregate({ _count: { _all: true }, _avg: { rating: true } }),
@@ -167,15 +167,9 @@ platformAdminConsoleRouter.get("/overview", async (_req, res) => {
     byTier[org.planTier] = (byTier[org.planTier] ?? 0) + 1;
     if (org.status === "ACTIVE" && org.trialEndsAt && org.trialEndsAt > now) trialsActive += 1;
   }
-  const signups30 = orgs.filter((o) => o.createdAt >= since30).length;
+  // Self-serve apart from console-made (signup-analytics.service.ts#overviewSignups).
+  const { signups30, signupsByWeek } = overviewSignups(orgs, now);
   const emailCounts = Object.fromEntries(emails30.map((r) => [r.status, r._count._all]));
-
-  // Twelve weekly buckets of signups — enough to see a trend, not so many the sparkline is noise.
-  const weeks = Array.from({ length: 12 }, (_, i) => {
-    const start = new Date(now.getTime() - (11 - i) * 7 * DAY_MS);
-    const end = new Date(start.getTime() + 7 * DAY_MS);
-    return { week: start.toISOString().slice(0, 10), signups: orgs.filter((o) => o.createdAt >= start && o.createdAt < end).length };
-  });
 
   res.json({
     orgs: { total: orgs.length, byStatus, byTier, trialsActive, signups30, deletedUnderPolicy: orgs.filter((o) => o.retentionDeletedAt).length },
@@ -188,7 +182,7 @@ platformAdminConsoleRouter.get("/overview", async (_req, res) => {
     },
     email: { sent30: emailCounts.SENT ?? 0, failed30: emailCounts.FAILED ?? 0, skipped30: emailCounts.SKIPPED ?? 0, configured: transport.configured, source: transport.source },
     feedback: { count: feedback._count._all, avgRating: feedback._avg.rating ? Number(feedback._avg.rating.toFixed(2)) : null },
-    signupsByWeek: weeks,
+    signupsByWeek,
     recentActivity: audit
   });
 });

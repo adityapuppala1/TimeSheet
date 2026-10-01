@@ -62,7 +62,7 @@ const control = {
 };
 vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: control }));
 
-const { clampSignupPeriod, getSignupAnalytics } = await import("../../src/services/signup-analytics.service.js");
+const { clampSignupPeriod, getSignupAnalytics, overviewSignups } = await import("../../src/services/signup-analytics.service.js");
 
 const now = new Date("2026-10-02T12:00:00Z");
 const DAY = 24 * 60 * 60 * 1000;
@@ -176,5 +176,23 @@ describe("getSignupAnalytics", () => {
     expect(result.topDomains[0]).toEqual({ domain: "acme.com", attempts: 3, created: 0, joinRequested: 1 });
     expect(result.topDomains[1]).toEqual({ domain: "globex.com", attempts: 2, created: 1, joinRequested: 0 });
     expect(result.topDomains.map((d) => d.domain)).not.toContain("gmail.com");
+  });
+});
+
+describe("overviewSignups — the Overview's tile and chart", () => {
+  const created = (createdVia: string | null, daysBack: number) => ({ createdVia, createdAt: daysAgo(daysBack) });
+
+  it("counts the last 30 days self-serve apart from console-made — a null createdVia is console", () => {
+    const result = overviewSignups([created("SELF_SERVE", 1), created("SELF_SERVE", 29), created("CONSOLE", 2), created(null, 3), created("SELF_SERVE", 31)], now);
+    expect(result.signups30).toEqual({ selfServe: 2, console: 2 });
+  });
+
+  it("buckets twelve weeks, oldest first, each split the same way", () => {
+    const result = overviewSignups([created("SELF_SERVE", 1), created("CONSOLE", 1), created("SELF_SERVE", 8), created("SELF_SERVE", 200)], now);
+    expect(result.signupsByWeek).toHaveLength(12);
+    expect(result.signupsByWeek.at(-1)).toMatchObject({ selfServe: 1, console: 1 });
+    expect(result.signupsByWeek.at(-2)).toMatchObject({ selfServe: 1, console: 0 });
+    expect(result.signupsByWeek.reduce((n, w) => n + w.selfServe + w.console, 0)).toBe(3);
+    expect(result.signupsByWeek[0].week < result.signupsByWeek[11].week).toBe(true);
   });
 });

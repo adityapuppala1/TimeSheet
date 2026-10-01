@@ -21,7 +21,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Building2, HeartHandshake, MailCheck, MailX, MessageSquareHeart, Sparkles, Star, Trash2, UserPlus } from "lucide-react";
 import { Link } from "react-router";
-import { Area, AreaChart, ResponsiveContainer, Tooltip as RTooltip, XAxis } from "recharts";
+import { Area, AreaChart, Legend, ResponsiveContainer, Tooltip as RTooltip, XAxis } from "recharts";
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
@@ -108,7 +108,16 @@ export function PlatformAdminOverview() {
         <>
           <KpiGrid>
             <KpiCard label="Organizations" value={d.orgs.total} icon={Building2} tone="accent" hint={`${d.orgs.byStatus.ACTIVE ?? 0} active · ${d.orgs.byStatus.GRACE ?? 0} in grace`} />
-            <KpiCard label="Signups, 30 days" value={d.orgs.signups30} icon={UserPlus} tone="success" hint={`${d.orgs.trialsActive} trial${d.orgs.trialsActive === 1 ? "" : "s"} running now`} delay={0.05} />
+            {/* Self-serve is the headline: customers who found us. Console-made workspaces are ones we
+                provisioned, so they sit in the hint rather than inflating the number. */}
+            <KpiCard
+              label="Signups, 30 days"
+              value={d.orgs.signups30.selfServe}
+              icon={UserPlus}
+              tone="success"
+              hint={`+${d.orgs.signups30.console} made in the console · ${d.orgs.trialsActive} trial${d.orgs.trialsActive === 1 ? "" : "s"} running`}
+              delay={0.05}
+            />
             <KpiCard label="In retention" value={d.retention.inProgramme} icon={HeartHandshake} tone={d.retention.dueSoon > 0 ? "warning" : "default"} hint={d.retention.dueSoon > 0 ? `${d.retention.dueSoon} within 14 days of deletion` : d.retention.enabled ? "Programme on" : "Programme off"} delay={0.1} />
             <KpiCard label="Deleted under policy" value={d.orgs.deletedUnderPolicy} icon={Trash2} hint={d.retention.autoDeleteEnabled ? "Auto-delete on" : "Auto-delete OFF"} delay={0.15} />
             <KpiCard label="Emails sent, 30 days" value={d.email.sent30} icon={MailCheck} tone="success" hint={d.email.configured ? `Relay from ${d.email.source === "database" ? "console settings" : ".env"}` : "No relay configured"} delay={0.2} />
@@ -180,7 +189,7 @@ export function PlatformAdminOverview() {
 
             <ConsoleSection
               title="Signups, last 12 weeks"
-              description="New workspaces per week — self-serve trials and provisioned customers together."
+              description="New workspaces per week — customers who signed themselves up, with the ones made in the console stacked on top."
               className="flex h-full flex-col lg:col-span-3"
               bodyClassName="flex flex-1 flex-col"
             >
@@ -197,6 +206,10 @@ export function PlatformAdminOverview() {
                         <stop offset="0%" stopColor="hsl(var(--accent))" stopOpacity={0.35} />
                         <stop offset="100%" stopColor="hsl(var(--accent))" stopOpacity={0.02} />
                       </linearGradient>
+                      <linearGradient id="consoleFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="hsl(var(--muted-foreground))" stopOpacity={0.25} />
+                        <stop offset="100%" stopColor="hsl(var(--muted-foreground))" stopOpacity={0.02} />
+                      </linearGradient>
                     </defs>
                     <XAxis dataKey="week" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickFormatter={(w: string) => w.slice(5)} axisLine={false} tickLine={false} minTickGap={16} />
                     <RTooltip
@@ -204,7 +217,12 @@ export function PlatformAdminOverview() {
                       contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12, color: "hsl(var(--popover-foreground))" }}
                       labelFormatter={(w) => `Week of ${w}`}
                     />
-                    <Area type="monotone" dataKey="signups" stroke="hsl(var(--accent))" strokeWidth={2} fill="url(#signupFill)" dot={false} activeDot={{ r: 4 }} isAnimationActive />
+                    {/* Self-serve is the BASE layer, console stacked above it in muted grey: stacked
+                        the other way, the accent line rode on top of the console total and a week of
+                        nothing but provisioning drew an accent spike that read as customer demand. */}
+                    <Area type="monotone" dataKey="selfServe" name="Self-serve" stackId="signups" stroke="hsl(var(--accent))" strokeWidth={2} fill="url(#signupFill)" dot={false} activeDot={{ r: 4 }} isAnimationActive />
+                    <Area type="monotone" dataKey="console" name="Console" stackId="signups" stroke="hsl(var(--muted-foreground))" strokeWidth={1.5} fill="url(#consoleFill)" dot={false} activeDot={{ r: 3 }} isAnimationActive />
+                    <Legend wrapperStyle={{ fontSize: 12 }} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>

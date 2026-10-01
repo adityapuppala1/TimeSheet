@@ -143,6 +143,30 @@ function topDomainsFrom(domainStages: DomainStageCount[]): SignupAnalytics["topD
   return [...perDomain.values()].sort((a, b) => b.attempts - a.attempts || a.domain.localeCompare(b.domain)).slice(0, 15);
 }
 
+/**
+ * The console Overview's signup tile and chart: the last 30 days and twelve weekly buckets, each split
+ * into customers who signed themselves up and workspaces an operator made. Before this the two were
+ * one number, so a week of console provisioning read as demand. A null createdVia (a row from before
+ * the column, not backfilled) counts as console — self-serve is only what the signup route recorded.
+ */
+export function overviewSignups(orgs: Array<{ createdVia: string | null; createdAt: Date }>, now: Date) {
+  const split = (from: Date, to: Date) => {
+    const inRange = orgs.filter((o) => o.createdAt >= from && o.createdAt < to);
+    const selfServe = inRange.filter((o) => o.createdVia === "SELF_SERVE").length;
+    return { selfServe, console: inRange.length - selfServe };
+  };
+  const end = new Date(now.getTime() + 1);
+  return {
+    signups30: split(new Date(now.getTime() - 30 * DAY_MS), end),
+    // Twelve weekly buckets — enough to see a trend, not so many the chart is noise.
+    signupsByWeek: Array.from({ length: 12 }, (_, i) => {
+      const start = new Date(now.getTime() - (11 - i + 1) * 7 * DAY_MS + 1);
+      const stop = new Date(start.getTime() + 7 * DAY_MS);
+      return { week: start.toISOString().slice(0, 10), ...split(start, i === 11 ? end : stop) };
+    })
+  };
+}
+
 export async function getSignupAnalytics(requestedDays: number, now = new Date()): Promise<SignupAnalytics> {
   const days = clampSignupPeriod(requestedDays);
   const gte = new Date(now.getTime() - days * DAY_MS);

@@ -426,11 +426,12 @@ export interface RoutingReadout {
  * ============================================================================================== */
 
 export interface PlatformOverview {
-  orgs: { total: number; byStatus: Record<string, number>; byTier: Record<string, number>; trialsActive: number; signups30: number; deletedUnderPolicy: number };
+  orgs: { total: number; byStatus: Record<string, number>; byTier: Record<string, number>; trialsActive: number; signups30: { selfServe: number; console: number }; deletedUnderPolicy: number };
   retention: { enabled: boolean; autoDeleteEnabled: boolean; inProgramme: number; dueSoon: number; held: number };
   email: { sent30: number; failed30: number; skipped30: number; configured: boolean; source: "database" | "env" };
   feedback: { count: number; avgRating: number | null };
-  signupsByWeek: Array<{ week: string; signups: number }>;
+  /** Self-serve apart from console-made, oldest week first (signup-analytics.service.ts#overviewSignups). */
+  signupsByWeek: Array<{ week: string; selfServe: number; console: number }>;
   recentActivity: PlatformAuditRow[];
 }
 
