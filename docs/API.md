@@ -34,6 +34,16 @@ authenticated route and every login method answers `503 { code: "MAINTENANCE" }`
 non-SUPER_ADMIN users — clients must treat that code as "show the maintenance page", not as an
 outage or an auth failure.
 
+**SSO callback claim checks.** `GET /auth/sso/:provider/callback` refuses a **Google** sign-in with
+**403** unless the ID token asserts `email_verified: true`. The account is matched (or created) by
+email address alone, so an address Google has not verified cannot be allowed to name an account;
+every Workspace account and every confirmed consumer account carries `true`. **Microsoft is not held
+to this rule** — Entra v2 ID tokens normally omit `email_verified`, and requiring it would refuse every
+Microsoft sign-in. A Microsoft sign-in through a multi-tenant authority (blank tenant ID, or
+`common` / `organizations` / `consumers`) succeeds but logs one `[sso]` warning with the token's
+tenant ID, never the user's email — see
+[DEPLOYMENT.md § SSO across workspace subdomains](DEPLOYMENT.md#sso-across-workspace-subdomains).
+
 ## Sessions and device identity
 
 `GET /auth/sessions` lists the caller's own live sessions; `DELETE /auth/sessions/:id` ends one.
@@ -2193,6 +2203,42 @@ against the stored one and sends the `billing.plan_changed` receipt **only when 
 seat-count sync (a quantity change on the same price) is silent. Recipients are the workspace's
 active, non-agent super admins, linked to `/app/settings?tab=billing`.
 
+## Self-serve signup
+
+Mounted before tenant resolution: there is no workspace yet, which is the point. The full design,
+including what is planned next, is in [SIGNUP_AND_DOMAINS_PLAN.md](SIGNUP_AND_DOMAINS_PLAN.md).
+
+**Signup is closed unless two things hold** (since 2026-10-01): a platform admin switched it on
+(Platform admin → Settings → Signup — `PlatformSignupSettings.enabled`, **off by default**), and the
+deployment routes workspaces by subdomain (`ROOT_DOMAIN` set — without it a new workspace would have
+no address of its own). The check **fails closed**: if the policy cannot be read, signup is closed.
+
+- `GET /signup/status` — `{ open, trialDays, trialTier }`. Public, and mounted ahead of the signup
+  limiter (it has its own, 60 a minute) because the landing page asks on every visit.
+- `POST /signup/start` `{ email }` — **403** `code: "SIGNUP_CLOSED"` while closed; **422** for a
+  personal address (97 providers, `rediffmail.com` and `yahoo.co.in` among them), a throwaway inbox
+  (22 services, its own message), or a domain an operator blocked in the console (same message as a
+  personal address, so the list stays private). Otherwise **202** `{ token }` and a six-digit code by
+  platform mail.
+- `POST /signup/complete` `{ token, code, workspaceName, slug, adminName, adminPassword }` —
+  re-checks that signup is still open and that the **proven** address is still allowed, then
+  provisions. **201** `{ slug, url, trialEndsAt, trialDays }`. **409** for a taken address. **502** if
+  provisioning fails, with a generic message: the error detail goes to the operators, never to the
+  public page.
+
+Both signup routes share a limiter of **5 per hour per IP**.
+
+**The codes** live in the control plane (`EmailVerificationCode`), not in process memory, so a code
+minted on one API replica is accepted on another. Token and code are stored as keyed hashes; ten
+minutes; five guesses, each spent atomically before the comparison; single-use. Each code is bound to
+the flow that minted it — a code from "Find your workspace" (`/auth/workspaces/*`) is refused here,
+and the reverse, exactly as if it had expired.
+
+**What operators get:** a platform audit row for every created workspace (`org.signup_completed`,
+actor `CUSTOMER`) and every failed one (`org.signup_failed`, with the error), shown in the console's
+Recent activity; and, unless switched off on the same settings card, an email per event
+(`platform.signup_created`, `platform.signup_failed`) to the console's alert recipients.
+
 ## Contact and the sales pipeline (5.0.0)
 
 `POST /api/contact` — **public, unauthenticated**, mounted before tenant resolution because a
@@ -2416,6 +2462,11 @@ Same prefix and auth, different router (`platform-admin-console.controller.ts`).
   forced to a dry run); `POST /retention/:orgId/hold` `{ hold }`;
   `POST /retention/:orgId/send/:marker`; `POST /retention/:orgId/delete` `{ confirmSlug }` — which
   refuses a paying customer and a workspace that is not lapsed, whatever is typed.
+- `GET /signup/settings` — the self-serve signup policy (`enabled`, `blockedDomains`,
+  `notifyOnSignup`, who last changed it), plus `availability` (whether signup is ACTUALLY open, and
+  if not, why: `disabled`, `single-org` or `unavailable`) and the sizes of the built-in personal and
+  temporary lists. `PUT /signup/settings` `{ enabled?, notifyOnSignup?, blockedDomains? }`
+  (`platform:operate`) — `blockedDomains` takes a list or pasted text and is normalised server-side.
 - `GET /feedback` — trial feedback with the rating distribution and the would-you-return split.
 - `GET /audit` — the control-plane audit trail (`PlatformAuditLog`).
 - `GET /admins`, `POST /admins` `{ email, name }` (returns a generated one-time password, shown

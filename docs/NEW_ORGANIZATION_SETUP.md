@@ -322,6 +322,22 @@ if you want in-console automation.
    only been tested via signature simulation, not a real Stripe account; do a real test purchase
    in Stripe's test mode before relying on it for a paying customer.
 
+### Letting customers create their own workspace (self-serve signup)
+
+Off until you turn it on: **Platform admin → Settings → Signup → Allow self-serve signup**. It also
+needs `ROOT_DOMAIN` (each workspace gets its own address) and `TENANT_DB_PROVISION_BASE_URL` (the
+server new databases are created on); the card says plainly when the first is missing.
+
+- **Who may sign up:** company addresses only. Personal and throwaway providers are refused already;
+  add any others (a regional provider, a competitor) in **Also refuse these email domains**.
+- **What you hear:** an email for every new workspace and for every signup that fails to provision —
+  to the alert recipients on the Alerts page, or every active platform admin if none are set. Each
+  also appears in Overview → Recent activity. A **failed** signup means a person proved their address,
+  filled in the form and was shown an error: write to them the same day.
+- **Not yet:** a second signup from a company that already has a workspace still creates a second
+  one. Routing those people to the existing workspace as a join request is Phase 1 of
+  [SIGNUP_AND_DOMAINS_PLAN.md](SIGNUP_AND_DOMAINS_PLAN.md).
+
 ---
 
 ## Part 3 — Per-org configuration walkthrough

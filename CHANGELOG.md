@@ -10,6 +10,46 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🔒 Self-serve signup has an off switch — and it starts off
+
+`/api/signup` was the one public route that creates infrastructure, and it was mounted on every
+deployment with no way to turn it off. A manual install copied from `.env.example` (which ships
+`TENANT_DB_PROVISION_BASE_URL` set) would create a database for anyone with a company address, and on
+a single-org install it built a workspace nobody could reach — the link it handed back pointed at the
+default workspace, where the new account does not exist.
+
+- **Off until a platform admin opens it** in Platform admin → Settings → Signup, and always refused
+  without `ROOT_DOMAIN`. The check fails closed. **Upgrading:** a multi-org deployment that sells
+  through signup must switch it on once.
+- The landing page, signup, contact and reactivation pages show a "signups are closed" state with
+  the doors that do exist, instead of a form that fails on submit.
+- **More addresses refused:** the personal-mail list grew from 20 to 97 providers — `rediffmail.com`,
+  `yahoo.co.in`, `ymail.com` and `live.in` among them — plus 22 throwaway-inbox services, and operators
+  can add any domain from the console without a release. The proven address is re-checked when the
+  workspace is created, not only when the code is sent.
+- **Codes that work on more than one server.** Signup and "Find your workspace" codes moved from
+  process memory to the control plane, so a deployment running several API replicas no longer refuses
+  a correct code at random. Each code is now bound to its flow: a "Find your workspace" code — which
+  reaches any address that belongs to a workspace, personal Gmail included — can no longer complete a
+  signup and skip the personal-address check.
+- **Operators hear about every signup.** Each new workspace and each failed one writes a platform
+  audit row (now visible in the console's Recent activity) and emails the alert recipients — switch
+  that off on the same card. A failed provision no longer shows its raw error, database names and all,
+  to the person on the public page.
+- The pricing card promised a 14-day trial against the route's 15; both now read one constant. The
+  code email said 15 minutes for a code that lasts 10.
+
+### 🔐 SSO: Google needs a verified email, and an open Microsoft setup is flagged
+
+A Google account whose ID token does not assert `email_verified: true` is now refused with a clear
+403, because sign-in matches people by email address alone. Microsoft sign-in with a blank tenant ID
+was **confirmed** to accept accounts from any organization — personal accounts too — matched by email:
+the "nOAuth" pattern, in which an administrator of any Entra directory can give a user your
+colleague's address. Existing setups keep working, but the Single sign-on settings card now recommends
+the Directory (tenant) ID and warns without it, and the API logs one warning per such sign-in. Pinned by
+`tests/unit/sso-oidc-claims.test.ts`, including what openid-client does with Microsoft's `common`
+authority. Matching Microsoft users by directory and object ID instead of by email is planned.
+
 ### 💸 The Actions bill, measured and then cut
 
 The account ran out of minutes mid-session: 4,412 billed against an allowance of 2,000. Measured

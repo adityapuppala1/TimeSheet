@@ -70,6 +70,7 @@ The **Type** column follows [Diátaxis](https://diataxis.fr/): a *how-to* gets a
 |---|---|---|---|
 | [ROADMAP.md](ROADMAP.md) | Plan | Living | What differentiates the product, next-feature themes, plan-tier mapping, open dependency advisories, out of scope, and the production-readiness backlog (resolved items stay, struck through) |
 | [V12_UiUx_ClickUp_PLAN.md](V12_UiUx_ClickUp_PLAN.md) | Plan + hand-off state | Living | The current work plan, next actions, and the session log that AI coding tools hand off through. Keep its format exactly |
+| [SIGNUP_AND_DOMAINS_PLAN.md](SIGNUP_AND_DOMAINS_PLAN.md) | Plan + design record | Phase 0 built; Phase 1 for review | Self-serve signup: the off switch, refused domains, operator notifications, and one workspace per company domain (join requests, domain claims, signup analytics) |
 | [ENGINEERING_LOG.md](ENGINEERING_LOG.md) | Record | Append-only | Dated write-ups of each unit of work: what was found, measured, decided and fixed |
 | [CHANGELOG.md](../CHANGELOG.md) | Record | Per release | User-facing release notes. The in-app **What's new** page parses this file, so its heading format matters |
 | [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) | Design record | Built (2.5.0) | V8: Goals, the Inbox, the agent roster, the Workflow Studio, the agent ledger. Why each was shaped the way it was |

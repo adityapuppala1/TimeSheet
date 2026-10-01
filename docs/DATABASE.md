@@ -489,6 +489,22 @@ Small additions that need no section of their own, recorded so the file stays a 
 | `GlobalNotificationSettings.emailPracticeUpdate` `BOOLEAN NOT NULL DEFAULT false`, `.practiceUpdateRecipients` `JSON` NULL, `.practiceUpdateWeekly` `BOOLEAN NOT NULL DEFAULT false`; `GlobalAISettings.practiceUpdateEnabled` `BOOLEAN NOT NULL DEFAULT false` | `20260827130000_practice_update` | The Weekly AI/ML Practice Update. Four columns across two singletons, and the split between them is this app's standard **two-layer digest gate**: the AI toggle decides whether the NARRATIVE is drafted, the notification toggle decides whether EMAIL leaves. Both default off, which is the house rule for digests — a new install must not start mailing anyone. `practiceUpdateRecipients` holds **plain email addresses, not user ids**: the audience is leadership, and a CEO or practice head often has no account in the workspace the update is about (`ReportSubscription.recipients` made the same call for the same reason). NULL means "nobody has been chosen yet", which is a different state from an empty array saved deliberately — the send path refuses on both, only the UI distinguishes them. `practiceUpdateWeekly` arms the Monday 07:30 cron; off by default because the button is the primary path and an unreviewed digest reaching a CEO every week is not something to switch on for somebody. All four are guarded by `information_schema` existence checks, so the migration is safe to replay against a tenant a prior partial run already touched. |
 | `ActivityType` (existing table, first reader) | — | Seeded since the first migration and **never read** until 2026-08: both apps imported a frozen twelve-item array from `@timesheet/shared`. No schema change was needed — see [API.md § Activity types](API.md#activity-types) for why `Timesheet.activityType` stays a string rather than becoming a foreign key. |
 
+## Control plane: signup policy and email codes (2026-10-01)
+
+Two additive control-plane tables, migration `20261001120000_signup_settings_and_verification_codes`
+(marked `@rerunnable`: both statements are `CREATE TABLE IF NOT EXISTS`).
+
+- **`PlatformSignupSettings`** — one row, `id` "global", written only by the console: `enabled`
+  (default **false**), `blockedDomains` (JSON list, extra domains refused at signup), `notifyOnSignup`
+  (default true), `updatedBy`. No row is seeded: every reader treats absence as the defaults, so
+  `updatedBy` never names somebody who did not decide anything.
+- **`EmailVerificationCode`** — the six-digit codes for signup and "Find your workspace", moved out
+  of process memory so they work across API replicas. `tokenHash` (primary key) and `codeHash` are
+  keyed hashes; `purpose` (`signup` / `discover`) binds a code to its flow; `attempts` is spent in the
+  same conditional UPDATE that checks the cap; rows are swept by `expiresAt` on every issue.
+
+Why these exist and what reads them: [API.md § Self-serve signup](API.md#self-serve-signup).
+
 ## API request telemetry (`ApiRequestSample`)
 
 One row per completed HTTP request, as measured by the instance that served it. Created by

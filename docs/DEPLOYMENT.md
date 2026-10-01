@@ -110,8 +110,9 @@ specifically for "I want Docker for the app, but my own database."
    - `WEB_ORIGIN` / `APP_BASE_URL` — your real domain.
    - Leave `TENANT_DB_PROVISION_BASE_URL` unset — this deployment shape never provisions a
      second organization, so in-app provisioning isn't relevant. The template ships it *set* (for
-     local development), so blank it here: a set value is also what lets the public self-serve
-     signup route create workspaces on this server (see the
+     local development), so blank it here. Self-serve signup is also refused on this shape
+     regardless — it needs `ROOT_DOMAIN` and the console's switch — but a provisioning server that
+     is not needed is still one credential fewer (see the
      [reference row](#core-settings-with-defaults)).
 3. `npm ci && npm run build`.
 4. Run migrations + seed the control plane and the one tenant:
@@ -813,6 +814,17 @@ sticky sessions needed. The migration is applied automatically by `migrate deplo
 Compose and Helm upgrade paths — there is no manual step.
 
 
+**Set the Microsoft tenant ID.** With the Directory (tenant) ID left blank, sign-in goes through
+Microsoft's `common` authority. That works — openid-client checks each ID token's issuer against the
+tenant named *in the token itself* — and that is the problem: any Microsoft work account from any
+organization, and personal accounts if the app registration allows them, can sign in and is matched
+to an account here by email address. An administrator of any Entra directory can set a user's email
+to any address, so a blank tenant ID lets an outsider sign in as a colleague. Enter the tenant ID
+from the app registration's Overview page so only your own directory's accounts are accepted.
+Existing blank configurations keep working: the Single sign-on settings card shows a warning, and
+the API logs one `[sso]` warning per sign-in that takes this route. Google sign-ins now require a
+verified email address.
+
 ### On-prem with no public domain — a private CA
 
 Let's Encrypt cannot issue for `192.168.x.x` or an internal hostname, so the options are a
@@ -1187,6 +1199,7 @@ migration reaches organizations beyond the default one only through the fan-out
 
 | Version | What to do | Detail |
 |---|---|---|
+| **Next release** (under `## Unreleased`) | **Self-serve signup is now off until you turn it on** — Platform admin → Settings → Signup. A multi-org deployment that sells through `/signup` must switch it on after upgrading; a single-org install refuses signup whatever the switch says. One additive control-plane migration (signup policy + verification codes). And in every workspace that uses Microsoft sign-in, set the **Directory (tenant) ID**: left blank, accounts from any Microsoft directory can sign in, matched by email. | [SIGNUP_AND_DOMAINS_PLAN.md](SIGNUP_AND_DOMAINS_PLAN.md), [SSO across workspace subdomains](#sso-across-workspace-subdomains) |
 | **5.7.0** | Set `ROOT_DOMAIN` if the address people type has three or more labels (`timesheet.company.com`): unset, every request — the login page included — answers `404 Unknown workspace.`, and the API now says so with a boot `ERROR` naming the value. Multi-workspace deployments also need every proxy to preserve `Host`, and Compose + HTTPS needs `CADDYFILE=Caddyfile.domain-wildcard`. The SSO hand-off table arrives through `migrate deploy`; nothing to run for it. | [Turning on multi-org routing](#turning-on-multi-org-routing-root_domain), [per shape](#multi-workspace-on-each-deployment-shape), [the Host header](#the-host-header-has-to-survive-every-hop) |
 | **5.6.0** | Upload virus scanning can now be configured in a container: `CLAMAV_HOST`/`CLAMAV_PORT` are forwarded by both compose files and the chart. Images are now published as `latest` and per version only — no `sha-…` tags — and retention keeps the last two releases plus `latest`, so pull by version and expect to rebuild anything older from its git tag. | [Operational settings](#operational-settings), [retention](#the-retention-that-keeps-it-that-way) |
 | **5.4.0** | Nothing to run, one behaviour change: sprints now require the plan that includes timelines. A workspace on a plan without it sees sprints refuse with an upgrade message; its data is kept and returns on upgrade. | CHANGELOG 5.4.0 |
