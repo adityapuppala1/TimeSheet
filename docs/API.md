@@ -1172,8 +1172,12 @@ rule. A draft can still be saved with any subset.
 `resolveChangeApprovers` returns **the requester's manager**, or every active super admin if they
 have none. There is no multi-level chain: one named approver, or the people who can always act.
 
-A requester can never approve their own change, and submitting with no manager and no active super
-admin is refused at submission time with an actionable message rather than creating a change nobody
+Nobody is ever *routed* their own change: the requester is excluded from the approver list. So a
+manager or team lead who raises a change cannot approve it — they hold no pending row in its round.
+A **super admin can**: `POST /changes/:id/decision` lets any super admin decide any pending change,
+including one they raised themselves (a product decision, confirmed 2026-10-01), and the round
+records who decided. Submitting with no manager and no active super admin is refused at submission
+time with an actionable message rather than creating a change nobody
 can decide. Rejection opens a **new round** rather than overwriting the first, so the objection stays
 on the record when the change is reworked and resubmitted.
 

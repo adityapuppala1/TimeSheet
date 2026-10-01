@@ -313,8 +313,10 @@ export interface ResolvedChangeApprover {
  * all super admins together means any one of them can clear it, rather than the request waiting on
  * whichever name a tie-break happened to pick.
  *
- * The requester is always excluded. Approving your own change is the one thing an approval gate
- * exists to prevent, and it is better handled here than by hoping nobody is their own manager.
+ * The requester is always excluded from ROUTING. Nobody is ever ASKED to approve their own change,
+ * and that is better handled here than by hoping nobody is their own manager — it is what stops a
+ * manager or team lead who raises a change from signing it off. A super admin is the one exception
+ * at DECISION time, by policy: see canDecideChange.
  */
 export async function resolveChangeApprovers(requesterId: string): Promise<ResolvedChangeApprover[]> {
   const requester = await prisma.user.findFirst({
@@ -340,6 +342,13 @@ export async function resolveChangeApprovers(requesterId: string): Promise<Resol
  * Two ways in, and no third: the approval row names them, or they are a super admin. A super admin
  * can always decide — that is what the requirement asks for, and it doubles as the escape hatch for
  * a change whose named approver has since left, gone on leave, or been deactivated.
+ *
+ * THAT INCLUDES A CHANGE THE SUPER ADMIN RAISED THEMSELVES. Confirmed by the product owner on
+ * 2026-10-01, after the docs had claimed the opposite: a super admin may raise a change and approve
+ * it. Nobody else can approve their own — `resolveChangeApprovers` never names the requester, and
+ * without a named row a non-super-admin is refused above. So there is deliberately no requester
+ * check here; adding one would lock out the workspace's highest-trust role, and the approval round
+ * still records who decided, when, and why.
  *
  * Holding `changes:approve` is necessary but never sufficient. Without the second half of this test,
  * any team lead in the workspace could sign off any change — precisely the flaw the ticket authority

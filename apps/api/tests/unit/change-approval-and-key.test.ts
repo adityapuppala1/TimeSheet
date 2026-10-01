@@ -148,6 +148,19 @@ describe("who may decide", () => {
     expect(canDecideChange(asUser("root", "SUPER_ADMIN", []), pending)).toBe(true);
   });
 
+  it("lets a super admin approve a change they raised themselves — product decision, 2026-10-01", () => {
+    // `pending` names their manager, not them; there is deliberately no requester check for this role.
+    // If this goes red, someone added one: that is a policy change, not a bug fix — ask first.
+    const requesterIsSuperAdmin = asUser("me", "SUPER_ADMIN", []);
+    expect(canDecideChange(requesterIsSuperAdmin, [{ approverId: "boss", status: "PENDING" }])).toBe(true);
+  });
+
+  it("does NOT let any other requester approve their own change — they are never named, so never asked", () => {
+    // resolveChangeApprovers never routes to the requester (pinned above), so a manager who raised a
+    // change holds no pending row in its round and is refused here, permission or not.
+    expect(canDecideChange(asUser("me", "MANAGER"), [{ approverId: "boss", status: "PENDING" }])).toBe(false);
+  });
+
   it("REFUSES a manager who is not the named approver", () => {
     // Holding changes:approve is necessary and never sufficient. Without this, any team lead could
     // sign off any change.

@@ -304,7 +304,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     title: "Approving a change",
     roles: APPROVERS,
     where: "Change Management → the change → Approvals",
-    when: "Approval is the requester's manager, or a super admin — never the requester.",
+    when: "Approval is the requester's manager, or a super admin. Nobody is asked to approve their own change — except that a super admin may approve any change, including one they raised.",
     steps: [
       "Open the change and review the risk band, the plans and the schedule.",
       "Approve, or reject with the objection written down — a rejection opens a NEW round rather than overwriting, so the objection survives the rework.",
