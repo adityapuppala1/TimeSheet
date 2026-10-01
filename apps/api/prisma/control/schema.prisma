@@ -159,6 +159,11 @@ model Organization {
   /// database that is about to be dropped is the wrong dependency direction. Null on every org
   /// created before this column existed; the worker falls back to the tenant's super admins then.
   ownerEmail           String?   @db.VarChar(255)
+  /// "SELF_SERVE" (signup) or "CONSOLE" (a platform admin created it) — so the console can count
+  /// customers who arrived on their own apart from ones an operator created. Backfilled by
+  /// 20261002090000 from `trialStartedAt` (only signup starts a trial); null only on a row written
+  /// by code older than that migration.
+  createdVia           String?   @db.VarChar(16)
   /// Day markers already sent — `["feedback10", "ended", "30", "60", "80", "90"]`. Same
   /// idempotence rule as `trialNoticesSent`: recorded even when the mail failed, so a broken
   /// relay does not turn into a daily copy of the same reminder.
@@ -187,6 +192,9 @@ model Organization {
 
   /// Short-lived SSO handoff codes — see SsoHandoffCode for why they are not in memory.
   ssoHandoffCodes SsoHandoffCode[]
+  /// The company email domains this workspace holds (signup Phase 1) — NOT custom hostnames, which
+  /// are `domains` above.
+  emailDomains    OrgEmailDomain[]
 
   @@index([status])
 }
@@ -1435,4 +1443,58 @@ model EmailVerificationCode {
 
   /// Expired rows are swept opportunistically on every issue; this keeps that DELETE cheap.
   @@index([expiresAt])
+}
+
+/// One company's claim on its email domain (signup Phase 1, docs/SIGNUP_AND_DOMAINS_PLAN.md §5.4).
+/// `domain` is UNIQUE, and that index — not application logic — is what stops two simultaneous
+/// signups from one new domain both creating a workspace: the loser's INSERT fails and its person is
+/// sent to the join path instead. Distinct from `OrgDomain`, which is a custom HOSTNAME.
+model OrgEmailDomain {
+  id             String       @id @default(uuid())
+  /// The company domain from `utils/company-domain.ts#companyDomainOf` — registrable, lower-case,
+  /// ASCII. Never a personal-mail provider.
+  domain         String       @unique @db.VarChar(253)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// "UNVERIFIED" until Phase 2's DNS check exists; "VERIFIED" after it.
+  status         String       @default("UNVERIFIED") @db.VarChar(16)
+  /// "SIGNUP" | "BACKFILL" | "ADMIN" — how the claim came to exist.
+  source         String       @db.VarChar(16)
+  verifiedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+}
+
+/// One row per stage a signup reached — the funnel the console's Signups page draws, and the
+/// source of the daily summary. Holds the company domain and a KEYED hash of the address, never the
+/// address itself: an abandoned attempt is somebody who chose not to become a customer, and the
+/// control plane already holds enough.
+model SignupAttempt {
+  id             String   @id @default(uuid())
+  /// CODE_SENT | REFUSED | VERIFIED | CREATED | JOIN_REQUESTED | UNAVAILABLE | FAILED
+  stage          String   @db.VarChar(16)
+  domain         String?  @db.VarChar(253)
+  emailHash      String?  @db.Char(64)
+  /// The workspace the stage concerns, when there is one (created, joined, unavailable).
+  organizationId String?
+  /// A failure's error or a refusal's reason, truncated. Operator-facing only.
+  detail         String?  @db.VarChar(500)
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([stage, createdAt])
+  @@index([organizationId, stage, createdAt])
+}
+
+/// "This job ran for this period." The primary key is the lock: every API replica runs the same
+/// cron, and only the replica whose INSERT succeeds does the work — the others hit the unique key and
+/// stand down. Used first by the daily signup summary and the "provisioning is failing" warning.
+model PlatformJobClaim {
+  job       String   @db.VarChar(64)
+  periodKey String   @db.VarChar(32)
+  claimedAt DateTime @default(now())
+
+  @@id([job, periodKey])
 }

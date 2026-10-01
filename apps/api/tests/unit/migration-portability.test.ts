@@ -369,3 +369,64 @@ describe("p3009Recovery", () => {
     expect(advice).toContain("<the migration named above>");
   });
 });
+
+/**
+ * The control plane's @rerunnable migrations — added 2026-10-01 with the signup work.
+ *
+ * `npm run doctor:heal` auto-recovers a failed CONTROL-plane migration exactly as it does a tenant
+ * one (scripts/doctor.ts asks `isRerunnable` of `prisma/control/migrations` too), but every check
+ * above reads only the tenant directory, so a control migration could carry the marker with nothing
+ * checking that it survives a re-run. The control files are small and create whole tables, so the
+ * rule here is per statement rather than the tenant rule's "somewhere in the file": every
+ * CREATE TABLE says IF NOT EXISTS, every ALTER TABLE runs only through an information_schema check +
+ * PREPARE, and every write states a WHERE its own effect makes false.
+ */
+describe("the @rerunnable marker on control-plane migrations", () => {
+  const CONTROL_DIR = path.resolve(fileURLToPath(new URL("../../prisma/control/migrations", import.meta.url)));
+  const controlMarked = fs
+    .readdirSync(CONTROL_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && isRerunnable(CONTROL_DIR, entry.name))
+    .map((entry) => {
+      const sql = fs.readFileSync(path.join(CONTROL_DIR, entry.name, "migration.sql"), "utf8");
+      const code = sql
+        .split("\n")
+        .filter((line) => !line.trimStart().startsWith("--"))
+        .join("\n")
+        .toLowerCase();
+      return { name: entry.name, code };
+    });
+
+  it("finds the marked control migrations", () => {
+    expect(controlMarked.map((migration) => migration.name)).toContain("20261001120000_signup_settings_and_verification_codes");
+  });
+
+  it("creates every table with IF NOT EXISTS", () => {
+    for (const migration of controlMarked) {
+      for (const match of migration.code.matchAll(/create\s+table\s+(?!if\s+not\s+exists)/g)) {
+        expect.fail(`${migration.name} has an unguarded CREATE TABLE near offset ${match.index}`);
+      }
+    }
+  });
+
+  it("alters a table only through an information_schema-guarded PREPARE", () => {
+    for (const migration of controlMarked) {
+      // An ALTER outside a quoted PREPARE body is a bare statement: it would fail on a re-run.
+      const outsideQuotes = migration.code.replace(/'(?:[^'\\]|\\.)*'/g, "''");
+      expect(outsideQuotes, `${migration.name} runs ALTER TABLE directly rather than through PREPARE`).not.toMatch(/\balter\s+table\b/);
+      if (/\balter\s+table\b/.test(migration.code)) {
+        expect(migration.code, `${migration.name} prepares an ALTER without asking information_schema`).toMatch(/information_schema/);
+      }
+    }
+  });
+
+  it("guards every write against repetition", () => {
+    for (const migration of controlMarked) {
+      // A write is a statement that STARTS with UPDATE or INSERT. Matching the word anywhere would
+      // flag a foreign key's `ON UPDATE CASCADE`, which is DDL inside a guarded PREPARE.
+      const writes = migration.code.split(";").filter((statement) => /^\s*(update|insert\s+into)\s/.test(statement));
+      for (const statement of writes) {
+        expect(statement, `${migration.name} has an unconditional write; a re-run would repeat it`).toMatch(/\bwhere\b/);
+      }
+    }
+  });
+});

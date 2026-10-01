@@ -250,7 +250,9 @@ platformAdminRouter.post("/organizations", requirePlatformAdmin, operate, valida
   if (existing) throw new AppError(409, "An organization with this slug already exists.");
 
   const org = await controlPrisma.organization.create({
-    data: { name: req.body.name, slug: req.body.slug, planTier: req.body.planTier, status: "PROVISIONING" }
+    // createdVia: the console's Signups page and Overview count operator-created workspaces apart
+    // from self-serve ones (signup sets "SELF_SERVE").
+    data: { name: req.body.name, slug: req.body.slug, planTier: req.body.planTier, status: "PROVISIONING", createdVia: "CONSOLE" }
   });
   // Creating a workspace wrote no audit row at all until 5.0.0 — the control plane's trail began
   // at the first thing done TO an org and had nothing to say about where the org came from.
