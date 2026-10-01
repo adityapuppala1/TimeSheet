@@ -453,7 +453,9 @@ platformAdminConsoleRouter.put("/signup/settings", operate, validate(signupSetti
 
 /**
  * The Signups page: the funnel, self-serve vs console by day, who signed up and how each is doing.
- * Read-only and address-free (the funnel keeps domains and hashes), so every console role may see it.
+ * Read-only, so every console role may see it. The FUNNEL holds no addresses (domains and keyed
+ * hashes only); the one address shown is each new workspace's owner, which `GET /organizations`
+ * already returns to every console role.
  * `?days=` is clamped to 7, 30 or 90 by the service.
  */
 platformAdminConsoleRouter.get("/signups", async (req, res) => {

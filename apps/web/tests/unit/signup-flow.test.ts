@@ -8,7 +8,7 @@
  *    claimed a moment ago back at the code step, an expired verification back at the start.
  */
 import { describe, expect, it } from "vitest";
-import { classifySignupError, contactPrefill, stepAfterVerify, workspaceHostSuffix } from "../../src/utils/signup-flow";
+import { classifySignupError, companyWorkspaceLabel, contactPrefill, stepAfterVerify, workspaceHostSuffix } from "../../src/utils/signup-flow";
 
 const axiosError = (status: number, data: Record<string, unknown> = {}) => ({ response: { status, data } });
 
@@ -72,6 +72,14 @@ describe("classifySignupError", () => {
   it("passes any other server message through, with a fallback when there is none", () => {
     expect(classifySignupError(axiosError(422, { message: "Use your work email." }))).toEqual({ kind: "message", message: "Use your work email." });
     expect(classifySignupError(new Error("Network Error"), "Couldn't send.")).toEqual({ kind: "message", message: "Couldn't send." });
+  });
+});
+
+describe("companyWorkspaceLabel", () => {
+  it("names the company's workspace when the server named it, and says something true when it did not", () => {
+    expect(companyWorkspaceLabel("Northwind")).toBe("Northwind's workspace");
+    // /complete's WORKSPACE_UNAVAILABLE carries no name — never render "'s workspace".
+    expect(companyWorkspaceLabel("")).toBe("Your company's workspace");
   });
 });
 

@@ -2241,13 +2241,17 @@ registrable domain (public suffix list, private suffixes included): `eng.acme.co
   nothing; the workspace row and its domain claim are written in one transaction, and the continuation
   is spent only once they exist. **201** `{ slug, url, trialEndsAt, trialDays }`. **409**
   `SLUG_TAKEN` (fix the address and resubmit) or `DOMAIN_CLAIMED` (somebody from the company won the
-  race a moment ago — verify again and ask to join). **400** `SIGNUP_EXPIRED` when the continuation is
-  gone. **502** if provisioning fails, with a generic message: the error detail goes to the
+  race a moment ago — verify again and ask to join). A collision with the person's OWN workspace (a
+  double click, a second tab) answers **200** with the same body plus `alreadyCreated: true` once it is
+  ready, or **409** `SIGNUP_IN_PROGRESS` while it is provisioning; a domain held by a workspace in
+  grace or suspended answers **409** `WORKSPACE_UNAVAILABLE`. **400** `SIGNUP_EXPIRED` when the
+  continuation is gone. **502** if provisioning fails, with a generic message: the error detail goes to the
   operators, never to the public page.
 - `POST /signup/join` `{ continuation, name, message? }` — writes a join request into the claimed
   workspace's own database. Refusals come before the continuation is spent: **409** `NO_WORKSPACE`
   (the domain lost its workspace since verify), **409** `WORKSPACE_UNAVAILABLE` (no longer ACTIVE),
-  **429** `JOIN_CAP` (25 requests to one workspace in 24 hours). **201** `{ status: "requested",
+  **429** `JOIN_CAP` (25 requests to one workspace in 24 hours, counted from `JoinRequest` rows in that
+  workspace's own database). **201** `{ status: "requested",
   workspace: { name } }`; **200** `already_pending` for a repeat ask, or `member` with the workspace's
   `url` for an address that got an account in the meantime.
 
@@ -2268,14 +2272,17 @@ and the reverse, exactly as if it had expired.
 actor `CUSTOMER`) and every failed one (`org.signup_failed`, with the error), shown in the console's
 Recent activity; a funnel row per stage (`SignupAttempt` — a domain and a keyed hash, never the
 address); and email to the console's alert recipients by `PlatformSignupSettings.notifyMode`: `DAILY`
-(the default — `platform.signup_digest` at 08:15, sent once however many replicas run, only on a day
-with news), `EACH` (`platform.signup_created` / `platform.signup_failed` per event) or `OFF`. In every
+(the default — `platform.signup_digest` at 08:15 in the deployment's `TZ`, Asia/Kolkata by default,
+sent once however many replicas run, only on a day with news), `EACH` (`platform.signup_created` / `platform.signup_failed` per event) or `OFF`. In every
 mode but `OFF`, the second provisioning failure inside an hour sends `platform.signup_failing` at
 once, at most hourly.
 
 ### Join requests (tenant)
 
 `/api/join-requests` — `requireAuth` + `users:manage`, because approving creates an account.
+
+A new request notifies (bell + `workspace.join_request` email) the workspace's active super admins —
+or, when it has none, its active admins, so a request is never left with nobody told.
 
 - `GET /join-requests?filter=pending|decided` — pending oldest first; decided (approved, declined,
   expired) newest first with `decidedBy`. A pending request past `expiresAt` is written `EXPIRED` when

@@ -35,7 +35,7 @@ import { withOrgTenant } from "../config/with-org-tenant.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { claimDomainInTransaction, DomainAlreadyClaimedError, findClaimForEmail } from "../services/company-domain-claims.service.js";
-import { createJoinRequest } from "../services/join-request.service.js";
+import { countJoinRequestsSince, createJoinRequest } from "../services/join-request.service.js";
 import { templates } from "../services/mail-templates.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { platformAudit } from "../services/platform-audit.service.js";
@@ -119,6 +119,42 @@ function slugProblem(slug: string): string | null {
   }
   if (RESERVED_SLUGS.has(slug)) return "That address is reserved. Try another.";
   return null;
+}
+
+const SLUG_TAKEN = () => new AppError(409, "That workspace address is already taken. Try another.", { code: "SLUG_TAKEN" });
+const DOMAIN_CLAIMED = () =>
+  new AppError(409, "Someone from your company has just created a workspace. Verify again and you can ask to join it.", { code: "DOMAIN_CLAIMED" });
+
+/** What /complete needs to know about whoever holds an address or a domain it collided with. */
+const HOLDER_SELECT = { id: true, name: true, slug: true, status: true, ownerEmail: true, createdVia: true, trialEndsAt: true } as const;
+type Holder = { id: string; name: string; slug: string; status: string; ownerEmail: string | null; createdVia: string | null; trialEndsAt: Date | null };
+
+/**
+ * A collision at /complete — the address is taken, or the domain already claimed — answered with the
+ * truth about WHO holds it, rather than one message for every case:
+ *  - the person's OWN workspace (a double click, a second tab, a retry after a slow response): ready →
+ *    the same success answer again; still being set up → say so. Not "your address is taken".
+ *  - the company's workspace is in GRACE or SUSPENDED (an operator assigned the domain to it since
+ *    verify): "it isn't taking new members", which is what /verify would now say too.
+ *  - anybody else: the original answer.
+ * Answers on `res` (and resolves) only for the person's own, ready workspace; otherwise throws.
+ */
+async function explainCollision(res: Response, holder: Holder | null, email: string, otherwise: AppError): Promise<void> {
+  if (holder && holder.createdVia === "SELF_SERVE" && holder.ownerEmail?.toLowerCase() === email) {
+    if (holder.status === "ACTIVE") {
+      res.json({ slug: holder.slug, url: workspaceUrlForSlug(holder.slug), trialEndsAt: holder.trialEndsAt, trialDays: TRIAL_DAYS, alreadyCreated: true });
+      return;
+    }
+    if (holder.status === "PROVISIONING") {
+      throw new AppError(409, "Your workspace is already being set up — we'll email you its link the moment it's ready.", { code: "SIGNUP_IN_PROGRESS" });
+    }
+  }
+  // GRACE or SUSPENDED only: a PROVISIONING holder is a colleague who won the race a moment ago,
+  // and "someone from your company has just created a workspace" is exactly the truth.
+  if (holder && (holder.status === "GRACE" || holder.status === "SUSPENDED") && otherwise.code === "DOMAIN_CLAIMED") {
+    throw new AppError(409, `${holder.name}'s workspace isn't taking new members right now. Ask your administrator.`, { code: "WORKSPACE_UNAVAILABLE" });
+  }
+  throw otherwise;
 }
 
 const EXPIRED = () =>
@@ -243,8 +279,11 @@ signupRouter.post(
     const slug = req.body.slug.trim().toLowerCase();
     const problem = slugProblem(slug);
     if (problem) throw new AppError(422, problem);
-    const taken = await controlPrisma.organization.findUnique({ where: { slug }, select: { id: true } });
-    if (taken) throw new AppError(409, "That workspace address is already taken. Try another.", { code: "SLUG_TAKEN" });
+    const taken = await controlPrisma.organization.findUnique({ where: { slug }, select: HOLDER_SELECT });
+    if (taken) {
+      await explainCollision(res, taken, email, SLUG_TAKEN());
+      return;
+    }
 
     const now = new Date();
     let org: Awaited<ReturnType<typeof controlPrisma.organization.create>>;
@@ -275,13 +314,15 @@ signupRouter.post(
       });
     } catch (error) {
       if (error instanceof DomainAlreadyClaimedError) {
-        throw new AppError(409, "Someone from your company has just created a workspace. Verify again and you can ask to join it.", {
-          code: "DOMAIN_CLAIMED"
-        });
+        const claim = await findClaimForEmail(email);
+        const holder = claim ? await controlPrisma.organization.findUnique({ where: { id: claim.organization.id }, select: HOLDER_SELECT }) : null;
+        await explainCollision(res, holder, email, DOMAIN_CLAIMED());
+        return;
       }
       // The same race on the address itself: the pre-check above passed for both requests.
       if ((error as { code?: string }).code === "P2002") {
-        throw new AppError(409, "That workspace address is already taken. Try another.", { code: "SLUG_TAKEN" });
+        await explainCollision(res, await controlPrisma.organization.findUnique({ where: { slug }, select: HOLDER_SELECT }), email, SLUG_TAKEN());
+        return;
       }
       throw error;
     }
@@ -419,18 +460,18 @@ signupRouter.post(
       await recordSignupStage("UNAVAILABLE", { email, organizationId: org.id, detail: org.status });
       throw new AppError(409, `${org.name}'s workspace isn't taking new members right now. Ask your administrator.`, { code: "WORKSPACE_UNAVAILABLE" });
     }
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const today = await controlPrisma.signupAttempt.count({ where: { stage: "JOIN_REQUESTED", organizationId: org.id, createdAt: { gte: since } } });
-    if (today >= JOIN_REQUESTS_PER_WORKSPACE_PER_DAY) {
-      throw new AppError(429, `${org.name} has had a lot of requests today. Try again tomorrow, or ask your administrator to add you.`, { code: "JOIN_CAP" });
-    }
-
-    if (!(await redeemSignupContinuation(req.body.continuation))) throw EXPIRED();
-
     const { joinRequestTtlDays } = await getSignupSettings();
-    const result = await withOrgTenant(org.slug, () =>
-      createJoinRequest({ email, name: req.body.name.trim(), message: req.body.message, ttlDays: joinRequestTtlDays, workspaceName: org.name })
-    );
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const result = await withOrgTenant(org.slug, async () => {
+      // The cap counts the requests that EXIST, in the workspace's own database — not funnel rows,
+      // which are written best-effort and would let the cap fail open if those writes failed.
+      if ((await countJoinRequestsSince(since)) >= JOIN_REQUESTS_PER_WORKSPACE_PER_DAY) {
+        throw new AppError(429, `${org.name} has had a lot of requests today. Try again tomorrow, or ask your administrator to add you.`, { code: "JOIN_CAP" });
+      }
+      // Spent only once nothing else can refuse.
+      if (!(await redeemSignupContinuation(req.body.continuation))) throw EXPIRED();
+      return createJoinRequest({ email, name: req.body.name.trim(), message: req.body.message, ttlDays: joinRequestTtlDays, workspaceName: org.name });
+    });
     if (result.status === "member") {
       res.json({ status: "member", workspace: { name: org.name, url: workspaceUrlForSlug(org.slug) } });
       return;

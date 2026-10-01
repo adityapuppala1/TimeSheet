@@ -15,6 +15,7 @@
  */
 import { controlPrisma } from "../config/control-prisma.js";
 import { companyDomainOf } from "../utils/company-domain.js";
+import { platformDayKey } from "../utils/platform-time.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PERIODS = [7, 30, 90] as const;
@@ -58,7 +59,8 @@ const STAGE_KEY: Record<string, keyof SignupAnalytics["funnel"]> = {
   FAILED: "failed"
 };
 
-const dayKey = (value: Date) => value.toISOString().slice(0, 10);
+/** Days are the platform's (Asia/Kolkata by default), never UTC's — see utils/platform-time.ts. */
+const dayKey = platformDayKey;
 
 type StageCount = { stage: string; _count: { _all: number } };
 type DomainStageCount = StageCount & { domain: string | null };
@@ -162,7 +164,7 @@ export function overviewSignups(orgs: Array<{ createdVia: string | null; created
     signupsByWeek: Array.from({ length: 12 }, (_, i) => {
       const start = new Date(now.getTime() - (11 - i + 1) * 7 * DAY_MS + 1);
       const stop = new Date(start.getTime() + 7 * DAY_MS);
-      return { week: start.toISOString().slice(0, 10), ...split(start, i === 11 ? end : stop) };
+      return { week: dayKey(start), ...split(start, i === 11 ? end : stop) };
     })
   };
 }

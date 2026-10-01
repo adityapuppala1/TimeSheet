@@ -25,6 +25,7 @@ import { emailDomainOf, isDisposableAddress, isFreeMailAddress } from "../utils/
 import { getAlertSettings, resolveAlertRecipients } from "./platform-alerts.service.js";
 import { platformAudit } from "./platform-audit.service.js";
 import { sendPlatformTemplate } from "./platform-mail.service.js";
+import { platformDayKey } from "../utils/platform-time.js";
 
 /** How operators hear about signups — decision 6 in docs/SIGNUP_AND_DOMAINS_PLAN.md. */
 export type SignupNotifyMode = "DAILY" | "EACH" | "OFF";
@@ -194,7 +195,8 @@ export type SignupOutcome =
   | { kind: "created"; organizationId: string; workspaceName: string; slug: string; ownerEmail: string; workspaceUrl: string; trialEndsAt: Date | null; trialTier: string }
   | { kind: "failed"; workspaceName: string; slug: string; ownerEmail: string; error: string };
 
-const formatDay = (date: Date | null) => (date ? date.toISOString().slice(0, 10) : "—");
+/** The platform's day (Asia/Kolkata by default), not UTC's — see utils/platform-time.ts. */
+const formatDay = (date: Date | null) => (date ? platformDayKey(date) : "—");
 
 /**
  * Tells the operators. Best-effort and NEVER throws: by the time this runs the workspace either

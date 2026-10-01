@@ -39,7 +39,7 @@ import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
 import { useSignupStatus } from "../hooks/use-signup-status";
 import { authApi } from "../services/api";
-import { classifySignupError, stepAfterVerify, workspaceHostSuffix, type SignupStep, type SignupWorkspaceLink } from "../utils/signup-flow";
+import { classifySignupError, companyWorkspaceLabel, stepAfterVerify, workspaceHostSuffix, type SignupStep, type SignupWorkspaceLink } from "../utils/signup-flow";
 
 const emailSchema = z.object({ email: z.string().email("Enter a valid work email") });
 const codeSchema = z.object({ code: z.string().regex(/^\d{6}$/, "Enter the 6-digit code") });
@@ -130,7 +130,7 @@ function stepTitle(step: SignupStep, companyName: string): string {
     case "joined":
       return "Request sent";
     case "unavailable":
-      return `${companyName}'s workspace isn't available`;
+      return `${companyWorkspaceLabel(companyName)} isn't available`;
     case "done":
       return "Your workspace is ready";
     default:

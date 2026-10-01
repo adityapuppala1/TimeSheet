@@ -64,6 +64,12 @@ export function classifySignupError(error: unknown, fallback = "Something went w
   return { kind: "message", message: message ?? fallback };
 }
 
+/** "Northwind's workspace", or "Your company's workspace" when the server did not name it — a
+ *  WORKSPACE_UNAVAILABLE from /complete carries no name, and "'s workspace" is not a sentence. */
+export function companyWorkspaceLabel(companyName: string): string {
+  return companyName ? `${companyName}'s workspace` : "Your company's workspace";
+}
+
 /** The opening line of the Contact form's message for a known `?reason=`. A closed set: the value is
  *  off a URL, and an unknown one starts the message empty rather than echoing it. */
 export function contactPrefill(reason: string | null): string {

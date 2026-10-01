@@ -969,8 +969,10 @@ export const templates = {
    *  escaped here, and the caller escapes them in `vars` too, for an admin-edited override. */
   joinRequest: (params: { requesterName: string; requesterEmail: string; message: string; workspaceName: string; reviewUrl: string }) =>
     shell(
-      { title: "Someone asked to join your workspace", preheader: `${escape(params.requesterName)} asked to join ${escape(params.workspaceName)}.`, accentColor: ACCENT },
-      heading(`${escape(params.requesterName)} asked to join ${escape(params.workspaceName)}`) +
+      // shell's title/preheader and heading() escape what they are given; paragraph() and infoCard
+      // values do not — so `escape` appears only inside those.
+      { title: "Someone asked to join your workspace", preheader: `${params.requesterName} asked to join ${params.workspaceName}.`, accentColor: ACCENT },
+      heading(`${params.requesterName} asked to join ${params.workspaceName}`) +
         paragraph(
           `They proved they own <strong>${escape(params.requesterEmail)}</strong> — an address at your company's domain — and asked to join this workspace rather than open a separate one.`
         ) +
@@ -985,18 +987,18 @@ export const templates = {
    *  for a new account, or the sign-in page for someone who already had one. */
   joinApproved: (params: { name: string; workspaceName: string; actionUrl: string; actionLabel: string }) =>
     shell(
-      { title: `You're in: ${escape(params.workspaceName)}`, preheader: `Your request to join ${escape(params.workspaceName)} was approved.` },
-      heading(`Welcome to ${escape(params.workspaceName)}`) +
+      { title: `You're in: ${params.workspaceName}`, preheader: `Your request to join ${params.workspaceName} was approved.` },
+      heading(`Welcome to ${params.workspaceName}`) +
         paragraph(`Hi ${escape(params.name.split(" ")[0])}, your request to join <strong>${escape(params.workspaceName)}</strong> was approved.`) +
-        paragraph(button(escape(params.actionLabel), params.actionUrl)) +
+        paragraph(button(params.actionLabel, params.actionUrl)) +
         paragraph(`<span style="color:${MUTED};">If you are choosing a password, the link works once and expires in 72 hours. If it has expired, use "Forgot password" on the sign-in page.</span>`)
     ),
 
   /** To the requester, when a workspace declined. `note` is the decider's own words, if they left any. */
   joinDeclined: (params: { name: string; workspaceName: string; note: string }) =>
     shell(
-      { title: `Your request to join ${escape(params.workspaceName)}`, preheader: "An administrator reviewed your request." },
-      heading(`Your request to join ${escape(params.workspaceName)}`) +
+      { title: `Your request to join ${params.workspaceName}`, preheader: "An administrator reviewed your request." },
+      heading(`Your request to join ${params.workspaceName}`) +
         paragraph(`Hi ${escape(params.name.split(" ")[0])}, an administrator of <strong>${escape(params.workspaceName)}</strong> reviewed your request and did not add you.`) +
         (params.note ? infoCard([["Their note", escape(params.note)]], MUTED) : "") +
         paragraph(`<span style="color:${MUTED};">If you think this is a mistake, ask your manager or the workspace's administrator directly.</span>`)

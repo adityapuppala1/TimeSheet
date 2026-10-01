@@ -49,15 +49,17 @@ const control = {
 };
 vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: control }));
 vi.mock("../../src/services/platform-signup.service.js", () => ({ getSignupSettings: vi.fn(async () => ({ notifyMode })) }));
+const resolveAlertRecipients = vi.fn(async (): Promise<string[]> => ["ops@timesphere.test", "owner@timesphere.test"]);
 vi.mock("../../src/services/platform-alerts.service.js", () => ({
   getAlertSettings: vi.fn(async () => ({})),
-  resolveAlertRecipients: vi.fn(async () => ["ops@timesphere.test", "owner@timesphere.test"])
+  resolveAlertRecipients
 }));
 const sendPlatformTemplate = vi.fn(async () => ({ ok: true, status: "SENT", subject: "s" }));
 vi.mock("../../src/services/platform-mail.service.js", () => ({ sendPlatformTemplate }));
 const platformAudit = vi.fn(async () => undefined);
 vi.mock("../../src/services/platform-audit.service.js", () => ({ platformAudit }));
-vi.mock("../../src/config/env.js", () => ({ env: { APP_BASE_URL: "https://timesphere.test" } }));
+// The platform's zone, as config/env.ts defaults it — the days and hours below are India's.
+vi.mock("../../src/config/env.js", () => ({ env: { APP_BASE_URL: "https://timesphere.test", TZ: "Asia/Kolkata" } }));
 
 const { alertIfProvisioningFailing, claimJobPeriod, runSignupDigest } = await import("../../src/services/signup-digest.service.js");
 
@@ -156,6 +158,26 @@ describe("the daily summary", () => {
     expect(sendPlatformTemplate).toHaveBeenCalledTimes(2); // two recipients, once — not four
   });
 
+  it("names the day as India sees it, not UTC — 19:00 UTC on the 1st is the summary for the 2nd", async () => {
+    const lateEvening = new Date("2026-10-01T19:00:00Z");
+    orgs = [
+      {
+        id: "o1",
+        name: "Northwind Logistics",
+        slug: "northwind",
+        ownerEmail: "priya@northwind.co.uk",
+        createdVia: "SELF_SERVE",
+        createdAt: new Date("2026-10-01T18:00:00Z"),
+        // 01:00 IST on the 17th — still the 16th in UTC.
+        trialEndsAt: new Date("2026-10-16T19:30:00Z")
+      }
+    ];
+    await runSignupDigest(lateEvening);
+    expect(claims.has("signup-digest|2026-10-02")).toBe(true);
+    expect(varsOf().day).toBe("2026-10-02");
+    expect(varsOf().createdList).toContain("trial ends 2026-10-17");
+  });
+
   it("a dry run claims nothing and sends nothing, but says what it would do", async () => {
     busyDay();
     const result = await runSignupDigest(now, { dryRun: true });
@@ -181,6 +203,20 @@ describe("provisioning is failing", () => {
     expect(sentKeys()).toEqual(["platform.signup_failing", "platform.signup_failing"]);
     expect(varsOf().failedCount).toBe("2");
     expect(varsOf().recentFailures).toContain("b.com — ECONNREFUSED db-2:3306");
+  });
+
+  it("claims India's clock hour, not UTC's", async () => {
+    attempts = [attempt("FAILED", 20), attempt("FAILED", 10)];
+    await alertIfProvisioningFailing(now); // 08:15 UTC = 13:45 IST
+    expect(claims.has("signup-failing|2026-10-02T13")).toBe(true);
+  });
+
+  it("with nobody to tell, claims nothing — the hour stays free for when recipients are configured", async () => {
+    attempts = [attempt("FAILED", 20), attempt("FAILED", 10)];
+    resolveAlertRecipients.mockResolvedValueOnce([]);
+    expect(await alertIfProvisioningFailing(now)).toBe(false);
+    expect(claims.size).toBe(0);
+    expect(await alertIfProvisioningFailing(now)).toBe(true);
   });
 
   it("a failure more than an hour ago does not count towards it", async () => {

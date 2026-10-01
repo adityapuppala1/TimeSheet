@@ -61,6 +61,8 @@ const control = {
   }
 };
 vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: control }));
+// The platform's zone, as config/env.ts defaults it — every day key below is India's.
+vi.mock("../../src/config/env.js", () => ({ env: { TZ: "Asia/Kolkata" } }));
 
 const { clampSignupPeriod, getSignupAnalytics, overviewSignups } = await import("../../src/services/signup-analytics.service.js");
 
@@ -159,6 +161,13 @@ describe("getSignupAnalytics", () => {
     expect(result.recent.map((r) => r.orgId).sort()).toEqual(["s1", "s2"]);
   });
 
+  it("buckets by India's day — a workspace made at 01:00 IST counts on that day, not UTC's previous one", async () => {
+    orgs = [org({ id: "late", createdAt: new Date("2026-10-01T19:30:00Z") })]; // 01:00 IST on the 2nd
+    const result = await getSignupAnalytics(7, now);
+    expect(result.byDay.find((d) => d.day === "2026-10-02")).toMatchObject({ selfServe: 1 });
+    expect(result.byDay.find((d) => d.day === "2026-10-01")).toMatchObject({ selfServe: 0 });
+  });
+
   it("ranks the domains trying hardest, with how many got a workspace or asked to join", async () => {
     attempts = [
       at("CODE_SENT", 1, { domain: "acme.com" }),
@@ -194,5 +203,11 @@ describe("overviewSignups — the Overview's tile and chart", () => {
     expect(result.signupsByWeek.at(-2)).toMatchObject({ selfServe: 1, console: 0 });
     expect(result.signupsByWeek.reduce((n, w) => n + w.selfServe + w.console, 0)).toBe(3);
     expect(result.signupsByWeek[0].week < result.signupsByWeek[11].week).toBe(true);
+  });
+
+  it("labels each week by the day it starts in India", () => {
+    // 19:00 UTC on 1 Oct is 00:30 IST on the 2nd, so the last week starts on India's 25 Sept.
+    const result = overviewSignups([], new Date("2026-10-01T19:00:00Z"));
+    expect(result.signupsByWeek.at(-1)?.week).toBe("2026-09-25");
   });
 });

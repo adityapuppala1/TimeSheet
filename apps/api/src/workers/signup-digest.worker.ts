@@ -6,11 +6,13 @@
  * to ask. Same split as platform-alert-digest.worker.ts, so the console's "Run now" runs the identical
  * code path.
  *
- * AT 08:15 EVERY DAY. Early enough to be read with the morning's mail and to act on a failed signup
+ * AT 08:15 EVERY DAY, IN THE PLATFORM'S ZONE (`TZ`, Asia/Kolkata by default) — named explicitly rather
+ * than left to whatever zone the process happens to run in. Early enough to be read with the morning's mail and to act on a failed signup
  * the same day; :15 keeps it clear of the hourly jobs at :00, :05, :25 and :30. Every replica schedules
  * it — the PlatformJobClaim row is what makes one email, not the scheduler.
  */
 import cron from "node-cron";
+import { env } from "../config/env.js";
 import { runSignupDigest } from "../services/signup-digest.service.js";
 
 let started = false;
@@ -34,5 +36,5 @@ export function startSignupDigestWorker(): void {
     } finally {
       running = false;
     }
-  });
+  }, { timezone: env.TZ });
 }

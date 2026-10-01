@@ -21,6 +21,8 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const envMock: Record<string, unknown> = {
+  // The platform's zone, as config/env.ts defaults it.
+  TZ: "Asia/Kolkata",
   ROOT_DOMAIN: "timesphere.test",
   APP_BASE_URL: "https://timesphere.test",
   JWT_ACCESS_SECRET: "test-secret-test-secret-test-secret"
@@ -43,10 +45,7 @@ const orgs = new Map<string, Org>();
 const claims = new Map<string, { domain: string; organizationId: string; source: string }>();
 let orgSeq = 0;
 
-let joinRequestsToday = 0;
 const control = {
-  // The per-workspace daily cap on join requests counts the funnel's JOIN_REQUESTED rows.
-  signupAttempt: { count: vi.fn(async () => joinRequestsToday) },
   platformSignupSettings: {
     findUnique: vi.fn(async () => settingsRow),
     upsert: vi.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => {
@@ -151,7 +150,10 @@ vi.mock("../../src/services/notify.service.js", () => ({ dispatchTransactional: 
 const alertIfProvisioningFailing = vi.fn(async () => false);
 vi.mock("../../src/services/signup-digest.service.js", () => ({ alertIfProvisioningFailing }));
 const createJoinRequest = vi.fn(async (): Promise<{ status: string; id?: string }> => ({ status: "requested", id: "jr-1" }));
-vi.mock("../../src/services/join-request.service.js", () => ({ createJoinRequest }));
+// The per-workspace daily cap counts the join requests that exist in the workspace's own database.
+let joinRequestsToday = 0;
+const countJoinRequestsSince = vi.fn(async () => joinRequestsToday);
+vi.mock("../../src/services/join-request.service.js", () => ({ createJoinRequest, countJoinRequestsSince }));
 const withOrgTenantMock = (await import("../../src/config/with-org-tenant.js")).withOrgTenant as unknown as ReturnType<typeof vi.fn>;
 
 const { signupRouter, signupStatusHandler } = await import("../../src/controllers/signup.controller.js");
@@ -405,7 +407,34 @@ describe("complete — creating the workspace", () => {
     addWorkspace({ id: "nw", name: "Northwind", slug: "northwind-hq", status: "SUSPENDED" }, "northwind.co.uk");
     const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
     expect(res.status).toBe(409);
+    // The truth — that company's workspace is not taking people — not "a colleague just created one".
+    expect(res.body.code).toBe("WORKSPACE_UNAVAILABLE");
     expect(claims.get("northwind.co.uk")).toMatchObject({ organizationId: "nw" });
+  });
+
+  it("a second submit of the SAME signup (a double click, a second tab) is told about its own workspace", async () => {
+    const first = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+    expect(first.status).toBe(201);
+    // Still provisioning, as a real second click would find it.
+    orgs.get("org-new")!.status = "PROVISIONING";
+    const sameSlug = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+    expect(sameSlug.status).toBe(409);
+    expect(sameSlug.body.code).toBe("SIGNUP_IN_PROGRESS");
+    const otherSlug = await request(buildApp()).post("/api/signup/complete").send({ ...completeBody, slug: "northwind-two" });
+    expect(otherSlug.body.code).toBe("SIGNUP_IN_PROGRESS");
+    // Once it is ready, the same submit is simply the success it was.
+    orgs.get("org-new")!.status = "ACTIVE";
+    const later = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+    expect(later.status).toBe(200);
+    expect(later.body).toMatchObject({ slug: "northwind", url: "https://northwind.timesphere.test", alreadyCreated: true });
+    expect(provisionOrganization).toHaveBeenCalledTimes(1);
+    expect(orgs.size).toBe(1);
+  });
+
+  it("someone ELSE's workspace at that address is still just a taken address", async () => {
+    addWorkspace({ id: "other", name: "Other", slug: "northwind", status: "ACTIVE", ownerEmail: "someone@else.example", createdVia: "SELF_SERVE" });
+    const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+    expect(res.body.code).toBe("SLUG_TAKEN");
   });
 
   it("refuses an expired continuation, and creates nothing", async () => {
@@ -476,9 +505,10 @@ describe("join — asking the company's workspace", () => {
     joinRequestsToday = 25;
     const res = await join();
     expect(res.status).toBe(429);
-    expect(control.signupAttempt.count).toHaveBeenCalledWith({
-      where: { stage: "JOIN_REQUESTED", organizationId: "nw", createdAt: { gte: expect.any(Date) } }
-    });
+    // Counted in the claimed workspace's own database, over the last 24 hours.
+    expect(withOrgTenantMock).toHaveBeenCalledWith("northwind-hq", expect.any(Function));
+    const since = countJoinRequestsSince.mock.calls[0][0] as Date;
+    expect(Date.now() - since.getTime()).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 5000);
     expect(createJoinRequest).not.toHaveBeenCalled();
     expect(directory.redeemSignupContinuation).not.toHaveBeenCalled();
   });
@@ -525,6 +555,20 @@ describe("what the operators hear", () => {
     const created = sendPlatformTemplate.mock.calls.filter(([key]) => key === "platform.signup_created");
     expect(created.map(([, args]) => (args as { to: string }).to)).toEqual(["ops@timesphere.test", "owner@timesphere.test"]);
     expect(created[0][1]).toMatchObject({ vars: { workspaceName: "Northwind Logistics", domain: "northwind.co.uk" } });
+  });
+
+  it("dates the trial's end as India sees it, not UTC", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // 00:30 IST on the 2nd; fifteen days on is 00:30 IST on the 17th — still the 16th in UTC.
+    vi.setSystemTime(new Date("2026-10-01T19:00:00Z"));
+    try {
+      openSignup({ notifyMode: "EACH" });
+      await request(buildApp()).post("/api/signup/complete").send(completeBody);
+      const created = sendPlatformTemplate.mock.calls.find(([key]) => key === "platform.signup_created");
+      expect(created?.[1]).toMatchObject({ vars: { trialEndsAt: "2026-10-17" } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stays quiet when an operator switched notifications OFF — but still records the signup", async () => {

@@ -37,9 +37,10 @@ let seq = 0;
 const matches = (row: Req, where: Record<string, unknown>) =>
   Object.entries(where).every(([key, value]) => {
     if (value && typeof value === "object" && !(value instanceof Date)) {
-      const cond = value as { gt?: Date; lte?: Date; in?: string[] };
+      const cond = value as { gt?: Date; gte?: Date; lte?: Date; in?: string[] };
       const field = row[key as keyof Req] as Date | string;
       if (cond.gt) return (field as Date) > cond.gt;
+      if (cond.gte) return (field as Date) >= cond.gte;
       if (cond.lte) return (field as Date) <= cond.lte;
       if (cond.in) return cond.in.includes(field as string);
     }
@@ -49,7 +50,12 @@ const matches = (row: Req, where: Record<string, unknown>) =>
 const tenant = {
   user: {
     findUnique: vi.fn(async ({ where }: { where: { email: string } }) => [...users.values()].find((u) => u.email === where.email) ?? null),
-    findMany: vi.fn(async () => [...users.values()].filter((u) => u.roleName === "SUPER_ADMIN" && u.status === "ACTIVE").map((u) => ({ id: u.id, email: u.email, name: u.name }))),
+    // Honours the role filter as Prisma would — the fallback to admins depends on it.
+    findMany: vi.fn(async ({ where }: { where: { role?: { name?: string } } }) =>
+      [...users.values()]
+        .filter((u) => u.status === "ACTIVE" && !u.deletedAt && (!where.role?.name || u.roleName === where.role.name))
+        .map((u) => ({ id: u.id, email: u.email, name: u.name }))
+    ),
     create: vi.fn(async ({ data }: { data: { email: string; name: string; status: string } }) => {
       seq += 1;
       const user = { id: `user-${seq}`, email: data.email, name: data.name, status: data.status, deletedAt: null, roleName: "EMPLOYEE" };
@@ -104,9 +110,8 @@ vi.mock("../../src/config/prisma.js", () => ({ prisma: tenant }));
 vi.mock("../../src/config/tenant-context.js", () => ({ requireTenantContext: () => ({ orgId: "org-1", orgSlug: "acme" }) }));
 
 let orgStatus = "ACTIVE";
-vi.mock("../../src/config/control-prisma.js", () => ({
-  controlPrisma: { organization: { findUnique: vi.fn(async () => ({ id: "org-1", name: "Acme", status: orgStatus })) } }
-}));
+const orgFindUnique = vi.fn(async () => ({ id: "org-1", name: "Acme", status: orgStatus }));
+vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: { organization: { findUnique: orgFindUnique } } }));
 
 const dispatchInAppToMany = vi.fn(async () => 1);
 const dispatchTransactional = vi.fn(async () => ({ ok: true }));
@@ -124,7 +129,9 @@ vi.mock("../../src/services/workspace-directory.service.js", () => ({ rememberWo
 const issueSetPasswordLink = vi.fn(async () => "https://acme.timesphere.test/reset-password?token=t&welcome=1");
 vi.mock("../../src/services/set-password-link.service.js", () => ({ issueSetPasswordLink }));
 
-const { approveJoinRequest, createJoinRequest, declineJoinRequest, listJoinRequests } = await import("../../src/services/join-request.service.js");
+const { approveJoinRequest, countJoinRequestsSince, createJoinRequest, declineJoinRequest, listJoinRequests } = await import(
+  "../../src/services/join-request.service.js"
+);
 
 const now = new Date("2026-10-01T10:00:00Z");
 const DAY = 24 * 60 * 60 * 1000;
@@ -158,6 +165,14 @@ describe("asking to join", () => {
     await ask();
     expect((await ask("SAM@acme.com")).status).toBe("already_pending");
     expect(requests.size).toBe(1);
+  });
+
+  it("counts the requests written since a moment — the daily cap's source of truth", async () => {
+    await ask("a@acme.com");
+    await ask("b@acme.com");
+    const older = requests.get("jr-1")!;
+    older.createdAt = new Date(now.getTime() - 2 * DAY);
+    expect(await countJoinRequestsSince(new Date(now.getTime() - DAY))).toBe(1);
   });
 
   it("answers member, and creates nothing, when the address already has an account", async () => {
@@ -251,13 +266,59 @@ describe("expiry", () => {
   });
 });
 
+describe("what the emails carry", () => {
+  it("escapes the requester's name and the workspace's name for an edited template, and the fallback exactly once", async () => {
+    const { id } = await createJoinRequest({ email: "sam@acme.com", name: "Sam <b>Hacker</b>", ttlDays: 14, workspaceName: "Acme", now });
+    orgFindUnique.mockResolvedValueOnce({ id: "org-1", name: "Acme & Co", status: "ACTIVE" });
+    await approveJoinRequest(id!, admin, { orgId: "org-1", now });
+    const sent = dispatchTransactional.mock.calls.map(([args]) => args as { templateKey: string; vars: Record<string, string>; fallback: { html: string } });
+    const approved = sent.find((m) => m.templateKey === "workspace.join_approved")!;
+    expect(approved.vars).toMatchObject({ name: "Sam &lt;b&gt;Hacker&lt;/b&gt;", workspaceName: "Acme &amp; Co" });
+    expect(approved.fallback.html).toContain("Acme &amp; Co");
+    expect(approved.fallback.html).not.toContain("&amp;amp;");
+    expect(approved.fallback.html).not.toContain("<b>Hacker");
+  });
+
+  it("escapes a stranger's name exactly once in the admins' email — the heading included", async () => {
+    await createJoinRequest({ email: "sam@acme.com", name: "Sam & <b>Co</b>", message: "Hi <i>there</i>", ttlDays: 14, workspaceName: "Acme", now });
+    const mail = dispatchTransactional.mock.calls.map(([args]) => args as { templateKey: string; vars: Record<string, string>; fallback: { subject: string; html: string } })
+      .find((m) => m.templateKey === "workspace.join_request")!;
+    expect(mail.vars).toMatchObject({ requesterName: "Sam &amp; &lt;b&gt;Co&lt;/b&gt;", message: "Hi &lt;i&gt;there&lt;/i&gt;" });
+    expect(mail.fallback.html).toContain("Sam &amp; &lt;b&gt;Co&lt;/b&gt; asked to join");
+    expect(mail.fallback.html).not.toContain("&amp;amp;");
+    expect(mail.fallback.html).not.toContain("<i>there");
+  });
+
+  it("tells the admins when the workspace has no active super admin, rather than nobody", async () => {
+    users.clear();
+    users.set("ad-1", { id: "ad-1", email: "admin@acme.com", name: "Ada", status: "ACTIVE", deletedAt: null, roleName: "ADMIN" });
+    await ask();
+    expect(dispatchInAppToMany).toHaveBeenCalledWith(expect.objectContaining({ userIds: ["ad-1"] }));
+    expect(dispatchTransactional).toHaveBeenCalledWith(expect.objectContaining({ to: "admin@acme.com", templateKey: "workspace.join_request" }));
+  });
+
+  it("does not also tell the admins when a super admin is there to decide", async () => {
+    users.set("ad-1", { id: "ad-1", email: "admin@acme.com", name: "Ada", status: "ACTIVE", deletedAt: null, roleName: "ADMIN" });
+    await ask();
+    expect(dispatchInAppToMany).toHaveBeenCalledWith(expect.objectContaining({ userIds: ["sa-1"] }));
+  });
+});
+
 describe("declining", () => {
+  it("records nothing when the workspace cannot be read — the request stays pending, so it can be declined again", async () => {
+    const { id } = await ask();
+    orgFindUnique.mockRejectedValueOnce(new Error("control plane down"));
+    await expect(declineJoinRequest(id!, "sa-1", "No.", now)).rejects.toThrow("control plane down");
+    expect(requests.get(id!)?.status).toBe("PENDING");
+  });
+
   it("records who, when and why, and mails the requester", async () => {
     const { id } = await ask();
     await declineJoinRequest(id!, "sa-1", "Please use your client's workspace instead.", now);
     expect(requests.get(id!)).toMatchObject({ status: "DECLINED", decidedById: "sa-1", decisionNote: "Please use your client's workspace instead." });
+    // Escaped in `vars` for an admin-edited override (which inserts them verbatim); the fallback escapes itself.
     expect(dispatchTransactional).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "sam@acme.com", templateKey: "workspace.join_declined", vars: expect.objectContaining({ note: "Please use your client's workspace instead." }) })
+      expect.objectContaining({ to: "sam@acme.com", templateKey: "workspace.join_declined", vars: expect.objectContaining({ note: "Please use your client&#39;s workspace instead." }) })
     );
     expect(audit).toHaveBeenCalledWith("sa-1", "join_request.declined", "JoinRequest", id, expect.anything());
   });

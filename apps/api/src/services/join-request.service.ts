@@ -75,22 +75,32 @@ export async function createJoinRequest(input: CreateJoinRequestInput): Promise<
   });
 
   try {
-    await tellSuperAdmins(row, input.workspaceName);
+    await tellDeciders(row, input.workspaceName);
   } catch (error) {
-    console.error(`[join-request] request ${row.id} saved, but telling the super admins failed:`, error);
+    console.error(`[join-request] request ${row.id} saved, but telling the admins failed:`, error);
   }
   return { status: "requested", id: row.id };
 }
 
-async function tellSuperAdmins(row: { email: string; name: string; message: string | null }, workspaceName: string) {
-  const superAdmins = await prisma.user.findMany({
-    where: { status: "ACTIVE", deletedAt: null, isAgent: false, role: { name: "SUPER_ADMIN" } },
-    select: { id: true, email: true, name: true }
-  });
-  if (superAdmins.length === 0) return;
+/**
+ * Who hears about a new request: the active super admins — or, in a workspace that has none (the
+ * last one left or was deactivated), its active admins, who hold `users:manage` and can decide it.
+ * Telling nobody would leave a person waiting on a tab no one knows to open.
+ */
+async function decidersToTell() {
+  const select = { id: true, email: true, name: true };
+  const active = { status: "ACTIVE" as const, deletedAt: null, isAgent: false };
+  const superAdmins = await prisma.user.findMany({ where: { ...active, role: { name: "SUPER_ADMIN" } }, select });
+  if (superAdmins.length > 0) return superAdmins;
+  return prisma.user.findMany({ where: { ...active, role: { name: "ADMIN" } }, select });
+}
+
+async function tellDeciders(row: { email: string; name: string; message: string | null }, workspaceName: string) {
+  const deciders = await decidersToTell();
+  if (deciders.length === 0) return;
 
   await dispatchInAppToMany({
-    userIds: superAdmins.map((admin) => admin.id),
+    userIds: deciders.map((admin) => admin.id),
     category: "join.requested",
     title: `${row.name} asked to join`,
     body: `${row.email} proved they own an address at your company's domain. Approve or decline on Users → Requests.`,
@@ -104,7 +114,7 @@ async function tellSuperAdmins(row: { email: string; name: string; message: stri
   // go in escaped too. Cost: an override's SUBJECT shows `&amp;` for a name with an ampersand.
   const { escape } = emailShell;
   const vars = { requesterName: escape(row.name), requesterEmail: escape(row.email), message: escape(row.message), workspaceName: escape(workspaceName), reviewUrl };
-  for (const admin of superAdmins) {
+  for (const admin of deciders) {
     await dispatchTransactional({
       to: admin.email,
       templateKey: "workspace.join_request",
@@ -112,6 +122,12 @@ async function tellSuperAdmins(row: { email: string; name: string; message: stri
       fallback: { subject: `${row.name} asked to join ${workspaceName}`, html: templates.joinRequest(raw) }
     });
   }
+}
+
+/** Requests written since `since`, whatever became of them — the daily cap on /api/signup/join.
+ *  Tenant context required. */
+export async function countJoinRequestsSince(since: Date): Promise<number> {
+  return prisma.joinRequest.count({ where: { createdAt: { gte: since } } });
 }
 
 export async function listJoinRequests(filter: JoinRequestFilter, now = new Date()) {
@@ -234,12 +250,18 @@ async function linkExistingMember(row: { id: string; email: string; name: string
 }
 
 async function mailApproved(row: { email: string; name: string }, workspaceName: string, actionUrl: string, actionLabel: string) {
-  const vars = { name: row.name, workspaceName, actionUrl, actionLabel };
+  // The compiled fallback escapes what it prints; an admin-edited override substitutes `vars`
+  // verbatim (template-store.service.ts#applyVars), so the names go in escaped too — the house
+  // convention (security-report.service.ts does the same). The link and its label are ours.
+  const { escape } = emailShell;
   await dispatchTransactional({
     to: row.email,
     templateKey: "workspace.join_approved",
-    vars,
-    fallback: { subject: `You're in: ${workspaceName} approved your request`, html: templates.joinApproved(vars) },
+    vars: { name: escape(row.name), workspaceName: escape(workspaceName), actionUrl, actionLabel },
+    fallback: {
+      subject: `You're in: ${workspaceName} approved your request`,
+      html: templates.joinApproved({ name: row.name, workspaceName, actionUrl, actionLabel })
+    },
     // The body carries a single-use set-password link — see mail.service.ts#SendArgs.sensitive.
     sensitive: true
   });
@@ -247,6 +269,9 @@ async function mailApproved(row: { email: string; name: string }, workspaceName:
 
 export async function declineJoinRequest(id: string, actorId: string, note?: string, now = new Date()): Promise<void> {
   const row = await loadPending(id, now);
+  // Read BEFORE the write: if the control plane cannot be reached, nothing is recorded and the
+  // admin can simply decline again — rather than a decline saved with its email never sent.
+  const org = await workspaceOrThrow(requireTenantContext().orgId);
   const decisionNote = note?.trim() || null;
   const claimed = await prisma.joinRequest.updateMany({
     where: { id, status: "PENDING" },
@@ -255,12 +280,13 @@ export async function declineJoinRequest(id: string, actorId: string, note?: str
   if (claimed.count === 0) throw new AppError(409, "Someone else decided this request a moment ago.");
   await audit(actorId, "join_request.declined", "JoinRequest", id, { email: row.email, withNote: Boolean(decisionNote) });
 
-  const org = await workspaceOrThrow(requireTenantContext().orgId);
-  const vars = { name: row.name, workspaceName: org.name, note: decisionNote ?? "" };
+  const raw = { name: row.name, workspaceName: org.name, note: decisionNote ?? "" };
+  const { escape } = emailShell;
   await dispatchTransactional({
     to: row.email,
     templateKey: "workspace.join_declined",
-    vars,
-    fallback: { subject: `Your request to join ${org.name}`, html: templates.joinDeclined(vars) }
+    // Escaped for an edited override, raw for the fallback that escapes itself — as mailApproved.
+    vars: { name: escape(raw.name), workspaceName: escape(raw.workspaceName), note: escape(raw.note) },
+    fallback: { subject: `Your request to join ${org.name}`, html: templates.joinDeclined(raw) }
   });
 }

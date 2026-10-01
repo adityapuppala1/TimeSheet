@@ -22,6 +22,7 @@
 import { controlPrisma } from "../config/control-prisma.js";
 import { env } from "../config/env.js";
 import { companyDomainOf } from "../utils/company-domain.js";
+import { platformDayKey, platformHourKey } from "../utils/platform-time.js";
 import { getAlertSettings, resolveAlertRecipients } from "./platform-alerts.service.js";
 import { platformAudit } from "./platform-audit.service.js";
 import { sendPlatformTemplate } from "./platform-mail.service.js";
@@ -62,7 +63,8 @@ export async function claimJobPeriod(job: string, periodKey: string): Promise<bo
   }
 }
 
-const day = (value: Date | null | undefined) => (value ? value.toISOString().slice(0, 10) : "—");
+/** A day as the platform's zone names it (Asia/Kolkata by default) — never UTC's; see platform-time.ts. */
+const day = (value: Date | null | undefined) => (value ? platformDayKey(value) : "—");
 const consoleUrl = () => `${env.APP_BASE_URL.replace(/\/$/, "")}/platform-admin/signups`;
 
 async function gatherDay(now: Date) {
@@ -158,16 +160,19 @@ export async function alertIfProvisioningFailing(now = new Date()): Promise<bool
       orderBy: { createdAt: "desc" }
     });
     if (recent.length < FAILING_THRESHOLD) return false;
-    if (!(await claimJobPeriod("signup-failing", now.toISOString().slice(0, 13)))) return false;
-
+    // Recipients BEFORE the claim: with nobody configured, claiming would spend the hour on an email
+    // that never went, and the alert would stay silent after someone is added.
     const recipients = await resolveAlertRecipients(await getAlertSettings());
+    if (recipients.length === 0) return false;
+    if (!(await claimJobPeriod("signup-failing", platformHourKey(now)))) return false;
+
     const vars = { failedCount: String(recent.length), recentFailures: recent.slice(0, 10).map(failureLine).join("\n"), consoleUrl: consoleUrl() };
     for (const to of recipients) {
       await sendPlatformTemplate("platform.signup_failing", { to, vars }).catch((error: Error) =>
         console.warn(`[signup-digest] could not send the failing alert to ${to}:`, error.message)
       );
     }
-    return recipients.length > 0;
+    return true;
   } catch (error) {
     console.warn("[signup-digest] provisioning-failing check skipped:", (error as Error).message);
     return false;

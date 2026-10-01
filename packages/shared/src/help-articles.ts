@@ -417,7 +417,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     where: "Sidebar → User management → Requests",
     when: "Someone at your company tried to sign up for TimeSphere and was offered a request to join this workspace instead of opening a second one.",
     steps: [
-      "Super admins get a bell notification and an email when a request arrives. Open User management → Requests — the tab shows how many are waiting.",
+      "Super admins — or, in a workspace without one, its admins — get a bell notification and an email when a request arrives. Open User management → Requests — the tab shows how many are waiting.",
       "Each request shows the person's name, the address they proved they own, their message, when they asked and how long it has left.",
       "Approve: choose a role — Employee, unless you are a super admin and pick another. The line under the role says how many seats approving uses; at your plan's limit, free a seat or upgrade first.",
       "They are emailed a link to choose their own password. It works once and expires after 72 hours; after that, Forgot password on the sign-in page still works.",
