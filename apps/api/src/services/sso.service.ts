@@ -80,6 +80,31 @@ function issuerFor(provider: OidcProviderType, tenantHint?: string | null): URL 
   return new URL(`https://login.microsoftonline.com/${tenantHint || "common"}/v2.0`);
 }
 
+/**
+ * The Microsoft authorities that admit accounts the customer does not control: a blank tenant ID
+ * (which issuerFor turns into `common`), and the three aliases an admin could type by hand —
+ * `organizations` (any work directory) and `consumers` (any personal account) included.
+ *
+ * WHY THIS MATTERS, measured rather than assumed: `common` WORKS. openid-client 6.x special-cases
+ * login.microsoftonline.com — discovery tolerates the `{tenantid}` placeholder issuer, and the
+ * ID-token issuer check is then built from the token's OWN `tid` claim (openid-client
+ * build/index.js handleEntraId + the Configuration constructor; oauth4webapi validateIssuer). So a
+ * token minted for any directory passes, and the only thing tying the sign-in to this workspace is
+ * the app registration's client id. completeSsoLogin matches people by `email` alone, and Entra's
+ * `email` claim is the user's `mail` attribute, which an admin of ANY directory can set to any
+ * address — the "nOAuth" pattern. tests/unit/sso-oidc-claims.test.ts pins the library behaviour.
+ *
+ * WARNED, NOT REFUSED: every workspace that has Microsoft sign-in working with this field blank
+ * would lose it on deploy, and that is not a call to make silently on their behalf. The settings
+ * card says it plainly; completeAuthorizationCodeGrant logs each sign-in that takes this route.
+ */
+const MULTI_TENANT_MICROSOFT_AUTHORITIES = new Set(["common", "organizations", "consumers"]);
+
+export function isMultiTenantMicrosoftAuthority(tenantHint: string | null | undefined): boolean {
+  const hint = (tenantHint ?? "").trim().toLowerCase();
+  return hint === "" || MULTI_TENANT_MICROSOFT_AUTHORITIES.has(hint);
+}
+
 function callbackUrl(provider: OidcProviderType): string {
   return `${env.APP_BASE_URL.replace(/\/$/, "")}/api/auth/sso/${provider.toLowerCase()}/callback`;
 }
@@ -153,6 +178,9 @@ export async function recordSsoLoginSuccess(orgId: string, provider: SsoProvider
 export interface SsoIdentity {
   email: string;
   name: string | null;
+  /** Informational once it reaches here. The one place it DECIDES anything is the Google branch
+   *  of completeAuthorizationCodeGrant, which refuses an unverified address before an identity is
+   *  ever built — see the comment there for why that check is Google-only. */
   emailVerified: boolean;
 }
 
@@ -174,6 +202,39 @@ export async function completeAuthorizationCodeGrant(currentUrl: URL, expectedSt
   const claims = tokens.claims();
   if (!claims?.email || typeof claims.email !== "string") {
     throw new AppError(400, "The identity provider didn't return an email address — sign-in can't continue.");
+  }
+
+  /**
+   * GOOGLE HAS TO VOUCH FOR THE ADDRESS, because here the address IS the identity:
+   * completeSsoLogin (auth.service.ts) signs somebody into an existing account by `email` alone,
+   * and creates one when nothing matches. An address Google has not verified is one the account
+   * holder merely typed in, so accepting it would let a Google account carrying a colleague's
+   * address sign in as that colleague.
+   *
+   * Nothing legitimate is refused: Google includes `email_verified` in every ID token issued for
+   * the `email` scope (requested in buildAuthorizationRedirect), and it is `true` for every
+   * Workspace account and every confirmed consumer account. `=== true` rather than truthiness so a
+   * malformed value fails closed.
+   *
+   * NOT applied to Microsoft: Entra v2 ID tokens normally carry no `email_verified` at all, so the
+   * same rule would refuse every Microsoft sign-in. Microsoft's exposure is the multi-tenant
+   * authority instead — see isMultiTenantMicrosoftAuthority and the warning below.
+   */
+  if (provider === "GOOGLE" && claims.email_verified !== true) {
+    throw new AppError(
+      403,
+      "Google hasn't verified the email address on this account, so it can't be used to sign in here. Contact your workspace admin."
+    );
+  }
+
+  if (provider === "MICROSOFT" && isMultiTenantMicrosoftAuthority(ssoConfig.tenantHint)) {
+    // One line per sign-in, naming the org and the directory the token came from — the `tid` is
+    // what lets an operator spot a sign-in from a directory that is not the customer's. Never the
+    // email: this is an operational warning about the CONFIGURATION, not a record of who signed in.
+    const tid = typeof claims.tid === "string" ? claims.tid : "unknown";
+    console.warn(
+      `[sso] org ${orgId}: Microsoft sign-in accepted through the multi-tenant authority (tenant ID not set; token tenant ${tid}). Any Microsoft account can sign in to this workspace and is matched by email — set the Directory (tenant) ID in Settings → Single sign-on.`
+    );
   }
 
   return {

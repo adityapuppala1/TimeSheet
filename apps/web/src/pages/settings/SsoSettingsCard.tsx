@@ -213,6 +213,15 @@ function SsoVerification({
 type CardProps = { config?: SsoProviderConfig; readOnly: boolean; isLoading: boolean; open: boolean; onToggle: () => void };
 
 /**
+ * Tenant IDs that do NOT restrict sign-in to one organization: blank (the server falls back to
+ * Microsoft's `common` authority) and the three aliases somebody could type by hand. Mirrors
+ * isMultiTenantMicrosoftAuthority in apps/api/src/services/sso.service.ts — the server logs every
+ * sign-in that takes this route; this is the half an admin sees BEFORE that happens.
+ */
+const MULTI_TENANT_MICROSOFT_AUTHORITIES = new Set(["", "common", "organizations", "consumers"]);
+const isMultiTenantMicrosoft = (tenantHint: string) => MULTI_TENANT_MICROSOFT_AUTHORITIES.has(tenantHint.trim().toLowerCase());
+
+/**
  * Phase B4 — per-org SSO configuration. Each org registers its OWN OAuth app with Google/
  * Microsoft (there's no shared client id/secret this app provides), so every field here is
  * that org's own credentials. `clientSecret` is write-only (never echoed back), same masking
@@ -243,6 +252,19 @@ function OidcProviderCard({ provider, config, readOnly, isLoading, open, onToggl
   const complete = Boolean(config?.clientId && config?.clientSecretSet);
   const started = Boolean(config?.clientId || config?.clientSecretSet);
 
+  /*
+   * WARN, DON'T BLOCK. A blank tenant ID works — Microsoft's `common` authority accepts accounts
+   * from every directory, and this app matches people by email address — so it is an exposure, not
+   * a broken setting. Making the field required would lock out every workspace already signing in
+   * this way, so it stays optional and this says plainly what leaving it blank means.
+   *
+   * Reads the TYPED value, not the saved one, so the warning clears the moment a real ID is entered;
+   * and appears only once Microsoft is switched on or being filled in, so the card does not open on
+   * an alarm for a provider nobody is using.
+   */
+  const configuring = Boolean(config?.isEnabled) || started || clientId.trim() !== "" || clientSecret !== "";
+  const openToAnyMicrosoftAccount = provider === "MICROSOFT" && configuring && isMultiTenantMicrosoft(tenantHint);
+
   return (
     <ProviderShell
       id={provider.toLowerCase()}
@@ -250,7 +272,7 @@ function OidcProviderCard({ provider, config, readOnly, isLoading, open, onToggl
       blurb={
         provider === "GOOGLE"
           ? "Register an OAuth client in Google Cloud Console; the redirect URI is fixed regardless of which org configures it."
-          : 'Register an app registration in Azure AD; set the tenant ID below (or leave blank for multi-tenant "common").'
+          : "Register an app in Azure AD (Microsoft Entra ID) and enter its Directory (tenant) ID below, so only your organization's accounts can sign in."
       }
       state={stateFrom(complete, started, Boolean(config?.isEnabled))}
       Mark={provider === "GOOGLE" ? GoogleMark : MicrosoftMark}
@@ -286,9 +308,37 @@ function OidcProviderCard({ provider, config, readOnly, isLoading, open, onToggl
           </div>
 
           {provider === "MICROSOFT" && (
-            <div className="grid gap-1.5 sm:w-1/2">
-              <Label>Azure AD tenant ID (optional)</Label>
-              <Input value={tenantHint} disabled={readOnly} onChange={(e) => setTenantHint(e.target.value)} placeholder='Leave blank for multi-tenant "common"' />
+            <div className="grid gap-3">
+              <div className="grid gap-1.5 sm:w-1/2">
+                <Label htmlFor="sso-microsoft-tenant">
+                  Directory (tenant) ID <span className="font-normal text-muted-foreground">(recommended)</span>
+                </Label>
+                <Input
+                  id="sso-microsoft-tenant"
+                  value={tenantHint}
+                  disabled={readOnly}
+                  onChange={(e) => setTenantHint(e.target.value)}
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  aria-describedby="sso-microsoft-tenant-hint"
+                />
+                <p id="sso-microsoft-tenant-hint" className="text-xs text-muted-foreground">
+                  On your app registration's Overview page in the Azure portal. It limits sign-in to accounts in your organization.
+                </p>
+              </div>
+
+              {openToAnyMicrosoftAccount && (
+                <Alert variant="warning">
+                  <ShieldAlert />
+                  <AlertTitle>Without a tenant ID, any Microsoft account can sign in</AlertTitle>
+                  <AlertDescription>
+                    Microsoft will accept a work account from any other organization and, if your app registration allows them,
+                    personal Outlook and Hotmail accounts. People are matched to accounts here by email address alone, so someone
+                    outside your organization whose Microsoft account shows a colleague's address could sign in as that colleague —
+                    and anyone else can be given a new account. Enter your Directory (tenant) ID to allow only your organization's
+                    accounts.
+                  </AlertDescription>
+                </Alert>
+              )}
             </div>
           )}
 
