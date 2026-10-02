@@ -39,6 +39,7 @@ import { forgetOrgStatus } from "../services/org-status.service.js";
 import { isConverted } from "../services/retention.service.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
 import { requireTenantContext } from "../config/tenant-context.js";
+import { sendPlatformTemplate } from "../services/platform-mail.service.js";
 import { audit } from "../services/audit.service.js";
 
 export const platformAdminRouter = Router();
@@ -813,7 +814,32 @@ const billingSettingsSchema = z.object({
     .strict()
 });
 
-platformAdminRouter.patch("/billing-settings", requirePlatformAdmin, billing, validate(billingSettingsSchema), async (req, res) => {
+/**
+ * WHO IS TOLD (M6). Replacing the Stripe credentials is now: a written reason (the header, enforced
+ * below), the audit row it lands on, and an email to every active OWNER naming who changed which
+ * credential and why. A swap made by one billing operator is no longer known only to them.
+ * Best-effort: the change has happened, and a relay hiccup must not read as a failed save.
+ */
+async function notifyOwnersOfStripeChange(actorEmail: string, fields: string[], reason: string) {
+  const owners = await controlPrisma.platformAdminUser.findMany({ where: { status: "ACTIVE", role: "OWNER" }, select: { email: true, name: true } });
+  const described = fields.map((f) => (f === "secretKey" ? "the Stripe secret key" : "the Stripe webhook signing secret")).join(" and ");
+  const vars = {
+    actor: actorEmail,
+    fields: described,
+    reason,
+    changedAt: new Date().toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }),
+    consoleUrl: `${env.APP_BASE_URL.endsWith("/") ? env.APP_BASE_URL.slice(0, -1) : env.APP_BASE_URL}/platform-admin/plan-tiers`
+  };
+  await Promise.all(
+    owners.map((owner) =>
+      sendPlatformTemplate("platform.billing_credentials_changed", { to: owner.email, vars, metadata: { by: actorEmail, fields } }).catch((error: Error) =>
+        console.warn(`[platform-billing] could not tell ${owner.email} about the Stripe change: ${error.message}`)
+      )
+    )
+  );
+}
+
+platformAdminRouter.patch("/billing-settings", requirePlatformAdmin, billing, requirePlatformReason, validate(billingSettingsSchema), async (req, res) => {
   const data: Record<string, unknown> = {};
   if (typeof req.body.secretKey === "string") data.encryptedSecretKey = req.body.secretKey.length > 0 ? encryptSecret(req.body.secretKey) : null;
   if (typeof req.body.webhookSigningSecret === "string")
@@ -838,6 +864,8 @@ platformAdminRouter.patch("/billing-settings", requirePlatformAdmin, billing, va
       priceIdEnterprise: updated.priceIdEnterprise
     }
   });
+  const credentialFields = ["secretKey", "webhookSigningSecret"].filter((key) => typeof req.body[key] === "string");
+  if (credentialFields.length) await notifyOwnersOfStripeChange(req.platformAdmin!.email, credentialFields, req.platformReason ?? "");
   res.json({
     secretKeySet: Boolean(updated.encryptedSecretKey),
     webhookSigningSecretSet: Boolean(updated.encryptedWebhookSigningSecret),

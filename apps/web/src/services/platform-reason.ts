@@ -53,6 +53,7 @@ const REASON_ROUTES: { method: string; pattern: RegExp; label: string; snapshotO
   { method: "POST", pattern: /^\/backups\/sweep\//, label: "Sweep this workspace's old backups" },
   { method: "POST", pattern: /^\/company-domains$/, label: "Point this company domain at a workspace — its people will be sent there" },
   { method: "DELETE", pattern: /^\/company-domains\/[^/]+$/, label: "Release this company domain — its people will no longer be sent to any workspace" },
+  { method: "PATCH", pattern: /^\/billing-settings$/, label: "Change the platform's Stripe configuration — every customer's payments go through it" },
   { method: "POST", pattern: /^\/admins$/, label: "Create a platform admin account" },
   { method: "PATCH", pattern: /^\/admins\/[^/]+$/, label: "Change a platform admin's role or status" }
 ];

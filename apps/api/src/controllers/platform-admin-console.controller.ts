@@ -81,6 +81,7 @@ import {
   BACKUP_FREQUENCY_LABEL,
   backupFrequencyAllowed,
   platformCapabilities,
+  platformRoleHas,
   platformRoles,
   platformTwoPersonActions,
   type BackupFrequency,
@@ -1495,10 +1496,32 @@ const policyBody = z
   })
   .strict();
 
+/** What a new policy's retention rule is when nothing has been chosen — also what "unchanged" is
+ *  measured against for a workspace with no policy yet. */
+const BACKUP_RETENTION_DEFAULTS = { retentionMode: "COUNT", keepCount: 7, keepDays: 30, gfsDaily: 7, gfsWeekly: 4, gfsMonthly: 12, gfsYearly: 3 } as const;
+type BackupRetentionField = keyof typeof BACKUP_RETENTION_DEFAULTS;
+
+/**
+ * The SCHEDULE is the billing role's (a tier entitles a cadence); the RETENTION rule is the operator
+ * role's (M6). `keepCount: 1` makes the next sweep delete every older backup of the workspace, and
+ * destroying customer backups is not a finance decision. Judged per field and against what is
+ * stored, because the console's form re-sends every field on every save.
+ */
 platformAdminConsoleRouter.put("/backups/policy/:orgId", billing, validate(z.object({ params: z.object({ orgId: z.string() }), body: policyBody })), async (req, res) => {
   const orgId = String(req.params.orgId);
   const org = await controlPrisma.organization.findUnique({ where: { id: orgId } });
   if (!org) throw new AppError(404, "Organization not found");
+
+  const existing = await controlPrisma.orgBackupPolicy.findUnique({ where: { organizationId: orgId } });
+  const retentionChanged = (Object.keys(BACKUP_RETENTION_DEFAULTS) as BackupRetentionField[]).filter(
+    (field) => req.body[field] !== undefined && req.body[field] !== (existing?.[field] ?? BACKUP_RETENTION_DEFAULTS[field])
+  );
+  if (retentionChanged.length && !platformRoleHas(req.platformAdmin!.role, platformCapabilities.PLATFORM_OPERATE)) {
+    throw new AppError(
+      403,
+      `Changing how long a workspace's backups are kept (${retentionChanged.join(", ")}) needs "${platformCapabilities.PLATFORM_OPERATE}" — a shorter rule deletes backups on the next sweep. You are ${req.platformAdmin!.role}.`
+    );
+  }
 
   const entitlement = await backupEntitlement(org);
   const wanted = (req.body.frequency ?? "NONE") as BackupFrequency;
@@ -1520,7 +1543,6 @@ platformAdminConsoleRouter.put("/backups/policy/:orgId", billing, validate(z.obj
     if (dest.organizationId && dest.organizationId !== orgId) throw new AppError(403, `"${dest.name}" belongs to a different workspace.`);
   }
 
-  const existing = await controlPrisma.orgBackupPolicy.findUnique({ where: { organizationId: orgId } });
   const merged = {
     enabled: req.body.enabled ?? existing?.enabled ?? false,
     frequency: (req.body.frequency ?? existing?.frequency ?? "NONE") as BackupFrequency,
@@ -1535,13 +1557,13 @@ platformAdminConsoleRouter.put("/backups/policy/:orgId", billing, validate(z.obj
   const data = {
     ...merged,
     destinationId: req.body.destinationId !== undefined ? req.body.destinationId : (existing?.destinationId ?? null),
-    retentionMode: req.body.retentionMode ?? existing?.retentionMode ?? "COUNT",
-    keepCount: req.body.keepCount ?? existing?.keepCount ?? 7,
-    keepDays: req.body.keepDays ?? existing?.keepDays ?? 30,
-    gfsDaily: req.body.gfsDaily ?? existing?.gfsDaily ?? 7,
-    gfsWeekly: req.body.gfsWeekly ?? existing?.gfsWeekly ?? 4,
-    gfsMonthly: req.body.gfsMonthly ?? existing?.gfsMonthly ?? 12,
-    gfsYearly: req.body.gfsYearly ?? existing?.gfsYearly ?? 3,
+    retentionMode: req.body.retentionMode ?? existing?.retentionMode ?? BACKUP_RETENTION_DEFAULTS.retentionMode,
+    keepCount: req.body.keepCount ?? existing?.keepCount ?? BACKUP_RETENTION_DEFAULTS.keepCount,
+    keepDays: req.body.keepDays ?? existing?.keepDays ?? BACKUP_RETENTION_DEFAULTS.keepDays,
+    gfsDaily: req.body.gfsDaily ?? existing?.gfsDaily ?? BACKUP_RETENTION_DEFAULTS.gfsDaily,
+    gfsWeekly: req.body.gfsWeekly ?? existing?.gfsWeekly ?? BACKUP_RETENTION_DEFAULTS.gfsWeekly,
+    gfsMonthly: req.body.gfsMonthly ?? existing?.gfsMonthly ?? BACKUP_RETENTION_DEFAULTS.gfsMonthly,
+    gfsYearly: req.body.gfsYearly ?? existing?.gfsYearly ?? BACKUP_RETENTION_DEFAULTS.gfsYearly,
     alertEmails: req.body.alertEmails !== undefined ? req.body.alertEmails : (existing?.alertEmails ?? null),
     alertOnSuccess: req.body.alertOnSuccess ?? existing?.alertOnSuccess ?? false,
     alertOnFailure: req.body.alertOnFailure ?? existing?.alertOnFailure ?? true,

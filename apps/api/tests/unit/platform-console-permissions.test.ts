@@ -534,6 +534,36 @@ describe("PATCH /organizations/:id is authorised per FIELD, not per route", () =
   });
 });
 
+describe("backup RETENTION is an operator decision, the schedule a billing one (M6)", () => {
+  /*
+   * BILLING keeps the backup schedule a tier entitles. What it no longer has is the retention rule:
+   * `keepCount: 1` makes the next sweep delete every older backup of that workspace, and deleting
+   * customer backups is the operator role's call. Judged per FIELD and against what is stored, because
+   * the console's form sends every field on every save — an unchanged retention value is not a change.
+   */
+  const put = (role: PlatformRole, body: object) =>
+    request(app).put(`/api/platform-admin/backups/policy/${ORG}`).set("Authorization", `Bearer ${tokenFor[role]}`).send(body);
+
+  beforeEach(() => {
+    control.organization.findUnique.mockResolvedValue({ id: ORG, slug: "acme", planTier: "TEAM", trialTier: null });
+    control.orgBackupPolicy.findUnique.mockResolvedValue({ id: "p-1", enabled: true, frequency: "DAILY", hourUtc: 2, dayOfWeek: 0, retentionMode: "COUNT", keepCount: 7, keepDays: 30, gfsDaily: 7, gfsWeekly: 4, gfsMonthly: 12, gfsYearly: 3 });
+  });
+
+  it("refuses BILLING a change to how many backups are kept", async () => {
+    const res = await put("BILLING", { keepCount: 1 });
+    expect(res.status).toBe(403);
+    expect(res.body.message).toMatch(/platform:operate/);
+  });
+
+  it("lets BILLING save the schedule when the retention fields it re-sends are unchanged", async () => {
+    expect((await put("BILLING", { frequency: "DAILY", hourUtc: 4, keepCount: 7, retentionMode: "COUNT" })).status).not.toBe(403);
+  });
+
+  it("lets OPERATOR change retention", async () => {
+    expect((await put("OPERATOR", { keepCount: 1 })).status).not.toBe(403);
+  });
+});
+
 describe("the role comes from the database row, not from the token", () => {
   it("honours a demotion on the very next request, with the same token", async () => {
     const before = await call({ method: "post", path: "/monitoring/sample", cap: OPERATE }, "OPERATOR");

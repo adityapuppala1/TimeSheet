@@ -553,6 +553,35 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
     )
   },
   {
+    /*
+     * M6: the Stripe credentials are the merchant-of-record account for every paying customer, and a
+     * swap used to be one BILLING operator with nobody told. This goes to every active OWNER. It
+     * names WHICH credential changed, never any part of it — a notification that quotes a secret is
+     * a second copy of the secret.
+     */
+    key: "platform.billing_credentials_changed",
+    group: "Operator",
+    description: "To every platform OWNER when somebody replaces or clears the Stripe secret key or webhook signing secret. Names who, which credential and why — never the credential.",
+    variables: ["actor", "fields", "reason", "changedAt", "consoleUrl", "appUrl"],
+    sample: {
+      actor: "billing@timesphere.app",
+      fields: "the Stripe secret key",
+      reason: "Rotating the restricted key after the quarterly review",
+      changedAt: "2 Oct 2026, 14:05",
+      consoleUrl: "https://timesphere.app/platform-admin/plan-tiers",
+      appUrl: "https://timesphere.app"
+    },
+    subject: "Stripe credentials changed by {{actor}}",
+    html: shell(
+      { title: "Stripe credentials changed", preheader: "{{actor}} changed {{fields}}." },
+      heading("Stripe credentials changed") +
+        paragraph("<strong>{{actor}}</strong> changed <strong>{{fields}}</strong> at {{changedAt}}. Every customer payment on this platform goes through these credentials.") +
+        paragraph("Their reason: <em>{{reason}}</em>") +
+        paragraph(button("Review it in the console", "{{consoleUrl}}", ACCENT)) +
+        paragraph(`<span style="font-size:12px;color:#64748B;">Sent to every platform owner. If you did not expect this, check the audit trail and the Stripe dashboard now.</span>`)
+    )
+  },
+  {
     key: "platform.smtp_test",
     group: "Operator",
     description: "What the “Send test” button on Platform mail settings sends. Proves the relay, the From address and the reply-to.",
