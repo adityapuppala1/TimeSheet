@@ -244,6 +244,21 @@ describe("setting a plan on a trialling workspace ends the trial", () => {
     expect(written().convertedAt).toEqual(first);
   });
 
+  it("does not date a conversion that happened long ago to an unrelated edit made today", async () => {
+    // Converted by hand before the console cleared trial clocks: a paid plan, the trial tier and a
+    // long-past trial end still set, and no recorded conversion moment. A RENAME tidies the clock
+    // away, but it is not the conversion — stamping now added a 200-day "days to convert" row.
+    control.organization.findUnique.mockResolvedValue(
+      trialling({ planTier: "TEAM", trialStartedAt: new Date(Date.now() - 200 * DAY), trialEndsAt: new Date(Date.now() - 185 * DAY), convertedAt: null })
+    );
+
+    const res = await patch({ name: "Acme Ltd" });
+
+    expect(res.status).toBe(200);
+    expect(written()).toMatchObject({ name: "Acme Ltd", trialEndsAt: null, trialTier: null });
+    expect(written().convertedAt).toBeUndefined();
+  });
+
   it("writes an audit row that names the conversion", async () => {
     control.organization.findUnique.mockResolvedValue(lapsedTrial());
 
