@@ -29,6 +29,7 @@ import { dispatchTransactional } from "../services/notify.service.js";
 import { forgetOrgStatus } from "../services/org-status.service.js";
 import { isConverted, isRetentionProgrammeEnabled } from "../services/retention.service.js";
 import { runOncePerTick } from "../services/job-claim.service.js";
+import { billingPathFor } from "../utils/billing-paths.js";
 
 let started = false;
 let running = false;
@@ -103,15 +104,19 @@ async function superAdminEmails(): Promise<string[]> {
  * build this string as an ARGUMENT to `mailSuperAdmins` — evaluated before `withOrgTenant` runs, so
  * an ambient read would silently produce the deployment's default address there and the correct one
  * inside. In multi-org mode that mailed Acme a link to somebody else's billing page.
+ *
+ * AND THE STATUS, because a trial that has ENDED is in GRACE, where the Billing tab cannot open — its
+ * app shell is refused with a 402 that bounces to /plan-lapsed. "Trial ended" therefore links to
+ * /plan-lapsed itself; "trial ending" (still ACTIVE) to the Billing tab. See utils/billing-paths.ts.
  */
-const billingUrlFor = (slug: string) => `${workspaceUrlForSlug(slug)}/app/settings?tab=billing`;
+const billingUrlFor = (slug: string, status: "ACTIVE" | "GRACE") => `${workspaceUrlForSlug(slug)}${billingPathFor(status)}`;
 
 async function mailSuperAdmins(
   slug: string,
   templateKey: string,
-  subject: string,
-  html: string
+  mail: { subject: string; html: string; billingUrl: string }
 ): Promise<void> {
+  const { subject, html, billingUrl } = mail;
   try {
     await withOrgTenant(slug, async () => {
       const to = await superAdminEmails();
@@ -119,7 +124,7 @@ async function mailSuperAdmins(
       await dispatchTransactional({
         to: to.join(","),
         templateKey,
-        vars: { workspace: slug, billingUrl: billingUrlFor(slug) },
+        vars: { workspace: slug, billingUrl },
         fallback: { subject, html }
       });
     });
@@ -154,12 +159,12 @@ export async function runTrialLifecycleTick(now = Date.now()): Promise<{ warned:
     const sent = noticesAlreadySent(org.trialNoticesSent);
     if (sent.includes(due)) continue;
 
-    await mailSuperAdmins(
-      org.slug,
-      "billing.trial_ending",
-      `Your TimeSphere trial ends in ${left} ${left === 1 ? "day" : "days"}`,
-      templates.trialEnding(org.name, left, billingUrlFor(org.slug))
-    );
+    const billingUrl = billingUrlFor(org.slug, "ACTIVE");
+    await mailSuperAdmins(org.slug, "billing.trial_ending", {
+      subject: `Your TimeSphere trial ends in ${left} ${left === 1 ? "day" : "days"}`,
+      html: templates.trialEnding(org.name, left, billingUrl),
+      billingUrl
+    });
     // Recorded even when the mail failed. A workspace whose SMTP is broken would otherwise be
     // re-notified on every tick forever, which is the loudest possible way to report a mail problem.
     await controlPrisma.organization.update({ where: { id: org.id }, data: { trialNoticesSent: [...sent, due] } });
@@ -187,12 +192,12 @@ export async function runTrialLifecycleTick(now = Date.now()): Promise<{ warned:
     });
     forgetOrgStatus(org.id);
     if (!programmeOwnsTrialEnded) {
-      await mailSuperAdmins(
-        org.slug,
-        "billing.trial_ended",
-        "Your TimeSphere trial has ended",
-        templates.trialEnded(org.name, GRACE_DAYS, billingUrlFor(org.slug))
-      );
+      const billingUrl = billingUrlFor(org.slug, "GRACE");
+      await mailSuperAdmins(org.slug, "billing.trial_ended", {
+        subject: "Your TimeSphere trial has ended",
+        html: templates.trialEnded(org.name, GRACE_DAYS, billingUrl),
+        billingUrl
+      });
     }
     lapsed += 1;
   }

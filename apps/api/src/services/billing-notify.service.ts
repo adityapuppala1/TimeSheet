@@ -9,6 +9,7 @@
  */
 import { prisma } from "../config/prisma.js";
 import { withOrgTenant } from "../config/with-org-tenant.js";
+import { billingPathFor } from "../utils/billing-paths.js";
 import { templates } from "./mail-templates.js";
 import { dispatchTransactional } from "./notify.service.js";
 import { tenantBaseUrl } from "./workspace-directory.service.js";
@@ -29,7 +30,9 @@ async function superAdminRecipients(): Promise<string> {
   return admins.map((a) => a.email).join(",");
 }
 
-const billingUrl = () => `${tenantBaseUrl()}/app/settings?tab=billing`;
+/** A failed renewal has just put the workspace in GRACE, where the Billing tab cannot open (its shell
+ *  is refused) — so that email goes to /plan-lapsed. A plan change leaves it ACTIVE. See billing-paths.ts. */
+const billingUrl = (status: "ACTIVE" | "GRACE") => `${tenantBaseUrl()}${billingPathFor(status)}`;
 
 /** Tells a workspace's super admins that a renewal failed. Never throws: a webhook that 500s
  *  because an email bounced is a webhook Stripe retries forever over something already recorded. */
@@ -38,7 +41,7 @@ export async function notifyPaymentFailed(slug: string, name: string): Promise<v
     await withOrgTenant(slug, async () => {
       const to = await superAdminRecipients();
       if (!to) return;
-      const url = billingUrl();
+      const url = billingUrl("GRACE");
       await dispatchTransactional({
         to,
         templateKey: "billing.payment_failed",
@@ -72,7 +75,7 @@ export async function notifyPlanChanged(slug: string, name: string, tier: string
     await withOrgTenant(slug, async () => {
       const to = await superAdminRecipients();
       if (!to) return;
-      const url = billingUrl();
+      const url = billingUrl("ACTIVE");
       const plan = TIER_LABEL[tier] ?? tier;
       await dispatchTransactional({
         to,

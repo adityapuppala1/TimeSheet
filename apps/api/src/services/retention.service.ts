@@ -36,6 +36,7 @@ import { disconnectAllTenantClients, prisma } from "../config/prisma.js";
 import { withOrgTenant } from "../config/with-org-tenant.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { billingPathFor, PLAN_LAPSED_PATH } from "../utils/billing-paths.js";
 import { forgetOrgStatus } from "./org-status.service.js";
 import { platformAudit } from "./platform-audit.service.js";
 import { RETENTION_MARKER_TEMPLATE } from "./platform-mail-templates.js";
@@ -379,7 +380,9 @@ export function retentionVars(org: { id: string; name: string; slug: string; tri
     workspaceUrl,
     reactivateUrl: `${appBase()}/reactivate/${reactivateToken}`,
     feedbackUrl: `${appBase()}/feedback/${feedbackToken}`,
-    billingUrl: `${workspaceUrl}/app/settings?tab=billing`,
+    // Only the mid-trial check-in reaches a workspace that is still ACTIVE; every other marker goes to
+    // a lapsed one, whose Billing tab cannot open — so those link to /plan-lapsed (billing-paths.ts).
+    billingUrl: `${workspaceUrl}${billingPathFor(marker === "feedback10" ? "ACTIVE" : "GRACE")}`,
     signupUrl: `${appBase()}/signup`,
     deleteDate: longDate(plan.deleteAt),
     daysUntilDeletion: String(Math.max(0, plan.daysUntilDeletion ?? 0)),
@@ -764,5 +767,7 @@ export async function reactivateWorkspace(token: string) {
   });
   forgetOrgStatus(org.id);
   await platformAudit("CUSTOMER", org.slug, "retention.workspace_restored", "Organization", org.id, { fromStatus: org.status, stage: payload.s ?? null });
-  return { restored: true, alreadyActive: false, url: `${url}/login?returnTo=${encodeURIComponent("/app/settings?tab=billing")}` };
+  // `next`, the parameter Login.tsx reads (it sent `returnTo`, which nothing reads), and /plan-lapsed
+  // rather than the Billing tab: the workspace is in GRACE now, where the app shell is refused.
+  return { restored: true, alreadyActive: false, url: `${url}/login?next=${encodeURIComponent(PLAN_LAPSED_PATH)}` };
 }

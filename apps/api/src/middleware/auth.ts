@@ -91,6 +91,16 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  */
 const GRACE_EXPORT_PATHS = ["/api/reports/"] as const;
 
+/**
+ * What EVERY member may still reach in GRACE, beyond `/auth/*`: exactly one read, matched exactly.
+ *
+ * `/billing/standing` is the workspace's status and the names of the admins who can renew it — the
+ * only useful thing the /plan-lapsed page can tell somebody who cannot pay ("ask Priya"). Without it
+ * that page could say only "ask an admin", to people who may not know who that is. It reveals nothing
+ * a member could not already see in the team directory.
+ */
+const GRACE_OPEN_PATHS = new Set(["/api/billing/standing"]);
+
 export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const header = req.headers.authorization ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
@@ -165,6 +175,11 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
    *    what an enterprise procurement review asks about.
    *  - `/auth/*` for everyone, because this runs after a session exists and refusing logout would
    *    strand people in a session they cannot end.
+   *  - `/billing/standing` for everyone — who can renew, for the /plan-lapsed page (GRACE_OPEN_PATHS).
+   *
+   * /plan-lapsed is built from exactly these routes and nothing else, which is what lets a lapsed
+   * workspace pay without entering the app shell — whose own reads (the notifications bell, the
+   * project sidebar) are refused here, and whose 402s send the browser back to /plan-lapsed.
    *
    * Everything else, for everyone including super admins, gets a machine-readable 402 so the client
    * can render the "trial ended" screen rather than treating it as a broken session.
@@ -179,7 +194,7 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
     // workspace through it, not by any unit test, because the bug is in Express's path semantics
     // rather than in the logic.
     const path = req.originalUrl.split("?")[0];
-    const alwaysOpen = path.startsWith("/api/auth/");
+    const alwaysOpen = path.startsWith("/api/auth/") || GRACE_OPEN_PATHS.has(path);
     const payOrExport = user.role.name === "SUPER_ADMIN" && (path.startsWith("/api/billing/") || GRACE_EXPORT_PATHS.some((p) => path.startsWith(p)));
     if (!alwaysOpen && !payOrExport) {
       throw new AppError(402, "This workspace's plan has lapsed. A workspace admin can restore access from Billing.", { code: "PLAN_LAPSED" });

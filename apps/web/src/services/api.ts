@@ -2105,7 +2105,16 @@ export const billingApi = {
   /** Stripe's hosted Customer Portal — card updates, invoice history, cancellation. 409s when this
    *  workspace has never had a Stripe customer, which is a state, not a failure. */
   portalSession: async () => (await api.post<{ url: string }>("/billing/portal-session")).data,
-  invoices: async () => (await api.get<BillingInvoice[]>("/billing/invoices")).data
+  invoices: async () => (await api.get<BillingInvoice[]>("/billing/invoices")).data,
+  /** The workspace's lifecycle status and who can renew it. The one billing read every member may
+   *  make while the workspace is in GRACE — /plan-lapsed's "ask Priya", and its payment poll. */
+  standing: async () =>
+    (
+      await api.get<{
+        status: "PROVISIONING" | "ACTIVE" | "GRACE" | "SUSPENDED" | "ARCHIVED";
+        contacts: Array<{ name: string; email: string }>;
+      }>("/billing/standing")
+    ).data
 };
 
 /** The three workspace flags ordinary (non-super-admin) pages are allowed to read — see

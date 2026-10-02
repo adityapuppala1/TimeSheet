@@ -19,15 +19,17 @@ import express, { Router } from "express";
 import Stripe from "stripe";
 import { z } from "zod";
 import { controlPrisma } from "../config/control-prisma.js";
+import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
 import { countActiveSeats } from "../services/seat-count.service.js";
-import { forgetOrgStatus } from "../services/org-status.service.js";
+import { forgetOrgStatus, getOrgStatus } from "../services/org-status.service.js";
 import { notifyPaymentFailed, notifyPlanChanged } from "../services/billing-notify.service.js";
 import { DEAD_SUBSCRIPTION_STATUSES, resolveStripeClient, requireStripeClient } from "../services/stripe-client.service.js";
+import { stripeReturnPath } from "../utils/billing-paths.js";
 import { decryptSecret } from "../utils/encryption.js";
 
 export const billingRouter = Router();
@@ -58,6 +60,38 @@ billingRouter.get("/status", async (req, res) => {
     activeSeats,
     checkoutAvailable: { TEAM: Boolean(settings?.priceIdTeam), ENTERPRISE: Boolean(settings?.priceIdEnterprise) }
   });
+});
+
+/** How many admins /plan-lapsed names. Enough to reach somebody; not the whole admin list. */
+const STANDING_CONTACTS = 3;
+
+/**
+ * GET /standing — the workspace's lifecycle status and who can renew it. The one billing read open
+ * to EVERY member in GRACE (middleware/auth.ts#GRACE_OPEN_PATHS), because it is what /plan-lapsed
+ * needs to tell somebody who cannot pay anything useful: "ask Priya Shah", not "ask an admin".
+ *
+ * The status is `getOrgStatus` — the cached value middleware/auth.ts gates on — not a fresh read.
+ * /plan-lapsed polls this after a payment and opens the app the moment it says ACTIVE; a fresh read
+ * could say ACTIVE while the gate's cache still says GRACE, and the app would bounce straight back.
+ *
+ * Contacts are the active, human super admins (the only role that can reach billing in GRACE), the
+ * workspace's recorded owner first — the person who signed up is usually the one holding the card.
+ */
+billingRouter.get("/standing", async (_req, res) => {
+  const { orgId } = requireTenantContext();
+  const [status, org, admins] = await Promise.all([
+    getOrgStatus(orgId),
+    controlPrisma.organization.findUnique({ where: { id: orgId }, select: { ownerEmail: true } }),
+    prisma.user.findMany({
+      where: { status: "ACTIVE", deletedAt: null, isAgent: false, role: { name: "SUPER_ADMIN" } },
+      select: { name: true, email: true },
+      orderBy: { createdAt: "asc" },
+      take: STANDING_CONTACTS + 1
+    })
+  ]);
+  const owner = org?.ownerEmail?.toLowerCase();
+  const contacts = [...admins].sort((a, b) => Number(b.email.toLowerCase() === owner) - Number(a.email.toLowerCase() === owner)).slice(0, STANDING_CONTACTS);
+  res.json({ status, contacts });
 });
 
 const checkoutSchema = z.object({ body: z.object({ tier: z.enum(["TEAM", "ENTERPRISE"]) }) });
@@ -183,13 +217,16 @@ billingRouter.post("/checkout-session", requireSuperAdmin, validate(checkoutSche
     await controlPrisma.organization.update({ where: { id: org.id }, data: { stripeSubscriptionId: null } });
   }
 
+  // A LAPSED workspace comes back to /plan-lapsed, which waits for the webhook and then opens the app;
+  // landing inside /app first meant the shell's own requests 402'd and sent the customer who had just
+  // paid back to "this workspace is paused". See utils/billing-paths.ts.
   const appOrigin = originOf(req);
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
     customer: customerId,
     line_items: [{ price: priceId, quantity: seats }],
-    success_url: `${appOrigin}/app/settings?billing=success`,
-    cancel_url: `${appOrigin}/app/settings?billing=cancelled`,
+    success_url: `${appOrigin}${stripeReturnPath(org.status, "success")}`,
+    cancel_url: `${appOrigin}${stripeReturnPath(org.status, "cancelled")}`,
     metadata: { organizationId: org.id, tier: req.body.tier, seatsAtCheckout: String(seats) }
   });
 
@@ -211,7 +248,7 @@ billingRouter.post("/checkout-session", requireSuperAdmin, validate(checkoutSche
  */
 billingRouter.post("/portal-session", requireSuperAdmin, async (req, res) => {
   const { orgId } = requireTenantContext();
-  const org = await controlPrisma.organization.findUniqueOrThrow({ where: { id: orgId }, select: { stripeCustomerId: true } });
+  const org = await controlPrisma.organization.findUniqueOrThrow({ where: { id: orgId }, select: { stripeCustomerId: true, status: true } });
   if (!org.stripeCustomerId) {
     throw new AppError(409, "This workspace has no billing account with Stripe yet. Choose a plan first — the billing portal opens once there's a subscription to manage.");
   }
@@ -220,9 +257,10 @@ billingRouter.post("/portal-session", requireSuperAdmin, async (req, res) => {
   try {
     const session = await stripe.billingPortal.sessions.create({
       customer: org.stripeCustomerId,
-      // Back to the same settings page the button was pressed on. No `?billing=` marker: nothing
-      // was necessarily bought, and a success toast for "looked at an invoice" is a lie.
-      return_url: `${originOf(req)}/app/settings`
+      // Back to the page the button was pressed on — settings, or /plan-lapsed for a workspace whose
+      // renewal failed (it cannot open settings). No `?billing=` marker: nothing was necessarily
+      // bought, and a success toast for "looked at an invoice" is a lie.
+      return_url: `${originOf(req)}${stripeReturnPath(org.status)}`
     });
     if (!session.url) throw new AppError(502, "Stripe did not return a portal URL.");
     res.json({ url: session.url });
