@@ -128,9 +128,11 @@ export async function updateRetentionSettings(patch: Partial<Omit<RetentionSetti
   }
   // The snapshot directory must sit inside SNAPSHOT_ROOT (snapshot-root.ts, H1), and is stored as the
   // absolute path the check resolved — the deletion-time dump writes to it as-is. Validated only
-  // when this save names one, so an older out-of-root value does not block saving anything else
-  // (the snapshot routes refuse to serve from it regardless).
-  const snapshotDir = patch.snapshotDir !== undefined && next.snapshotDir?.trim() ? await resolveSnapshotDir(next.snapshotDir) : next.snapshotDir?.trim() || null;
+  // when this save CHANGES it, so an older out-of-root value does not block saving anything else —
+  // the console's form re-sends the stored value on every save (R1-5). The snapshot routes refuse to
+  // serve from an out-of-root directory regardless.
+  const requested = next.snapshotDir?.trim() || null;
+  const snapshotDir = requested && requested !== (current.snapshotDir?.trim() || null) ? await resolveSnapshotDir(requested) : requested;
   const row = await controlPrisma.platformRetentionSettings.update({
     where: { id: "global" },
     data: { enabled: next.enabled, feedbackDay: next.feedbackDay, reminderDays, retentionDays: next.retentionDays, autoDeleteEnabled: next.autoDeleteEnabled, snapshotDir }

@@ -57,4 +57,19 @@ describe("updateRetentionSettings and the snapshot directory", () => {
     stored = { ...stored, snapshotDir: "/somewhere/else" };
     await expect(updateRetentionSettings({ feedbackDay: 12 }, "ops@timesphere.app")).resolves.toMatchObject({ feedbackDay: 12 });
   });
+
+  // R1-5. The console's form re-sends every field on every save, the stored directory included —
+  // so validating whatever the save NAMES blocked every edit, even pausing the programme, on an
+  // install whose directory predates SNAPSHOT_ROOT.
+  it("accepts the form re-sending an unchanged out-of-root value alongside another change, and keeps it as stored", async () => {
+    stored = { ...stored, snapshotDir: "/somewhere/else" };
+    const result = await updateRetentionSettings({ enabled: false, feedbackDay: 10, reminderDays: [30, 60, 80, 90], retentionDays: 90, autoDeleteEnabled: true, snapshotDir: "/somewhere/else" }, "ops@timesphere.app");
+    expect(result).toMatchObject({ enabled: false, snapshotDir: "/somewhere/else" });
+  });
+
+  it("still refuses CHANGING an out-of-root value to another one outside the root", async () => {
+    stored = { ...stored, snapshotDir: "/somewhere/else" };
+    await expect(updateRetentionSettings({ snapshotDir: os.homedir() }, "ops@timesphere.app")).rejects.toMatchObject({ statusCode: 422 });
+    expect(control.platformRetentionSettings.update).not.toHaveBeenCalled();
+  });
 });
