@@ -23,6 +23,7 @@ import { getOnlineSeenByUser } from "../services/maintenance.service.js";
 import { assertSeatAvailable, syncSeatsAfterChange, takesASeat } from "../services/seats.service.js";
 import { assertValidManager, loadReportingRows, managerRefusal } from "../services/reporting-line.service.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
+import { assertPasswordPolicy, passwordPolicyProblem } from "../utils/password-policy.js";
 import { forgetWorkspaceMembership, rememberWorkspaceMembership, tenantBaseUrl } from "../services/workspace-directory.service.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import {
@@ -381,6 +382,10 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
     password?: string;
   };
 
+  // A typed password is checked once, before anyone is touched, for what does not depend on who it
+  // is for (blocklist, length). The per-person part (not built from their email) runs per target.
+  if (action === "RESET_PASSWORD" && password) assertPasswordPolicy(password, {});
+
   const targets = await prisma.user.findMany({
     where: userIds?.length ? { id: { in: userIds }, deletedAt: null } : whereFromQuery(filter ?? {}),
     select: { ...AUTHORITY_TARGET_SELECT, name: true, email: true, isAgent: true }
@@ -432,6 +437,8 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
           // "Admin@12345" fallback is documented in this repo's README, and a default anyone
           // can read is not a password). Either way the person is prompted to choose their own
           // at next sign-in via mustChangePassword.
+          // Throws into `skipped` below, named — the rest of the batch still gets the password.
+          if (password) assertPasswordPolicy(password, { email: target.email });
           const nextPassword = password || generateTempPassword();
           await prisma.user.update({
             where: { id: target.id },
@@ -551,6 +558,10 @@ userRouter.post(
     // `roles` is already super-admin-only above; the plain `role` field was not, so an ADMIN could
     // create a SUPER_ADMIN — a superior it then had the password of.
     assertMayGrant(req.user!, [req.body.role]);
+    // An admin-TYPED password meets the same policy a person's own does. It is temporary (the
+    // account must change it at first sign-in), but that gate lets whoever signs in FIRST choose the
+    // real one — so a guessable temporary password is an open door until its owner uses it.
+    if (req.body.password) assertPasswordPolicy(req.body.password, { email: req.body.email });
     // Plan-tier seat enforcement — re-checked on every creation (not cached) so a platform
     // admin lowering a tier's seat limit, or an org outgrowing its plan, takes effect
     // immediately rather than after some reconciliation job. Counts the same population
@@ -691,6 +702,10 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
       if (refusal) throw new Error(refusal);
       const existing = await prisma.user.findUnique({ where: { email: row.email } });
       if (existing) throw new Error("A user with this email already exists");
+      // Same policy as POST /users; one weak line fails that line only. (A password under the
+      // minimum is still replaced by a generated one, as it always was.)
+      const passwordProblem = row.password && row.password.length >= 8 ? passwordPolicyProblem(row.password, { email: row.email }) : null;
+      if (passwordProblem) throw new Error(passwordProblem);
 
       const user = await prisma.user.create({
         data: {
@@ -925,6 +940,11 @@ userRouter.post("/:id/reset-password", async (req, res) => {
   // response (it is stored only as a hash). The old behavior defaulted to "Admin@12345", which
   // this repo's own README documents — a default the whole internet can read is not a password.
   const provided = typeof req.body.password === "string" && req.body.password.length >= 8 ? req.body.password : null;
+  if (provided) {
+    // The typed password meets the person's own policy — see POST /users for why it matters here.
+    const owner = await prisma.user.findUnique({ where: { id: String(req.params.id) }, select: { email: true } });
+    assertPasswordPolicy(provided, { email: owner?.email });
+  }
   const password = provided ?? generateTempPassword();
   await prisma.user.update({
     where: { id: String(req.params.id) },

@@ -16,9 +16,10 @@
  * Deliberately NOT: composition rules or forced rotation. NIST 800-63B advises against both; they
  * produce "Password1!" and the same password with a digit incremented.
  *
- * NOT YET APPLIED to passwords an ADMIN sets (user create, bulk import, admin reset) — those live in
- * user.controller.ts and are wired separately. Admin-set passwords are temporary by design anyway:
- * the account is flagged and must change it at first sign-in.
+ * ALSO APPLIED to passwords an ADMIN types (user create, CSV import, single and bulk reset in
+ * user.controller.ts). They are temporary — the account must change it at first sign-in — but that
+ * gate lets whoever signs in FIRST choose the real password, so a guessable temporary one is an open
+ * door until its owner uses it. Generated one-time passwords are random and always pass.
  */
 import { AppError } from "../middleware/error.js";
 import { COMMON_PASSWORDS } from "./common-passwords.js";
