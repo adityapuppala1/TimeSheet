@@ -10,6 +10,279 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 📊 Workspace analytics: your numbers, India's day, and one definition for each
+
+- **"Your hours" are yours.** A manager's, team lead's or admin's home page summed the whole
+  workspace's hours under "Your logged hours"; the target meter and rhythm chart too. They are now the
+  signed-in person's, and "Today's timesheet is logged" is about today, not the whole week.
+- **Utilisation means something.** It counts capacity only up to today (a month-to-date figure used to
+  divide by the rest of the month), subtracts leave, includes the people who logged nothing — the row a
+  manager most needs — and counts only submitted and approved hours. Target utilisation is its own
+  column. The workload board no longer reads 250% on a Thursday for a part-week.
+- **One definition per number**, written down in [docs/AUDIT_2026-10.md](docs/AUDIT_2026-10.md):
+  logged hours, open, overdue, SLA breached (from the due date, so it works with the breach sweep
+  off), median resolution, first response, reopen rate (never above 100%). People counts leave out AI
+  agent identities.
+- **Comparisons are like for like** — "vs the same days last week", printed, not hidden in a tooltip —
+  and a figure that describes "now" no longer carries a one-way "vs yesterday". A zero baseline reads
+  "new", not +100%.
+- **Money keeps its currency.** Insights, the budget widget, Portfolio and the reports showed rupees as
+  dollars and added currencies together; totals are now per currency, and burn % counts only budgeted
+  projects.
+- **A failed request shows "—" and Retry**, never a green zero or "nothing assigned to you". Numbers
+  and dates use the Indian format (₹12,34,567; 2 Oct 2026); charts have text summaries for screen
+  readers; status is never colour alone.
+- Today, this week and this month are India's everywhere — My Work's buckets, the team trend, ticket
+  sparklines, the workload board — not UTC's. The admin summary polls every two minutes, and only while
+  the tab is visible.
+
+### 🐛 Timesheets: nobody approves their own hours, and the queue shows everything waiting
+
+- **No self-approval.** Anyone who could approve timesheets could approve their own entry — and their
+  own manager's. Nobody, admins included, can now decide their own entry or one by someone above them
+  in their reporting line; those entries don't appear in their queue.
+- **The approvals queue shows every entry waiting**, filtered and paged on the server. It used to filter
+  the newest 100 rows of the whole workspace in the browser, so an entry submitted a few days late — the
+  very one an SLA escalation pointed at — was often not in the list at all. Every "awaiting review"
+  number (the queue, the Inbox brief, the dashboard tile) now counts the same rows. History searches its
+  whole date range on the server too.
+- **Bulk reject tells people.** Rejecting several entries at once notified nobody; now each submitter
+  gets the same email a single rejection sends. Two people deciding the same entry no longer produce
+  two emails — the second is told it was already decided.
+- **An approval can be undone.** An approver (never the author) can **Reopen** an approved entry with a
+  reason; it goes back to the queue, its frozen rate is cleared, and the author is told.
+- **Somebody can always decide.** The person at the top of the reporting tree can have their hours
+  decided by any other approver, and in a one-approver workspace that person may approve their own
+  (recorded as such). An SLA escalation only ever goes to someone who may decide the entry. The
+  approver's email is now its own "awaiting your review" message, under the approval-SLA email toggle.
+- Editing a submitted entry's date, times, project or module restarts its review clock and drops its
+  identity-verified badge; moving it to a project its author isn't on is refused, and a module must
+  belong to its project.
+- **"Today" is your own day** — on the log form, in the future-date check, the Inbox brief and the daily
+  status, from your profile's time zone. Between midnight and 05:30 in India the form used to default to
+  yesterday. The daily-cap meter counts only your own hours.
+- A draft submitted later emails the approver, as a direct submit always did; the Team page's escalation
+  list gained Reject and the identity check; weekend-working teams get one escalation per missed day.
+- **Notifications and reports:** identity-check alerts go to the super admins who can open the review
+  log, and link to it; "Sign-offs waiting on you" counts only steps actually waiting on you and opens
+  the ticket; scheduled dashboard emails pause if their owner loses report access, match the live
+  dashboard's scope, escape their content and skip colleagues who have left; exports name every filter
+  they were cut to, the PDF follows the on-screen grouping, and the security digests honour the email
+  mutes. The Inbox's unread count matches the bell. **Upgrading:** a manager's or team lead's
+  scheduled delivery that goes to an outside address is paused (it now covers their team's projects,
+  as the live dashboard does) — the owner checks the recipients and presses Resume.
+
+### 🎫 Tickets: one path for every status change, and email that threads
+
+- **Every way of moving a ticket follows the same rules.** The app, the public API, AI assistants (MCP)
+  and the security scanner's auto-reopen now go through one transition: notifications to the reporter,
+  assignee, watchers and collaborators, the findings-verification gate, the closed digest, and one audit
+  action (`ticket.status_changed`, with how it moved). API and assistant moves used to skip all of it,
+  so they were missing from burndowns, reopen rates and sparklines too. Comments posted by an assistant
+  or the API now notify people as well.
+- **A reopened ticket gets a fresh SLA clock.** Reopening kept the old due date, so a ticket reopened
+  two weeks later breached and escalated within 15 minutes; a breach was also never cleared. Reopening —
+  and changing priority — now restarts the clock from now.
+- **A change's ticket moves only from its change.** Closing it from the Tickets page left the change
+  waiting for approval; ticket SLA emails no longer fire for changes; and the CHANGE type can't be given
+  to a plain ticket from any form, API, assistant, AI proposal or blueprint. A change's delivered-work
+  list no longer offers other changes' tickets.
+- **Email intake threads replies** — a reply to the confirmation, or with `[WEB-12]` in the subject from
+  the original sender, is added to that ticket instead of opening a new one; a reply to a resolved
+  ticket reopens it, and one to a closed ticket opens a linked follow-up. Auto-replies, bounces and bulk
+  mail are skipped (and counted on the intake settings card) so they can't loop; mail arriving through
+  a Google Group or other mailing list is processed normally. The confirmation subject starts with the
+  ticket key.
+- Intake tickets can be triaged by the managers and team leads of their project, and their "needs
+  review" flag can finally be cleared (Mark reviewed, or by assigning or moving the ticket). Request-form
+  review is scoped to projects you can see. Review and closed-digest emails open the ticket.
+- My Work, the Timeline and the Calendar show a ticket's real status, not the one it had on the day of
+  the planning upgrade. Sprint burndown days end at midnight where the team is.
+
+### 🔀 Change management: what was approved stays approved
+
+- **The plan locks at submission.** A requester could submit a high-risk change and then — while it
+  waited — delete the backout plan and answer every risk question "low", and the approval was recorded
+  against that. Plans, risk answers, the window and the type now lock when a change is submitted;
+  **Withdraw to draft** unlocks them and records the round as withdrawn. Approving re-checks that the
+  change is still complete, and a change manager's edit to an approved change sends it back for a new
+  approval.
+- **A workflow that submits a change asks its approver.** It used to move the change without opening an
+  approval round, leaving it stuck — and approving it failed. Proposal-only workflows' "move a change"
+  suggestions can now actually be applied.
+- Stage clocks restart when a change re-enters a stage, and a cancelled change stops its clocks instead
+  of breaching for ever. Approval emails and bell items open the change itself. Standard changes are
+  still approved — the wording no longer says "pre-approved". Scheduling or starting inside a blackout
+  or overlapping window needs a written reason, and moving the window clears an old reason. The
+  implementer can work the runbook of an approved change again. Approving and withdrawing at the same
+  moment no longer leave a change half-decided, and adding a risk question doesn't strand changes
+  already waiting for approval.
+
+### 📊 Console numbers you can defend: churn, conversion, billed revenue and India's calendar
+
+- **Churn counts paying customers.** A customer who cancelled to the free plan was counted as a
+  downgrade, free workspaces sat in the churn denominator, a workspace that appeared mid-period joined
+  the starting cohort, and one night with a workspace's database unreachable read as a lost customer.
+  Now churn and NRR follow the ChartMogul/Stripe conventions, and unmeasured workspaces are carried
+  forward and shown as such.
+- **Trial conversion is one rule and a cohort measure** (by the month the trial started), and "median
+  days to convert" finally shows a number — conversion is now dated when it happens.
+- **Billed MRR** counts only active and past-due subscriptions, net of their coupons; the gap to list
+  price is no longer called "discounting".
+- **India's calendar throughout the console:** email "deliveries per day" includes today, feedback months
+  are labelled correctly (they were all one month early), snapshots and month-to-date use the Indian day,
+  and signups are counted by calendar week.
+- The signup funnel counts people, not events. "Needs attention" leaves out deleted and long-lapsed
+  workspaces and says "unreachable" rather than "never signed in". Analytics and Monitoring stop
+  re-reading every tenant database on every view. A failed read shows "—" and Retry instead of zeros;
+  money uses one en-IN formatter with the currency from the data; charts have text summaries.
+
+### 🐛 A lapsed workspace can pay its way back in, and every scheduled job runs once
+
+A whole-application audit (2026-10-02) traced every workflow end to end. The billing and lifecycle
+ones had the worst breaks:
+
+- **A workspace in grace could not be paid for.** "Choose a plan" opened Settings inside the app, whose
+  own background requests answered "plan lapsed" and sent the admin straight back — a loop with no
+  way out. The paused page now does the job itself: a super admin picks a plan (Stripe Checkout),
+  updates the card when a renewal failed (the billing portal), or exports timesheets; everyone else is
+  told by name who can renew. Returning from Stripe shows "finishing your payment…" until the payment
+  lands. The payment-failed, trial-ended and retention emails link there, and the reactivation link
+  now signs in to it (it used a parameter the sign-in page never read).
+- **Setting a plan in the console ends the trial.** It used to leave the trial clock running, so a
+  customer who had signed a contract got "trial ends in 3 days", then a lapse, then a suspension.
+  Operators can also **extend a trial** (up to a year out), which re-arms the trial warnings and the
+  whole retention sequence for the new end date.
+- **Paying after a suspension restores the workspace.** A renewal that failed, went to grace and was
+  suspended after 14 days stayed suspended even after the customer paid. It is restored now — only
+  when the suspension was for not paying that subscription, never one an operator applied.
+- **Each scheduled job runs once per deployment, not once per API server.** The Helm chart runs two
+  or more, and every one ran every job: scheduled reports, trial and retention emails and reminders
+  went out twice, and every inbound email opened two tickets. A claim row in the control plane now
+  lets the first server run each tick and stands the rest down; a lease stops a long run overlapping
+  the next, and is taken over if its server dies. `replicaCount: 1` is no longer needed for this.
+- A signup interrupted mid-provisioning (a server restart) is cleaned up after 30 minutes instead of
+  holding the company's domain forever; its error now says plainly to start again. A live workspace
+  can't be moved back to "Provisioning" from the console, so the clean-up can never take one.
+- The Stripe seat sync writes the headcount only to the subscription line priced at a plan tier.
+  Re-wording an operator's suspension makes it the operator's, so a later payment can't lift it.
+- A workspace created from the console claims its owner's company domain, as signup does, so a
+  colleague can no longer open a second workspace for the same company.
+- Approving a join request in a workspace that signs in through SSO only sends a "sign in with your
+  company account" link instead of a password link that could never be used.
+
+### 🛡️ Who may act on whom: admins, super admins, seats and reporting lines
+
+- **An admin can no longer take over a super admin.** Resetting a super admin's password from the row
+  menu handed the new password to any ADMIN; editing their email or status, deleting them and granting
+  SUPER_ADMIN (to anyone, themselves included) were open the same way. Only a super admin may now act
+  on, or create, a super admin — including someone who holds it while switched into another role.
+- **Nobody locks themselves or the workspace out.** You can't deactivate, delete or demote your own
+  account in User management, and the last active super admin can't be removed. The old guard counted
+  only extra role grants, which the founding super admin of every recent workspace doesn't have.
+- **Seats are checked when someone comes back**, not only when they are created — reactivating a
+  person, or a bulk "activate", needs a free seat. The Stripe seat count now follows every change
+  (bulk actions, CSV import, SCIM, SSO) and is corrected nightly, so invoices match headcount.
+- **A password an admin types must be a real one.** Temporary passwords have to be changed at first
+  sign-in (below), which means whoever signs in first chooses the real one — so a typed temporary
+  password now meets the same rules as one a person picks: not a common password, not built from
+  the person's email address.
+- Reporting lines can't loop (A reports to B reports to A), and a manager must be active. The org
+  chart, which crashed on a loop, now draws one.
+- **SCIM:** Microsoft Entra's deprovisioning (`"active": "False"`, as a string) now deactivates the
+  person — it used to answer 200 and change nothing — and requests sent as `application/scim+json`
+  are read at all. Deprovisioning the workspace's last active super admin is refused (409) until
+  another one is assigned.
+- People added by an admin, a CSV or SCIM can find their workspace by email straight away; deleted
+  people drop out of that index. The Users page's Requests link works while you are already on it.
+
+### 🔐 Signing in: reset links, lockout, sign-out, and passwords you didn't choose
+
+- **A bad reset link costs one lookup, not 24 seconds of CPU.** Checking a reset link compared it
+  against up to 500 stored hashes, so a stream of bad links could stall the server — and flooding
+  "forgot password" pushed real links out of reach. Links now carry an indexed selector; old links
+  keep working until they expire. Using one is atomic and voids the person's other links.
+- **Forgot-password and "Find your workspace" count every request** (10 and 60 per 15 minutes per
+  network — an office signing in together uses the finder) and send at most 3 emails an hour to one address, and they answer before doing any work, so the
+  response time no longer reveals whether an address has an account.
+- **Sign-out always signs you out.** If the server couldn't be reached, the app said "Signed out"
+  while the session survived and came back on reload. Sign-out now works even in maintenance or
+  grace, always clears the cookie, and says so when it could not confirm.
+- **A password set by an admin must be changed before anything else.** The Help manual always said
+  so; now it is enforced for password sign-ins.
+- **Lockout escalates instead of resetting** — five wrong passwords lock the account for 5 minutes,
+  and each further one for 15, then 60 (never longer: every extra hour is time a stranger could take
+  from the real owner). A completed password reset lifts it. Directory (LDAP) sign-in shares it.
+- **New passwords are checked** against the 3,000 most common ones, can't be built from your email
+  address, and can't exceed 72 bytes (the point past which bcrypt silently ignores the rest) — when you
+  choose one, when an admin types one, when a console operator provisions a workspace (whose founder
+  then chooses their own at first sign-in), and when a company signs up.
+- **"Remember me" starts unticked**, and unticked now means the session ends with the browser.
+  Operators can also end idle sessions (`SESSION_IDLE_TIMEOUT_MINUTES`, off by default).
+- A workspace page can make signed-in requests only to its own workspace, not to a sibling's.
+- Sign-ins, failures, sign-outs, password changes and resets are in the audit log, and you get an
+  email when your password changes. Workspaces that sign in through SSO only no longer offer
+  password resets. Two tabs refreshing at the same moment no longer sign you out.
+- The sign-in page names the workspace and its address on every screen size; the Password/Directory
+  switch is a proper radio group, and a failure is announced once.
+
+### 🔐 Single sign-on: works where it didn't, and asks before it lets strangers in
+
+Existing setups keep signing in exactly as they did — nothing below turns a working configuration off.
+
+- **SAML from Microsoft Entra and Google Workspace works with their default signing.** Both sign only
+  the assertion by default, and TimeSphere required the whole response to be signed too. Either is
+  accepted now; unsigned and signature-wrapped responses are still refused. Certificates can be
+  rolled over (paste both), clocks may differ by three minutes, and on a new configuration the
+  issuer, destination and recipient are checked. A working configuration keeps matching people by the
+  same address it always did.
+- **SAML works on more than one API server** — the request IDs it checks lived in one server's
+  memory, so a sign-in that started on one and finished on another failed at random.
+- **Sign-in from a custom domain starts at that workspace**, not at the deployment's default one.
+- **Failures land on the sign-in page with a readable reason** (cancelled, expired, not allowed, seat
+  limit…) instead of raw JSON on the API's address.
+- **Automatic account creation can be switched off or limited to your domains.** First sign-in through
+  SSO creates an Employee account; each configuration now has a switch for that and an allowed-domains
+  list (Google accounts outside gmail.com must also belong to the matching Google Workspace). New
+  accounts are audited and super admins are told. Existing configurations keep today's behaviour until
+  an admin sets them.
+- **Microsoft with no directory ID** (which accepts any organization, and personal accounts) can no
+  longer be set up new. Existing ones keep working, record which directories people sign in from,
+  and offer **Restrict to my directory**, showing exactly who that would shut out first. The console
+  flags workspaces still open this way.
+- The settings card shows the exact redirect URLs, SAML ACS URL and entity ID to register, with copy
+  buttons, and the SP metadata URL now answers. While "Require SSO only" is on, the last provider
+  anyone has signed in through can't be switched off. LDAP fills in every `{{email}}` in a filter and
+  refuses one that matches two people; connection tests are plan-gated and can no longer probe
+  internal addresses through redirects; a Microsoft test says "configuration looks valid" rather
+  than "passed", because it cannot check the secret.
+
+### 🛡️ The platform console stops trusting one person, or one public password
+
+- **A fresh install no longer has a public owner password.** The console owner used to be created
+  with `PlatformAdmin@12345` on every install. Installers now generate one and print it once; an
+  account on a generated or temporary password must change it before the console opens.
+- **Owners and operators need a second factor in production** (`PLATFORM_ADMIN_REQUIRE_MFA`), and
+  turning MFA off needs a code. Wrong second-factor codes lock an account (1 minute, doubling to an
+  hour); for an account with MFA the right password always reaches the code step, so a stranger who
+  knows the owner's address can't keep them out. Without MFA, failures are forgiven after a quiet
+  15 minutes.
+- **Console sessions last 12 hours and end after 30 idle minutes** instead of 14 days.
+- **Two people, where it matters.** Loosening the retention policy (shorter window, auto-delete on,
+  no pre-deletion snapshot) and reactivating an operator now wait for a second owner — and the approver
+  sees exactly which settings change, from what to what, and approval applies only those. A queued
+  restore or deletion says "Queued for approval" instead of reporting it done, and an approval runs
+  exactly once.
+- **Snapshots stay snapshots.** The snapshot folder must sit inside `SNAPSHOT_ROOT`, only snapshot
+  files can be listed or downloaded (the setting could point at any folder the server can read), and
+  a snapshot restores only into the workspace it came from.
+- **Rescue admin tells the customer** — every super admin of the workspace gets an email with the
+  reason — and no longer quietly reactivates an owner the customer deactivated.
+- Creating an operator can be finished: the approver sees the temporary password once. A lone owner
+  can add a second with `npm run control:create-owner`. Changing Stripe credentials needs a reason and
+  emails every owner. Signup codes and reactivation links are no longer readable in the email log.
+  The console's signing secret is checked at boot and must differ from the workspace secrets.
+
 ### 🔒 Self-serve signup has an off switch — and it starts off
 
 `/api/signup` was the one public route that creates infrastructure, and it was mounted on every

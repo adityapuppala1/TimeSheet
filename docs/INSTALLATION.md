@@ -407,10 +407,13 @@ Created by `npm run seed` here, and by the Docker installer's seed step:
 | Super Admin | `superadmin@timesheet.local` | `Admin@12345` | `/login` |
 | Manager | `manager@timesheet.local` | `Admin@12345` | `/login` |
 | Employee | `employee@timesheet.local` | `Admin@12345` | `/login` |
-| Platform Admin | `platform-admin@timesphere.local` | `PlatformAdmin@12345` | `/platform-admin/login` |
+| Platform Admin | `platform-admin@timesphere.local` | `PlatformAdmin@12345` (dev only — see below) | `/platform-admin/login` |
 
-**Change the platform-admin password immediately** — it has cross-org access, and the seeded one is
-the same on every install. How: the platform-admin password question in the [FAQ](#faq).
+**The platform-admin password above is the development value only.** `.env.example` passes it to the
+seed as `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` so local and CI sign-ins are predictable. The installers
+generate a strong one instead and print it once, and a seed run without the variable generates one —
+on a production install the account is held at **Change password** until it is rotated, and, with
+`NODE_ENV=production`, at MFA enrolment after that. It has cross-org access; treat it accordingly.
 
 ### Secrets: ENCRYPTION_KEY and per-environment .env files
 
@@ -429,8 +432,8 @@ damage than one that fails loudly:
   be freshly generated per environment. Production additionally gets a boot-time check
   (`server.ts#assertProductionSafety`) that refuses to start when `JWT_ACCESS_SECRET`,
   `JWT_REFRESH_SECRET` or `ENCRYPTION_KEY` is under 32 characters, repetitive, low-entropy, or
-  contains a placeholder word such as `replace-with` or `secret`. It does **not** check
-  `PLATFORM_ADMIN_JWT_SECRET`, so generating that one well is on you. See
+  contains a placeholder word such as `replace-with` or `secret`. Since 2026-10 it checks
+  `PLATFORM_ADMIN_JWT_SECRET` the same way, and refuses to start when it equals either JWT secret. See
   [.github/SECURITY.md](../.github/SECURITY.md).
 
 **`Unsupported state or unable to authenticate data` means the wrong key, not a corrupted

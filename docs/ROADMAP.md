@@ -489,6 +489,41 @@ Captured here so it isn't silently forgotten, not because it's undesirable:
 - Data residency / region selection — relevant once there's an actual EU/regulated customer.
 - Per-org custom domains beyond subdomain routing — nice-to-have, not structural.
 
+## Open from the 2026-10-02 whole-application audit
+
+Found, judged worth doing, and deliberately not built in that pass — each needs a product decision,
+a rollout, or more than a day. Priority order and design sketches: [AUDIT_2026-10.md § Proposed
+next](AUDIT_2026-10.md#proposed-next-in-priority-order).
+
+- **Tenant MFA** (TOTP + recovery codes, then passkeys) with a workspace policy, and step-up
+  re-authentication for security-sensitive settings — the largest remaining standards gap.
+- **SSO identity binding** (`UserIdentity` on provider + issuer/`tid` + `sub`/`oid`), then auto-pinning
+  a Microsoft configuration that has only ever seen one directory.
+- **Browser-bound OIDC state** (httpOnly cookie for the PKCE verifier and a nonce).
+- **A shared lockout and rate-limit store** across replicas, weighted by (account, IP).
+- **Console step-up re-authentication** and **customer-granted support access windows**.
+- **A tamper-evident platform audit log**, with console sign-ins audited and optional SIEM streaming.
+- **LDAP StartTLS + custom CA**, SSO certificate/secret **expiry alerts**, **break-glass recovery codes**.
+- **Temporary-password expiry**, a **higher minimum password length** once MFA ships, and
+  **per-purpose keys** (HKDF) instead of one secret for nine uses.
+- **Change management:** an approval snapshot column on `ChangeApproval` (what exactly was approved);
+  emergency-change routing (an ECAB group, a shorter SLA, a forced PIR); a catalogue of pre-authorised
+  standard-change templates as the only route to auto-approval; notify the approver when a change is
+  withdrawn; a dedicated proposal kind for "move a change".
+- **Tickets:** carry unfinished tickets over when a sprint closes; an OPEN → CLOSED "won't fix" path;
+  email the external reporter on resolution and public comments; a `FORM` ticket source for request
+  forms; wire custom workflows into status changes (the settings say "preview" until then).
+- **Timesheets and email:** a dedicated "approval requests" email toggle (it shares the approval-SLA one
+  today); the History page's 2,000-row cap with its person filter applied after the cap.
+- **Analytics:** move the remaining ~190 locale-less number and date calls to `lib/format.ts`; date-picker
+  presets that refresh after midnight; dated goal/POC completion (`achievedAt`) so practice counters stop
+  keying on `updatedAt`; an "exclude from metrics" flag for internal and test workspaces; an index and
+  pruning for `SignupAttempt` before the funnel grows large; per-row currency conversion for budgets set
+  in a currency other than the billing one.
+- **Billing:** the in-place plan change and `customer.subscription.updated` still read the first
+  subscription line; provisioning should refuse a workspace that isn't new; seeded system accounts are
+  counted as billed seats.
+
 ## Related: production-readiness backlog (from the July 2026 deep audit)
 
 Tracked here so nothing surfaced during the security/responsive audit gets silently lost.

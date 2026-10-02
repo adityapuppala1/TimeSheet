@@ -321,10 +321,14 @@ provisioning of new organizations from that console.
 4. Configure DNS/your reverse proxy so `<any-slug>.yourdomain.com` reaches the same running API
    — `middleware/tenant.ts` resolves the org purely from the `Host` header's subdomain, so no
    per-org DNS entry beyond a wildcard (`*.yourdomain.com`) is needed.
-5. Log into `https://yourdomain.com/platform-admin/login` with the seeded credentials printed by
-   `control:seed` (`platform-admin@timesphere.local` / `PlatformAdmin@12345` in dev — **rotate
-   this immediately in any real deployment**: the console shows an amber banner while that
-   password is still in use, and **Change password** in its sidebar rotates it).
+5. Log into `https://yourdomain.com/platform-admin/login` as `platform-admin@timesphere.local` with
+   the password `control:seed` printed. Since 2026-10 there is **no fixed production password**: the
+   seed uses `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` when it is set (the installers generate one, and dev
+   and CI pass the known `PlatformAdmin@12345` through `.env.example`), and otherwise generates a
+   24-character password and prints it once. An account on a generated password — or on the public dev
+   value under `NODE_ENV=production` — is held at **Change password** until it is rotated, and in
+   production an OWNER or OPERATOR without a second factor is held at MFA enrolment
+   (`PLATFORM_ADMIN_REQUIRE_MFA`). A seed re-run never changes an existing account's password.
 
 ### Provisioning a new organization
 
@@ -1199,7 +1203,7 @@ migration reaches organizations beyond the default one only through the fan-out
 
 | Version | What to do | Detail |
 |---|---|---|
-| **Next release** (under `## Unreleased`) | **Self-serve signup is now off until you turn it on** — Platform admin → Settings → Signup. A multi-org deployment that sells through `/signup` must switch it on after upgrading; a single-org install refuses signup whatever the switch says. One additive control-plane migration (signup policy + verification codes). And in every workspace that uses Microsoft sign-in, set the **Directory (tenant) ID**: left blank, accounts from any Microsoft directory can sign in, matched by email. **Signup Phase 1** adds a second control-plane migration (company domains, the signup funnel, job claims, `Organization.createdVia`) and one tenant migration (`JoinRequest`) — fan it out with `npm run db:migrate:tenants` as usual. Then, once, run **Platform admin → Company domains → Backfill from signup emails** and settle the conflicts it lists: until a workspace owns its domain, people from that company can still open a second one. | [SIGNUP_AND_DOMAINS_PLAN.md](SIGNUP_AND_DOMAINS_PLAN.md), [NEW_ORGANIZATION_SETUP.md § Company domains](NEW_ORGANIZATION_SETUP.md#company-domains), [SSO across workspace subdomains](#sso-across-workspace-subdomains) |
+| **Next release** (under `## Unreleased`) | **Self-serve signup is now off until you turn it on** — Platform admin → Settings → Signup. A multi-org deployment that sells through `/signup` must switch it on after upgrading; a single-org install refuses signup whatever the switch says. One additive control-plane migration (signup policy + verification codes). And in every workspace that uses Microsoft sign-in, set the **Directory (tenant) ID**: left blank, accounts from any Microsoft directory can sign in, matched by email. **Signup Phase 1** adds a second control-plane migration (company domains, the signup funnel, job claims, `Organization.createdVia`) and one tenant migration (`JoinRequest`) — fan it out with `npm run db:migrate:tenants` as usual. Then, once, run **Platform admin → Company domains → Backfill from signup emails** and settle the conflicts it lists: until a workspace owns its domain, people from that company can still open a second one. **The 2026-10 audit fixes** ([AUDIT_2026-10.md § Upgrade notes](AUDIT_2026-10.md#upgrade-notes-for-operators)): with `NODE_ENV=production` the API now **refuses to boot** when `PLATFORM_ADMIN_JWT_SECRET` is weak, a placeholder, or equal to `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` — generate a fresh one (`openssl rand -base64 48`) before upgrading. Console owners and operators without MFA are sent to enrolment at their next sign-in (`PLATFORM_ADMIN_REQUIRE_MFA`), console sessions shorten to 12 hours / 30 idle minutes, and a pre-deletion snapshot folder must sit inside `SNAPSHOT_ROOT` (mount a volume there). `api.replicaCount: 1` is no longer needed for scheduled jobs. Several additive control-plane and tenant migrations; fan out as usual. | [SIGNUP_AND_DOMAINS_PLAN.md](SIGNUP_AND_DOMAINS_PLAN.md), [NEW_ORGANIZATION_SETUP.md § Company domains](NEW_ORGANIZATION_SETUP.md#company-domains), [SSO across workspace subdomains](#sso-across-workspace-subdomains) |
 | **5.7.0** | Set `ROOT_DOMAIN` if the address people type has three or more labels (`timesheet.company.com`): unset, every request — the login page included — answers `404 Unknown workspace.`, and the API now says so with a boot `ERROR` naming the value. Multi-workspace deployments also need every proxy to preserve `Host`, and Compose + HTTPS needs `CADDYFILE=Caddyfile.domain-wildcard`. The SSO hand-off table arrives through `migrate deploy`; nothing to run for it. | [Turning on multi-org routing](#turning-on-multi-org-routing-root_domain), [per shape](#multi-workspace-on-each-deployment-shape), [the Host header](#the-host-header-has-to-survive-every-hop) |
 | **5.6.0** | Upload virus scanning can now be configured in a container: `CLAMAV_HOST`/`CLAMAV_PORT` are forwarded by both compose files and the chart. Images are now published as `latest` and per version only — no `sha-…` tags — and retention keeps the last two releases plus `latest`, so pull by version and expect to rebuild anything older from its git tag. | [Operational settings](#operational-settings), [retention](#the-retention-that-keeps-it-that-way) |
 | **5.4.0** | Nothing to run, one behaviour change: sprints now require the plan that includes timelines. A workspace on a plan without it sees sprints refuse with an upgrade message; its data is kept and returns on upgrade. | CHANGELOG 5.4.0 |
@@ -1831,19 +1835,24 @@ Telegram polling, the AI weekly digest, the optional Monday Weekly AI/ML Practic
 lifecycle sweep — retention purge, downgrade grace/purge, enrollment reminders, overdue-review
 nudges — and the weekly identity digest) run
 as in-process `node-cron` schedules inside the `api`
-container/pod itself (see `apps/api/src/workers/*.worker.ts`). This means **exactly one replica
-of `api` should run the cron
-schedules** in a horizontally-scaled deployment, or jobs fire once per replica — set
-`api.replicaCount: 1` (Compose: don't `--scale api=N`) if you scale beyond one instance, or gate
-the cron registration behind a leader-election/singleton lock if you need both HA and >1 replica
-(not implemented today — see [docs/ROADMAP.md](ROADMAP.md) for the relevant epic if you need this
-split into a dedicated worker process/pod).
+container/pod itself (see `apps/api/src/workers/*.worker.ts`). **Since 2026-10 each tick runs once
+per deployment, however many replicas run** (`services/job-claim.service.ts#runOncePerTick`): every
+replica schedules every job, and the first one to insert the control-plane row
+`PlatformJobClaim(tick:<job>, <minute|hour|day key in the platform timezone>)` runs that tick while
+the others stand down. A second row, `(tick:<job>, "lease")`, is held for the length of the run and
+renewed every minute, so a slow run (the inbound-mail poll, a large fleet sweep) is not overlapped by
+another replica's next tick; a lease not renewed for 5 minutes belongs to a dead pod and is taken
+over. Claims are pruned after 7 days (04:30 daily). If the control plane cannot be reached a tick is
+skipped with a warning rather than run unguarded. So `api.replicaCount` above 1, the chart's
+autoscaler and `--scale api=N` are all safe for scheduled work — before this, every replica ran
+every job, and the Helm defaults (2 replicas, autoscaling) sent each scheduled report, trial notice
+and reminder twice and opened every inbound email as two tickets.
 
 Every digest worker is nonetheless written to be **idempotent by re-reading what it already sent**
 rather than by keeping state — the weekly digest counts its own `Notification` rows, the practice
-update reads its own `EmailLog` rows for the period. That is a guard against a restart or a
-double-fire, not a licence to scale past one replica: two replicas firing simultaneously can still
-both pass the check before either writes.
+update reads its own `EmailLog` rows for the period. That stays as the second line of defence — a
+restart mid-run, or a manual "Run now" racing a scheduled tick — behind the per-tick claim above,
+which is what stops two replicas both passing the check before either writes.
 
 ## Sizing (measured, not guessed)
 
@@ -1976,7 +1985,7 @@ still: its `${VAR:?}` guards also refuse to start without `WEB_ORIGIN` and `APP_
 | `DATABASE_URL` | non-empty | The default organization's tenant database — in Shape 1, the only one. Still required in Shape 2, where it is [functionally unused once more than one org exists](#one-time-platform-setup). |
 | `CONTROL_DATABASE_URL` | non-empty | The control-plane database (org registry, SSO config, plan tiers, platform-admin accounts). Both shapes — see [why even a single org has one](#why-a-control-plane-exists-even-in-this-single-org-shape). |
 | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` | ≥ 16 characters | Sign every tenant's access and refresh tokens. With `NODE_ENV=production`, a weak or template-looking value is also fatal at boot (`server.ts#assertProductionSafety`). |
-| `PLATFORM_ADMIN_JWT_SECRET` | ≥ 16 characters | Signs `/platform-admin` tokens, which administer every organization — so it **must differ** from the two above. The production weak-secret check does not cover this one; generate it as carefully anyway. |
+| `PLATFORM_ADMIN_JWT_SECRET` | ≥ 16 characters | Signs `/platform-admin` tokens, which administer every organization. With `NODE_ENV=production` it gets the same weak-secret check as the two above (`config/production-secrets.ts`), and boot is refused when it **equals** either of them. |
 | `ENCRYPTION_KEY` | exactly 64 hex characters | The AES-256-GCM key for every stored secret, tenant DSNs included. The template's placeholder fails validation on purpose, so an unedited copy cannot encrypt anything under a key nobody wrote down. `openssl rand -hex 32`, fresh per environment; production applies the same weak-secret check as to the JWT secrets. |
 
 ### Core settings with defaults
@@ -2002,7 +2011,12 @@ real deployments.
 | `CSP_CONNECT_SRC` | empty | Extra origins appended to the SPA's `connect-src`, read by the **web** container's nginx, not the API. Empty is right for every topology this repo ships; a **split** deployment (SPA on another origin) sets it to its `VITE_API_URL` origin or the browser blocks every API call. [Browser security headers](#browser-security-headers). **Neither compose file nor the chart forwards it** — it is a runtime `ENV` of the web image (`apps/web/Dockerfile`), so set it on the `web` service or container. |
 | `RATE_LIMIT_PER_MINUTE` | `900` | The blanket per-IP request budget, validated 60–1,000,000 at boot. Per **egress** IP — an office NAT or corporate proxy is ONE bucket, and a 9 am rush across a hundred people behind it exceeds 900/min easily. Raise it for NAT-heavy deployments; the strict per-surface limiters (auth 20/min-failed, public share links, webhooks, AI) are deliberately not affected. Load-validated: the cut lands at exactly the configured budget. |
 | `TENANT_DB_CONNECTION_LIMIT` | `5` (code) / `20` (shipped by Compose + chart) | Connections per tenant Prisma client. 5 is multi-tenant arithmetic — 50 cached tenant clients × 5 must stay under MySQL `max_connections` (151). A single-org install has ONE live tenant, and load testing measured what 5 costs it: the authed path pinned near 90 req/s at every concurrency while p50 scaled with queue depth alone (51 ms → 480 ms). SaaS fleets with many live tenant databases should set it back toward 5 and mind the ceiling arithmetic in `config/prisma.ts`. A `connection_limit` already present in the DSN still wins. Read outside the boot-time schema, so a value that is not an integer from 1 to 100 silently means 5 rather than failing. |
-| `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL_DAYS` | `15m` / `14` | Token lifetimes. Surfaced in the chart as `env.accessTokenTtl` / `env.refreshTokenTtlDays` because shortening the access-token TTL is a standard security-review request. |
+| `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL_DAYS` | `15m` / `14` | Token lifetimes. Surfaced in the chart as `env.accessTokenTtl` / `env.refreshTokenTtlDays` because shortening the access-token TTL is a standard security-review request. A sign-in with **Remember me** unticked (the default since 2026-10) gets a browser-session cookie that ends when the browser closes; the server-side session still expires at this TTL. |
+| `SESSION_IDLE_TIMEOUT_MINUTES` | `0` (off) | Minutes without activity after which a workspace session can no longer be refreshed. Activity is any authenticated request — an open tab's heartbeat counts — so this ends sessions whose browser was closed or asleep that long, not ones left open on a desk. Values under about 10 are coarse (activity is stamped at most every 5 minutes). Chart: `env.sessionIdleTimeoutMinutes`. |
+| `PLATFORM_ADMIN_SESSION_TTL_HOURS`, `PLATFORM_ADMIN_IDLE_TIMEOUT_MINUTES` | `12` / `30` | The platform console's own session lifetime (it used to borrow the 14 days above): absolute hours from sign-in, never extended by activity (1–336), and idle minutes before it signs out (5–1440). Defaults are OWASP ASVS L2's. |
+| `PLATFORM_ADMIN_REQUIRE_MFA` | empty = `true` under `NODE_ENV=production`, `false` otherwise | Whether a console OWNER or OPERATOR without a second factor is held at MFA enrolment before any page opens. Other roles see a banner. Set `false` to opt out. |
+| `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` | unset | Read only when `control:seed` CREATES the console owner. Unset: a random password is generated, printed once, and must be changed at first sign-in. The installers generate and pass one; `.env.example` (dev, CI) passes the known dev value. |
+| `SNAPSHOT_ROOT` | `/var/backups/timesphere-retention` | The directory every pre-deletion retention snapshot folder must sit inside (absolute, no `..`; symlink escapes refused). Only files named like snapshots (`<slug>-<timestamp>.sql`) are listed or served. Mount a volume here to keep snapshots across container restarts. **Upgrading:** a snapshot folder configured outside this root stops being served until it is moved inside. |
 | `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_SECURE` | empty / `587` / `false` | Outbound email. A **fallback only** — `GlobalMailSettings` in the tenant database (Workspace Settings → Mail server) wins whenever it is configured. With no `SMTP_HOST` anywhere, mail is written to the log instead of sent, which on Kubernetes means a password reset that only ever reached `kubectl logs`. Now carried by the Helm chart too (`mail.*` in values.yaml, `SMTP_PASS` in the Secret) — it previously was not, so a chart install had no way to configure mail at all. |
 | `SLA_ENABLED`, `SLA_CRON_SCHEDULE`, `SLA_DEFAULT_APPROVAL_HOURS`, `TICKET_SLA_*` | on / `*/15 * * * *` / `48` / `168`·`72`·`24`·`4` h (low → critical) | Approval and ticket escalation. The `*_ENABLED` switches stop the workers, and the cron values are how often they scan. The hour values are where deadlines *start*, not live settings: `TICKET_SLA_*_HOURS` seed `GlobalTicketSettings` the first time a workspace reads it and are edited at runtime from Workspace Settings after that, while `SLA_DEFAULT_APPROVAL_HOURS` is only the fallback for a project with no positive approval window — new projects take the `slaApprovalHours` column's own default of 48, editable per project. Now forwarded by both compose files and the chart (`sla.*`). |
 | `STORAGE_ROOT`, `STORAGE_DOCUMENTS_DIR`, `STORAGE_AVATARS_DIR`, `STORAGE_FACE_DIR` | empty (today's layout under `UPLOAD_DIR`) | [Relocating file storage](#relocating-file-storage) |

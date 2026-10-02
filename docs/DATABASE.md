@@ -542,6 +542,75 @@ The claims are not filled by the migration — that needs the public suffix list
 conflicts. Run **Company domains → Backfill** in the console once after upgrading
 ([NEW_ORGANIZATION_SETUP.md](NEW_ORGANIZATION_SETUP.md#company-domains)).
 
+## Audit fixes (2026-10-02)
+
+All additive and `@rerunnable` (information_schema + PREPARE for every column, index and foreign
+key). Why each exists: [AUDIT_2026-10.md](AUDIT_2026-10.md).
+
+**Control plane:**
+
+- `20261002120000_dunning_nonpayment_marker` — **`Organization.nonPaymentSubscriptionId`**. Written by
+  `invoice.payment_failed`, kept when the trial worker suspends a GRACE workspace, cleared by
+  checkout, by the restoring payment and by any operator status change. `invoice.paid` restores a
+  SUSPENDED workspace only when this matches the paid subscription — so a payment never lifts an
+  operator's suspension, whose free-text reason looks the same. Backfills workspaces currently in
+  GRACE for a failed renewal; SUSPENDED ones are deliberately not backfilled (see the changelog's
+  upgrade note).
+- **`PlatformJobClaim`** gains a second use: `(tick:<job>, <period>)` makes every scheduled tick run
+  once per deployment, and `(tick:<job>, "lease")` stops a run overlapping the next tick
+  (`services/job-claim.service.ts`). Rows are pruned after 7 days.
+- `20261002122000_saml_request_ids` — **`SamlRequestId`** (`id`, `organizationId`, `expiresAt`): a
+  SAML AuthnRequest's ID, consumed atomically when its response arrives (10-minute TTL, pruned on each
+  insert), so start and ACS may land on different replicas.
+- `20261002122100_sso_jit_controls` — **`OrgSsoConfig.jitEnabled`** (`BOOLEAN NOT NULL DEFAULT true`)
+  and **`jitAllowedDomains`** (`JSON NULL`, `NULL` = any domain). Existing rows keep today's behaviour.
+- `20261002122200_sso_observed_microsoft_directories` — **`OrgSsoObservedTenant`** (org, `tenantId`,
+  `emailDomain`, `count`, `firstSeenAt`, `lastSeenAt`): the Entra directories people actually sign in
+  from, behind **Restrict to my directory** and the console's any-directory flag.
+- `20261002124000_platform_console_account_hardening` — **`PlatformAdminUser.mustChangePassword`**
+  (default false), **`failedLoginCount`**, **`lockedUntil`**, and **`PlatformAdminSession.lastUsedAt`**
+  (the console idle timeout).
+- `20261002134000_organization_converted_at` — **`Organization.convertedAt`**: when a trial became
+  paid (Stripe checkout, or an operator setting a plan). Backfilled from the `organization.trial_converted`
+  audit rows and from the first STARTER→paid plan change on a former trial; Stripe conversions before
+  this left no trace and stay NULL (counted as converted, undated).
+- `20261002134100_billed_subscription_status` — **`Organization.billedSubscriptionStatus`**, stored by
+  the nightly billing reconcile so billed MRR counts only `active` and `past_due` subscriptions. NULL
+  reads as billable until the next sweep.
+- `20261002143000_platform_admin_failure_decay` — **`PlatformAdminUser.lastFailedLoginAt`**: lets a
+  console account without MFA have its failures forgiven after a quiet 15 minutes (an account with MFA
+  locks only at the code step).
+
+**Tenant** (fan out with `npm run db:migrate:tenants`):
+
+- `20261002121000_user_role_backfill` — data only: re-runs `INSERT IGNORE INTO UserRole … SELECT
+  … FROM User`, so every account holds a `UserRole` row for its primary role. Workspaces provisioned
+  after the multi-role migration had founders without one, which the last-super-admin guard missed.
+- `20261002123000_password_reset_selector` — **`PasswordResetToken.selector`** (`VARCHAR(32)`, unique,
+  nullable). A link is `<selector>.<verifier>`; the verifier is stored as SHA-256 in `tokenHash`.
+  `NULL` marks a legacy link, redeemable until it expires.
+- `20261002123100_session_remember_me` — **`Session.rememberMe`** (`BOOLEAN NULL`): `false` gets a
+  browser-session cookie on sign-in and every refresh; `NULL` (SSO, LDAP, older sessions) keeps the
+  expiring cookie.
+- `20261002123200_session_auth_method` — **`Session.authMethod`** (`VARCHAR(16) NULL`, `PASSWORD` for a
+  password sign-in): what the must-change-password gate checks, so SSO and LDAP sessions are not held.
+- `20261002130000_change_stage_timestamps` — data only: clears change stage stamps that lie beyond a
+  change's current state, and sets `submittedAt` to the opening of each change's latest approval round,
+  so stage clocks read correctly after rework.
+- `20261002131000_email_intake_confirmation_subject` — data only: the email-intake confirmation's
+  subject becomes `[{{ticketKey}}] We received your report`, where it is still a shipped spelling, so
+  replies can be threaded by key.
+- `20261002131100_ticket_email_deep_links` — data only: the `ticket.needs_review` and
+  `ticket.closed_digest` templates' button opens `/app/tickets?open={{ticketId}}`, and `ticketId` joins
+  their variables.
+- `20261002141000_pause_widened_manager_report_deliveries` — data only: pauses ACTIVE scheduled report
+  deliveries whose owner is a MANAGER or TEAM_LEAD and which have a recipient who is not a workspace
+  user, with a `lastSendError` saying why (the report now covers the owner's team's projects, as the
+  live dashboard does). Written without `JSON_TABLE` so it also runs on MariaDB 10.4.
+- `20261002142000_request_form_change_type` — data only: request forms set to the CHANGE ticket type
+  (any spelling — the column is case-insensitive) move to BUG, since only the change module creates a
+  change's ticket.
+
 ## API request telemetry (`ApiRequestSample`)
 
 One row per completed HTTP request, as measured by the instance that served it. Created by

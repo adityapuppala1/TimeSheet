@@ -96,24 +96,32 @@ Migrating required, in order:
 
 ### 4. Rotate the seeded platform-admin credentials
 
-The control-plane seed creates `platform-admin@timesphere.local` / `PlatformAdmin@12345` — the
-single highest-privilege account on the platform (cross-org access), and its password is in this
-repository. Since 3.11.0 the console itself tells you: while that account still verifies against
-the seeded password, an amber **"seeded bootstrap password"** banner sits across every
-`/platform-admin` page, and **Change password** in the sidebar rotates it (current password
-re-verified, at least 12 characters, every *other* console session signed out). Do this before any
-real organization is provisioned; the banner disappears the moment the change is accepted.
+The control-plane seed creates `platform-admin@timesphere.local` — the single highest-privilege
+account on the platform (cross-org access). **Since 2026-10 it no longer has a fixed password:**
 
-The SQL route still works if you would rather script it:
+- `install.sh` / `install.ps1` generate a strong password, pass it to the seed as
+  `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD`, prove a sign-in with it, and print it **once**. Copy it then.
+- A manual `npm run control:seed -w apps/api` uses `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` if you set it;
+  otherwise it generates a 24-character password and prints it once.
+- An account on a generated password is held at **Change password** — every other console route
+  answers `403 PASSWORD_ROTATION_REQUIRED` — until it is rotated (current password re-verified, at
+  least 12 characters, every *other* console session signed out). The public dev value
+  (`PlatformAdmin@12345`, which `.env.example` passes for dev and CI) is held the same way under
+  `NODE_ENV=production`, and an older install still on it keeps the amber **"seeded bootstrap
+  password"** banner.
+- In production an OWNER or OPERATOR without a second factor is then held at MFA enrolment
+  (`PLATFORM_ADMIN_REQUIRE_MFA`, on by default under `NODE_ENV=production`).
 
-```sql
--- Against the control-plane database, with a freshly bcrypt-hashed password:
-UPDATE PlatformAdminUser SET passwordHash = '<bcrypt-hash>' WHERE email = 'platform-admin@timesphere.local';
+Re-running the seed never changes an existing account's password. A lone owner who needs a second
+one (two-person approvals need two owners) can add it from the shell — audited, with a generated
+password that must be changed:
+
+```bash
+npm run control:create-owner -w apps/api -- --email=ops2@example.com --name="Second Owner" --reason="Second approver for two-person actions"
 ```
 
-Or re-run `npm run control:seed -w apps/api` against a still-empty control database before you
-register any real org, and change the email/password constants in
-`apps/api/prisma/control/seed.ts` first.
+It refuses once two active owners exist; after that, owners are added through **Access**, with a
+second owner's approval.
 
 ### 5. Harden the container images
 
@@ -184,19 +192,15 @@ Loki, Datadog, ELK — whatever your infra already uses) and consider wiring a r
 (Sentry, Bugsnag) at the two `process.on(...)` handlers in `server.ts` and in
 `middleware/error.ts`'s 5xx branch.
 
-### 9. Pin the cron-running replica count to 1
+### 9. Scheduled jobs and the API replica count
 
-**Verified**: scheduled jobs (SLA sweeps, reminders, weekly digests, IMAP/Telegram polling) run
-as in-process `node-cron` schedules inside the `api` process itself
-(`apps/api/src/workers/*.worker.ts`) — there is no leader-election lock. If you horizontally scale
-`api` beyond one replica, every job fires once per replica (duplicate reminder emails, duplicate
-SLA escalations). Either:
-- keep exactly **one** `api` replica (`api.replicaCount: 1` in the Helm chart's values, or don't
-  `docker compose up --scale api=N`), or
-- accept duplicate job execution until a leader-election/singleton lock is built (tracked in
-  [docs/ROADMAP.md](ROADMAP.md)).
-
-The `web` service (stateless, no cron) scales freely either way.
+**No action needed since 2026-10.** Scheduled jobs (SLA sweeps, reminders, digests, IMAP/Telegram
+polling) still run as in-process `node-cron` schedules inside every `api` replica, but each tick is
+claimed in the control plane first, so it runs **once per deployment** however many replicas there
+are (`services/job-claim.service.ts`; [DEPLOYMENT.md § Worker/background processing](DEPLOYMENT.md)).
+Before this, every replica ran every job and the Helm defaults (two replicas plus an autoscaler) sent
+duplicate reminders, reports and escalations — pinning `api.replicaCount: 1` was the workaround, and
+the autoscaler silently overrode it. Scale `api` and `web` as traffic needs.
 
 ### 10. Watch the per-tenant connection ceiling (SaaS shape only)
 

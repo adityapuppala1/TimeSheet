@@ -17,13 +17,50 @@ httpOnly refresh cookie, resolved to an organization by the request's `Host` hea
 
 ## Auth
 
-- `POST /auth/login` `{ email, password, rememberMe }`
-- `POST /auth/refresh` `{ refreshToken }`
-- `POST /auth/logout`
-- `POST /auth/forgot-password` `{ email }`
-- `POST /auth/reset-password` `{ token, password }`
-- `POST /auth/change-password` `{ currentPassword, nextPassword }`
-- `GET /auth/me`
+- `POST /auth/login` `{ email, password, rememberMe }` — `rememberMe` omitted reads as `false`, and
+  `false` gets a browser-session refresh cookie (no `Expires`); `true` keeps the 30-day one. Answers
+  `passwordChangeRequired` (see below).
+- `POST /auth/refresh` `{ refreshToken }` — `401` once the session has been idle longer than
+  `SESSION_IDLE_TIMEOUT_MINUTES` (when set). A replay of the previous secret inside the 30-second
+  grace window returns an access token only — no new secret, no `Set-Cookie` — so two tabs
+  refreshing together no longer sign each other out. If the request carries an `Origin`, it must be
+  allowed for the request's own `Host`.
+- `POST /auth/logout` — **no `requireAuth`**, so it works during maintenance, in grace, and with an
+  expired access token: it revokes the session named by the refresh cookie (and by the access
+  token's `sid` when one is sent), always clears the cookie, and always answers `204`.
+- `POST /auth/forgot-password` `{ email }` — always `202`, sent **before** any lookup so the timing
+  says nothing about the address. Every request counts against 10 per 15 minutes per IP
+  (`middleware/auth-limits.ts`; the workspace finder's `/workspaces/start` has its own 60, because an
+  office behind one address signs in through it), and at most 3 links per address per hour are sent (counted in the
+  database, so it holds across replicas). Sends nothing while the workspace's password sign-in is
+  off (`requireSsoOnly` or `passwordLoginEnabled: false`).
+- `POST /auth/reset-password` `{ token, password }` — the token is `<selector>.<verifier>` (an indexed
+  16-character selector plus a 48-character verifier stored as SHA-256): one lookup, one constant-time
+  compare. Legacy 48-character tokens still redeem until they expire. Spending is one conditional
+  update, voids the person's other outstanding links, re-checks the account is ACTIVE, lifts any
+  sign-in lockout on it, and sends `account.password_changed`. **403** while password sign-in is off.
+- `POST /auth/change-password` `{ currentPassword, nextPassword }` — also voids outstanding reset links.
+- `GET /auth/me` — carries `passwordChangeRequired`.
+
+**Password policy** (`utils/password-policy.ts`), on change, reset, the welcome link, and every
+password an admin types (create, CSV, single and bulk reset): at least 8 characters, at most **72
+bytes** of UTF-8 (bcrypt's input limit), not one of the ~3,000 most common passwords, and not equal to
+or containing the email address's local part. `422` with the reason otherwise.
+
+**`PASSWORD_CHANGE_REQUIRED`.** While `User.mustChangePassword` is set (admin create, admin or
+platform reset) and the session was established by a password sign-in (`Session.authMethod =
+PASSWORD`), `requireAuth` answers `403 { code: "PASSWORD_CHANGE_REQUIRED" }` on everything except
+`/auth/me`, `/auth/change-password`, `/auth/heartbeat`, `/auth/logout` and `/auth/logout-all`. SSO and
+LDAP sessions are not held. The SPA renders a forced change-password screen.
+
+**Lockout.** Five failed sign-ins for one address (password or LDAP, per workspace, per process)
+lock it for 5 minutes; while the count lives, each further failure re-locks it for 15, then 60
+minutes — never longer. A success or a completed reset clears it; 15 quiet minutes after a lock ends
+forgive it. `429` with the minutes left.
+
+**Audit.** `auth.login_succeeded`, `auth.login_failed` (address and reason, never the password; GUEST
+actor), `auth.logout`, `auth.password_changed`, `auth.password_reset_requested`,
+`auth.password_reset_completed`, and for SSO `auth.sso_login` and `user.sso_provisioned`.
 - `GET /auth/heartbeat` — deliberately tiny authenticated liveness beat the app shell polls
   every 15s. Its 401 is how a server-side session revocation (admin force-logout, another
   device's sign-out) reaches an open tab within seconds; it also keeps `Session.lastSeenAt`
@@ -43,6 +80,47 @@ Microsoft sign-in. A Microsoft sign-in through a multi-tenant authority (blank t
 `common` / `organizations` / `consumers`) succeeds but logs one `[sso]` warning with the token's
 tenant ID, never the user's email — see
 [DEPLOYMENT.md § SSO across workspace subdomains](DEPLOYMENT.md#sso-across-workspace-subdomains).
+
+**SSO since 2026-10.**
+
+- **Failures redirect, never render JSON.** Start, callback and ACS errors go to
+  `<that workspace's login URL>?sso_error=<code>` — `cancelled` (the IdP's `access_denied`),
+  `expired`, `email_unverified`, `inactive`, `seat_limit`, `maintenance`, `not_provisioned`,
+  `not_allowed`, `config` or `failed` — or to the `APP_BASE_URL` login when the workspace can't be
+  known. Only `failed` and `config` are logged, by error name and message, never the URL.
+- **Start routes resolve the workspace like every other route**, verified custom domain first
+  (`middleware/tenant.ts#resolveRequestOrgSlug`).
+- **Just-in-time accounts.** `OrgSsoConfig.jitEnabled` (default `true`) and `jitAllowedDomains`
+  (JSON array; `NULL` = any). An identity with no account is refused with `not_provisioned` when JIT
+  is off or its email domain is not listed; for Google, a non-`gmail.com` address must also carry an
+  `hd` claim in the list. A created account gets its `UserRole` row, a workspace-directory row and a
+  Stripe seat sync, writes `user.sso_provisioned`, and notifies active super admins
+  (`sso.user_provisioned`). Existing users are still matched by email.
+- **Microsoft directories.** A NEW Microsoft configuration with a blank, `common`, `organizations`
+  or `consumers` tenant, or un-pinning a pinned one, is `422`. An existing blank one can still be
+  saved and the response carries `warnings[]`. Every Microsoft sign-in upserts
+  `OrgSsoObservedTenant(org, tid, emailDomain)`; `GET /settings/sso` returns `microsoftDirectories`
+  (with the caller's own latest directory as the suggestion) behind the card's **Restrict to my
+  directory**.
+- **SAML.** Either a signed response or a signed assertion is accepted; unsigned and
+  multiple-assertion responses are refused. `idpCert` may hold several PEMs (rollover); clock skew
+  is 180 s. Request IDs live in the control-plane `SamlRequestId` table (10-minute TTL, consumed
+  atomically), so start and ACS may hit different replicas. The issuer, `Destination` and
+  `Recipient` are checked against the workspace's ACS hosts — enforced on configurations with no
+  recorded sign-in, warned about on proven ones. Email comes from `email`, `mail`, OID
+  `0.9.2342.19200300.100.1.3` or Entra's `…/claims/emailaddress`; NameID only in emailAddress or
+  unspecified format; it must be a syntactically valid address.
+- `GET /auth/sso/saml/metadata` serves SP metadata; `GET /settings/sso` returns `registration` —
+  the absolute OAuth redirect URIs, ACS URL, SP entity ID and metadata URL.
+- **Settings guards.** While `requireSsoOnly` is on, a PATCH that would leave no enabled, complete
+  provider with a recorded sign-in is `409`. `POST …/test` is plan-gated (`403`), follows redirects
+  hop by hop through the egress guard, returns generic LDAP errors when `ROOT_DOMAIN` is set, and
+  stores a Microsoft result as `UNVERIFIED` (credentials are only proven by a real sign-in). LDAP
+  replaces every `{{email}}` and refuses a filter that matches more than one entry (`409`).
+- **SCIM** reads `application/scim+json` bodies, and accepts `active` as a boolean or a
+  case-insensitive `"true"`/`"false"` string (Microsoft Entra sends `"False"`), with or without a
+  `path`. Deprovisioning (PATCH `active:false` or DELETE) the workspace's last active super admin is a
+  SCIM `409` — assign another first.
 
 ## Sessions and device identity
 
@@ -168,6 +246,16 @@ halves of that (`tests/unit/branding-storage.test.ts`).
   emailed reset does; an admin reset is usually a response to a compromise, and a new hash alone
   evicts nobody
 
+**Who may act on whom** (`services/user-authority.service.ts`, every single-user and bulk route):
+only a SUPER_ADMIN may act on an account that holds SUPER_ADMIN (primary role or a `UserRole`
+grant) or grant SUPER_ADMIN — `403` otherwise, and no password comes back. Deactivating, deleting or
+removing roles from your own account is `422`, and so is anything that would leave no active super
+admin (a holder is an ACTIVE account whose primary role is SUPER_ADMIN **or** which holds a
+`UserRole` row for it). A user becoming ACTIVE needs a free seat (`402`; bulk ACTIVATE is refused
+whole), and every seat-changing path syncs the Stripe quantity, reconciled nightly at 03:50. A
+manager must be ACTIVE and must not close a reporting loop (`422`; in the CSV import that row's
+manager link fails). A typed password must meet the password policy (above).
+
 ### Deactivated people in the UI
 
 **One rule, one definition, one boundary.** `apps/api/src/services/people-visibility.service.ts`
@@ -275,6 +363,26 @@ the same `projects:manage` right.
 - `POST /timesheets/submit`
 - `PATCH /timesheets/:id/approve`
 - `PATCH /timesheets/:id/reject`
+
+  **Who may decide** (`services/timesheet-approval-scope.service.ts`, both cores and bulk): never the
+  entry's author, and never an approver who sits BELOW the author in the reporting line (deciding your
+  own manager's hours) — `403` for every role, admins included. Two exceptions keep every entry
+  decidable: an author with no (non-deleted) manager may be decided by any other approver, and an
+  author who is the workspace's only eligible approver may decide their own (audited
+  `soleApprover: true`). The face check is spent only after these checks pass. An SLA escalation goes
+  only to someone who may decide the entry, else to nobody. The approver's notice is its own template,
+  `timesheet.awaiting_review`, under the `emailSlaBreach` toggle. Each decision writes with
+  `updateMany … where status = SUBMITTED`; a row someone else just decided answers `409` and sends no
+  second email or audit. A rejection — single or bulk — notifies and audits each row.
+- `GET /timesheets/approval-queue` — `TIMESHEETS_APPROVE`. The queue, filtered in SQL: `status`
+  (SUBMITTED by default; APPROVED/REJECTED/DRAFT/ALL), `projectId`, `activityTypeId`, `from`/`to`,
+  `search`, paged (`page`, `pageSize` ≤ 100), with facets over the whole scope and `awaitingReview`.
+  It never lists the caller's own entries or those of anyone above them. "Awaiting review" means one
+  thing everywhere (`awaitingReviewWhere`): this queue's count, the Inbox brief and the admin summary.
+- `POST /timesheets/:id/reopen` `{ reason }` — `TIMESHEETS_APPROVE`, under the same who-may-decide
+  rule. APPROVED → SUBMITTED: clears the rate snapshot and reviewer fields, restarts the approval
+  deadline, writes `timesheet.reopened` with what the approval had frozen, and notifies the author.
+  `409` if the entry changed first.
 - `PATCH /timesheets/decide-bulk` — body `{ ids[] (1–100), decision: "approve"|"reject", reason?,
   faceVerificationId? }`; `reason` is required for reject. Decides each row **independently**
   through the same core the single routes use (one payroll path, so the two can never drift) and
@@ -529,7 +637,7 @@ existed**, so every other caller is unaffected by passing nothing:
 | Endpoint | With no window | With one |
 |---|---|---|
 | `GET /timesheets` | newest-first page, capped at 100 rows | filters `workDate`, and raises the cap to 2 000 |
-| `GET /reports/admin-summary` | today / yesterday / 7d / year-to-date, hardcoded | the window, compared against the equal-length window before it |
+| `GET /reports/admin-summary` | today (India's), against the same day last week | the window, against the same weekdays whole weeks earlier |
 | `GET /reports/daily-status` | today | the window, and returns `from`/`to`/`days` so the card can label itself |
 | `GET /dashboards/my-month` | the current calendar month | the window |
 
@@ -548,9 +656,13 @@ same eight-line date parser and the off-by-one in an inclusive range (an exclusi
 midnight on the day *after* `to`, or the window quietly drops its own last day) is exactly the kind
 of thing that should exist once.
 
-**"vs yesterday" becomes "vs the previous equal-length period"** on `admin-summary` once a window is
-given — it is the only thing a delta can honestly mean for an arbitrary span, since comparing a
-fortnight against a single day reads as a collapse every time. The project/status/activity
+**Comparisons are like for like (since 2026-10).** A window is compared with the same weekdays
+shifted back by whole weeks (`utils/date-window.ts#resolveDayComparison`, labelled "vs the same days
+last week" / "… N weeks earlier"), cut at the same moment when it runs past now — an equal-length
+window just before it crossed a weekend and biased every delta. Figures that describe NOW (users,
+projects, pending approvals, open escalations, risk) carry no comparison at all. Every boundary is an
+India-midnight instant. The metric definitions are in
+[AUDIT_2026-10.md § Workspace metric definitions](AUDIT_2026-10.md#workspace-metric-definitions). The project/status/activity
 breakdowns gain the filter too; they were previously **all-time**, which meant a "project
 utilization" card on a page showing one week was silently answering for the entire history.
 
@@ -563,15 +675,17 @@ scope and keep the visibility they have, because narrowing those would change wh
 
 
 - `GET /reports/employee-summary`
-- `GET /reports/admin-summary` — also returns a same-shaped `<metric>Yesterday`/`<metric>LastWeek`
-  baseline field alongside every headline metric (e.g. `usersYesterday`, `approvedLastWeek`,
-  `todayDailyRemindersSentYesterday`) so the frontend's `computeTrend()` (`lib/trend.ts`) can
-  render a today-vs-yesterday or this-week-vs-last-week badge without a second request. A `null`
-  trend (baseline was 0) means "no badge shown," not an error.
-- `GET /reports/ticket-summary` — same pattern: `openSlaBreachesYesterday`, `resolvedLastWeek`,
-  `avgResolutionHoursLastWeek` alongside the current-period fields.
-- `GET /team/sla-summary` — same pattern, scoped to the calling manager's direct reports:
-  `submittedYesterday`, `breachedYesterday`, `approvedLastWeek`, `openEscalationsYesterday`.
+- `GET /reports/admin-summary` — built by `services/admin-summary.service.ts`. Since 2026-10 a
+  period figure carries a `<metric>Prev` baseline over the like-for-like window plus a `period` block
+  naming it; the old `*Yesterday` keys are gone. `workforce` counts the same people (active human
+  employees and team leads) on both sides and is null when there is nobody to measure.
+  `pendingApprovals` is the approvals queue's own count for the viewer. A zero baseline reads "new".
+- `GET /reports/ticket-summary` — `resolution` (the median over the last 28 days against the 28
+  before, null when empty, with its sample size), `openTickets`, and SLA breaches counted from each
+  ticket's due date (so they appear even where the breach sweep is off); "resolved this week" is the
+  India week to date. The old `avgResolution*` and `openSlaBreachesYesterday` fields are gone.
+- `GET /team/sla-summary` — scoped to the calling manager's direct reports: point-in-time counts
+  ("now", no delta) plus `breachedLastWeek`; the `*Yesterday` fields are gone.
 - `GET /team/reports/:userId/hours-trend` — authenticated, with **no separate role check because
   the lookup *is* the scope check**: the user is fetched with `managerId = <the caller>` **and the
   shared `NOT_DEACTIVATED` predicate**, the same one `GET /team/reports` filters the roster by, so
@@ -600,7 +714,8 @@ scope and keep the visibility they have, because narrowing those would change wh
 - `GET /reports/cost-insights` — opt-in (`GlobalTicketSettings.enableCostAnalytics`). Covers
   **approved, billable** hours only, priced at the rate frozen onto each timesheet when it was
   approved (falling back to the person's current rate only for entries approved before rate
-  snapshotting existed). Alongside `totalCostUsd`/`avgCostPerTicket`/`rows` it returns
+  snapshotting existed). Each row carries its own `cost` and `currency`, and `totalsByCurrency`
+  replaces the old `totalCostUsd` — amounts in different currencies are never added. Alongside `rows` it returns
   `unratedHours` (hours with no rate on record — reported, never priced as zero) and
   `excludedDraftHours`/`excludedRejectedHours`.
 
@@ -1088,6 +1203,12 @@ tickets and hours, which every workspace already has.
 - `GET|POST|DELETE /dashboards/subscriptions[/:id]` — email a dashboard on a `DAILY`, `WEEKLY` or
   `MONTHLY` cadence to any list of addresses, including people with no account. Recipients are
   plain strings, deliberately: the point is reaching a stakeholder who will never log in.
+- `PATCH /dashboards/subscriptions/:id` `{ isActive }` — the OWNER pauses or resumes their own
+  delivery. Resuming needs `reports:view` (`403` otherwise) and clears `lastSendError`; audited as
+  `report_subscription.paused` / `.resumed`. Owners can always list and delete their own deliveries.
+  Since 2026-10 the worker builds the report with the same project scope as the live dashboard,
+  escapes every value, re-checks the owner's `reports:view` each run (pausing with a reason when it
+  is gone), and skips recipients who are deactivated workspace users.
 
   The worker runs hourly and resolves the widgets **as the subscription's owner**, so a report
   can never show more than the person who set it up can see. If that person is deactivated or
@@ -1120,8 +1241,10 @@ was raised, so the key stays meaningful when it is read a year later in an audit
 
 ### The four change types, and why there are four
 
-`STANDARD`, `NORMAL` and `EMERGENCY` are ITIL's vocabulary: pre-approved routine work, planned work
-that earns a decision, and work that cannot wait for one.
+`STANDARD`, `NORMAL` and `EMERGENCY` are ITIL's vocabulary: routine low-risk work, planned work that
+earns a decision, and work that cannot wait for one. **Every type is approved here** — ITIL's
+"pre-authorised" standard change depends on a catalogue of vetted templates, and without one a type the
+requester picks freely would be a way round approval.
 
 **`MAJOR` is not a fourth peer — it is `NORMAL` escalated**, and it exists because two obligations
 cannot be derived from the risk score:
@@ -1152,18 +1275,30 @@ the feature is off, which would have made the whole module Enterprise-only.
 
 - `GET /changes` — the register, project-scoped. Filters: `state`, `riskLevel`, `changeKind`,
   `environment`, `projectId`, `search`.
-- `GET /changes/:id` — one change with everything on it, plus four server-computed answers the
+- `GET /changes/:id` — one change with everything on it, plus server-computed answers the
   browser cannot work out for itself: `canEdit`, `canDecide`, `blockingForSubmit` (what the change
-  still owes before it could be submitted), `blockingDependencies`, and `sla`.
+  still owes before it could be submitted), `blockingDependencies`, `sla`, and since 2026-10
+  `lockedFields`, `editReopensApproval` and `allowedTransitions` (the page draws its buttons from it).
 - `POST /changes` — raise one. `justification` is required at creation; a change with no stated
   reason is the thing this module exists to stop.
-- `PATCH /changes/:id` — fill in any section. The plan **freezes** at `APPROVED` for non-privileged
-  editors: scope, risk and schedule are what got approved, so changing them afterwards means raising
-  a new change. Outcome fields stay writable, because recording what happened is post-approval work.
-- `POST /changes/:id/transition` — move it. Refuses illegal edges, answers a no-op rather than
-  performing it (a double-click was otherwise enough to open a second approval round and re-mail the
-  approver), and refuses `IMPLEMENTING` while a dependency is open.
-- `POST /changes/:id/decision` — approve or reject. `CHANGES_APPROVE`.
+- `PATCH /changes/:id` — fill in any section. The **material** fields (`MATERIAL_CHANGE_FIELDS`:
+  type, environment, the risk inputs, downtime, justification, the implementation/backout/test/
+  communication plans and the planned window) **lock at submission** for everyone: `409` while it
+  waits for approval ("withdraw it to draft"). On an APPROVED or SCHEDULED change a change manager's
+  material edit sends it back to AWAITING_APPROVAL as a new round, after the submission gate; from
+  IMPLEMENTING on, `409`. Wording, people and outcome fields stay writable.
+- `POST /changes/:id/transition` — move it, through `services/change-transition.service.ts`, which the
+  Workflow Studio and applied proposals use too (approval round, stage stamps, ticket status and its
+  `closedAt`, the submission email). Refuses illegal edges, answers a no-op rather than performing it
+  (a double-click was otherwise enough to open a second approval round and re-mail the approver), and
+  refuses `IMPLEMENTING` while a dependency is open. AWAITING_APPROVAL → DRAFT is **withdraw** (the
+  pending round is settled `WITHDRAWN`; a cancel settles it `CANCELLED`). Scheduling or starting a
+  window that collides with a blackout or another change needs `conflictOverrideReason` (`422`).
+- `POST /changes/:id/decision` — approve or reject. `CHANGES_APPROVE`. Re-checks the submission
+  requirements — against the risk questions that existed when the round opened — before writing
+  APPROVED (`422` — reject it instead), and answers `409` when no pending approval round names anyone,
+  or when the change was withdrawn or decided while the approver had it open. A transition made on a
+  stale read of the change is refused the same way.
 
 ### What submission requires, and why it is not advisory
 
@@ -1569,6 +1704,11 @@ applied.
   is not a question with an answer, and silently choosing a window would produce a confident
   percentage nobody asked for.
 
+  - **Since 2026-10:** capacity counts working days up to today (IST) minus booked leave, without the
+    target scale (`targetUtilisationPct` and `timeOffHours` are separate fields); every counted person
+    in scope appears, idle ones included; hours are SUBMITTED + APPROVED only, with the drafts and
+    rejected hours left out reported in `totals.excluded`. `truncated` now covers only the latency
+    sample.
   - **Utilisation** reuses `capacityForBucket` from the workload service rather than
     reimplementing it, so a person cannot read as 80% booked on the workload board and 120%
     utilised on the report for the same fortnight. `capacityHours` and `utilisationPct` are
@@ -2170,6 +2310,14 @@ foothold. Applying a new path is one `.env` line and a restart.
 
 ## Billing (5.0.0)
 
+**In GRACE** (a lapsed trial or a failed renewal), a super admin can still reach `status`,
+`standing`, `checkout-session`, `portal-session` and the timesheet exports; everyone else gets
+`402 PLAN_LAPSED` except on `standing`. Checkout success/cancel and the portal return go to
+`/plan-lapsed` while the workspace is not ACTIVE (`utils/billing-paths.ts`), which polls until the
+webhook has restored it. `invoice.paid` restores a SUSPENDED workspace too when it was suspended for
+not paying that subscription (`Organization.nonPaymentSubscriptionId`), never an operator's
+suspension.
+
 Base URL `/api/billing`, mounted **twice** — see ARCHITECTURE.md's tenant-resolution table. The
 webhook receiver is mounted before `express.json()` because Stripe's signature is computed over the
 exact raw bytes; the ordinary router below is mounted after tenant resolution. Everything except
@@ -2178,8 +2326,9 @@ exact raw bytes; the ordinary router below is mounted after tenant resolution. E
 | Route | Notes |
 |---|---|
 | `GET /billing/status` | `requireAuth`. Plan tier, active seats against the limit, `hasStripeCustomer`, `hasSubscription`, and which tiers are self-serve-purchasable on this deployment. |
+| `GET /billing/standing` | `requireAuth`, **any member, also in GRACE** (the one exact path the grace gate opens to everyone). The org status and up to three active super admins, owner first — what `/plan-lapsed` needs to say who can renew. |
 | `POST /billing/checkout-session` | `{ tier }`. Returns **one of two shapes**: `{ mode: "checkout", url }` or `{ mode: "updated" }`. |
-| `POST /billing/portal-session` | Returns `{ url }` for Stripe's Customer Portal — card, billing address, tax ids, invoices, cancellation. `return_url` is `/app/settings`, with no `?billing=` marker, because nothing happened that the page needs to announce. |
+| `POST /billing/portal-session` | Returns `{ url }` for Stripe's Customer Portal — card, billing address, tax ids, invoices, cancellation. `return_url` is `/app/settings` (or `/plan-lapsed` while the workspace is not ACTIVE), with no `?billing=` marker, because nothing happened that the page needs to announce. |
 | `GET /billing/invoices` | The last **12** invoices (`limit: 12`, no date filter), each with `hostedInvoiceUrl` and `invoicePdf`. `[]` — with no Stripe call at all — when the workspace has no Stripe customer. Amounts stay in minor units. |
 | `POST /billing/webhook` | Stripe's. Raw body, signature-verified. Writes control-plane state only. |
 
@@ -2407,8 +2556,19 @@ cookie (`platformAdminRefreshToken`, path-scoped to `/api/platform-admin/auth`),
 state with the tenant app.
 
 - `POST /auth/login` `{ email, password }` → `{ accessToken, admin }`. `admin.usingSeededPassword`
-  is `true` while the account still verifies against the password the control seed ships with —
-  the console shows a persistent banner until it is changed.
+  is `true` while the account still verifies against the public dev password — the console shows a
+  persistent banner until it is changed. Five consecutive failures lock the account for 1 minute,
+  doubling to an hour (`platform_admin.locked` audited). For an account with MFA only the CODE step
+  counts and locks — the right password always reaches it, so a stranger who knows the owner's
+  address cannot keep them out; without MFA, failures are forgiven 15 minutes after the last failure
+  and the end of the last lock. Wrong proofs on `mfa/disable` and `change-password` count too.
+- **Held accounts.** An account with `PlatformAdminUser.mustChangePassword` (a generated bootstrap
+  password, an operator created or reactivated through approvals, an owner from the break-glass CLI)
+  gets `403 PASSWORD_ROTATION_REQUIRED` everywhere but its own `/auth/*` routes. With
+  `PLATFORM_ADMIN_REQUIRE_MFA` on (default under `NODE_ENV=production`) an OWNER or OPERATOR without
+  MFA is held at enrolment the same way. Sessions last `PLATFORM_ADMIN_SESSION_TTL_HOURS` (12) from
+  sign-in and end after `PLATFORM_ADMIN_IDLE_TIMEOUT_MINUTES` (30) without a request, and a token is
+  refused unless its session belongs to the admin it names.
 - `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` (also carries `usingSeededPassword`, so
   the banner survives a reload).
 - `POST /auth/change-password` `{ currentPassword, newPassword }` — current password re-verified;
@@ -2463,13 +2623,24 @@ you say it. An unrecognised stored value fails closed to `READ_ONLY`.
 - `POST /auth/login/totp` `{ challengeToken, code }` — completes it. A recovery code is accepted in
   place of a TOTP code and is consumed atomically.
 - `GET /auth/mfa`, `POST /auth/mfa/begin`, `POST /auth/mfa/confirm`, `POST /auth/mfa/disable` —
-  enrolment. **Opt-in**: nothing at login enforces `mfaEnabled`; the console nags instead. TOTP is
+  enrolment. **Mandatory for OWNER and OPERATOR when `PLATFORM_ADMIN_REQUIRE_MFA` is on** (the default
+  in production); other roles see a console-wide banner. `disable` needs the password **and** a
+  current `code` (or a `recovery` code). TOTP is
   hand-rolled on `node:crypto` (6 digits, 30s step, ±1 window) and pinned in tests against RFC
   6238's own published vectors — the only way to know an authenticator implementation is right is to
   check it against the numbers in the specification. Recovery codes are bcrypt-hashed one row each,
   and `mfaLastUsedStep` refuses a step already consumed.
 
-**Two-person actions.** Five of them, listed once in `platformTwoPersonActions` because the API
+**Two-person actions.** Since 2026-10 also `retention.settings` — a retention-policy change that
+shortens the window, moves a reminder or the final notice closer to deletion, switches auto-delete on
+or clears the snapshot folder (other settings stay single-person) — and `admin.reactivate`
+(INACTIVE → ACTIVE, which also issues a new temporary password); a PATCH carrying both a role and a
+status is `422`. Approval claims its request atomically, so it runs once. A `retention.settings`
+request stores only the fields it changes (`{ changes: { field: { from, to } }, risks }`), the Approvals
+card shows them, and approval applies only that difference — refused (`409`) if, against the policy
+as it is then, it would loosen more than it showed. `PUT /retention/settings`
+and `PATCH /billing-settings` need a reason; changing a Stripe secret emails every OWNER. The original
+five, listed once in `platformTwoPersonActions` because the API
 enforces the list and the console has to describe what it queued: `retention.delete`,
 `snapshot.restore`, `snapshot.delete`, `admin.create`, `admin.role_change`. Membership is decided by
 "can it be undone", not by "is it dangerous" — a suspended workspace can be un-suspended; a deleted
@@ -2687,7 +2858,7 @@ Every screen in this block reads **one nightly snapshot**, not the fleet. `OrgUs
 one row per workspace per day — seats (human and agent, counted separately), tickets by status, AI
 spend month-to-date against the ceiling in force, outbound mail counts, database size copied from
 the hourly sampler, last sign-in, and the plan/status/trial columns *as they stood that day*. It is
-written at 03:40 UTC by `org-usage-snapshot.worker.ts`, whose whole logic lives in
+written at 03:40 platform time (`TZ`, India by default — the `day` is India's date) by `org-usage-snapshot.worker.ts`, whose whole logic lives in
 `platform-admin-analytics.service.ts#captureOrgUsageSnapshots` — the single audited place in this
 codebase allowed to loop tenant databases for reporting, and still aggregate-only: counts, sums and
 timestamps, never a ticket title, a comment or a person.
@@ -2733,7 +2904,7 @@ silently under-reported.
   null means not reconciled yet, never a gap of zero** — a failed workspace folded in at 0 against a
   real list price would report a Stripe outage as 100% discounting.
 - `POST /analytics/reconcile-billing` (`platform:billing`) — run the sweep now instead of waiting
-  for 03:50 UTC. The only action on the revenue screen that is not `platform:operate`: it spends our
+  for 03:50 platform time. The only action on the revenue screen that is not `platform:operate`: it spends our
   Stripe API quota and what it fetches is money, which is the same reasoning that puts the list-price
   edit on the finance role. Walks every workspace holding a `stripeSubscriptionId`, reads
   `unit_amount × quantity` per line and **normalises it to a month through the price's own
@@ -2748,7 +2919,14 @@ silently under-reported.
   *composes* the endpoints above with `/organizations/:id`, `/monitoring/:orgId/trend`,
   `/backups/overview`, `/email-log`, `/audit` and `/ai/advice/:orgId` rather than reimplementing any
   of them.
-- `POST /analytics/snapshot` — take today's snapshot now instead of waiting for 03:40 UTC.
+- `POST /analytics/snapshot` — take today's snapshot now instead of waiting for 03:40.
+
+**Metric definitions since 2026-10** (churn, conversion, billed MRR, the funnel, "needs attention") are
+written out in [AUDIT_2026-10.md § Console metric definitions](AUDIT_2026-10.md#console-metric-definitions).
+`/analytics/summary?fresh=1` and `/monitoring/fleet?fresh=1` bypass the 60-second and 5-minute caches.
+New response fields include `mrr.unmeasuredAccounts`, `churn.unmeasuredAccounts`, `trials.byCohort`,
+`trials.convertedUndated`, `funnel.existingMembers`, `needsAttention`, `ticketsOpen`/`ticketsTotal`,
+`selfServe`, `revenueState`, `rowsTruncated` and `measuredAt`.
   `platform:operate`, matching `POST /monitoring/sample`, because it opens a connection to every
   tenant database in the fleet — a load decision, not a reporting one. Safe to run twice: the pass
   upserts on `(organizationId, day)`, so a second run corrects the day rather than doubling every
@@ -2828,6 +3006,14 @@ Everything above requires the normal JWT session (a logged-in browser). The rout
 for **external integrations** — a script, Zapier/Make, or your own service — authenticated with
 a long-lived bearer **API key** instead of a login session. Generate one from **Workspace
 Settings → Public API**; it's shown once, in full, at creation time.
+
+**Since 2026-10, a status change or comment through this API runs the app's own rules**
+(`services/ticket-transition.service.ts`, `services/ticket-comment.service.ts`): the same notifications,
+findings-verification gate, closed digest, SLA restart on reopen, and one audit action —
+`ticket.status_changed` / `ticket.commented` with `via: "api"` and the `apiKeyId` (the old
+`…_via_api` actions are no longer written). A change's own ticket answers `409 CHANGE_OWNED_TICKET`,
+and `type: "CHANGE"` is refused on create. The `ticket.reopened` webhook fires on RESOLVED → REOPENED
+as well as CLOSED → REOPENED.
 
 Base URL: `<your-workspace-url>/api/public/v1` (e.g. `https://acme.timesphere.app/api/public/v1`,
 or `http://localhost:5173/api/public/v1` for a local/on-prem install — the web dev server proxies
