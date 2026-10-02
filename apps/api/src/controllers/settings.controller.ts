@@ -78,7 +78,8 @@ import {
   type SsoTestResult
 } from "../services/sso-validation.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
-import { ssoRegistrationValues } from "../services/sso.service.js";
+import { isMultiTenantMicrosoftAuthority, ssoRegistrationValues } from "../services/sso.service.js";
+import { observedMicrosoftDirectories } from "../services/sso-microsoft-directory.service.js";
 import { normaliseJitDomain, readJitAllowedDomains } from "../services/sso-jit.service.js";
 import { claimsForOrg } from "../services/company-domain-claims.service.js";
 import { Prisma as ControlPrisma, type OrgSsoConfig } from "../generated/control-client/index.js";
@@ -1008,12 +1009,80 @@ function ssoConfigView(c: OrgSsoConfig) {
   };
 }
 
-settingsRouter.get("/sso", requireSuperAdmin, async (_req, res) => {
+/**
+ * The directory of THIS admin's latest Microsoft sign-in, from their own `auth.sso_login` audit rows
+ * (auth.service.ts#recordSsoSignIn writes the `tid` there). It is the safest restriction to suggest:
+ * the person confirming it is, by construction, not locked out by it.
+ */
+async function latestOwnMicrosoftDirectory(userId: string): Promise<string | null> {
+  const rows = await prisma.auditLog.findMany({
+    where: { actorId: userId, action: "auth.sso_login" },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+    select: { metadata: true }
+  });
+  for (const row of rows) {
+    const metadata = row.metadata as { provider?: unknown; directory?: unknown } | null;
+    if (metadata?.provider === "MICROSOFT" && typeof metadata.directory === "string") return metadata.directory;
+  }
+  return null;
+}
+
+/**
+ * What "Restrict to my directory" needs (audit C1, staged): every directory people have signed in
+ * from, with counts and email domains — so the admin sees who would be shut out BEFORE confirming —
+ * and the suggested one: their own latest Microsoft sign-in's directory, else the most frequent.
+ */
+async function microsoftDirectoryView(orgId: string, adminId: string) {
+  const [observed, own] = await Promise.all([observedMicrosoftDirectories(orgId), latestOwnMicrosoftDirectory(adminId)]);
+  const mostFrequent = observed[0]?.tenantId ?? null;
+  let suggestedFrom: "your-sign-in" | "most-frequent" | null = null;
+  if (own) suggestedFrom = "your-sign-in";
+  else if (mostFrequent) suggestedFrom = "most-frequent";
+  return { observed, suggestedTenantId: own ?? mostFrequent, suggestedFrom };
+}
+
+const ANY_MICROSOFT_DIRECTORY_WARNING =
+  "This Microsoft configuration has no Directory (tenant) ID, so any Microsoft account — from any organization, and possibly personal accounts — can sign in, matched to people here by email address alone. Restrict it to your directory.";
+
+/**
+ * A Microsoft configuration must name ONE directory (audit C1) — staged so nobody is locked out:
+ *  - a NEW configuration (nothing saved with a client ID yet) is refused without a real tenant ID;
+ *  - a PINNED configuration cannot be un-pinned (blank, `common`, `organizations`, `consumers`);
+ *  - an EXISTING blank configuration stays editable — its sign-ins keep working — and every save says
+ *    why it should not stay that way. The card's "Restrict to my directory" is the way forward.
+ * Returns the warnings for the response; refuses with 422 otherwise.
+ */
+async function microsoftTenantWarnings(orgId: string, providerType: SsoProviderKey, data: Record<string, unknown>): Promise<string[]> {
+  if (providerType !== "MICROSOFT") return [];
+  const existing = await controlPrisma.orgSsoConfig.findUnique({
+    where: { organizationId_providerType: { organizationId: orgId, providerType } }
+  });
+  const tenantHint = "tenantHint" in data ? (data.tenantHint as string | null) : (existing?.tenantHint ?? null);
+  if (!isMultiTenantMicrosoftAuthority(tenantHint)) return [];
+
+  if (existing?.tenantHint && !isMultiTenantMicrosoftAuthority(existing.tenantHint)) {
+    throw new AppError(
+      422,
+      `This configuration is restricted to directory ${existing.tenantHint}. Removing the Directory (tenant) ID would let any Microsoft account sign in — enter another directory's ID instead.`
+    );
+  }
+  if (!existing?.clientId) {
+    throw new AppError(
+      422,
+      "Enter your Directory (tenant) ID — the GUID on your Azure app registration's Overview page. Without it any Microsoft account, from any organization, could sign in to this workspace."
+    );
+  }
+  return [ANY_MICROSOFT_DIRECTORY_WARNING];
+}
+
+settingsRouter.get("/sso", requireSuperAdmin, async (req, res) => {
   const { orgId } = requireTenantContext();
-  const [configs, authMethod, claims] = await Promise.all([
+  const [configs, authMethod, claims, microsoftDirectories] = await Promise.all([
     controlPrisma.orgSsoConfig.findMany({ where: { organizationId: orgId } }),
     controlPrisma.orgAuthMethod.findUnique({ where: { organizationId: orgId } }),
-    claimsForOrg(orgId)
+    claimsForOrg(orgId),
+    microsoftDirectoryView(orgId, req.user!.id)
   ]);
   res.json({
     providers: configs.map(ssoConfigView),
@@ -1023,7 +1092,8 @@ settingsRouter.get("/sso", requireSuperAdmin, async (_req, res) => {
     registration: ssoRegistrationValues(configs.find((c) => c.providerType === "SAML")?.spEntityId),
     // The workspace's claimed company domains — the card's suggested "allowed domains" list for
     // automatic account creation, so the safe setting is one click rather than a research task.
-    claimedDomains: claims.map((claim) => claim.domain)
+    claimedDomains: claims.map((claim) => claim.domain),
+    microsoftDirectories
   });
 });
 
@@ -1122,7 +1192,8 @@ const SSO_PROVIDER_LABEL: Record<SsoProviderKey, string> = {
  *
  * Keyed on the COLUMN names, so the merged-row check below reads the same shape whether a value
  * arrived in this request or was already stored. `tenantHint` is deliberately absent from
- * MICROSOFT: Azure's `common` endpoint is a legitimate multi-tenant configuration.
+ * MICROSOFT: it is enforced separately and STAGED (microsoftTenantWarnings) — required for a new
+ * configuration, tolerated with a warning on an existing blank one so its sign-ins keep working.
  */
 const SSO_REQUIRED_FIELDS: Record<SsoProviderKey, Array<[column: string, label: string]>> = {
   GOOGLE: [
@@ -1232,6 +1303,7 @@ settingsRouter.patch("/sso/:provider", requireSuperAdmin, validate(ssoConfigSche
   }
 
   await assertKeepsAProvenProvider(orgId, providerType, data);
+  const warnings = await microsoftTenantWarnings(orgId, providerType, data);
 
   // A PASS DOES NOT SURVIVE AN EDIT TO WHAT IT TESTED.
   //
@@ -1255,7 +1327,7 @@ settingsRouter.patch("/sso/:provider", requireSuperAdmin, validate(ssoConfigSche
     create: { organizationId: orgId, providerType, ...data }
   });
   await audit(req.user!.id, "settings.sso_updated", "OrgSsoConfig", updated.id, { provider: providerType, ...req.body, clientSecret: undefined, ldapBindCredential: undefined });
-  res.json(ssoConfigView(updated));
+  res.json({ ...ssoConfigView(updated), warnings });
 });
 
 /* ---------- SSO connection test ---------- */

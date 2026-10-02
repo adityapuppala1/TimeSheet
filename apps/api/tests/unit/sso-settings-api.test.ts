@@ -44,7 +44,8 @@ vi.mock("../../src/config/control-prisma.js", () => ({
         return { providerType: "GOOGLE", isEnabled: false, jitEnabled: true, jitAllowedDomains: null, ...args.update };
       }
     },
-    orgEmailDomain: { findMany: async () => claims }
+    orgEmailDomain: { findMany: async () => claims },
+    orgSsoObservedTenant: { findMany: async () => [] }
   }
 }));
 
@@ -63,6 +64,8 @@ function app() {
 
 beforeEach(() => {
   client = createFakeTenantClient();
+  // The GET reads the admin's own sign-in audit rows for the "Restrict to my directory" suggestion.
+  (client as unknown as { auditLog: unknown }).auditLog = { findMany: vi.fn().mockResolvedValue([]) };
   rows.length = 0;
   upserts.length = 0;
   claims.length = 0;

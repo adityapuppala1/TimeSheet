@@ -75,6 +75,7 @@ import {
   shortDateTime
 } from "./console-ui";
 import { HealthBandPill, HealthSignals } from "./health-ui";
+import { MicrosoftSignInFlag } from "./MicrosoftSignInFlag";
 import { runInBackground } from "../../lib/run-in-background";
 
 const money = (minor: number | null, currency: string) =>
@@ -213,6 +214,8 @@ export function PlatformAdminOrgProfile() {
           />
         </KpiGrid>
       )}
+
+      <MicrosoftSignInFlag exposure={org.data?.microsoftSignIn} />
 
       {/* Health first, because it is the panel that says what to do about everything below it. */}
       <ConsoleSection

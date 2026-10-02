@@ -46,10 +46,11 @@ import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
 import { GoogleMark, LdapMark, MicrosoftMark, SamlMark, ScimMark } from "../../components/ui/provider-marks";
 import { copyText } from "../../lib/clipboard";
-import { SERVER_ORIGIN, settingsApi, type SsoProviderConfig, type SsoRegistrationValues, type SsoTestResult } from "../../services/api";
+import { SERVER_ORIGIN, settingsApi, type SsoProviderConfig, type SsoRegistrationValues, type SsoSettings, type SsoTestResult } from "../../services/api";
 import { runInBackground } from "../../lib/run-in-background";
 import { SSO_TEST_OUTCOME_LABEL, ssoTestOutcome, type SsoTestOutcome } from "../../lib/sso-test-status";
 import { formatDomainList, opensToAnyone, parseDomainList } from "../../lib/sso-jit";
+import { describeRestrictionImpact, isMultiTenantMicrosoft, restrictionImpact } from "../../lib/sso-microsoft";
 
 const SSO_PROVIDER_LABEL: Record<"GOOGLE" | "MICROSOFT", string> = { GOOGLE: "Google", MICROSOFT: "Microsoft / Azure AD" };
 
@@ -340,14 +341,85 @@ type CardProps = {
   onToggle: () => void;
 };
 
+/** A save can succeed and still carry a warning — a Microsoft configuration left open to any directory. */
+function announceSaved(result: { warnings?: string[] }) {
+  if (result.warnings?.length) toast.warning("Saved — but read this", { description: result.warnings.join(" ") });
+  else toast.success("Saved");
+}
+
+type MicrosoftDirectories = NonNullable<SsoSettings["microsoftDirectories"]>;
+
 /**
- * Tenant IDs that do NOT restrict sign-in to one organization: blank (the server falls back to
- * Microsoft's `common` authority) and the three aliases somebody could type by hand. Mirrors
- * isMultiTenantMicrosoftAuthority in apps/api/src/services/sso.service.ts — the server logs every
- * sign-in that takes this route; this is the half an admin sees BEFORE that happens.
+ * "RESTRICT TO MY DIRECTORY" (audit C1, staged rollout). Shown only for a SAVED Microsoft configuration
+ * that accepts any directory. Pinning it is the fix; pinning it blind is a lockout — so it is built from
+ * the directories people have ACTUALLY signed in from (recorded on every Microsoft sign-in), prefilled
+ * with the admin's own, and it lists every other directory with its sign-ins and email domains before
+ * the admin confirms. Two steps, because the second one is the one that shuts people out.
  */
-const MULTI_TENANT_MICROSOFT_AUTHORITIES = new Set(["", "common", "organizations", "consumers"]);
-const isMultiTenantMicrosoft = (tenantHint: string) => MULTI_TENANT_MICROSOFT_AUTHORITIES.has(tenantHint.trim().toLowerCase());
+function RestrictToDirectory({ directories, readOnly, onRestrict }: { directories: MicrosoftDirectories; readOnly: boolean; onRestrict: (tenantId: string) => void }) {
+  const [chosen, setChosen] = useState(directories.suggestedTenantId ?? "");
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => setChosen(directories.suggestedTenantId ?? ""), [directories.suggestedTenantId]);
+
+  if (directories.observed.length === 0) {
+    return (
+      <p className="text-xs leading-5 text-muted-foreground">
+        No Microsoft sign-ins have been recorded since this check was added. Enter your Directory (tenant) ID above — or wait for
+        people to sign in, and this will offer the directory they use.
+      </p>
+    );
+  }
+
+  const impact = restrictionImpact(directories.observed, chosen);
+  return (
+    <div className="grid gap-3 rounded-lg border border-warning/40 bg-warning/5 p-4">
+      <Label>Restrict to my directory</Label>
+      <fieldset className="grid gap-2">
+        <legend className="sr-only">Directory to allow</legend>
+        {directories.observed.map((directory) => (
+          <label key={directory.tenantId} className="flex min-w-0 items-start gap-2 text-xs">
+            <input
+              type="radio"
+              name="sso-microsoft-directory"
+              className="mt-0.5"
+              checked={chosen === directory.tenantId}
+              disabled={readOnly}
+              onChange={() => {
+                setChosen(directory.tenantId);
+                setConfirming(false);
+              }}
+            />
+            <span className="min-w-0">
+              <code className="break-all">{directory.tenantId}</code>
+              {directory.tenantId === directories.suggestedTenantId && directories.suggestedFrom === "your-sign-in" ? " — your directory" : ""}
+              <span className="block text-muted-foreground">
+                {directory.count} sign-in{directory.count === 1 ? "" : "s"} · {directory.emailDomains.map((entry) => entry.domain).join(", ")}
+              </span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      {!confirming && (
+        <Button size="sm" variant="outline" className="w-fit" disabled={readOnly || !chosen} onClick={() => setConfirming(true)}>
+          Restrict to this directory…
+        </Button>
+      )}
+      {confirming && (
+        <div className="grid gap-2 text-xs">
+          <p>{describeRestrictionImpact(impact)}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => onRestrict(chosen)} disabled={readOnly}>
+              Confirm — allow only {chosen}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * Phase B4 — per-org SSO configuration. Each org registers its OWN OAuth app with Google/
@@ -355,7 +427,17 @@ const isMultiTenantMicrosoft = (tenantHint: string) => MULTI_TENANT_MICROSOFT_AU
  * that org's own credentials. `clientSecret` is write-only (never echoed back), same masking
  * convention as the AI tab's BYOK API key and the email-intake IMAP password.
  */
-function OidcProviderCard({ provider, config, registration, claimedDomains = [], readOnly, isLoading, open, onToggle }: CardProps & { provider: "GOOGLE" | "MICROSOFT" }) {
+function OidcProviderCard({
+  provider,
+  config,
+  registration,
+  claimedDomains = [],
+  microsoftDirectories,
+  readOnly,
+  isLoading,
+  open,
+  onToggle
+}: CardProps & { provider: "GOOGLE" | "MICROSOFT"; microsoftDirectories?: MicrosoftDirectories }) {
   const queryClient = useQueryClient();
   const [clientId, setClientId] = useState(config?.clientId ?? "");
   const [clientSecret, setClientSecret] = useState("");
@@ -369,8 +451,8 @@ function OidcProviderCard({ provider, config, registration, claimedDomains = [],
   const save = useMutation({
     mutationFn: (payload: Partial<SsoProviderConfig> & { clientSecret?: string }) =>
       settingsApi.updateSso(provider.toLowerCase() as "google" | "microsoft", payload),
-    onSuccess: () => {
-      toast.success("Saved");
+    onSuccess: (result) => {
+      announceSaved(result);
       setClientSecret("");
       runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "sso"] }));
     },
@@ -381,10 +463,12 @@ function OidcProviderCard({ provider, config, registration, claimedDomains = [],
   const started = Boolean(config?.clientId || config?.clientSecretSet);
 
   /*
-   * WARN, DON'T BLOCK. A blank tenant ID works — Microsoft's `common` authority accepts accounts
-   * from every directory, and this app matches people by email address — so it is an exposure, not
-   * a broken setting. Making the field required would lock out every workspace already signing in
-   * this way, so it stays optional and this says plainly what leaving it blank means.
+   * STAGED, SO NOBODY IS LOCKED OUT (audit C1). A blank tenant ID works — Microsoft's `common`
+   * authority accepts accounts from every directory, and this app matches people by email address —
+   * so it is an exposure, not a broken setting. The API now refuses it for a NEW configuration and
+   * refuses un-pinning a pinned one, but an EXISTING blank configuration keeps working and stays
+   * editable: requiring it outright would switch off Microsoft sign-in for every such workspace. This
+   * warning, and "Restrict to my directory" below, are how that state ends.
    *
    * Reads the TYPED value, not the saved one, so the warning clears the moment a real ID is entered;
    * and appears only once Microsoft is switched on or being filled in, so the card does not open on
@@ -392,6 +476,8 @@ function OidcProviderCard({ provider, config, registration, claimedDomains = [],
    */
   const configuring = Boolean(config?.isEnabled) || started || clientId.trim() !== "" || clientSecret !== "";
   const openToAnyMicrosoftAccount = provider === "MICROSOFT" && configuring && isMultiTenantMicrosoft(tenantHint);
+  // The SAVED configuration accepts any directory — what "Restrict to my directory" exists to fix.
+  const savedUnpinned = provider === "MICROSOFT" && Boolean(config?.clientId) && isMultiTenantMicrosoft(config?.tenantHint);
 
   return (
     <ProviderShell
@@ -446,7 +532,7 @@ function OidcProviderCard({ provider, config, registration, claimedDomains = [],
             <div className="grid gap-3">
               <div className="grid gap-1.5 sm:w-1/2">
                 <Label htmlFor="sso-microsoft-tenant">
-                  Directory (tenant) ID <span className="font-normal text-muted-foreground">(recommended)</span>
+                  Directory (tenant) ID <span className="font-normal text-muted-foreground">(required)</span>
                 </Label>
                 <Input
                   id="sso-microsoft-tenant"
@@ -473,6 +559,10 @@ function OidcProviderCard({ provider, config, registration, claimedDomains = [],
                     accounts.
                   </AlertDescription>
                 </Alert>
+              )}
+
+              {savedUnpinned && microsoftDirectories && (
+                <RestrictToDirectory directories={microsoftDirectories} readOnly={readOnly} onRestrict={(tenantId) => save.mutate({ tenantHint: tenantId })} />
               )}
             </div>
           )}
@@ -1052,6 +1142,7 @@ export function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
           config={providerOf(provider)}
           registration={settings.data?.registration}
           claimedDomains={settings.data?.claimedDomains}
+          microsoftDirectories={settings.data?.microsoftDirectories}
           readOnly={readOnly}
           isLoading={settings.isLoading}
           open={openId === provider.toLowerCase()}

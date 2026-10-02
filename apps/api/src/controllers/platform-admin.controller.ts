@@ -29,6 +29,7 @@ import { getPlatformAnalytics } from "../services/platform-admin-analytics.servi
 import { provisionOrganization } from "../services/provisioning.service.js";
 import { addDomain, listDomains, removeDomain, verifyDomain } from "../services/org-domain.service.js";
 import { workspaceUrlForSlug } from "../services/workspace-directory.service.js";
+import { microsoftSignInExposure } from "../services/sso-microsoft-directory.service.js";
 import { describeObservedRouting } from "../middleware/tenant.js";
 import { withOrgTenant } from "../config/with-org-tenant.js";
 import { dispatchTransactional } from "../services/notify.service.js";
@@ -272,7 +273,10 @@ platformAdminRouter.get("/organizations/:id", requirePlatformAdmin, readOnly, as
   res.json({
     ...rest,
     database: database ? { host: database.host, databaseName: database.databaseName, migratedAt: database.migratedAt, schemaVersion: database.schemaVersion } : null,
-    ssoConfigs: ssoConfigs.map((c) => ({ provider: c.providerType, isEnabled: c.isEnabled }))
+    ssoConfigs: ssoConfigs.map((c) => ({ provider: c.providerType, isEnabled: c.isEnabled })),
+    // Read-only: does Microsoft sign-in accept ANY directory, and which directories has it been used
+    // from (audit C1). Directory ids and email domains only — never a person.
+    microsoftSignIn: await microsoftSignInExposure(org.id, ssoConfigs)
   });
 });
 

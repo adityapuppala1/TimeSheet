@@ -29,7 +29,8 @@ const orgs = [
   { id: "org-acme", slug: "acme", status: "ACTIVE" }
 ];
 
-const { sso, completeSsoLogin, samlRow } = vi.hoisted(() => ({
+const { sso, completeSsoLogin, samlRow, recordMicrosoftDirectory } = vi.hoisted(() => ({
+  recordMicrosoftDirectory: vi.fn(),
   samlRow: { current: null as Record<string, unknown> | null },
   sso: {
     buildAuthorizationRedirect: vi.fn(),
@@ -61,6 +62,7 @@ vi.mock("../../src/config/control-prisma.js", async () => {
 });
 vi.mock("../../src/config/prisma.js", () => ({ getTenantClient: async () => ({}) }));
 vi.mock("../../src/services/auth.service.js", () => ({ completeSsoLogin }));
+vi.mock("../../src/services/sso-microsoft-directory.service.js", () => ({ recordMicrosoftDirectory }));
 vi.mock("../../src/services/sso.service.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/services/sso.service.js")>("../../src/services/sso.service.js");
   return { ...actual, ...sso };
@@ -187,6 +189,38 @@ describe("every SSO failure lands on the workspace's login page with a code (M3)
     const res = await request(app()).get(`/api/auth/sso/google/callback?code=c&state=${encodeURIComponent(stateFor("org-acme"))}`);
     expect(res.status).toBe(302);
     expect(res.headers.location).not.toContain("sso_error");
+  });
+});
+
+describe("every successful Microsoft sign-in records the directory it came from (C1, step b)", () => {
+  const signedIn = { accessToken: "a", refreshToken: "r", refreshTokenExpiresAt: new Date(Date.now() + 60_000), user: {} };
+  const TID = "bbbbbbbb-0000-4000-8000-000000000002";
+
+  it("records the token's directory and the address's domain after the session exists", async () => {
+    sso.completeAuthorizationCodeGrant.mockResolvedValue({
+      orgId: "org-acme",
+      identity: { provider: "MICROSOFT", email: "sam@acme.example", name: "Sam", emailVerified: false, tenantId: TID }
+    });
+    completeSsoLogin.mockResolvedValue(signedIn);
+    await request(app()).get(`/api/auth/sso/microsoft/callback?code=c&state=${encodeURIComponent(stateFor("org-acme", "MICROSOFT"))}`);
+    expect(recordMicrosoftDirectory).toHaveBeenCalledWith("org-acme", TID, "sam@acme.example");
+  });
+
+  it("records nothing for a sign-in that was refused", async () => {
+    sso.completeAuthorizationCodeGrant.mockResolvedValue({
+      orgId: "org-acme",
+      identity: { provider: "MICROSOFT", email: "sam@acme.example", name: "Sam", emailVerified: false, tenantId: TID }
+    });
+    completeSsoLogin.mockRejectedValue(new AppError(403, "Account is not active", { code: "SSO_INACTIVE" }));
+    await request(app()).get(`/api/auth/sso/microsoft/callback?code=c&state=${encodeURIComponent(stateFor("org-acme", "MICROSOFT"))}`);
+    expect(recordMicrosoftDirectory).not.toHaveBeenCalled();
+  });
+
+  it("records nothing for Google", async () => {
+    sso.completeAuthorizationCodeGrant.mockResolvedValue({ orgId: "org-acme", identity: { provider: "GOOGLE", email: "sam@acme.example", name: "Sam", emailVerified: true } });
+    completeSsoLogin.mockResolvedValue(signedIn);
+    await request(app()).get(`/api/auth/sso/google/callback?code=c&state=${encodeURIComponent(stateFor("org-acme"))}`);
+    expect(recordMicrosoftDirectory).not.toHaveBeenCalled();
   });
 });
 

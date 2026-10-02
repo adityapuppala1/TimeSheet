@@ -172,6 +172,12 @@ export interface OrgListRow {
 
 export interface OrgDetail extends OrgListRow {
   ssoConfigs: Array<{ provider: SsoProvider; isEnabled: boolean }>;
+  /** Microsoft sign-in's exposure (audit C1): null when Microsoft is not switched on. */
+  microsoftSignIn?: {
+    acceptsAnyDirectory: boolean;
+    tenantId: string | null;
+    observedDirectories: Array<{ tenantId: string; count: number; firstSeenAt: string; lastSeenAt: string; emailDomains: Array<{ domain: string; count: number }> }>;
+  } | null;
   authMethod: { passwordLoginEnabled: boolean; requireSsoOnly: boolean } | null;
 }
 

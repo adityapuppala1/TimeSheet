@@ -204,6 +204,8 @@ model Organization {
   ssoHandoffCodes SsoHandoffCode[]
   /// SAML AuthnRequest ids awaiting their answer — see SamlRequestId.
   samlRequestIds  SamlRequestId[]
+  /// Microsoft directories people have signed in from — see OrgSsoObservedTenant.
+  observedMicrosoftTenants OrgSsoObservedTenant[]
   /// The company email domains this workspace holds (signup Phase 1) — NOT custom hostnames, which
   /// are `domains` above.
   emailDomains    OrgEmailDomain[]
@@ -1359,6 +1361,33 @@ model PlatformAlertState {
   @@unique([organizationId, alertKey])
   @@index([resolvedAt, severity])
   @@index([organizationId, lastSeenAt])
+}
+
+/// Which Microsoft directories (Entra `tid`) people actually sign in to this workspace from — one row
+/// per (workspace, directory, email domain), counted.
+///
+/// WHY (audit C1, staged rollout step 0). A Microsoft configuration with a blank (or `common` /
+/// `organizations` / `consumers`) tenant ID accepts a token from ANY directory. Pinning it is the fix,
+/// but pinning blind would lock out whoever signs in from a directory the admin did not know about —
+/// and in an SSO-only workspace that is everybody. So every successful Microsoft sign-in is recorded
+/// here first, and the settings card offers "Restrict to my directory" with the other directories and
+/// their email domains listed, so the admin sees who would be shut out before confirming. The platform
+/// console reads the same rows to flag workspaces still open to any directory.
+///
+/// A directory id and an email DOMAIN identify organisations, not people; no address is stored.
+model OrgSsoObservedTenant {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// The token's `tid` claim.
+  tenantId       String       @db.VarChar(64)
+  /// Lower-case domain of the signed-in address.
+  emailDomain    String       @db.VarChar(253)
+  count          Int          @default(1)
+  firstSeenAt    DateTime     @default(now())
+  lastSeenAt     DateTime     @default(now())
+
+  @@unique([organizationId, tenantId, emailDomain])
 }
 
 /// A SAML AuthnRequest this deployment issued and has not yet seen answered — what makes

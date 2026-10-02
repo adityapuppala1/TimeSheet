@@ -34,6 +34,7 @@ import {
 } from "../services/sso.service.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { issueHandoffCode } from "../services/sso-handoff.service.js";
+import { recordMicrosoftDirectory } from "../services/sso-microsoft-directory.service.js";
 import { workspaceUrlForSlug } from "../services/workspace-directory.service.js";
 
 export const ssoRouter = Router();
@@ -80,6 +81,9 @@ async function finishSsoLogin(
   // AFTER the session exists, never before: this stamp is evidence that a sign-in completed, and
   // recording it for one that then failed is exactly the false assurance the gate exists to avoid.
   await recordSsoLoginSuccess(org.id, provider);
+  // Which Microsoft directory this person came from — what "Restrict to my directory" and the console's
+  // "accepts any directory" flag are built on (audit C1). Every Microsoft sign-in, pinned or not.
+  if (provider === "MICROSOFT") await recordMicrosoftDirectory(org.id, identity.tenantId, identity.email);
 
   /**
    * WHERE THIS BROWSER ACTUALLY BELONGS, which is not necessarily where the callback landed.

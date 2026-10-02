@@ -1,3 +1,4 @@
+import type { ObservedDirectory } from "../lib/sso-microsoft";
 import axios, { type AxiosRequestConfig } from "axios";
 import type { SignupVerifyResult } from "../utils/signup-flow";
 import type { BulkUploadResult } from "../components/CsvBulkUploadDialog";
@@ -2321,7 +2322,7 @@ export const settingsApi = {
   updateSso: async (
     provider: "google" | "microsoft" | "saml" | "ldap",
     payload: Partial<SsoProviderConfig> & { clientSecret?: string; idpCertificate?: string; ldapBindCredential?: string }
-  ) => (await api.patch<SsoProviderConfig>(`/settings/sso/${provider}`, payload)).data,
+  ) => (await api.patch<SsoProviderConfig & { warnings?: string[] }>(`/settings/sso/${provider}`, payload)).data,
   /** Tests the SAVED configuration, not what is in the form — see the route's own comment for why
    *  a pass recorded against unsaved values would be exactly the false assurance to avoid. */
   /** Is clamd actually reachable? Same contract as the mail and SSO testers: a failure is an
@@ -2686,6 +2687,13 @@ export interface SsoSettings {
   registration?: SsoRegistrationValues;
   /** The workspace's claimed company domains — the suggested allowed-domain list for automatic accounts. */
   claimedDomains?: string[];
+  /** Microsoft directories people have signed in from, for "Restrict to my directory" (audit C1). */
+  microsoftDirectories?: {
+    observed: ObservedDirectory[];
+    suggestedTenantId: string | null;
+    /** Why that one: the admin's own latest Microsoft sign-in, or simply the most frequent directory. */
+    suggestedFrom: "your-sign-in" | "most-frequent" | null;
+  };
 }
 
 export interface EmailTemplateRow {
