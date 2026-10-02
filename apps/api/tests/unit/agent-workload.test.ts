@@ -19,7 +19,8 @@ vi.mock("../../src/config/prisma.js", () => ({
     user: { findMany: (...a: unknown[]) => userFindMany(...a) },
     agentWorkEntry: { findMany: (...a: unknown[]) => entryFindMany(...a) },
     resourceBooking: { findMany: vi.fn().mockResolvedValue([]) },
-    timesheet: { findMany: vi.fn().mockResolvedValue([]) }
+    timesheet: { findMany: vi.fn().mockResolvedValue([]) },
+    ticket: { findMany: vi.fn().mockResolvedValue([]) }
   }
 }));
 vi.mock("../../src/services/planning.service.js", () => ({
@@ -104,5 +105,15 @@ describe("the agent series' window", () => {
     const [row] = await loadAgentWorkload({ from, to, buckets });
     expect(cellAt(row, "2026-08-10").runs).toBe(1);
     expect(cellAt(row, "2026-08-03").runs).toBe(0);
+  });
+});
+
+describe("what the board calls logged (M10)", () => {
+  it("is submitted + approved hours — the definition every other page uses", async () => {
+    const { prisma } = await import("../../src/config/prisma.js");
+    userFindMany.mockResolvedValue([{ id: "u1", name: "Ana", email: "a@x.test", avatarUrl: null, weeklyCapacityHours: null, plannedUtilizationPct: null }]);
+    await loadWorkload({ from, to });
+    const logged = vi.mocked(prisma.timesheet.findMany).mock.calls.at(-1)![0] as any;
+    expect(logged.where.status).toEqual({ in: ["SUBMITTED", "APPROVED"] });
   });
 });

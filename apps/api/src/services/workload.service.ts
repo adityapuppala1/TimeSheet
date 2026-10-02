@@ -5,7 +5,7 @@
  * WHY THIS IS THE FEATURE TIMESPHERE CAN DO BETTER THAN A PURE PM TOOL: Wrike, Asana and the
  * rest can only ever compare a plan against another plan, because estimates are the only numbers
  * they hold. This app already has approved timesheets with a rate snapshot, so it can put PLANNED
- * (a `ResourceBooking`), ACTUAL (approved `Timesheet` rows) and CAPACITY
+ * (a `ResourceBooking`), ACTUAL (logged — submitted and approved — `Timesheet` rows) and CAPACITY
  * (`User.weeklyCapacityHours`) on the same axis. "Ana is booked at 110%" is a forecast; "Ana was
  * booked at 110% and actually logged 46 hours" is evidence. The whole shape of this file follows
  * from wanting the second sentence to be possible.
@@ -29,6 +29,7 @@ import {
   DEFAULT_WORKING_DAYS
 } from "./plan-schedule.service.js";
 import { getPlanningSettings } from "./planning.service.js";
+import { LOGGED_HOURS_WHERE } from "./workspace-metrics.js";
 import { platformDayStart } from "../utils/date-window.js";
 import { platformDayKey } from "../utils/platform-time.js";
 
@@ -542,9 +543,10 @@ export async function loadWorkload(params: {
       where: {
         userId: { in: ids },
         deletedAt: null,
-        // APPROVED only. A draft or rejected entry is not evidence of anything, and counting it
-        // would make "actual" mean something different here from every other number in the app.
-        status: "APPROVED",
+        // LOGGED hours: submitted + approved (workspace-metrics.ts) — the definition every other page
+        // uses, which "approved only" made this board the exception to. A draft or rejected entry is
+        // still not evidence of anything, so neither counts.
+        ...LOGGED_HOURS_WHERE,
         workDate: { gte: params.from, lte: params.to },
         ...(projectScope ? { projectId: { in: projectScope } } : {})
       },

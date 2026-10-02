@@ -63,7 +63,9 @@ export interface WidgetDescriptor {
 export const WIDGET_CATALOGUE: WidgetDescriptor[] = [
   { type: "OPEN_ITEMS", label: "Open work items", shape: "STAT", description: "Everything not resolved or closed." },
   { type: "OVERDUE_ITEMS", label: "Overdue", shape: "STAT", description: "Past its planned end date or its SLA." },
-  { type: "HOURS_LOGGED", label: "Hours logged", shape: "STAT", description: "Approved hours in the period." },
+  // Labelled for what it counts. "Hours logged" over approved hours only read as the logged-hours
+  // figure every other page shows (submitted + approved) and was not.
+  { type: "HOURS_LOGGED", label: "Approved hours", shape: "STAT", description: "Approved hours in the period." },
   { type: "BUDGET_BURN", label: "Budget burn", shape: "STAT", description: "Spent against budget, from approved rate snapshots." },
   { type: "VELOCITY", label: "Created vs resolved", shape: "SERIES", description: "Weekly throughput." },
   { type: "STATUS_MIX", label: "Status mix", shape: "BREAKDOWN", description: "Where open work is sitting." },
