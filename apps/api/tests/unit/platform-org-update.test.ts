@@ -109,6 +109,37 @@ describe("an operator's status change and the non-payment marker", () => {
     expect(written()).not.toHaveProperty("nonPaymentSubscriptionId");
     expect(auditActions()).toContain("organization.updated");
   });
+
+  /** Suspended by the lifecycle worker for not paying sub_123: GRACE's reason, and the marker. */
+  const suspendedForNonPayment = () =>
+    org({ status: "SUSPENDED", stripeSubscriptionId: "sub_123", nonPaymentSubscriptionId: "sub_123", suspendedReason: "A renewal payment failed." });
+
+  it("clears the marker when an operator rewrites the reason on a workspace already suspended", async () => {
+    // Re-suspending "for fraud, do not restore" keeps the status SUSPENDED — and a Stripe retry that
+    // later succeeded used to lift it, because the marker still said non-payment.
+    control.organization.findUnique.mockResolvedValue(suspendedForNonPayment());
+
+    await patch({ status: "SUSPENDED", suspendedReason: "Chargeback fraud - do not restore." });
+
+    expect(written()).toMatchObject({ suspendedReason: "Chargeback fraud - do not restore.", nonPaymentSubscriptionId: null });
+  });
+
+  it("clears it for a reason sent on its own, without the status", async () => {
+    control.organization.findUnique.mockResolvedValue(suspendedForNonPayment());
+
+    await patch({ suspendedReason: "Chargeback fraud - do not restore." });
+
+    expect(written()).toMatchObject({ nonPaymentSubscriptionId: null });
+  });
+
+  it("keeps it when the dialog re-sends the reason unchanged", async () => {
+    control.organization.findUnique.mockResolvedValue(suspendedForNonPayment());
+
+    // Exactly what the edit dialog sends for a suspended workspace whose seats were changed.
+    await patch({ status: "SUSPENDED", planTier: "STARTER", suspendedReason: "A renewal payment failed.", seatLimitOverride: 40, aiMonthlyBudgetCeilingOverride: null });
+
+    expect(written()).not.toHaveProperty("nonPaymentSubscriptionId");
+  });
 });
 
 /**

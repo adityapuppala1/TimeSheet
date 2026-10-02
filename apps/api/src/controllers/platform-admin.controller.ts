@@ -325,7 +325,13 @@ type OrgRow = NonNullable<Awaited<ReturnType<typeof controlPrisma.organization.f
 
 /** The columns a STATUS change writes beside the status itself. */
 function statusEffects(before: OrgRow, body: { status?: string; suspendedReason?: string | null }): Record<string, unknown> {
-  if (!body.status) return {};
+  // REWRITING THE REASON on a suspended workspace takes the suspension over just as moving the status
+  // does — "chargeback fraud, do not restore" leaves the status SUSPENDED, and with the marker still
+  // naming the subscription, Stripe's next successful retry lifted it. The dialog re-sends the reason
+  // it opened with, so an unchanged one is not a decision.
+  const reasonRewritten =
+    before.status === "SUSPENDED" && "suspendedReason" in body && (body.suspendedReason ?? null) !== (before.suspendedReason ?? null);
+  if (!body.status) return reasonRewritten ? { nonPaymentSubscriptionId: null } : {};
   // PROVISIONING is where a workspace starts, never a state to put one back in. The signup sweep
   // deletes a self-serve workspace it finds there (signup-sweep.service.ts), and the delete cascades
   // to its database's DSN row, domain claims, SSO config and Stripe ids — a live workspace an operator
@@ -342,7 +348,7 @@ function statusEffects(before: OrgRow, body: { status?: string; suspendedReason?
   // An operator who MOVES the status has made the lifecycle decision their own, so the webhook's
   // "lapsed for not paying sub_X" marker goes: `invoice.paid` restores only what non-payment caused,
   // never an operator's suspension. Re-saving the dialog with the status unchanged is not a decision.
-  if (body.status !== before.status) data.nonPaymentSubscriptionId = null;
+  if (body.status !== before.status || reasonRewritten) data.nonPaymentSubscriptionId = null;
   return data;
 }
 
