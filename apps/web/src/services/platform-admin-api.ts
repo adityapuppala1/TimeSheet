@@ -1484,14 +1484,20 @@ export interface MrrBreakdown {
   mrrMinor: number;
   arrMinor: number;
   arpaMinor: number | null;
+  /** Paying customers — ACTIVE, past the trial, on a paid tier, list MRR not known to be zero. The
+   *  logo count; includes the unpriced (Enterprise) ones. */
   payingAccounts: number;
+  /** Active workspaces on a tier listed at zero (Starter). Never a customer, never a logo. */
   freeAccounts: number;
-  /** Revenue-bearing workspaces whose tier has no list price — excluded from `mrrMinor` and shown
+  /** Paying workspaces whose tier has no list price — excluded from `mrrMinor` and shown
    *  as an explicit exclusion rather than folded in as zero. */
   unpricedAccounts: number;
   unpricedSeats: number;
   billableSeats: number;
   trialingAccounts: number;
+  /** Workspaces whose latest nightly reading could not reach their database; priced from the last
+   *  reading that could. */
+  unmeasuredAccounts: number;
   byTier: TierRevenue[];
 }
 
@@ -1512,6 +1518,8 @@ export interface ChurnWindow {
   revenueChurnPercent: number | null;
   netRevenueRetentionPercent: number | null;
   grossRevenueRetentionPercent: number | null;
+  /** Start-cohort customers whose end reading was carried forward over an unreachable night. */
+  unmeasuredAccounts: number;
 }
 
 export interface TrialConversion {
@@ -1673,8 +1681,10 @@ export interface OrgUsageProfile {
     daysSinceLastActivity: number | null;
     backupFailures: number;
   } | null;
-  /** Null when the workspace's tier has no list price. Render "Not set", never $0. */
+  /** The fleet's own rule for this one workspace: 0 while it is not revenue-bearing, null when its
+   *  tier has no list price (render "Not set", never $0) or its seats were never measured. */
   listMrrMinor: number | null;
+  revenueState: "paying" | "free" | "trialing" | "not-active" | "unmeasured" | null;
   currency: string;
   coverage: { snapshots: number; firstDay: string | null; lastDay: string | null };
 }
@@ -1685,7 +1695,7 @@ export const platformRevenueApi = {
     (await platformAdminApi.get<{ rows: AccountHealthRow[]; coverage: { firstDay: string | null; lastDay: string | null }; seatOverage: SeatOverageRow[] }>("/analytics/health", { params: { days } })).data,
   usageTrend: async (days = 90) => (await platformAdminApi.get<{ points: FleetUsagePoint[] }>("/analytics/usage-trend", { params: { days } })).data,
   orgUsage: async (orgId: string, days = 60) => (await platformAdminApi.get<OrgUsageProfile>(`/analytics/org/${orgId}`, { params: { days } })).data,
-  /** Take today's snapshot now rather than waiting for 03:40 UTC. Safe to run twice — the sweep
+  /** Take today's snapshot now rather than waiting for 03:40 platform time. Safe to run twice — the sweep
    *  upserts on (workspace, day). */
   snapshotNow: async () =>
     (await platformAdminApi.post<{ day: string; captured: number; failed: Array<{ slug: string; error: string }>; prunedRows: number }>("/analytics/snapshot")).data,
@@ -1694,7 +1704,7 @@ export const platformRevenueApi = {
    *  separately from `overview` so refreshing three numbers after a reconcile does not re-run a
    *  cohort table and a churn window. */
   billedRevenue: async () => (await platformAdminApi.get<StripeReconciliation | null>("/analytics/billed-revenue")).data,
-  /** Ask Stripe now rather than waiting for 03:50 UTC. `platform:billing` — it spends our Stripe
+  /** Ask Stripe now rather than waiting for 03:50 platform time. `platform:billing` — it spends our Stripe
    *  quota and what it fetches is money, which is why it is not the same gate as "Snapshot now". */
   reconcileBilling: async () => (await platformAdminApi.post<ReconcileResult>("/analytics/reconcile-billing")).data
 };

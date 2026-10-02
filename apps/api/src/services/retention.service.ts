@@ -38,6 +38,7 @@ import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { billingPathFor, PLAN_LAPSED_PATH } from "../utils/billing-paths.js";
 import { forgetOrgStatus } from "./org-status.service.js";
+import { isConverted } from "./trial-conversion.js";
 import { platformAudit } from "./platform-audit.service.js";
 import { RETENTION_MARKER_TEMPLATE } from "./platform-mail-templates.js";
 import { sendPlatformTemplate } from "./platform-mail.service.js";
@@ -201,12 +202,9 @@ export function noticesSent(raw: unknown): Record<string, string> {
   return out;
 }
 
-export function isConverted(org: Pick<RetentionOrgInput, "trialTier" | "stripeSubscriptionId" | "planTier">): boolean {
-  // The Stripe webhook nulls `trialTier` when a checkout completes; a platform admin converting a
-  // customer by hand raises `planTier`. Either is "somebody is paying" — and a paying customer is
-  // never in this programme, whatever the clock says.
-  return org.trialTier === null || Boolean(org.stripeSubscriptionId) || org.planTier !== "STARTER";
-}
+/** The shared "left the trial for a paid plan" rule — trial-conversion.ts — re-exported so the
+ *  callers that have always imported it from here keep doing so. */
+export { isConverted };
 
 export function retentionPlan(org: RetentionOrgInput, settings: RetentionSettings, now: Date): RetentionPlan {
   const sent = noticesSent(org.retentionNoticesSent);

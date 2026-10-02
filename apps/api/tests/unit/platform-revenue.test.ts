@@ -27,6 +27,8 @@ const {
   computeChurn,
   computeListMrr,
   computeTrialConversion,
+  isFreeAccount,
+  isPayingCustomer,
   isRevenueBearing,
   monthKey,
   ticketVelocity
@@ -93,7 +95,8 @@ describe("computeListMrr", () => {
     const mrr = computeListMrr([account("free", { planTier: "STARTER", activeSeats: 5 }), account("ent", { planTier: "ENTERPRISE" }), account("paid")], PRICES);
     expect(mrr.freeAccounts).toBe(1);
     expect(mrr.unpricedAccounts).toBe(1);
-    expect(mrr.payingAccounts).toBe(1);
+    // Two paying LOGOS: the Team customer and the Enterprise contract. Free is never one of them.
+    expect(mrr.payingAccounts).toBe(2);
     // Starter contributes a real, deliberate 0 to the total.
     expect(mrr.byTier.find((tier) => tier.tier === "STARTER")!.mrrMinor).toBe(0);
   });
@@ -132,6 +135,43 @@ describe("computeListMrr", () => {
     const mrr = computeListMrr([account("x", { planTier: "PLATINUM" })], PRICES);
     expect(mrr.mrrMinor).toBe(0);
     expect(mrr.unpricedAccounts).toBe(1);
+  });
+
+  it("counts an Enterprise contract as a paying logo but keeps it out of ARPA's denominator", () => {
+    // Paying logos: the Team workspace AND the Enterprise one — its list MRR is unknown, not zero.
+    // ARPA divides the PRICED MRR by the priced paying accounts only, or it would be diluted by a
+    // customer whose revenue it never added.
+    const mrr = computeListMrr([account("team", { activeSeats: 10 }), account("ent", { planTier: "ENTERPRISE", activeSeats: 400 })], PRICES);
+    expect(mrr.payingAccounts).toBe(2);
+    expect(mrr.arpaMinor).toBe(8_000);
+  });
+
+  it("states how many workspaces were measured from a carried-forward reading", () => {
+    const mrr = computeListMrr([account("a"), account("b", { unmeasured: true })], PRICES);
+    expect(mrr.unmeasuredAccounts).toBe(1);
+    // The carried-forward seats still price: an outage is not a downgrade.
+    expect(mrr.mrrMinor).toBe(16_000);
+  });
+});
+
+describe("isPayingCustomer and isFreeAccount — the two populations, defined once", () => {
+  it("is a paying customer only when ACTIVE, past the trial, on a paid tier, with list MRR above zero", () => {
+    expect(isPayingCustomer(account("p"), PRICES)).toBe(true);
+    expect(isPayingCustomer(account("t", { trialing: true }), PRICES)).toBe(false);
+    expect(isPayingCustomer(account("g", { status: "GRACE" }), PRICES)).toBe(false);
+    expect(isPayingCustomer(account("f", { planTier: "STARTER" }), PRICES)).toBe(false);
+    // A Team workspace with nobody left in it bills nothing.
+    expect(isPayingCustomer(account("empty", { activeSeats: 0 }), PRICES)).toBe(false);
+    // Priced per contract: MRR is unknown, which is not zero.
+    expect(isPayingCustomer(account("ent", { planTier: "ENTERPRISE" }), PRICES)).toBe(true);
+    // Never measured at all: the seat count is unknown, so whether it pays cannot be said.
+    expect(isPayingCustomer(account("blind", { seatsKnown: false, activeSeats: 0 }), PRICES)).toBe(false);
+  });
+
+  it("is a free account when ACTIVE, past the trial and on a tier priced at zero", () => {
+    expect(isFreeAccount(account("f", { planTier: "STARTER" }), PRICES)).toBe(true);
+    expect(isFreeAccount(account("p"), PRICES)).toBe(false);
+    expect(isFreeAccount(account("t", { planTier: "STARTER", trialing: true }), PRICES)).toBe(false);
   });
 });
 
@@ -206,6 +246,40 @@ describe("computeChurn", () => {
     const churn = computeChurn([account("x")], [account("x", { status: "GRACE" })], PRICES, 30);
     expect(churn.churnedAccounts).toBe(1);
     expect(churn.logoChurnPercent).toBe(100);
+  });
+
+  it("books a paying customer who cancels to free Starter as logo churn, not as contraction", () => {
+    // `customer.subscription.deleted` moves the workspace to STARTER and leaves it ACTIVE. Stripe and
+    // ChartMogul both call a downgrade to free a churned customer; booking it as contraction hid
+    // every cancellation inside "shrinkage" and left the logo churn rate at 0%.
+    const churn = computeChurn([account("x"), account("y")], [account("x", { planTier: "STARTER", subscribed: false }), account("y")], PRICES, 30);
+    expect(churn.churnedAccounts).toBe(1);
+    expect(churn.churnedMrrMinor).toBe(8_000);
+    expect(churn.contractionMinor).toBe(0);
+    expect(churn.logoChurnPercent).toBe(50);
+  });
+
+  it("keeps free Starter workspaces out of the churn denominator", () => {
+    // Two free workspaces and one paying one: the churn rate is about the ONE customer.
+    const start = [account("paid"), account("free1", { planTier: "STARTER" }), account("free2", { planTier: "STARTER" })];
+    const end = [account("free1", { planTier: "STARTER" }), account("free2", { planTier: "STARTER" })];
+    const churn = computeChurn(start, end, PRICES, 30);
+    expect(churn.startAccounts).toBe(1);
+    expect(churn.logoChurnPercent).toBe(100);
+    expect(churn.endAccounts).toBe(0);
+  });
+
+  it("calls a free workspace that starts paying a new customer", () => {
+    const churn = computeChurn([account("x", { planTier: "STARTER" })], [account("x")], PRICES, 30);
+    expect(churn.newAccounts).toBe(1);
+    expect(churn.startAccounts).toBe(0);
+  });
+
+  it("reads an unmeasured end as the carried-forward seats, flagged — never as contraction", () => {
+    const churn = computeChurn([account("x", { activeSeats: 10 })], [account("x", { activeSeats: 10, unmeasured: true })], PRICES, 30);
+    expect(churn.contractionMinor).toBe(0);
+    expect(churn.netRevenueRetentionPercent).toBe(100);
+    expect(churn.unmeasuredAccounts).toBe(1);
   });
 });
 

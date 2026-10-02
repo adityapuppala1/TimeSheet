@@ -35,8 +35,10 @@
  * history yet" rather than as 0%.
  */
 import { controlPrisma } from "../config/control-prisma.js";
+import { platformDate } from "../utils/platform-time.js";
 import { MIN_TREND_SNAPSHOTS, scoreAccountHealth, selectSeatOverage, type AccountHealth, type SeatOverageRow, type SeatUsageRow } from "./platform-account-health.js";
 import { isStripeConfigured } from "./stripe-client.service.js";
+import { isConverted } from "./trial-conversion.js";
 
 /** Every figure this service produces is derived from an operator-editable LIST price. Carried in
  *  the payload rather than assumed by the client, so a future billed-revenue source can be added
@@ -72,6 +74,16 @@ export interface RevenueAccount {
   /** True while a trial clock is still running — a trialling workspace is pipeline, not revenue. */
   trialing: boolean;
   subscribed: boolean;
+  /**
+   * True when this reading could not reach the tenant database, so `activeSeats` is the last reading
+   * that DID — carried forward — rather than the zero the unreachable row holds. An outage is not a
+   * downgrade: reading it as one booked contraction and dragged NRR down for one bad night. Counted
+   * and shown ("N unmeasured") so a carried figure is never mistaken for a fresh one.
+   */
+  unmeasured?: boolean;
+  /** False when no reading of this workspace has EVER reached its database: its seat count is
+   *  unknown, which is not zero. Absent means known. */
+  seatsKnown?: boolean;
 }
 
 /**
@@ -97,12 +109,45 @@ export function isRevenueBearing(account: RevenueAccount): boolean {
   return account.status === "ACTIVE" && !account.trialing;
 }
 
-/** One account's list MRR in minor units, or `null` when its tier has no list price. */
+/**
+ * A PAYING CUSTOMER — the population every logo count, ARPA, churn rate and NRR on the console is
+ * about. ACTIVE, past its trial, on a paid tier, with list MRR above zero.
+ *
+ * "Above zero" means not KNOWN to be zero: a tier priced per contract (Enterprise, no list price) is a
+ * paying customer whose MRR this product cannot see, and dropping it would hide every Enterprise
+ * cancellation from the logo churn rate. A priced tier with nobody left in it bills nothing and is
+ * not a customer; a workspace never once measured cannot be said to pay and is counted as unmeasured.
+ *
+ * Free Starter workspaces are NOT customers (`isFreeAccount`), and are reported beside them, never
+ * among them. Counting them inflated the churn denominator with accounts that could not churn
+ * revenue, and a paying customer cancelling to Starter — `customer.subscription.deleted` leaves the
+ * workspace ACTIVE on STARTER — read as contraction rather than as the lost customer it is.
+ */
+export function isPayingCustomer(account: RevenueAccount, prices: TierPrices): boolean {
+  if (!isRevenueBearing(account)) return false;
+  if (isUnpricedTier(account.planTier, prices)) return true;
+  if (account.seatsKnown === false) return false;
+  return (accountMrrMinor(account, prices) ?? 0) > 0;
+}
+
+/** A tier with no list price — Enterprise, or a tier the price table has never heard of. Unpriced is
+ *  not free: it is priced per contract, somewhere this product cannot see. */
+function isUnpricedTier(planTier: string, prices: TierPrices): boolean {
+  return (prices[planTier]?.perSeatMinor ?? null) === null;
+}
+
+/** A FREE ACCOUNT: active, past its trial, on a tier listed at zero (Starter). Reported on its own. */
+export function isFreeAccount(account: RevenueAccount, prices: TierPrices): boolean {
+  return isRevenueBearing(account) && prices[account.planTier]?.perSeatMinor === 0;
+}
+
+/** One account's list MRR in minor units, or `null` when its tier has no list price — or when its
+ *  seats have never been measured, which is unknown rather than zero. */
 export function accountMrrMinor(account: RevenueAccount, prices: TierPrices): number | null {
   if (!isRevenueBearing(account)) return 0;
-  const price = prices[account.planTier];
-  if (!price || price.perSeatMinor === null) return null;
-  return price.perSeatMinor * billableSeats(account);
+  const perSeatMinor = prices[account.planTier]?.perSeatMinor ?? null;
+  if (perSeatMinor === null || account.seatsKnown === false) return null;
+  return perSeatMinor * billableSeats(account);
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -126,19 +171,22 @@ export interface MrrBreakdown {
   mixedCurrencies: boolean;
   mrrMinor: number;
   arrMinor: number;
-  /** MRR ÷ paying accounts. Null when there are none — not 0, which would read as "our customers
-   *  pay nothing" rather than "we have no paying customers". */
+  /** Priced MRR ÷ priced paying accounts. Null when there are none — not 0, which would read as "our
+   *  customers pay nothing" rather than "we have no paying customers". */
   arpaMinor: number | null;
-  /** Revenue-bearing accounts on a tier whose list price is above zero. */
+  /** Paying customers (`isPayingCustomer`) — the logo count. Includes the unpriced ones below. */
   payingAccounts: number;
-  /** Revenue-bearing accounts on a tier priced at exactly zero (Starter). Free is not unpriced. */
+  /** Active accounts on a tier priced at exactly zero (Starter). Never a customer, never a logo. */
   freeAccounts: number;
-  /** Revenue-bearing accounts whose tier has NO list price (Enterprise). Excluded from `mrrMinor`
-   *  and stated here so the exclusion is visible rather than silent. */
+  /** Paying customers whose tier has NO list price (Enterprise). Excluded from `mrrMinor` and from
+   *  ARPA's denominator, and stated here so the exclusion is visible rather than silent. */
   unpricedAccounts: number;
   unpricedSeats: number;
   billableSeats: number;
   trialingAccounts: number;
+  /** Workspaces whose latest reading could not reach their database, priced from the last reading
+   *  that could (see `RevenueAccount.unmeasured`). The console prints "N unmeasured". */
+  unmeasuredAccounts: number;
   byTier: TierRevenue[];
 }
 
@@ -151,36 +199,32 @@ export function computeListMrr(accounts: RevenueAccount[], prices: TierPrices): 
   let unpricedAccounts = 0;
   let unpricedSeats = 0;
   let seats = 0;
-  let trialingAccounts = 0;
 
   const tiers = new Map<string, { accounts: number; seats: number; mrrMinor: number | null }>();
 
-  for (const account of accounts) {
-    if (account.trialing) trialingAccounts += 1;
-    if (!isRevenueBearing(account)) continue;
-
+  for (const account of accounts.filter(isRevenueBearing)) {
     const accountSeats = billableSeats(account);
-    const price = prices[account.planTier];
+    const amount = accountMrrMinor(account, prices);
     seats += accountSeats;
+    if (isPayingCustomer(account, prices)) payingAccounts += 1;
+    else if (isFreeAccount(account, prices)) freeAccounts += 1;
 
-    const bucket = tiers.get(account.planTier) ?? { accounts: 0, seats: 0, mrrMinor: price && price.perSeatMinor !== null ? 0 : null };
+    const bucket = tiers.get(account.planTier) ?? { accounts: 0, seats: 0, mrrMinor: 0 };
     bucket.accounts += 1;
     bucket.seats += accountSeats;
-
-    if (!price || price.perSeatMinor === null) {
+    // An unpriced tier's bucket is null for good; one unknown seat count does not erase the rest.
+    if (isUnpricedTier(account.planTier, prices)) {
       unpricedAccounts += 1;
       unpricedSeats += accountSeats;
       bucket.mrrMinor = null;
-    } else {
-      const amount = price.perSeatMinor * accountSeats;
+    } else if (amount !== null) {
       mrrMinor += amount;
-      if (price.perSeatMinor > 0) payingAccounts += 1;
-      else freeAccounts += 1;
       if (bucket.mrrMinor !== null) bucket.mrrMinor += amount;
     }
     tiers.set(account.planTier, bucket);
   }
 
+  const pricedPaying = payingAccounts - unpricedAccounts;
   return {
     basis: REVENUE_BASIS,
     currency: [...currencies][0] ?? "USD",
@@ -189,13 +233,14 @@ export function computeListMrr(accounts: RevenueAccount[], prices: TierPrices): 
     arrMinor: mrrMinor * 12,
     // Rounded to the minor unit: an ARPA of 833.333 cents is a false precision an operator would
     // read as exact. Guarded, because dividing by zero paying accounts yields Infinity, not an error.
-    arpaMinor: payingAccounts > 0 ? Math.round(mrrMinor / payingAccounts) : null,
+    arpaMinor: pricedPaying > 0 ? Math.round(mrrMinor / pricedPaying) : null,
     payingAccounts,
     freeAccounts,
     unpricedAccounts,
     unpricedSeats,
     billableSeats: seats,
-    trialingAccounts,
+    trialingAccounts: accounts.filter((account) => account.trialing).length,
+    unmeasuredAccounts: accounts.filter((account) => account.unmeasured).length,
     byTier: [...tiers.entries()]
       .map(([tier, bucket]) => ({ tier, ...bucket, perSeatMinor: prices[tier]?.perSeatMinor ?? null }))
       .sort((a, b) => (b.mrrMinor ?? -1) - (a.mrrMinor ?? -1))
@@ -211,6 +256,7 @@ export interface ChurnWindow {
   /** How many days the comparison actually spans. 0 means there is one day of history and every
    *  figure below is null — which is the honest answer, not zero churn. */
   windowDays: number;
+  /** Paying customers on the window's first snapshot day — the cohort every rate below is about. */
   startAccounts: number;
   endAccounts: number;
   churnedAccounts: number;
@@ -227,6 +273,10 @@ export interface ChurnWindow {
   revenueChurnPercent: number | null;
   netRevenueRetentionPercent: number | null;
   grossRevenueRetentionPercent: number | null;
+  /** Start-cohort accounts whose END reading was carried forward from an earlier night because the
+   *  latest could not reach their database — retained at their last measured value, never booked as
+   *  contraction, and counted here so the console can say so. */
+  unmeasuredAccounts: number;
 }
 
 const percent = (numerator: number, denominator: number): number | null =>
@@ -235,10 +285,16 @@ const percent = (numerator: number, denominator: number): number | null =>
 /**
  * Churn and retention between two observations of the same fleet.
  *
- * THE COHORT IS THE ACCOUNTS THAT WERE REVENUE-BEARING AT THE START. Everything is measured about
- * them: an account that both arrived and left inside the window is `new` and never joins the churn
- * denominator, which is the standard treatment and the one that stops a good month of signups
- * flattering the churn rate.
+ * THE COHORT IS THE PAYING CUSTOMERS AT THE START (`isPayingCustomer`) — the caller hands in the
+ * fleet as it stood on the window's FIRST snapshot day, and anything absent that day is `new`
+ * (ChartMogul's NRR convention). Everything is measured about them: an account that both arrived and
+ * left inside the window never joins the churn denominator, which is what stops a good month of
+ * signups flattering the churn rate. Free Starter workspaces are not in it at all.
+ *
+ * LOGO CHURN IS A CUSTOMER WHO STOPPED PAYING, by any route: suspended, archived, lapsed to grace, or
+ * cancelled down to free Starter — which `customer.subscription.deleted` does while leaving the
+ * workspace ACTIVE. Stripe and ChartMogul both book a downgrade to free as churn; booking it as
+ * contraction hid every cancellation inside "shrinkage" and left the logo churn rate at 0%.
  *
  * NRR counts the start cohort's value at the END — expansion and contraction included, churn
  * included, new logos excluded. GRR is the same without the expansion, which is why the two are
@@ -251,8 +307,8 @@ const percent = (numerator: number, denominator: number): number | null =>
  * churn figure that describes a minority of its business.
  */
 export function computeChurn(start: RevenueAccount[], end: RevenueAccount[], prices: TierPrices, windowDays: number): ChurnWindow {
-  const startBearing = start.filter(isRevenueBearing);
-  const endBearing = end.filter(isRevenueBearing);
+  const startBearing = start.filter((account) => isPayingCustomer(account, prices));
+  const endBearing = end.filter((account) => isPayingCustomer(account, prices));
   const endById = new Map(endBearing.map((account) => [account.orgId, account]));
   const startIds = new Set(startBearing.map((account) => account.orgId));
 
@@ -264,6 +320,7 @@ export function computeChurn(start: RevenueAccount[], end: RevenueAccount[], pri
   let contractionMinor = 0;
   let churnedMrrMinor = 0;
   let churnedAccounts = 0;
+  let unmeasuredAccounts = 0;
 
   for (const account of startBearing) {
     const before = mrrOf(account);
@@ -274,6 +331,7 @@ export function computeChurn(start: RevenueAccount[], end: RevenueAccount[], pri
       churnedMrrMinor += before;
       continue;
     }
+    if (after.unmeasured) unmeasuredAccounts += 1;
     const now = mrrOf(after);
     retainedMrrMinor += now;
     if (now > before) expansionMinor += now - before;
@@ -301,7 +359,8 @@ export function computeChurn(start: RevenueAccount[], end: RevenueAccount[], pri
     logoChurnPercent: comparable ? percent(churnedAccounts, startBearing.length) : null,
     revenueChurnPercent: comparable ? percent(churnedMrrMinor + contractionMinor, startMrrMinor) : null,
     netRevenueRetentionPercent: comparable ? percent(retainedMrrMinor, startMrrMinor) : null,
-    grossRevenueRetentionPercent: comparable ? percent(startMrrMinor - churnedMrrMinor - contractionMinor, startMrrMinor) : null
+    grossRevenueRetentionPercent: comparable ? percent(startMrrMinor - churnedMrrMinor - contractionMinor, startMrrMinor) : null,
+    unmeasuredAccounts
   };
 }
 
@@ -478,10 +537,86 @@ export async function getTierPrices(): Promise<TierPrices> {
 
 type SnapshotRow = Awaited<ReturnType<typeof controlPrisma.orgUsageSnapshot.findMany>>[number];
 
-/** A snapshot row plus its workspace's identity, as a `RevenueAccount`. `trialing` is decided
+/** The columns a revenue reading needs — and only those. The window can be a year of daily rows per
+ *  workspace, and `ticketCountsByStatus` is a JSON document per row that no revenue figure reads. */
+const REVENUE_SNAPSHOT_SELECT = {
+  organizationId: true,
+  day: true,
+  planTier: true,
+  status: true,
+  activeSeats: true,
+  agentSeats: true,
+  seatLimit: true,
+  trialEndsAt: true,
+  trialTier: true,
+  stripeSubscriptionId: true,
+  reachable: true
+} as const;
+
+type RevenueSnapshotRow = Pick<SnapshotRow, keyof typeof REVENUE_SNAPSHOT_SELECT>;
+
+/** A reading after carry-forward: seats are the last REACHABLE ones, and it says whether they were. */
+type CarriedRow = RevenueSnapshotRow & { unmeasured: boolean; seatsKnown: boolean };
+
+/** Snapshot `day`s are date-only values (UTC midnight of the platform's date), so a window "the last
+ *  N days" starts N calendar days before today's — not N×24h before this instant, which dropped the
+ *  first day of every window. */
+const windowStart = (windowDays: number, now = new Date()): Date => new Date(platformDate(now).getTime() - windowDays * DAY_MS);
+
+/**
+ * Seats carried forward over every reading that could not reach the tenant database.
+ *
+ * AN UNREACHABLE NIGHT IS NOT A DOWNGRADE. The sweep writes `activeSeats: 0, reachable: false` for a
+ * workspace it could not read — honest in the table, because the zero is flagged — but read as a
+ * seat count it priced an outage as lost revenue: one bad night on the last day of a window booked
+ * the whole workspace as contraction and dragged NRR down. So each unreachable row takes the seats
+ * of the last row that WAS reachable — from earlier in the window, or from the latest reading before
+ * it (`seed`) — and is flagged `unmeasured` so the console can say how many figures are carried. A
+ * workspace no reading has ever reached keeps its zero with `seatsKnown: false`: unknown, not none.
+ */
+export function carrySeatsForward<T extends Pick<SnapshotRow, "organizationId" | "reachable" | "activeSeats" | "agentSeats">>(
+  rows: T[],
+  seed: Map<string, { activeSeats: number; agentSeats: number }> = new Map()
+): Array<T & { unmeasured: boolean; seatsKnown: boolean }> {
+  const lastGood = new Map(seed);
+  return rows.map((row) => {
+    if (row.reachable) {
+      lastGood.set(row.organizationId, { activeSeats: row.activeSeats, agentSeats: row.agentSeats });
+      return { ...row, unmeasured: false, seatsKnown: true };
+    }
+    const carried = lastGood.get(row.organizationId);
+    return carried ? { ...row, ...carried, unmeasured: true, seatsKnown: true } : { ...row, unmeasured: true, seatsKnown: false };
+  });
+}
+
+/** The latest REACHABLE reading before `before` for each of `orgIds` — what an unreachable first
+ *  reading carries forward from. One query; the first row per workspace wins. */
+async function lastGoodReadings(orgIds: string[], before: Date): Promise<Map<string, { activeSeats: number; agentSeats: number }>> {
+  const seed = new Map<string, { activeSeats: number; agentSeats: number }>();
+  if (orgIds.length === 0) return seed;
+  const rows = await controlPrisma.orgUsageSnapshot.findMany({
+    where: { organizationId: { in: orgIds }, reachable: true, day: { lt: before } },
+    orderBy: { day: "desc" },
+    select: { organizationId: true, activeSeats: true, agentSeats: true }
+  });
+  for (const row of rows) if (!seed.has(row.organizationId)) seed.set(row.organizationId, { activeSeats: row.activeSeats, agentSeats: row.agentSeats });
+  return seed;
+}
+
+/** Workspaces whose FIRST reading in a series could not reach their database — the ones that need a
+ *  seed from before the series to carry forward. */
+function unreachableFirst(rows: Array<Pick<SnapshotRow, "organizationId" | "reachable">>): string[] {
+  const first = new Map<string, boolean>();
+  for (const row of rows) if (!first.has(row.organizationId)) first.set(row.organizationId, row.reachable);
+  return [...first.entries()].filter(([, reachable]) => !reachable).map(([orgId]) => orgId);
+}
+
+/** A carried reading plus its workspace's identity, as a `RevenueAccount`. `trialing` is decided
  *  against the day the snapshot describes, not against now — that is the whole reason the trial
- *  columns are carried on the row. */
-function toAccount(row: SnapshotRow, org: { slug: string; name: string }): RevenueAccount {
+ *  columns are carried on the row — and a workspace that has CONVERTED (trial-conversion.ts) is not
+ *  trialling whatever its clock says: one converted by hand before the console cleared the clock was
+ *  read as pipeline until the date passed. */
+function toAccount(row: CarriedRow, org: { slug: string; name: string }): RevenueAccount {
   return {
     orgId: row.organizationId,
     slug: org.slug,
@@ -490,22 +625,30 @@ function toAccount(row: SnapshotRow, org: { slug: string; name: string }): Reven
     status: row.status,
     activeSeats: row.activeSeats,
     agentSeats: row.agentSeats,
-    trialing: row.trialEndsAt !== null && row.trialEndsAt.getTime() > row.day.getTime(),
-    subscribed: Boolean(row.stripeSubscriptionId)
+    trialing: row.trialEndsAt !== null && row.trialEndsAt.getTime() > row.day.getTime() && !isConverted(row),
+    subscribed: Boolean(row.stripeSubscriptionId),
+    unmeasured: row.unmeasured,
+    seatsKnown: row.seatsKnown
   };
 }
 
-/** The most recent snapshot per workspace, and the earliest one inside `since`. One query, split in
- *  memory: two `DISTINCT ON`-shaped queries is two full scans of the same window. */
-async function windowEdges(since: Date) {
-  const rows = await controlPrisma.orgUsageSnapshot.findMany({ where: { day: { gte: since } }, orderBy: { day: "asc" } });
-  const first = new Map<string, SnapshotRow>();
-  const last = new Map<string, SnapshotRow>();
-  for (const row of rows) {
-    if (!first.has(row.organizationId)) first.set(row.organizationId, row);
-    last.set(row.organizationId, row);
-  }
-  return { rows, first, last };
+/**
+ * The window's readings, carried forward, split into the two sides of a churn window.
+ *
+ * `start` is the fleet on the window's FIRST snapshot day — one day, every workspace on it — and not
+ * "each workspace's first row in the window", which put a workspace provisioned on day 20 into the
+ * starting cohort, booked its growth as NRR expansion and hid it from "new" (ChartMogul's convention:
+ * the cohort is who was a customer on day one; anything absent that day is new). `last` is each
+ * workspace's latest reading. One query for the window, plus one for the workspaces whose first
+ * reading in it was unreachable and so needs its last good reading from before it.
+ */
+async function loadRevenueWindow(since: Date) {
+  const rows = await controlPrisma.orgUsageSnapshot.findMany({ where: { day: { gte: since } }, orderBy: { day: "asc" }, select: REVENUE_SNAPSHOT_SELECT });
+  const carried = carrySeatsForward(rows, await lastGoodReadings(unreachableFirst(rows), since));
+  const firstDay = carried[0]?.day.getTime() ?? null;
+  const last = new Map<string, CarriedRow>();
+  for (const row of carried) last.set(row.organizationId, row);
+  return { rows: carried, start: carried.filter((row) => row.day.getTime() === firstDay), last };
 }
 
 export interface RevenueOverview {
@@ -532,32 +675,23 @@ export interface RevenueOverview {
  */
 export async function getRevenueOverview(windowDays = 30): Promise<RevenueOverview> {
   const now = new Date();
-  const since = new Date(now.getTime() - windowDays * DAY_MS);
+  const since = windowStart(windowDays, now);
 
-  const [prices, orgs, { rows, first, last }] = await Promise.all([
+  const [prices, orgs, { rows, start, last }] = await Promise.all([
     getTierPrices(),
     controlPrisma.organization.findMany({ select: { id: true, slug: true, name: true, createdAt: true, status: true, trialStartedAt: true, trialEndsAt: true, stripeSubscriptionId: true } }),
-    windowEdges(since)
+    loadRevenueWindow(since)
   ]);
 
   const orgById = new Map(orgs.map((org) => [org.id, org]));
-  const identify = (row: SnapshotRow) => orgById.get(row.organizationId) ?? { slug: row.organizationId, name: row.organizationId };
+  const identify = (row: CarriedRow) => orgById.get(row.organizationId) ?? { slug: row.organizationId, name: row.organizationId };
 
-  const startAccounts = [...first.values()].map((row) => toAccount(row, identify(row)));
+  const startAccounts = start.map((row) => toAccount(row, identify(row)));
   const endAccounts = [...last.values()].map((row) => toAccount(row, identify(row)));
 
   const days = [...new Set(rows.map((row) => row.day.getTime()))].sort((a, b) => a - b);
   const spanDays = days.length >= 2 ? Math.round((days[days.length - 1] - days[0]) / DAY_MS) : 0;
 
-  // Cohort membership: a workspace counts as alive in a month if any snapshot that month found it
-  // ACTIVE with at least one seat in use. "ACTIVE with nobody in it" is not retention.
-  const activeMonths = new Map<string, Set<string>>();
-  for (const row of rows) {
-    if (row.status !== "ACTIVE" || row.activeSeats <= 0) continue;
-    const set = activeMonths.get(row.organizationId) ?? new Set<string>();
-    set.add(monthKey(row.day));
-    activeMonths.set(row.organizationId, set);
-  }
   // Cohorts want the WHOLE observed history, not the churn window — a 30-day window would make
   // every cohort a single column.
   const [firstEver, lastEver] = await Promise.all([
@@ -869,7 +1003,7 @@ export async function getBilledRevenueReconciliation(windowDays = 30): Promise<S
   const [prices, orgs, { last }] = await Promise.all([
     getTierPrices(),
     controlPrisma.organization.findMany({ select: { id: true, slug: true, name: true } }),
-    windowEdges(new Date(Date.now() - windowDays * DAY_MS))
+    loadRevenueWindow(windowStart(windowDays))
   ]);
   const orgById = new Map(orgs.map((org) => [org.id, org]));
   const accounts = [...last.values()].map((row) => toAccount(row, orgById.get(row.organizationId) ?? { slug: row.organizationId, name: row.organizationId }));
@@ -1096,15 +1230,32 @@ export interface OrgUsageProfile {
     daysSinceLastActivity: number | null;
     backupFailures: number;
   } | null;
-  /** This workspace's own list MRR, minor units. Null when its tier has no list price. */
+  /** This workspace's own list MRR, minor units — `accountMrrMinor`, the SAME rule the fleet total
+   *  sums, so this tile and the Revenue page cannot disagree about one workspace. 0 while it is not
+   *  revenue-bearing (trialling, lapsed, suspended); null when its tier has no list price or its seats
+   *  have never been measured. */
   listMrrMinor: number | null;
+  /** Which population the workspace is in on its latest reading, so the tile can say WHY a figure
+   *  is zero or blank: a running trial and a free account both list at 0 for different reasons. */
+  revenueState: RevenueState | null;
   currency: string;
   coverage: { snapshots: number; firstDay: string | null; lastDay: string | null };
 }
 
+/** The population one workspace is in, in the order the predicates are asked. */
+export type RevenueState = "paying" | "free" | "trialing" | "not-active" | "unmeasured";
+
+export function revenueStateOf(account: RevenueAccount, prices: TierPrices): RevenueState {
+  if (account.trialing) return "trialing";
+  if (account.status !== "ACTIVE") return "not-active";
+  if (isPayingCustomer(account, prices)) return "paying";
+  if (isFreeAccount(account, prices)) return "free";
+  return account.seatsKnown === false ? "unmeasured" : "not-active";
+}
+
 export async function getOrgUsageProfile(orgId: string, windowDays = 60): Promise<OrgUsageProfile> {
   const now = new Date();
-  const since = new Date(now.getTime() - windowDays * DAY_MS);
+  const since = windowStart(windowDays, now);
 
   const [org, series, prices, backupFailures] = await Promise.all([
     controlPrisma.organization.findUnique({ where: { id: orgId }, select: { id: true, slug: true, name: true, trialEndsAt: true } }),
@@ -1113,8 +1264,13 @@ export async function getOrgUsageProfile(orgId: string, windowDays = 60): Promis
     controlPrisma.backupRun.count({ where: { organizationId: orgId, status: "FAILED", startedAt: { gte: since } } })
   ]);
 
-  const latest = series[series.length - 1];
+  const latest = series.at(-1);
   const velocity = ticketVelocity(series);
+  // Priced from the carried-forward reading, through the fleet's own predicate. This tile used to
+  // multiply the list price by the latest row's seats whatever the workspace's state — a running
+  // trial showed list MRR the Revenue page did not count, and an unreachable night showed $0.
+  const carried = latest ? carrySeatsForward(series, await lastGoodReadings(unreachableFirst(series), since)).at(-1) : undefined;
+  const account = carried && org ? toAccount(carried, org) : null;
   const price = latest ? prices[latest.planTier] : undefined;
   const daysSinceLastActivity = latest?.lastActivityAt ? Math.floor((now.getTime() - latest.lastActivityAt.getTime()) / DAY_MS) : null;
 
@@ -1166,7 +1322,8 @@ export async function getOrgUsageProfile(orgId: string, windowDays = 60): Promis
       : null,
     // `undefined` price and `null` price are the same answer here — "no list price for this tier" —
     // and both must render as "Not set" rather than as nothing owed.
-    listMrrMinor: latest && price && price.perSeatMinor !== null ? price.perSeatMinor * latest.activeSeats : null,
+    listMrrMinor: account ? accountMrrMinor(account, prices) : null,
+    revenueState: account ? revenueStateOf(account, prices) : null,
     currency: price?.currency ?? "USD",
     coverage: { snapshots: series.length, firstDay: series[0]?.day.toISOString() ?? null, lastDay: latest?.day.toISOString() ?? null }
   };

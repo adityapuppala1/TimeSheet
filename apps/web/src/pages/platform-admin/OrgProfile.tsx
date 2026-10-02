@@ -81,6 +81,25 @@ import { runInBackground } from "../../lib/run-in-background";
 const money = (minor: number | null, currency: string) =>
   minor === null ? "Not set" : new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(minor / 100);
 
+/** Why the List MRR tile reads what it reads — the fleet's own predicates, for this one workspace. A
+ *  running trial and a free account both list at 0, and they are different conversations. */
+function revenueStateHint(state: "paying" | "free" | "trialing" | "not-active" | "unmeasured" | null): string {
+  switch (state) {
+    case "paying":
+      return "Paying customer · list price, not billed revenue";
+    case "free":
+      return "Free account · not counted as a customer";
+    case "trialing":
+      return "On trial · pipeline, not revenue";
+    case "not-active":
+      return "Not active · contributes nothing";
+    case "unmeasured":
+      return "Seats never measured";
+    default:
+      return "No snapshot yet";
+  }
+}
+
 const errorMessageOf = (error: unknown) => (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
 
 /** The forecast's own confidence, as a pill. `none` is `muted` rather than `destructive`: refusing
@@ -194,7 +213,7 @@ export function PlatformAdminOrgProfile() {
             value={(usage.data?.listMrrMinor ?? 0) / 100}
             format={() => money(usage.data?.listMrrMinor ?? null, usage.data?.currency ?? "USD")}
             delay={0.05}
-            hint="List price, not billed revenue"
+            hint={revenueStateHint(usage.data?.revenueState ?? null)}
           />
           <KpiCard
             icon={Activity}

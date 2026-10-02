@@ -54,6 +54,14 @@ const money = (minor: number | null | undefined, currency: string, fractionDigit
     ? "—"
     : new Intl.NumberFormat("en-US", { style: "currency", currency, minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits }).format(minor / 100);
 
+/** The MRR tile's footnote: what the total leaves out, and what it carries over from an earlier night. */
+function mrrHint(mrr: RevenueOverview["mrr"]): string {
+  const parts: string[] = [];
+  if (mrr.unpricedAccounts > 0) parts.push(`Excludes ${mrr.unpricedAccounts} workspace${mrr.unpricedAccounts === 1 ? "" : "s"} with no list price`);
+  if (mrr.unmeasuredAccounts > 0) parts.push(`${mrr.unmeasuredAccounts} unmeasured (last reading carried)`);
+  return parts.length ? parts.join(" · ") : "List price, not billed revenue";
+}
+
 /** A percentage the data could not support renders as an em dash, not as 0%. */
 const pct = (value: number | null | undefined) => (value === null || value === undefined ? "—" : `${value.toFixed(1)}%`);
 
@@ -186,7 +194,7 @@ function Loaded({ data }: { data: RevenueOverview }) {
           value={mrr.mrrMinor / 100}
           format={(n) => money(Math.round(n * 100), currency)}
           tone="accent"
-          hint={mrr.unpricedAccounts > 0 ? `Excludes ${mrr.unpricedAccounts} workspace${mrr.unpricedAccounts === 1 ? "" : "s"} with no list price` : "List price, not billed revenue"}
+          hint={mrrHint(mrr)}
         />
         <KpiCard icon={LineChart} label="List ARR" value={mrr.arrMinor / 100} format={(n) => money(Math.round(n * 100), currency)} delay={0.05} hint="MRR × 12" />
         <KpiCard
@@ -219,7 +227,7 @@ function Loaded({ data }: { data: RevenueOverview }) {
 
       <ConsoleSection
         title="Revenue by tier"
-        description="Revenue-bearing workspaces only — active, not on a running trial."
+        description="Active workspaces past their trial — paying customers and free Starter accounts, each on its own row."
         flush
       >
         <ConsoleTable minWidth={720}>
@@ -259,19 +267,28 @@ function Loaded({ data }: { data: RevenueOverview }) {
       </ConsoleSection>
 
       <div className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-2">
-        <ConsoleSection title={`Churn (${churn.windowDays} days)`} description="Measured about the workspaces that were revenue-bearing at the start of the window.">
+        <ConsoleSection
+          title={`Churn (${churn.windowDays} days)`}
+          description="Measured about the paying customers on the window's first day. A customer who cancels down to free Starter has churned; free accounts are never in the count."
+        >
           <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Stat label="Logo churn" value={pct(churn.logoChurnPercent)} hint={`${churn.churnedAccounts} of ${churn.startAccounts} workspaces`} />
+            <Stat label="Logo churn" value={pct(churn.logoChurnPercent)} hint={`${churn.churnedAccounts} of ${churn.startAccounts} paying customers`} />
             <Stat label="Revenue churn" value={pct(churn.revenueChurnPercent)} hint="Lost plus contracted, over starting MRR" />
             <Stat label="Expansion" value={money(churn.expansionMinor, currency)} hint="Growth inside the starting cohort" />
             <Stat label="Contraction" value={money(churn.contractionMinor, currency)} hint="Shrinkage inside the starting cohort" />
-            <Stat label="New workspaces" value={String(churn.newAccounts)} hint="Arrived inside the window; excluded from churn" />
+            <Stat label="New customers" value={String(churn.newAccounts)} hint="Paying at the end, not on the first day; excluded from churn" />
             <Stat label="Churned MRR" value={money(churn.churnedMrrMinor, currency)} hint="List value of the workspaces that left" />
           </dl>
           {churn.logoChurnPercent === null && (
             <p className="mt-3 text-xs text-muted-foreground">
               Not enough history to compare yet — churn needs two observations of the same fleet, and the snapshot series is {coverage.days} day
               {coverage.days === 1 ? "" : "s"} long. It is left blank rather than shown as 0%.
+            </p>
+          )}
+          {churn.unmeasuredAccounts > 0 && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              {churn.unmeasuredAccounts} unmeasured: the latest nightly reading could not reach {churn.unmeasuredAccounts === 1 ? "that workspace's" : "those workspaces'"} database, so{" "}
+              {churn.unmeasuredAccounts === 1 ? "it is" : "they are"} counted at the last seat count that could be read — never as contraction.
             </p>
           )}
           {mrr.unpricedAccounts > 0 && (
