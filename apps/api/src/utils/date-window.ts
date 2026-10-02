@@ -177,3 +177,20 @@ export function resolveTimestampWindow(window: DayWindow, now: Date): TimestampW
   const comparableEnd = end && end.getTime() < now.getTime() ? end : now;
   return { start, end, prevStart: new Date(start.getTime() - shift), prevEnd: new Date(comparableEnd.getTime() - shift) };
 }
+
+/**
+ * The platform zone's UTC offset at `at`, as MySQL's CONVERT_TZ wants it: "+05:30".
+ *
+ * For raw SQL over DATETIME columns. Prisma writes and reads `DateTime` as UTC, and a DATETIME is
+ * zone-less, so MySQL's session time_zone does not touch it: `DATE(createdAt)` is UTC's day.
+ * `DATE(CONVERT_TZ(createdAt, '+00:00', <this>))` is the platform's day — the same day Prisma-side
+ * comparisons against `platformDayStart` give. One offset per query: exact for IST, which has no
+ * daylight saving; a zone that does is off by an hour across its changeover only.
+ */
+export function platformUtcOffset(at: Date = new Date()): string {
+  const day = platformToday(at);
+  const minutes = Math.round((day.getTime() - platformDayStart(day).getTime()) / 60_000);
+  const sign = minutes < 0 ? "-" : "+";
+  const abs = Math.abs(minutes);
+  return `${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
+}

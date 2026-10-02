@@ -19,6 +19,8 @@ import path from "node:path";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../config/prisma.js";
+import { platformUtcOffset } from "../utils/date-window.js";
+import { platformDayKey } from "../utils/platform-time.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { FACE_ENROLL_MAX_FRAMES, FACE_VERIFY_MAX_FRAMES, faceCaptureUpload, preserveTenantContext } from "../middleware/upload.js";
@@ -1107,11 +1109,13 @@ faceRouter.get("/analytics", requireAdmin, validate(analyticsQuerySchema), async
    * Per-day, per-outcome counts in ONE aggregate query. Prisma's groupBy cannot bucket a
    * DateTime, and the alternatives are both worse: a query per bucket (up to 90 round trips) or
    * pulling every attempt row back to bucket in JS — which is the thing this endpoint exists to
-   * avoid. DATE() resolves in the session time zone, which config/prisma.ts pins to the
-   * configured offset, so a "day" here is the same day the rest of the app reports.
+   * avoid. `createdAt` is a zone-less DATETIME that Prisma writes in UTC — the session time zone
+   * config/prisma.ts pins does NOT apply to it — so it is converted to the platform's offset
+   * before taking the day (utils/date-window.ts#platformUtcOffset). DATE_FORMAT(createdAt) alone was
+   * UTC's day, and every attempt before 05:30 IST landed on the bar for the day before.
    */
   const daily = await prisma.$queryRaw<Array<{ day: string; outcome: string; n: bigint | number }>>`
-    SELECT DATE_FORMAT(createdAt, '%Y-%m-%d') AS day, outcome, COUNT(*) AS n
+    SELECT DATE_FORMAT(CONVERT_TZ(createdAt, '+00:00', ${platformUtcOffset()}), '%Y-%m-%d') AS day, outcome, COUNT(*) AS n
     FROM FaceVerificationAttempt
     WHERE createdAt >= ${since}
     GROUP BY day, outcome
@@ -1128,7 +1132,9 @@ faceRouter.get("/analytics", requireAdmin, validate(analyticsQuerySchema), async
   const bucketMs = bucket === "week" ? 7 * DAY_MS : DAY_MS;
   const bucketCount = Math.ceil((Date.now() - since.getTime()) / bucketMs);
   const trend = Array.from({ length: bucketCount }, (_, i) => ({
-    bucketStart: new Date(since.getTime() + i * bucketMs).toISOString().slice(0, 10),
+    // The IST day the bucket starts on. `since` is IST midnight — 18:30 UTC the evening before — so
+    // `toISOString()` labelled every bar with the previous day.
+    bucketStart: platformDayKey(new Date(since.getTime() + i * bucketMs)),
     total: 0,
     counts: Object.fromEntries(seenOutcomes.map((o) => [o, 0])) as Record<string, number>
   }));

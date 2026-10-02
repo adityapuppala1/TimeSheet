@@ -24,6 +24,7 @@ vi.mock("../../src/config/prisma.js", () => ({
 }));
 
 const { buildTicketMetricSeries, METRIC_WINDOW_DAYS } = await import("../../src/services/ticket-metrics.service.js");
+const { platformDayKey } = await import("../../src/utils/platform-time.js");
 
 /** `daysAgo` days before today, at midday UTC — safely inside that day whatever the clock says. */
 function daysAgo(n: number): Date {
@@ -54,7 +55,8 @@ describe("shape", () => {
     const s = await buildTicketMetricSeries({}, { OPEN: 3 }, { LOW: 3 });
     expect(s.days).toHaveLength(METRIC_WINDOW_DAYS);
     expect(s.byStatus.OPEN).toHaveLength(METRIC_WINDOW_DAYS);
-    expect(s.days[s.days.length - 1]).toBe(new Date().toISOString().slice(0, 10));
+    // India's today (the platform calendar), not UTC's — see the M1 case at the end.
+    expect(s.days[s.days.length - 1]).toBe(platformDayKey(new Date()));
     expect([...s.days].sort()).toEqual(s.days);
   });
 
@@ -180,5 +182,23 @@ describe("honesty flags", () => {
     const s = await buildTicketMetricSeries({}, { OPEN: 1 }, { HIGH: 1 });
     expect(s.priorityExact).toBe(true);
     expect(s.truncated).toBe(false);
+  });
+});
+
+describe("whose days (M1)", () => {
+  it("cuts the days at IST midnight, so the last point is India's today", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      // 01:00 IST on 1 October — still 30 September in UTC.
+      vi.setSystemTime(new Date("2026-09-30T19:30:00.000Z"));
+      // Raised at 00:30 IST on the 1st: today's ticket, not yesterday's.
+      withTickets([{ id: "t-1", createdAt: new Date("2026-09-30T19:00:00.000Z"), status: "OPEN", priority: "LOW" }]);
+      const s = await buildTicketMetricSeries({}, { OPEN: 1 }, { LOW: 1 });
+      expect(s.days.at(-1)).toBe("2026-10-01");
+      expect(s.byStatus.OPEN.slice(-2)).toEqual([0, 1]);
+      expect(ticketFindMany.mock.calls[0][0].where.createdAt.gte).toEqual(new Date("2026-09-17T18:30:00.000Z"));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

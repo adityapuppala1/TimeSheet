@@ -14,6 +14,7 @@
  * WHO calls this: `controllers/email-templates.controller.ts`.
  */
 import { prisma } from "../config/prisma.js";
+import { platformUtcOffset } from "../utils/date-window.js";
 import { TEMPLATE_KEYS } from "./template-store.service.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -155,10 +156,12 @@ export async function getEmailAnalytics(): Promise<EmailAnalytics> {
       where: { createdAt: { gte: yesterdayStart, lt: todayStart } },
       _count: { _all: true }
     }),
-    // Prisma's groupBy cannot bucket a DateTime. DATE() resolves in the session time zone, which
-    // config/prisma.ts pins, so a "day" here is the same day the rest of the app reports.
+    // Prisma's groupBy cannot bucket a DateTime. `createdAt` is a zone-less DATETIME that Prisma
+    // writes in UTC, so the session time_zone does NOT apply to it and DATE(createdAt) was UTC's
+    // day: mail sent before 05:30 IST landed on the previous day's bar while the "today" card
+    // counted it today. Converted to the platform's offset first (utils/date-window.ts).
     prisma.$queryRaw<Array<{ day: Date | string; status: string; n: bigint | number }>>`
-      SELECT DATE(createdAt) AS day, status, COUNT(*) AS n
+      SELECT DATE(CONVERT_TZ(createdAt, '+00:00', ${platformUtcOffset()})) AS day, status, COUNT(*) AS n
       FROM EmailLog
       WHERE createdAt >= ${seriesSince}
       GROUP BY day, status
@@ -534,8 +537,9 @@ export async function getEmailDomainStats(fromIso?: string, toIso?: string): Pro
       WHERE createdAt >= ${since} AND createdAt < ${untilExclusive}
       GROUP BY domain, status
     `,
+    // The platform's day, not UTC's — see getEmailAnalytics for why DATE(createdAt) alone is wrong.
     prisma.$queryRaw<Array<{ day: Date | string; status: string; n: bigint | number }>>`
-      SELECT DATE(createdAt) AS day, status, COUNT(*) AS n
+      SELECT DATE(CONVERT_TZ(createdAt, '+00:00', ${platformUtcOffset()})) AS day, status, COUNT(*) AS n
       FROM EmailLog
       WHERE createdAt >= ${since} AND createdAt < ${untilExclusive}
       GROUP BY day, status

@@ -24,6 +24,7 @@
  */
 import { ticketPriorities, ticketStatuses } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
+import { DAY_MS, platformDayStart, platformToday } from "../utils/date-window.js";
 
 /** How many daily points a card's sparkline draws. Two weeks reads as a trend without becoming a
  *  chart that needs axes to be legible at 180px wide. */
@@ -45,18 +46,15 @@ export interface TicketMetricSeries {
   truncated: boolean;
 }
 
-/** UTC midnight opening the day `daysAgo` days before today. UTC throughout, matching every other
- *  date bucket in this codebase — a local-time boundary would shift the whole series for anybody in
- *  a different timezone from the server. */
-function startOfUtcDay(daysAgo: number): Date {
-  const now = new Date();
-  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  d.setUTCDate(d.getUTCDate() - daysAgo);
-  return d;
-}
-
-function dayKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
+/**
+ * The day `daysAgo` days before today on the PLATFORM calendar (IST): its `YYYY-MM-DD` key and the
+ * instant it began. It used to be UTC midnight — 05:30 IST — so a ticket raised in the first five
+ * and a half hours of a day was drawn on the day before, and the last point was UTC's today, not
+ * India's. The workspace's other day buckets are IST (utils/date-window.ts), so these are too.
+ */
+function platformDay(daysAgo: number): { key: string; start: Date } {
+  const day = new Date(platformToday().getTime() - daysAgo * DAY_MS);
+  return { key: day.toISOString().slice(0, 10), start: platformDayStart(day) };
 }
 
 type WindowEvent =
@@ -74,7 +72,7 @@ export async function buildTicketMetricSeries(
   nowByStatus: Record<string, number>,
   nowByPriority: Record<string, number>
 ): Promise<TicketMetricSeries> {
-  const windowStart = startOfUtcDay(METRIC_WINDOW_DAYS - 1);
+  const windowStart = platformDay(METRIC_WINDOW_DAYS - 1).start;
 
   // Tickets born inside the window, with the status they are in NOW. Walking backwards turns that
   // into the status they were in at any earlier moment.
@@ -162,10 +160,10 @@ export async function buildTicketMetricSeries(
 
   let cursor = 0;
   for (let i = 0; i < METRIC_WINDOW_DAYS; i++) {
-    const dayStart = startOfUtcDay(i);
+    const { key, start: dayStart } = platformDay(i);
     // Snapshot BEFORE undoing this day's events: the counts as they stand are the end of this day
     // (and, for i = 0, the state right now).
-    days.unshift(dayKey(dayStart));
+    days.unshift(key);
     let dayTotal = 0;
     for (const key of statusKeys) {
       // Clamped at zero: an audit trail that disagrees with the live counts (a hard-deleted ticket,
