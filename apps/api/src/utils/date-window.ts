@@ -23,7 +23,7 @@
  * The helpers below compose platform-time.ts and recipient-time.ts; they are not a second clock.
  */
 import { env } from "../config/env.js";
-import { platformDayKey } from "./platform-time.js";
+import { platformDayKey, platformDayStart as platformDayStartOfKey } from "./platform-time.js";
 import { dateKeyToUtc, startOfZonedDayUtc } from "./recipient-time.js";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -47,11 +47,15 @@ export function platformWeekStart(now: Date = new Date()): Date {
 
 /**
  * The INSTANT a calendar day began on the platform's clock, for comparing against a timestamp
- * column. `day` is the UTC-midnight value of that calendar day (what `parseIsoDay` returns). Noon UTC
- * is on the same calendar day in every zone between UTC−11 and UTC+11, so it is a safe probe.
+ * column. `day` is the UTC-midnight value of that calendar day (what `parseIsoDay` returns).
+ *
+ * Delegates to platform-time.ts, which corrects its noon-UTC probe for the zones east of UTC+11
+ * (where noon UTC is already the next day). This used to probe noon UTC uncorrected, so under
+ * Pacific/Auckland every window began a day late — two implementations of one boundary that
+ * disagreed.
  */
 export function platformDayStart(day: Date): Date {
-  return startOfZonedDayUtc(new Date(day.getTime() + DAY_MS / 2), env.TZ);
+  return platformDayStartOfKey(day.toISOString().slice(0, 10));
 }
 
 /** `2026-08-27` → midnight UTC that day. Anything else → undefined. */
@@ -185,11 +189,16 @@ export function resolveTimestampWindow(window: DayWindow, now: Date): TimestampW
  * zone-less, so MySQL's session time_zone does not touch it: `DATE(createdAt)` is UTC's day.
  * `DATE(CONVERT_TZ(createdAt, '+00:00', <this>))` is the platform's day — the same day Prisma-side
  * comparisons against `platformDayStart` give. One offset per query: exact for IST, which has no
- * daylight saving; a zone that does is off by an hour across its changeover only.
+ * daylight saving. NOT exact under a daylight-saving zone: the offset taken at `at` is applied to the
+ * whole series, so rows from the other side of a changeover that fall in the hour next to midnight
+ * land on the neighbouring day (review finding F6 — left as is; IST, the default, is unaffected).
+ *
+ * Measured AT `at`: `startOfZonedDayUtc` subtracts the zone's offset at that instant from the day's
+ * UTC-midnight value, so the difference between the two is that offset exactly — no noon probe, so
+ * no zone (UTC+13, UTC+14) falls outside it.
  */
 export function platformUtcOffset(at: Date = new Date()): string {
-  const day = platformToday(at);
-  const minutes = Math.round((day.getTime() - platformDayStart(day).getTime()) / 60_000);
+  const minutes = Math.round((platformToday(at).getTime() - startOfZonedDayUtc(at, env.TZ).getTime()) / 60_000);
   const sign = minutes < 0 ? "-" : "+";
   const abs = Math.abs(minutes);
   return `${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
