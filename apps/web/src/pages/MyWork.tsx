@@ -28,6 +28,7 @@ import { useState } from "react";
 import { Skeleton } from "../components/ui/skeleton";
 import { cn } from "../lib/utils";
 import { aiApi, planApi, type MyWorkItem } from "../services/api";
+import { QueryError } from "../components/QueryState";
 
 const PRIORITY_VARIANT: Record<string, "secondary" | "info" | "warning" | "destructive"> = {
   LOW: "secondary",
@@ -137,7 +138,10 @@ export function MyWorkPage() {
   }
 
   const data = work.data;
-  const empty = !data || data.counts.total === 0;
+  // "Nothing assigned" only when the queue was READ and is empty. A failed request used to land here
+  // too, under a green check — telling somebody with a full queue that they had nothing to do.
+  const failed = work.isError && !data;
+  const empty = Boolean(data) && data!.counts.total === 0;
 
   return (
     <div className="mx-auto grid w-full max-w-4xl gap-4 p-4 sm:p-6">
@@ -156,7 +160,9 @@ export function MyWorkPage() {
           nothing assigned to them at all — the first version hid the card from precisely them. */}
       <StandupCard />
 
-      {empty ? (
+      {failed && <QueryError what="your work queue" onRetry={() => work.refetch()} />}
+
+      {!failed && (empty ? (
         <Card>
           <CardContent className="grid gap-2 p-10 text-center">
             <CheckCircle2 className="mx-auto h-8 w-8 text-success" />
@@ -215,7 +221,7 @@ export function MyWorkPage() {
           />
           <Bucket title="Later" items={data!.later} onOpen={open} icon={ListTodo} />
         </>
-      )}
+      ))}
     </div>
   );
 }

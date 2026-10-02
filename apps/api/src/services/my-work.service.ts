@@ -16,7 +16,10 @@
  */
 import { prisma } from "../config/prisma.js";
 import { htmlToPlainText } from "../utils/sanitize.js";
+import { platformToday } from "../utils/date-window.js";
+import { platformDayKey } from "../utils/platform-time.js";
 import { dayKey, legacyCategory, toDay } from "./plan-schedule.service.js";
+import { isSlaBreached, OPEN_TICKET_STATUS } from "./workspace-metrics.js";
 
 export interface MyWorkItem {
   id: string;
@@ -64,14 +67,16 @@ export interface MyWork {
 /** `now` is a parameter so the brief and the page can agree on one instant, and so tests can pin
  *  a day rather than racing midnight. */
 export async function computeMyWork(userId: string, now: Date = new Date()): Promise<MyWork> {
-  const today = toDay(now);
+  // Today on the PLATFORM's calendar (IST). `toDay(now)` was UTC's day, so until 05:30 IST the page
+  // still thought it was yesterday, and yesterday's work sat under "Due today".
+  const today = platformToday(now);
   const weekEnd = new Date(today.getTime() + 7 * 86_400_000);
 
   const items = await prisma.ticket.findMany({
     where: {
       deletedAt: null,
       assigneeId: userId,
-      status: { notIn: ["CLOSED", "RESOLVED"] }
+      status: OPEN_TICKET_STATUS
     },
     select: {
       id: true, key: true, title: true, startDate: true, endDate: true, dueAt: true, priority: true,
@@ -84,7 +89,9 @@ export async function computeMyWork(userId: string, now: Date = new Date()): Pro
         select: { id: true, sourceTicket: { select: { id: true, key: true, title: true, status: true } } }
       }
     },
-    orderBy: [{ dueAt: "asc" }, { priority: "desc" }],
+    // Dated work first: MySQL sorts NULLs first, so `dueAt asc` let 300 undated tickets crowd out
+    // the ones with a deadline.
+    orderBy: [{ dueAt: { sort: "asc", nulls: "last" } }, { priority: "desc" }],
     take: 300
   });
 
@@ -92,15 +99,18 @@ export async function computeMyWork(userId: string, now: Date = new Date()): Pro
     const blockers = t.linksTo
       .map((l) => l.sourceTicket)
       .filter((s): s is NonNullable<typeof s> => Boolean(s) && !["RESOLVED", "CLOSED"].includes(s!.status));
-    const deadline = t.endDate ?? t.dueAt ?? null;
+    // The planned end is a calendar day; the SLA is an instant, dated by its IST day.
+    let deadline: string | null = null;
+    if (t.endDate) deadline = dayKey(t.endDate);
+    else if (t.dueAt) deadline = platformDayKey(t.dueAt);
     return {
       id: t.id,
       key: t.key,
       title: t.title,
       startDate: t.startDate ? dayKey(t.startDate) : null,
       endDate: t.endDate ? dayKey(t.endDate) : null,
-      dueAt: t.dueAt ? dayKey(t.dueAt) : null,
-      deadline: deadline ? dayKey(deadline) : null,
+      dueAt: t.dueAt ? platformDayKey(t.dueAt) : null,
+      deadline,
       priority: t.priority,
       status: t.status,
       statusCategory: legacyCategory(t.status),
@@ -116,9 +126,19 @@ export async function computeMyWork(userId: string, now: Date = new Date()): Pro
   });
 
   const blocked = enriched.filter((t) => t.blockers.length > 0);
+  /**
+   * OVERDUE is one rule across the product (workspace-metrics.ts, and the OVERDUE_ITEMS widget):
+   * past its planned end DAY, or past its SLA INSTANT — either broken promise counts. It used to be
+   * `(endDate ?? dueAt) < today`, so a ticket whose SLA had passed but whose planned end was later
+   * never read as overdue here while the dashboard counted it.
+   */
+  const slaById = new Map(items.map((t) => [t.id, t.dueAt]));
+  const isOverdue = (t: MyWorkItem) =>
+    Boolean(t.endDate && toDay(t.endDate) < today) || isSlaBreached({ dueAt: slaById.get(t.id) ?? null, resolvedAt: null }, now);
   const actionable = enriched.filter((t) => t.blockers.length === 0);
+  const overdue = actionable.filter(isOverdue);
   const bucket = (predicate: (deadline: Date | null) => boolean) =>
-    actionable.filter((t) => predicate(t.deadline ? toDay(t.deadline) : null));
+    actionable.filter((t) => !isOverdue(t) && predicate(t.deadline ? toDay(t.deadline) : null));
 
   const assignedRows = await prisma.ticketComment.findMany({
     where: { assigneeId: userId, resolvedAt: null, ticket: { deletedAt: null } },
@@ -138,7 +158,7 @@ export async function computeMyWork(userId: string, now: Date = new Date()): Pro
 
   return {
     assignedComments,
-    overdue: bucket((d) => Boolean(d && d < today)),
+    overdue,
     today: bucket((d) => Boolean(d && dayKey(d) === dayKey(today))),
     thisWeek: bucket((d) => Boolean(d && d > today && d <= weekEnd)),
     later: bucket((d) => !d || d > weekEnd),
