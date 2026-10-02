@@ -381,7 +381,7 @@ authRouter.post(
 
 authRouter.post(
   "/reset-password",
-  validate(z.object({ body: z.object({ token: z.string().min(10), password: z.string().min(8) }) })),
+  validate(z.object({ body: z.object({ token: z.string().min(10).max(200), password: z.string().min(8) }) })),
   async (req, res) => {
     await resetPassword(req.body.token, req.body.password);
     res.status(204).send();

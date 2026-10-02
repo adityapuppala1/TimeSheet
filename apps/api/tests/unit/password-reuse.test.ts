@@ -12,6 +12,7 @@
  * an emailed reset link is sent for the same reason, and re-setting the same password there is
  * the same non-change.
  */
+import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 /*
  * A BUDGET SIZED FOR BCRYPT, not for an assertion.
@@ -34,7 +35,7 @@ import { runInTenant } from "../helpers/tenant-context.js";
 vi.mock("../../src/services/audit.service.js", () => ({ audit: vi.fn().mockResolvedValue(undefined) }));
 
 const { changePassword, resetPassword } = await import("../../src/services/auth.service.js");
-const { hashPassword, hashToken } = await import("../../src/utils/security.js");
+const { hashPassword } = await import("../../src/utils/security.js");
 
 const CURRENT = "the-current-one";
 const USER_ID = "user-1";
@@ -48,14 +49,16 @@ beforeEach(async () => {
   storedHash = await hashPassword(CURRENT);
   client = {
     user: {
-      findUniqueOrThrow: vi.fn().mockResolvedValue({ id: USER_ID, passwordHash: storedHash }),
-      findUnique: vi.fn().mockResolvedValue({ id: USER_ID, passwordHash: storedHash }),
+      findUniqueOrThrow: vi.fn().mockResolvedValue({ id: USER_ID, passwordHash: storedHash, status: "ACTIVE", deletedAt: null }),
+      findUnique: vi.fn().mockResolvedValue({ id: USER_ID, passwordHash: storedHash, status: "ACTIVE", deletedAt: null }),
       update: vi.fn().mockResolvedValue({ id: USER_ID })
     },
     session: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
     passwordResetToken: {
+      findUnique: vi.fn().mockResolvedValue(null),
       findMany: vi.fn().mockResolvedValue([]),
-      update: vi.fn().mockResolvedValue({})
+      update: vi.fn().mockResolvedValue({}),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 })
     },
     $transaction: vi.fn().mockResolvedValue([])
   } as unknown as PrismaClient;
@@ -91,27 +94,36 @@ describe("changePassword", () => {
 });
 
 describe("resetPassword", () => {
-  /** The emailed link's happy path needs a token row whose bcrypt hash actually matches. */
-  async function withMatchingToken(raw: string) {
-    vi.mocked(client.passwordResetToken.findMany).mockResolvedValue([
-      { id: "tok-1", userId: USER_ID, tokenHash: await hashToken(raw), usedAt: null, expiresAt: new Date(Date.now() + 60_000) }
-    ] as never);
+  /** The emailed link's happy path needs a `<selector>.<verifier>` row whose verifier matches —
+   *  see reset-token.service.ts for the format. */
+  const SELECTOR = "selectorSelector";
+  const VERIFIER = "v".repeat(48);
+  const RAW = `${SELECTOR}.${VERIFIER}`;
+  function withMatchingToken() {
+    vi.mocked(client.passwordResetToken.findUnique).mockResolvedValue({
+      id: "tok-1",
+      userId: USER_ID,
+      selector: SELECTOR,
+      tokenHash: createHash("sha256").update(VERIFIER).digest("hex"),
+      usedAt: null,
+      expiresAt: new Date(Date.now() + 60_000)
+    } as never);
   }
 
   it("refuses to re-set the password the account already has", async () => {
-    await withMatchingToken("raw-token");
-    await expect(inTenant(() => resetPassword("raw-token", CURRENT))).rejects.toThrow(/different from your current/i);
+    withMatchingToken();
+    await expect(inTenant(() => resetPassword(RAW, CURRENT))).rejects.toThrow(/different from your current/i);
   });
 
   it("leaves the link usable after refusing, instead of burning it on a rejected attempt", async () => {
-    await withMatchingToken("raw-token");
-    await inTenant(() => resetPassword("raw-token", CURRENT)).catch(() => undefined);
+    withMatchingToken();
+    await inTenant(() => resetPassword(RAW, CURRENT)).catch(() => undefined);
     expect(client.$transaction).not.toHaveBeenCalled();
   });
 
   it("accepts a different password", async () => {
-    await withMatchingToken("raw-token");
-    await inTenant(() => resetPassword("raw-token", "a-genuinely-new-one"));
+    withMatchingToken();
+    await inTenant(() => resetPassword(RAW, "a-genuinely-new-one"));
     expect(client.$transaction).toHaveBeenCalled();
   });
 });

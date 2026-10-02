@@ -443,7 +443,13 @@ model PasswordResetToken {
   id        String    @id @default(uuid())
   userId    String
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// For a link minted as `<selector>.<verifier>` (services/reset-token.service.ts): SHA-256 hex
+  /// of the verifier. For a legacy link (selector NULL): a bcrypt digest of the whole token.
   tokenHash String    @unique
+  /// The public half of a `<selector>.<verifier>` link — what redemption looks the row up by, so a
+  /// guess costs one indexed read instead of a bcrypt compare against every live token. NULL on
+  /// rows minted before the format existed; those are checked by the legacy scan until they expire.
+  selector  String?   @unique @db.VarChar(32)
   expiresAt DateTime
   usedAt    DateTime?
   createdAt DateTime  @default(now())

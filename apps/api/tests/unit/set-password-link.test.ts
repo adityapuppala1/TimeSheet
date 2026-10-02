@@ -1,6 +1,6 @@
 /**
  * The link an approved joiner sets their first password with (signup Phase 1). It rides the existing
- * password-reset machinery — same table, same hashing, same /reset-password page — with a longer life,
+ * password-reset machinery — same table, same token format, same /reset-password page — with a longer life,
  * because "your request was approved" may sit in an inbox over a weekend where a reset link would not.
  */
 import { describe, expect, it, vi } from "vitest";
@@ -20,8 +20,12 @@ describe("issueSetPasswordLink", () => {
     expect(url.startsWith("https://acme.timesphere.test/reset-password?")).toBe(true);
     expect(new URL(url).searchParams.get("welcome")).toBe("1");
     expect(row.userId).toBe("user-1");
-    expect(row.tokenHash).not.toContain(token);
-    expect(row.tokenHash).toMatch(/^\$2[aby]\$/);
+    // `<selector>.<verifier>` — the selector is stored to look the row up by, the verifier only
+    // as a SHA-256 (reset-token.service.ts).
+    const [selector, verifier] = token.split(".");
+    expect((row as { selector?: string }).selector).toBe(selector);
+    expect(row.tokenHash).not.toContain(verifier);
+    expect(row.tokenHash).toMatch(/^[0-9a-f]{64}$/);
     expect(row.expiresAt.getTime() - before).toBeGreaterThanOrEqual(72 * 60 * 60 * 1000 - 1000);
     expect(row.expiresAt.getTime() - before).toBeLessThanOrEqual(72 * 60 * 60 * 1000 + 5000);
   });

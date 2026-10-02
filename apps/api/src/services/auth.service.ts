@@ -21,6 +21,7 @@ import { getEffectiveSeatLimit } from "./plan-limits.service.js";
 import { countActiveSeats } from "./seat-count.service.js";
 import { rememberWorkspaceMembership, tenantBaseUrl } from "./workspace-directory.service.js";
 import { isMaintenanceActive } from "./maintenance.service.js";
+import { findLiveResetToken, issueResetToken, voidOutstandingResetTokens } from "./reset-token.service.js";
 import {
   DUMMY_PASSWORD_HASH,
   hashPassword,
@@ -684,6 +685,8 @@ export async function changePassword(userId: string, currentPassword: string, ne
     where: { id: userId },
     data: { passwordHash: await hashPassword(nextPassword), mustChangePassword: false }
   });
+  // A reset link mailed before this change would otherwise still replace the password just chosen.
+  await voidOutstandingResetTokens(userId);
   // Revoke every other session — a password change is exactly the moment to assume any
   // other active session might belong to someone who shouldn't have access anymore.
   await prisma.session.updateMany({
@@ -701,52 +704,54 @@ export async function requestPasswordReset(email: string): Promise<{ resetUrl: s
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user || user.deletedAt || user.status !== "ACTIVE") return null;
 
-  const rawToken = opaqueToken();
-  await prisma.passwordResetToken.create({
-    data: { userId: user.id, tokenHash: await hashToken(rawToken), expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS) }
-  });
+  const rawToken = await issueResetToken(user.id, RESET_TOKEN_TTL_MS);
 
   const resetUrl = `${tenantBaseUrl()}/reset-password?token=${encodeURIComponent(rawToken)}`;
   return { resetUrl, user: { id: user.id, name: user.name, email: user.email } };
 }
 
+const INVALID_RESET_LINK = "This reset link is invalid or has expired.";
+
 export async function resetPassword(rawToken: string, nextPassword: string): Promise<void> {
   if (!rawToken) throw new AppError(422, "Reset token is required");
 
-  // tokenHash is bcrypt (per-row salt), so it can't be looked up by an equality query — pull
-  // the bounded set of not-yet-used, not-yet-expired candidates and compare in application code.
-  const candidates = await prisma.passwordResetToken.findMany({
-    where: { usedAt: null, expiresAt: { gt: new Date() } },
-    orderBy: { createdAt: "desc" },
-    take: 500
-  });
+  // One indexed read for a current link, and a draining bcrypt scan only for a legacy-shaped one —
+  // see reset-token.service.ts for the format and why the old 500-row scan had to go.
+  const match = await findLiveResetToken(rawToken);
+  if (!match) throw new AppError(422, INVALID_RESET_LINK);
 
-  let match: (typeof candidates)[number] | null = null;
-  for (const candidate of candidates) {
-    if (await verifyTokenHash(rawToken, candidate.tokenHash)) {
-      match = candidate;
-      break;
-    }
-  }
-  if (!match) throw new AppError(422, "This reset link is invalid or has expired.");
+  // RE-CHECKED AT REDEMPTION, not only when the link was mailed: a welcome link can sit in an
+  // inbox for 72 hours, and an account deactivated in that time must not have a password set on it
+  // afterwards. Same message as a bad link — the holder learns nothing about the account's state.
+  const resetting = await prisma.user.findUnique({
+    where: { id: match.userId },
+    select: { passwordHash: true, status: true, deletedAt: true }
+  });
+  if (!resetting || resetting.deletedAt || resetting.status !== "ACTIVE") throw new AppError(422, INVALID_RESET_LINK);
 
   // Same rule as `changePassword`: re-setting the password you already have is not a reset. Most
   // reset links are sent precisely because someone else set (or may know) the current password,
   // so accepting it back would end the flow having changed nothing. Checked AFTER the token is
   // matched but BEFORE it is burned, so a rejected attempt leaves the link usable for a real one.
-  const resetting = await prisma.user.findUnique({ where: { id: match.userId }, select: { passwordHash: true } });
-  if (resetting && (await verifyPassword(nextPassword, resetting.passwordHash))) {
+  if (await verifyPassword(nextPassword, resetting.passwordHash)) {
     throw new AppError(422, "Your new password must be different from your current one.");
   }
 
-  await prisma.$transaction([
-    prisma.passwordResetToken.update({ where: { id: match.id }, data: { usedAt: new Date() } }),
+  // Hashed BEFORE the transaction: a cost-12 bcrypt round is ~250 ms, and holding row locks for it
+  // would serialise every other write to these rows behind one person's reset.
+  const passwordHash = await hashPassword(nextPassword);
+  await prisma.$transaction(async (tx) => {
+    // SPENT BY ONE CONDITIONAL UPDATE, and the count is the verdict. Reading `usedAt` and then
+    // writing it let two concurrent submissions of the same link both see "unused" and both
+    // succeed; only one of them can flip it here.
+    const spent = await tx.passwordResetToken.updateMany({ where: { id: match.id, usedAt: null }, data: { usedAt: new Date() } });
+    if (spent.count !== 1) throw new AppError(422, INVALID_RESET_LINK);
+    // Every OTHER outstanding link for this person dies with it — a second reset mail, or a 72-hour
+    // welcome link, must not still work after the password it would replace has been chosen.
+    await voidOutstandingResetTokens(match.userId, tx);
     // A password chosen through the emailed link is the person's own — the change-prompt flag
     // (set by admin creation/reset) has served its purpose.
-    prisma.user.update({
-      where: { id: match.userId },
-      data: { passwordHash: await hashPassword(nextPassword), mustChangePassword: false }
-    }),
-    prisma.session.updateMany({ where: { userId: match.userId, revokedAt: null }, data: { revokedAt: new Date() } })
-  ]);
+    await tx.user.update({ where: { id: match.userId }, data: { passwordHash, mustChangePassword: false } });
+    await tx.session.updateMany({ where: { userId: match.userId, revokedAt: null }, data: { revokedAt: new Date() } });
+  });
 }
