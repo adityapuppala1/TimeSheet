@@ -142,7 +142,9 @@ async function performAction(params: {
       category: "workflow.attention",
       title: `${flow.emoji} ${flow.name}`,
       body: `${subject.label} reached step ${order} of this workflow.`,
-      link: subject.type === "ticket" && subject.id ? `/app/tickets/${subject.id}` : "/app/studio"
+      // `?open=` — the tickets page opens the sheet for it. There is no `/app/tickets/:id` route; that
+      // link landed on the router's 404.
+      link: subject.type === "ticket" && subject.id ? `/app/tickets?open=${subject.id}` : "/app/studio"
     });
     return { ...base, outcome: "ran", detail: "Notified them." };
   }

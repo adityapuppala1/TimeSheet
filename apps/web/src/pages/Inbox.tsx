@@ -45,6 +45,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/toolti
 import { cn } from "../lib/utils";
 import { useMediaQuery } from "../lib/use-media-query";
 import { inboxApi, type InboxEntry, type InboxFilterValue } from "../services/api";
+import { refreshNotificationQueries } from "../lib/notification-queries";
 
 const FILTERS: Array<{ value: InboxFilterValue; label: string; countKey: "unhandled" | "snoozed" | "handled" | null }> = [
   { value: "unhandled", label: "To do", countKey: "unhandled" },
@@ -189,11 +190,9 @@ export function InboxPage() {
     }
   });
 
-  const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ["inbox"] });
-    // The bell shares this data — leaving it stale would show a count the inbox has already cleared.
-    queryClient.invalidateQueries({ queryKey: ["notifications"] });
-  };
+  // The bell shares this data — leaving it stale would show a count the inbox has already cleared.
+  // Returned, so each mutation settles once both lists are fresh (lib/notification-queries.ts).
+  const refresh = () => refreshNotificationQueries(queryClient);
 
   const update = useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: { handled?: boolean; read?: boolean; snoozeUntil?: string | null; ids?: string[] } }) =>
@@ -206,7 +205,7 @@ export function InboxPage() {
     mutationFn: inboxApi.handleAll,
     onSuccess: (c) => {
       toast.success("Inbox cleared", { description: `${c.handled} item${c.handled === 1 ? "" : "s"} marked done. Nothing was deleted.` });
-      refresh();
+      return refresh();
     },
     onError: (err: any) => toast.error("Could not clear", { description: err?.response?.data?.message ?? "Try again." })
   });

@@ -29,18 +29,22 @@ notificationRouter.use(requireAuth);
  * "to do" filter uses. Anything hidden here is still reachable at /app/inbox under Snoozed or Done —
  * nothing is lost, it is just not shouting.
  */
+/** What the bell shows a person: theirs, not handled, and not still snoozed. ONE definition, because
+ *  the list, the badge and "Mark all read" must all mean the same rows. */
+const shownInBell = (userId: string, now: Date) => ({
+  userId,
+  handledAt: null,
+  OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }]
+});
+
 notificationRouter.get("/", async (req, res) => {
-  const now = new Date();
-  const notifications = await prisma.notification.findMany({
-    where: {
-      userId: req.user!.id,
-      handledAt: null,
-      OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }]
-    },
-    orderBy: { createdAt: "desc" },
-    take: 50
-  });
-  const unread = notifications.filter((n) => !n.readAt).length;
+  const visible = shownInBell(req.user!.id, new Date());
+  const [notifications, unread] = await Promise.all([
+    prisma.notification.findMany({ where: visible, orderBy: { createdAt: "desc" }, take: 50 }),
+    // Counted, not derived from the 50 listed: with the newest 50 all read and older ones unread,
+    // the badge said nothing and "Mark all read" disappeared.
+    prisma.notification.count({ where: { ...visible, readAt: null } })
+  ]);
   res.json({ items: notifications, unread });
 });
 
@@ -59,9 +63,12 @@ notificationRouter.post(
 );
 
 notificationRouter.post("/read-all", async (req, res) => {
+  const now = new Date();
+  // Only what the bell shows. Marking a snoozed row read meant it returned from its snooze with no
+  // dot and no count — the reason for snoozing it, gone.
   await prisma.notification.updateMany({
-    where: { userId: req.user!.id, readAt: null },
-    data: { readAt: new Date() }
+    where: { ...shownInBell(req.user!.id, now), readAt: null },
+    data: { readAt: now }
   });
   res.status(204).send();
 });

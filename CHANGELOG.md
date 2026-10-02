@@ -106,6 +106,21 @@ table (`JoinRequest`) — all additive.
 signup emails** once: it claims each domain exactly one workspace could own, and lists every domain two
 workspaces share as a conflict for you to assign by hand — nothing picks one automatically.
 
+### 🐛 The notifications bell: links that close, counts that are true
+
+- **Opening a notification closes the bell** and goes there. It used to navigate underneath and leave
+  the list open over the new page. A notification with a link is now a real link — it opens in a new
+  tab, and a screen reader hears it as one.
+- **"Mark all read" marks what the bell shows.** It used to mark every unread notification, so one
+  snoozed in the Inbox came back from its snooze already read.
+- **The badge counts every unread notification**, not only those among the 50 newest the list holds —
+  with those all read, the badge and "Mark all read" disappeared while older ones waited.
+- Marking read in the bell refreshes the Inbox too (and the other way round), so the two never
+  disagree; a failed mark-read says so instead of doing nothing; "Mark all read" cannot be sent twice;
+  and the bell's accessible name carries the unread count.
+- A workflow's "notify" step linked to `/app/tickets/<id>`, a page that does not exist; it now opens
+  the ticket like every other ticket notification.
+
 ### 🩹 The range picker names the preset you chose
 
 On the 1st of a month, "This month" is the same single day as "Today", and the picker's button named

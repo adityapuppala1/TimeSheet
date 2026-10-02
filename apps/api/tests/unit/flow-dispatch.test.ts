@@ -110,6 +110,14 @@ beforeEach(() => {
   ticketFindUnique.mockResolvedValue({ assigneeId: "old-1", key: "TCK-9", projectId: "p-1", priority: "HIGH", source: "EMAIL", externalReporterEmail: "sam@acme.io", reporter: { email: "intake@ours.io" } });
 });
 
+describe("the notify step", () => {
+  it("links to the ticket the way every other ticket notification does — there is no /app/tickets/:id route", async () => {
+    getFlow.mockResolvedValue(flow([{ kind: "ACTION", config: { action: "notify", notifyUserId: "u-1" } }]));
+    await startFlowRun({ flowId: "flow-1", trigger: "event:ticket.created", subject, triggerKey: "flow:flow-1:ticket:t-1" });
+    expect(dispatchNotification).toHaveBeenCalledWith(expect.objectContaining({ userId: "u-1", link: "/app/tickets?open=t-1" }));
+  });
+});
+
 describe("one occurrence, one run", () => {
   it("returns the existing run instead of starting a second for the same key", async () => {
     flowRunFindUnique.mockResolvedValue({ id: "fr-existing" });
