@@ -23,6 +23,8 @@ import { getOnlineSeenByUser } from "../services/maintenance.service.js";
 import { assertSeatAvailable, syncSeatsAfterChange, takesASeat } from "../services/seats.service.js";
 import { assertValidManager, loadReportingRows, managerRefusal } from "../services/reporting-line.service.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
+import { queryText } from "../utils/query-text.js";
+import { forEachInOrder } from "../utils/in-order.js";
 import { assertPasswordPolicy, passwordPolicyProblem } from "../utils/password-policy.js";
 import { forgetWorkspaceMembership, rememberWorkspaceMembership, tenantBaseUrl } from "../services/workspace-directory.service.js";
 import { requireTenantContext } from "../config/tenant-context.js";
@@ -80,7 +82,7 @@ userRouter.get("/roles", async (_req, res) => {
 });
 
 userRouter.get("/", async (req, res) => {
-  const search = String(req.query.search ?? "");
+  const search = queryText(req.query.search);
   const [users, onlineSeen] = await Promise.all([
     prisma.user.findMany({
       where: {
@@ -237,14 +239,14 @@ const pagedQuerySchema = z.object({
  *  a different set from the one the operator was looking at. Duplicating this is how those two
  *  drift apart, and the failure mode is deleting the wrong people. */
 function whereFromQuery(q: Record<string, unknown>) {
-  const search = String(q.search ?? "").trim();
+  const search = queryText(q.search).trim();
   const needle = search.toUpperCase().replace(/\s+/g, "_");
   const matchedRoles = search ? roles.filter((r) => r.includes(needle)) : [];
   return {
     deletedAt: null,
-    ...(q.roleId ? { roleId: String(q.roleId) } : {}),
+    ...(queryText(q.roleId) ? { roleId: queryText(q.roleId) } : {}),
     ...(q.status ? { status: q.status as "ACTIVE" | "INACTIVE" | "PENDING_VERIFICATION" } : {}),
-    ...(q.designation ? { designation: String(q.designation) } : {}),
+    ...(queryText(q.designation) ? { designation: queryText(q.designation) } : {}),
     ...(search
       ? {
           OR: [
@@ -262,16 +264,22 @@ function whereFromQuery(q: Record<string, unknown>) {
   };
 }
 
+/** Role sorts by its name and "last seen" by creation (the closest stored column); anything else is a column. */
+function orderByFor(sort: string, dir: "asc" | "desc") {
+  if (sort === "role") return { role: { name: dir } };
+  if (sort === "lastSeenAt") return { createdAt: dir };
+  return { [sort]: dir };
+}
+
 userRouter.get("/paged", validate(pagedQuerySchema), async (req, res) => {
   const q = req.query as Record<string, unknown>;
   const page = Number(q.page ?? 1);
   const pageSize = Number(q.pageSize ?? 25);
-  const sort = String(q.sort ?? "name");
-  const dir = (String(q.dir ?? "asc") === "desc" ? "desc" : "asc") as "asc" | "desc";
+  const sort = queryText(q.sort, "name");
+  const dir: "asc" | "desc" = queryText(q.dir) === "desc" ? "desc" : "asc";
   const where = whereFromQuery(q);
 
-  const orderBy =
-    sort === "role" ? { role: { name: dir } } : sort === "lastSeenAt" ? { createdAt: dir } : { [sort]: dir };
+  const orderBy = orderByFor(sort, dir);
 
   const [total, rows, onlineSeen, designations] = await Promise.all([
     prisma.user.count({ where }),
@@ -374,6 +382,68 @@ function bulkSkipReason(actor: { id: string; role: string }, target: Parameters<
   return null;
 }
 
+type BulkTarget = { id: string; name: string; email: string; status: string };
+type BulkContext = {
+  password?: string;
+  generatedPasswords: Array<{ id: string; name: string; email: string; password: string }>;
+};
+
+async function endSessionsOf(userId: string): Promise<void> {
+  await prisma.session.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
+}
+
+/** One function per bulk action. Each answers null when applied, or the reason it skipped that person. */
+const BULK_ACTIONS: Record<BulkAction, (target: BulkTarget, ctx: BulkContext) => Promise<string | null>> = {
+  ACTIVATE: async (target) => {
+    await prisma.user.update({ where: { id: target.id }, data: { status: "ACTIVE" } });
+    return null;
+  },
+  DEACTIVATE: async (target) => {
+    await prisma.user.update({ where: { id: target.id }, data: { status: "INACTIVE" } });
+    // Deactivating without ending sessions leaves the person working until their token
+    // expires, which is not what "deactivate" means to the person who clicked it.
+    await endSessionsOf(target.id);
+    return null;
+  },
+  RESET_PASSWORD: async (target, { password, generatedPasswords }) => {
+    // No explicit password → a per-person random one (never a fixed default: the old
+    // "Admin@12345" fallback is documented in this repo's README, and a default anyone
+    // can read is not a password). Either way the person is prompted to choose their own
+    // at next sign-in via mustChangePassword.
+    // Throws into `skipped`, named — the rest of the batch still gets the password.
+    if (password) assertPasswordPolicy(password, { email: target.email });
+    const nextPassword = password || generateTempPassword();
+    await prisma.user.update({
+      where: { id: target.id },
+      data: { passwordHash: await hashPassword(nextPassword), mustChangePassword: true }
+    });
+    // Same reasoning as the emailed-reset path (auth.service.ts#resetPassword): the reason
+    // an admin resets somebody's password is usually that the account is compromised, and
+    // a new hash alone evicts nobody — an attacker's refresh token keeps rotating for the
+    // rest of the session's 30 days. ALL sessions, not "all but the current": the actor
+    // here is the admin, never the target.
+    await endSessionsOf(target.id);
+    if (!password) generatedPasswords.push({ id: target.id, name: target.name, email: target.email, password: nextPassword });
+    return null;
+  },
+  RESEND_WELCOME: async (target) => {
+    if (target.status !== "ACTIVE") return "Not active";
+    const result = await sendWelcomeEmail(target);
+    return result.ok ? null : result.errorMessage ?? "SMTP refused the message";
+  },
+  FORCE_LOGOUT: async (target) => {
+    await endSessionsOf(target.id);
+    return null;
+  },
+  DELETE: async (target) => {
+    await prisma.user.update({ where: { id: target.id }, data: { deletedAt: new Date(), status: "INACTIVE" } });
+    await endSessionsOf(target.id);
+    // Out of the workspace finder too — see the single DELETE route below.
+    await forgetWorkspaceMembership(requireTenantContext().orgId, target.email);
+    return null;
+  }
+};
+
 userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => {
   const { action, userIds, filter, password } = req.body as {
     action: BulkAction;
@@ -406,82 +476,24 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
    *  operator copies them out now or resets again. Never written to the audit log. */
   const generatedPasswords: Array<{ id: string; name: string; email: string; password: string }> = [];
 
-  for (const target of targets) {
+  await forEachInOrder(targets, async (target) => {
     const skipReason = bulkSkipReason(req.user!, target, action);
     if (skipReason) {
       skipped.push({ id: target.id, name: target.name, reason: skipReason });
-      continue;
+      return;
     }
-
     try {
       // Throws (and so lands in `skipped` below, named) when this would leave no active super admin.
       if (action === "DEACTIVATE" || action === "DELETE") {
         await assertNotLastSuperAdmin(toAuthorityTarget(target), { status: "INACTIVE", deleted: action === "DELETE" });
       }
-      switch (action) {
-        case "DEACTIVATE":
-        case "ACTIVATE": {
-          await prisma.user.update({
-            where: { id: target.id },
-            data: { status: action === "ACTIVATE" ? "ACTIVE" : "INACTIVE" }
-          });
-          // Deactivating without ending sessions leaves the person working until their token
-          // expires, which is not what "deactivate" means to the person who clicked it.
-          if (action === "DEACTIVATE") {
-            await prisma.session.updateMany({ where: { userId: target.id, revokedAt: null }, data: { revokedAt: new Date() } });
-          }
-          break;
-        }
-        case "RESET_PASSWORD": {
-          // No explicit password → a per-person random one (never a fixed default: the old
-          // "Admin@12345" fallback is documented in this repo's README, and a default anyone
-          // can read is not a password). Either way the person is prompted to choose their own
-          // at next sign-in via mustChangePassword.
-          // Throws into `skipped` below, named — the rest of the batch still gets the password.
-          if (password) assertPasswordPolicy(password, { email: target.email });
-          const nextPassword = password || generateTempPassword();
-          await prisma.user.update({
-            where: { id: target.id },
-            data: { passwordHash: await hashPassword(nextPassword), mustChangePassword: true }
-          });
-          // Same reasoning as the emailed-reset path (auth.service.ts#resetPassword): the reason
-          // an admin resets somebody's password is usually that the account is compromised, and
-          // a new hash alone evicts nobody — an attacker's refresh token keeps rotating for the
-          // rest of the session's 30 days. ALL sessions, not "all but the current": the actor
-          // here is the admin, never the target.
-          await prisma.session.updateMany({ where: { userId: target.id, revokedAt: null }, data: { revokedAt: new Date() } });
-          if (!password) {
-            generatedPasswords.push({ id: target.id, name: target.name, email: target.email, password: nextPassword });
-          }
-          break;
-        }
-        case "RESEND_WELCOME": {
-          if (target.status !== "ACTIVE") {
-            skipped.push({ id: target.id, name: target.name, reason: "Not active" });
-            continue;
-          }
-          const result = await sendWelcomeEmail(target);
-          if (!result.ok) {
-            skipped.push({ id: target.id, name: target.name, reason: result.errorMessage ?? "SMTP refused the message" });
-            continue;
-          }
-          break;
-        }
-        case "FORCE_LOGOUT":
-          await prisma.session.updateMany({ where: { userId: target.id, revokedAt: null }, data: { revokedAt: new Date() } });
-          break;
-        case "DELETE":
-          await prisma.user.update({ where: { id: target.id }, data: { deletedAt: new Date(), status: "INACTIVE" } });
-          await prisma.session.updateMany({ where: { userId: target.id, revokedAt: null }, data: { revokedAt: new Date() } });
-          // Out of the workspace finder too — see the single DELETE route below.
-          await forgetWorkspaceMembership(requireTenantContext().orgId, target.email);
-          break;
-      }
-      done.push(target.id);
+      const refusal = await BULK_ACTIONS[action](target, { password, generatedPasswords });
+      if (refusal) skipped.push({ id: target.id, name: target.name, reason: refusal });
+      else done.push(target.id);
     } catch (err) {
       skipped.push({ id: target.id, name: target.name, reason: (err as Error)?.message ?? "Failed" });
     }
-  }
+  });
 
   // One audit row for the operation plus the target list, rather than N rows: "who ran a bulk
   // deactivate over 60 people" is the question an auditor actually asks, and it is unanswerable
@@ -668,16 +680,47 @@ const bulkUsersSchema = z.object({
  * (a manager and their reports uploaded together) — resolving managers only after every row's
  * user has been created means upload order within the CSV never matters.
  */
+type ImportRow = { name: string; email: string; role: string; password?: string; managerEmail?: string; designation?: string; githubUsername?: string };
+
+/** One CSV row → one account, or a thrown reason that becomes that row's error. */
+async function createImportedUser(actor: { id: string; role: string }, row: ImportRow, roleByName: Map<string, { id: string }>) {
+  const role = roleByName.get(row.role);
+  if (!role) throw new Error(`Unknown role "${row.role}"`);
+  // Per row, like every other refusal here: one SUPER_ADMIN line from an ADMIN must not block
+  // the forty employees in the same file.
+  const refusal = grantRefusal(actor, [row.role]);
+  if (refusal) throw new Error(refusal);
+  const existing = await prisma.user.findUnique({ where: { email: row.email } });
+  if (existing) throw new Error("A user with this email already exists");
+  // Same policy as POST /users; one weak line fails that line only. (A password under the
+  // minimum is still replaced by a generated one, as it always was.)
+  const typed = row.password && row.password.length >= 8 ? row.password : null;
+  const passwordProblem = typed ? passwordPolicyProblem(typed, { email: row.email }) : null;
+  if (passwordProblem) throw new Error(passwordProblem);
+
+  return prisma.user.create({
+    data: {
+      name: row.name,
+      email: row.email,
+      roleId: role.id,
+      status: "ACTIVE",
+      passwordHash: await hashPassword(typed ?? generateTempPassword()),
+      // Whether the CSV carried a password (the uploader knows it) or one was generated
+      // (nobody knows it — an admin reset hands it over later), the person should choose
+      // their own at first sign-in.
+      mustChangePassword: true,
+      designation: row.designation || undefined,
+      githubUsername: row.githubUsername || undefined,
+      notificationPreference: { create: {} },
+      // The account holds the role it was created with — see services/user-authority.service.ts
+      // for why a missing row mattered. Nested, so the user and the row land together.
+      userRoles: { create: { roleId: role.id } }
+    }
+  });
+}
+
 userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
-  const rows = req.body.rows as Array<{
-    name: string;
-    email: string;
-    role: string;
-    password?: string;
-    managerEmail?: string;
-    designation?: string;
-    githubUsername?: string;
-  }>;
+  const rows = req.body.rows as ImportRow[];
 
   await assertSeatAvailable(
     rows.length,
@@ -691,47 +734,15 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
   const emailToId = new Map<string, string>();
 
   // Pass 1 — create every valid row without a manager link yet.
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
+  await forEachInOrder(rows, async (row, i) => {
     try {
-      const role = roleByName.get(row.role);
-      if (!role) throw new Error(`Unknown role "${row.role}"`);
-      // Per row, like every other refusal here: one SUPER_ADMIN line from an ADMIN must not block
-      // the forty employees in the same file.
-      const refusal = grantRefusal(req.user!, [row.role]);
-      if (refusal) throw new Error(refusal);
-      const existing = await prisma.user.findUnique({ where: { email: row.email } });
-      if (existing) throw new Error("A user with this email already exists");
-      // Same policy as POST /users; one weak line fails that line only. (A password under the
-      // minimum is still replaced by a generated one, as it always was.)
-      const passwordProblem = row.password && row.password.length >= 8 ? passwordPolicyProblem(row.password, { email: row.email }) : null;
-      if (passwordProblem) throw new Error(passwordProblem);
-
-      const user = await prisma.user.create({
-        data: {
-          name: row.name,
-          email: row.email,
-          roleId: role.id,
-          status: "ACTIVE",
-          passwordHash: await hashPassword(row.password && row.password.length >= 8 ? row.password : generateTempPassword()),
-          // Whether the CSV carried a password (the uploader knows it) or one was generated
-          // (nobody knows it — an admin reset hands it over later), the person should choose
-          // their own at first sign-in.
-          mustChangePassword: true,
-          designation: row.designation || undefined,
-          githubUsername: row.githubUsername || undefined,
-          notificationPreference: { create: {} },
-          // The account holds the role it was created with — see services/user-authority.service.ts
-          // for why a missing row mattered. Nested, so the user and the row land together.
-          userRoles: { create: { roleId: role.id } }
-        }
-      });
+      const user = await createImportedUser(req.user!, row, roleByName);
       emailToId.set(row.email.toLowerCase(), user.id);
       results.push({ row: i, email: row.email, success: true, userId: user.id });
     } catch (error) {
       results.push({ row: i, email: row.email, success: false, error: (error as Error).message });
     }
-  }
+  });
 
   // Pass 2 — resolve managerEmail for every successfully-created row, against both this batch
   // and pre-existing users, then link and (best-effort, never blocks the response) send the
@@ -742,10 +753,9 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
   // people, so a file where Ann reports to Bob and Bob to Ann links the first and refuses the second.
   const reporting = await loadReportingRows();
   const idByEmail = new Map([...reporting.values()].map((person) => [person.email.toLowerCase(), person.id]));
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
+  await forEachInOrder(rows, async (row, i) => {
     const result = results[i];
-    if (!result.success || !row.managerEmail) continue;
+    if (!result.success || !row.managerEmail) return;
     try {
       const managerId = emailToId.get(row.managerEmail.toLowerCase()) ?? idByEmail.get(row.managerEmail.toLowerCase());
       if (!managerId) throw new Error(`Manager "${row.managerEmail}" not found (create them first, or fix the email)`);
@@ -756,15 +766,13 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
     } catch (error) {
       result.error = `User created, but manager link failed: ${(error as Error).message}`;
     }
-  }
+  });
 
   const createdUsers = results.filter((r) => r.success).map((r) => ({ id: r.userId!, name: rows[r.row].name, email: r.email }));
   const { orgId } = requireTenantContext();
-  for (const user of createdUsers) {
-    sendWelcomeEmail(user).catch(() => undefined);
-    // Findable by email from today, as POST /users does it.
-    await rememberWorkspaceMembership(orgId, user.email);
-  }
+  for (const user of createdUsers) sendWelcomeEmail(user).catch(() => undefined);
+  // Findable by email from today, as POST /users does it — independent writes, so together.
+  await Promise.all(createdUsers.map((user) => rememberWorkspaceMembership(orgId, user.email)));
 
   await audit(req.user!.id, "user.bulk_imported", "User", undefined, {
     total: rows.length,
@@ -834,19 +842,40 @@ async function assertPatchKeepsAccess(
   await assertNotLastSuperAdmin(target, after);
 }
 
+/** The SUPER_ADMIN-only `roles` array must come with an active `role` that is one of them. */
+function assertRoleSetShape(actor: { role: string }, body: { role?: string; roles?: string[] }): void {
+  if (!body.roles) return;
+  if (actor.role !== "SUPER_ADMIN") throw new AppError(403, "Only a super admin can grant more than one role.");
+  if (!body.role) throw new AppError(422, "An active role is required when granting a set of roles.");
+  if (!body.roles.includes(body.role)) throw new AppError(422, "The active role must be one of the granted roles.");
+}
+
+type PatchData = {
+  name?: string;
+  email?: string;
+  status?: "ACTIVE" | "INACTIVE" | "PENDING_VERIFICATION";
+  roleId?: string;
+  managerId?: string | null;
+  designation?: string | null;
+  faceVerificationRequired?: boolean;
+  githubUsername?: string | null;
+};
+
+/** The fields a PATCH copies across as they are — everything but role and manager, which are checked. */
+function plainPatchFields(body: Record<string, unknown>): PatchData {
+  const data: PatchData = {};
+  if (body.name) data.name = body.name as string;
+  if (body.email) data.email = body.email as string;
+  if (body.status) data.status = body.status as PatchData["status"];
+  if ("designation" in body) data.designation = (body.designation as string | null) ?? null;
+  if ("faceVerificationRequired" in body) data.faceVerificationRequired = Boolean(body.faceVerificationRequired);
+  if ("githubUsername" in body) data.githubUsername = (body.githubUsername as string | null) ?? null;
+  return data;
+}
+
 userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
   const targetId = String(req.params.id);
-  const actorIsSuperAdmin = req.user!.role === "SUPER_ADMIN";
-
-  if (req.body.roles && !actorIsSuperAdmin) {
-    throw new AppError(403, "Only a super admin can grant more than one role.");
-  }
-  if (req.body.roles && !req.body.role) {
-    throw new AppError(422, "An active role is required when granting a set of roles.");
-  }
-  if (req.body.roles && req.body.role && !req.body.roles.includes(req.body.role)) {
-    throw new AppError(422, "The active role must be one of the granted roles.");
-  }
+  assertRoleSetShape(req.user!, req.body);
 
   const row = await prisma.user.findUnique({
     where: { id: targetId },
@@ -865,22 +894,7 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
   // only, so deactivate-then-reactivate walked straight past a full plan.
   if (takesASeat(row, req.body.status)) await assertSeatAvailable(1);
 
-  const data: {
-    name?: string;
-    email?: string;
-    status?: "ACTIVE" | "INACTIVE" | "PENDING_VERIFICATION";
-    roleId?: string;
-    managerId?: string | null;
-    designation?: string | null;
-    faceVerificationRequired?: boolean;
-    githubUsername?: string | null;
-  } = {};
-  if (req.body.name) data.name = req.body.name;
-  if (req.body.email) data.email = req.body.email;
-  if (req.body.status) data.status = req.body.status;
-  if ("designation" in req.body) data.designation = req.body.designation ?? null;
-  if ("faceVerificationRequired" in req.body) data.faceVerificationRequired = Boolean(req.body.faceVerificationRequired);
-  if ("githubUsername" in req.body) data.githubUsername = req.body.githubUsername ?? null;
+  const data = plainPatchFields(req.body);
   if (req.body.role) {
     const role = await prisma.role.findUniqueOrThrow({ where: { name: req.body.role } });
     data.roleId = role.id;

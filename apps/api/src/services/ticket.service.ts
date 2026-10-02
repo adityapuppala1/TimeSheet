@@ -14,6 +14,7 @@ import type { Prisma, TicketPriority, TicketSource } from "@prisma/client";
 import { permissions } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
+import { queryText } from "../utils/query-text.js";
 import { AppError } from "../middleware/error.js";
 
 const PRIVILEGED_ROLES = new Set(["SUPER_ADMIN", "ADMIN"]);
@@ -94,8 +95,8 @@ export async function assertQualityGateAllowsResolve(ticket: { id: string; key: 
 
   const failed = Array.isArray(latestGate.conditions)
     ? (latestGate.conditions as Array<Record<string, unknown>>)
-        .filter((condition) => String(condition?.status ?? "").toUpperCase() === "ERROR")
-        .map((condition) => String(condition?.metric ?? "condition"))
+        .filter((condition) => queryText(condition?.status).toUpperCase() === "ERROR")
+        .map((condition) => queryText(condition?.metric, "condition"))
     : [];
   // The failing METRICS are named in the message, not just "the gate failed": the whole value of a
   // gate to the person it stops is knowing which line to go and fix.
