@@ -11,6 +11,8 @@ import { prisma } from "../config/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { NOT_DEACTIVATED } from "../services/people-visibility.service.js";
+import { LOGGED_HOURS_WHERE } from "../services/workspace-metrics.js";
+import { platformDayStart, platformMonth, platformToday, platformWeekStart } from "../utils/date-window.js";
 import { CHAT_INTAKE_SYSTEM_EMAIL } from "../services/chat-intake.service.js";
 import { EMAIL_INTAKE_SYSTEM_EMAIL } from "../services/email-intake.service.js";
 import { SECURITY_INGESTION_SYSTEM_EMAIL } from "../services/security-report.service.js";
@@ -45,39 +47,60 @@ teamRouter.use(requireAuth);
  * monotonically and never shrank. What that person logged is still in every export and in the
  * workspace totals; it is the named row and its trend that go.
  */
+/** The window the roster's per-person figures cover. Pending entries are counted whatever their
+ *  date — a queue waiting now is waiting now — but the rest is the last quarter, not all history. */
+const ROSTER_WINDOW_DAYS = 90;
+
 teamRouter.get("/reports", async (req, res) => {
   const reports = await prisma.user.findMany({
     where: { managerId: req.user!.id, ...NOT_DEACTIVATED },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      status: true,
-      avatarUrl: true,
-      bio: true,
-      role: { select: { name: true } },
-      timesheets: {
-        where: { deletedAt: null },
-        select: { id: true, status: true, totalHours: true, workDate: true, approvalDeadline: true, slaBreachAt: true }
-      }
-    },
+    select: { id: true, name: true, email: true, status: true, avatarUrl: true, bio: true, role: { select: { name: true } } },
     orderBy: { name: "asc" }
   });
+  const ids = reports.map((r) => r.id);
+  const now = new Date();
+  const today = platformToday(now);
+  const windowStart = new Date(today.getTime() - (ROSTER_WINDOW_DAYS - 1) * DAY_MS);
+
+  // Aggregated in the database, over a stated window. This used to load every timesheet each
+  // report had ever logged and count them in Node — the page got slower every week anybody worked.
+  const [byStatus, pendingNow, deadlines] = ids.length
+    ? await Promise.all([
+        prisma.timesheet.groupBy({
+          by: ["userId", "status"],
+          where: { userId: { in: ids }, deletedAt: null, workDate: { gte: windowStart, lte: today } },
+          _count: { _all: true },
+          _sum: { totalHours: true }
+        }),
+        prisma.timesheet.groupBy({ by: ["userId"], where: { userId: { in: ids }, deletedAt: null, status: "SUBMITTED" }, _count: { _all: true } }),
+        // Approval-SLA breaches from the deadline (workspace-metrics.ts), not from `slaBreachAt`,
+        // which only the SLA_ENABLED sweep writes.
+        prisma.timesheet.findMany({
+          where: { userId: { in: ids }, deletedAt: null, approvalDeadline: { gte: platformDayStart(windowStart), lt: now } },
+          select: { userId: true, approvalDeadline: true, reviewedAt: true }
+        })
+      ])
+    : [[], [], []];
 
   const enriched = reports.map((person) => {
-    const total = person.timesheets.length;
-    const pending = person.timesheets.filter((t) => t.status === "SUBMITTED").length;
-    const approved = person.timesheets.filter((t) => t.status === "APPROVED").length;
-    const rejected = person.timesheets.filter((t) => t.status === "REJECTED").length;
-    const slaBreached = person.timesheets.filter((t) => t.slaBreachAt).length;
-    const approvedHours = person.timesheets
-      .filter((t) => t.status === "APPROVED")
-      .reduce((sum, t) => sum + Number(t.totalHours ?? 0), 0);
-    const { timesheets, ...rest } = person;
+    const mine = byStatus.filter((g) => g.userId === person.id);
+    const countOf = (status: string) => mine.find((g) => g.status === status)?._count._all ?? 0;
+    const approvedHours = Number(mine.find((g) => g.status === "APPROVED")?._sum.totalHours ?? 0);
+    const slaBreached = deadlines.filter(
+      (d) => d.userId === person.id && d.approvalDeadline !== null && (d.reviewedAt ?? now).getTime() > d.approvalDeadline.getTime()
+    ).length;
     return {
-      ...rest,
-      role: rest.role.name,
-      stats: { total, pending, approved, rejected, slaBreached, approvedHours }
+      ...person,
+      role: person.role.name,
+      stats: {
+        total: mine.reduce((sum, g) => sum + g._count._all, 0),
+        pending: pendingNow.find((g) => g.userId === person.id)?._count._all ?? 0,
+        approved: countOf("APPROVED"),
+        rejected: countOf("REJECTED"),
+        slaBreached,
+        approvedHours: Number(approvedHours.toFixed(2)),
+        windowDays: ROSTER_WINDOW_DAYS
+      }
     };
   });
 
@@ -89,9 +112,12 @@ teamRouter.get("/reports", async (req, res) => {
  * Logged-hours trend for ONE direct report: week-by-week inside the current month, plus the
  * trailing 12 calendar months. Backs the per-person dialog on `apps/web/src/pages/Team.tsx`.
  *
- * WHY ALL LOGGED HOURS, not just approved: this answers "how much is this person working", and
- * an entry that is still sitting in DRAFT/SUBMITTED is work that was done. The approved-only
- * total already exists next to it in `/reports`'s `stats.approvedHours`.
+ * WHY LOGGED HOURS — submitted + approved (services/workspace-metrics.ts) — and not just approved:
+ * this answers "how much is this person working", and a submitted entry is work that was done and
+ * vouched for. Drafts and rejected hours are not: they used to be counted, so this trend disagreed
+ * with every other hours figure in the product. The approved-only total is `stats.approvedHours`.
+ *
+ * "This month" is the PLATFORM's month (IST); workDate values stay UTC-midnight calendar days.
  *
  * WHY EVERY DATE CALCULATION USES THE UTC GETTERS: `Timesheet.workDate` is written as a UTC
  * midnight (see timesheet.controller.ts), so reading it with local getters would push a day's
@@ -130,16 +156,17 @@ teamRouter.get("/reports/:userId/hours-trend", async (req, res) => {
   });
   if (!report) throw new AppError(404, "No such direct report.");
 
-  const now = new Date();
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0));
-  const windowStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (TREND_MONTHS - 1), 1));
+  // IST's month: from 00:00 to 05:30 IST on the 1st, UTC is still in last month.
+  const thisMonth = platformMonth(new Date());
+  const monthStart = thisMonth.start;
+  const monthEnd = new Date(thisMonth.end.getTime() - DAY_MS);
+  const windowStart = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() - (TREND_MONTHS - 1), 1));
 
   // Summed in the database — at most one row per calendar day comes back, and only the ~17
   // finished buckets reach the client. Raw timesheet rows never leave the server.
   const daily = await prisma.timesheet.groupBy({
     by: ["workDate"],
-    where: { userId: report.id, deletedAt: null, workDate: { gte: windowStart, lte: monthEnd } },
+    where: { userId: report.id, deletedAt: null, ...LOGGED_HOURS_WHERE, workDate: { gte: windowStart, lte: monthEnd } },
     _sum: { totalHours: true },
     _count: true
   });
@@ -232,57 +259,48 @@ teamRouter.get("/sla-summary", async (req, res) => {
   ).map((u) => u.id);
 
   if (myReportIds.length === 0) {
-    return res.json({
-      submitted: 0,
-      submittedYesterday: 0,
-      breached: 0,
-      breachedYesterday: 0,
-      approvedThisWeek: 0,
-      approvedLastWeek: 0,
-      openEscalations: 0,
-      openEscalationsYesterday: 0
-    });
+    return res.json({ submitted: 0, breached: 0, breachedLastWeek: 0, approvedThisWeek: 0, approvedLastWeek: 0, openEscalations: 0 });
   }
 
-  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // "Now" figures (pending, open escalations) carry no comparison: their old "vs yesterday" was the
+  // part of today's set that already existed yesterday, a number that can only make the badge go up.
+  // Period figures compare like-for-like on the IST calendar.
+  const now = new Date();
+  const todayStart = platformDayStart(platformToday(now));
+  const weekStart = platformWeekStart(now);
+  const today = platformToday(now);
+  const WEEK_MS = 7 * DAY_MS;
+  const approvedHours = (gte: Date, lte: Date) =>
+    prisma.timesheet
+      .aggregate({ where: { userId: { in: myReportIds }, status: "APPROVED", deletedAt: null, workDate: { gte, lte } }, _sum: { totalHours: true } })
+      .then((r) => Number(Number(r._sum.totalHours ?? 0).toFixed(2)));
+  /** Approval deadlines in [from, to) that passed before a decision — `(reviewedAt ?? now) > deadline`. */
+  const breachesBetween = async (from: Date, to: Date) => {
+    const rows = await prisma.timesheet.findMany({
+      where: { userId: { in: myReportIds }, deletedAt: null, approvalDeadline: { gte: from, lt: to } },
+      select: { approvalDeadline: true, reviewedAt: true }
+    });
+    return rows.filter((r) => r.approvalDeadline !== null && (r.reviewedAt ?? now).getTime() > r.approvalDeadline.getTime()).length;
+  };
 
-  const [submitted, submittedYesterday, breached, breachedYesterday, approvedThisWeek, approvedLastWeek, openEscalations, openEscalationsYesterday] =
-    await Promise.all([
-      prisma.timesheet.count({ where: { userId: { in: myReportIds }, status: "SUBMITTED", deletedAt: null } }),
-      prisma.timesheet.count({
-        where: { userId: { in: myReportIds }, status: "SUBMITTED", deletedAt: null, createdAt: { lt: today } }
-      }),
-      prisma.timesheet.count({ where: { userId: { in: myReportIds }, slaBreachAt: { not: null }, deletedAt: null } }),
-      prisma.timesheet.count({
-        where: { userId: { in: myReportIds }, deletedAt: null, slaBreachAt: { not: null, lt: today } }
-      }),
-      prisma.timesheet.count({
-        where: { userId: { in: myReportIds }, status: "APPROVED", reviewedAt: { gte: weekAgo }, deletedAt: null }
-      }),
-      prisma.timesheet.count({
-        where: {
-          userId: { in: myReportIds },
-          status: "APPROVED",
-          reviewedAt: { gte: twoWeeksAgo, lt: weekAgo },
-          deletedAt: null
-        }
-      }),
-      prisma.escalation.count({ where: { escalatedToId: req.user!.id, resolvedAt: null } }),
-      prisma.escalation.count({ where: { escalatedToId: req.user!.id, resolvedAt: null, createdAt: { lt: today } } })
-    ]);
+  const [submitted, breached, breachedLastWeek, approvedThisWeek, approvedLastWeek, openEscalations] = await Promise.all([
+    prisma.timesheet.count({ where: { userId: { in: myReportIds }, status: "SUBMITTED", deletedAt: null } }),
+    breachesBetween(todayStart, now),
+    breachesBetween(new Date(todayStart.getTime() - WEEK_MS), new Date(now.getTime() - WEEK_MS)),
+    approvedHours(weekStart, today),
+    approvedHours(new Date(weekStart.getTime() - WEEK_MS), new Date(today.getTime() - WEEK_MS)),
+    prisma.escalation.count({ where: { escalatedToId: req.user!.id, resolvedAt: null } })
+  ]);
 
   res.json({
     submitted,
-    submittedYesterday,
+    /** Approval deadlines that fell today (IST) and passed before a decision, and the same day last week. */
     breached,
-    breachedYesterday,
+    breachedLastWeek,
+    /** Approved HOURS, Monday to today (IST), and the same weekdays of last week. */
     approvedThisWeek,
     approvedLastWeek,
-    openEscalations,
-    openEscalationsYesterday
+    openEscalations
   });
 });
 
@@ -384,7 +402,9 @@ export function buildOrgChart(users: OrgChartUser[], roots: OrgChartUser[]): Org
 
 teamRouter.get("/org-chart", async (req, res) => {
   const allUsers: OrgChartUser[] = await prisma.user.findMany({
-    where: { deletedAt: null, status: "ACTIVE" },
+    // People only: an AI agent identity is an ACTIVE user row and would otherwise sit on the chart as
+    // a colleague with no manager.
+    where: { deletedAt: null, status: "ACTIVE", isAgent: false },
     select: {
       id: true,
       name: true,

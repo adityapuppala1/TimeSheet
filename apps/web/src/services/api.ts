@@ -1674,7 +1674,8 @@ export interface TeamReport {
   avatarUrl: string | null;
   bio: string | null;
   role: string;
-  stats: { total: number; pending: number; approved: number; rejected: number; slaBreached: number; approvedHours: number };
+  /** `pending` is now; the rest cover the last `windowDays` (90). */
+  stats: { total: number; pending: number; approved: number; rejected: number; slaBreached: number; approvedHours: number; windowDays?: number };
 }
 
 export interface OrgChartNode {
@@ -1693,14 +1694,16 @@ export const teamApi = {
   slaSummary: async () =>
     (
       await api.get<{
+        /** Awaiting approval now — no comparison. */
         submitted: number;
-        submittedYesterday: number;
+        /** Approval deadlines that fell today (IST) and passed before a decision; the same day last week. */
         breached: number;
-        breachedYesterday: number;
+        breachedLastWeek: number;
+        /** Approved HOURS, Monday to today (IST); the same weekdays of last week. */
         approvedThisWeek: number;
         approvedLastWeek: number;
+        /** Open now — no comparison. */
         openEscalations: number;
-        openEscalationsYesterday: number;
       }>("/team/sla-summary")
     ).data,
   /** Privileged roles see the whole company tree; everyone else sees only their own subtree. */

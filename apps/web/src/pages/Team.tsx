@@ -32,6 +32,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { StatCard } from "../components/ui/stat-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { computeTrend } from "../lib/trend";
+import { formatHours, formatNumber, NO_VALUE } from "../lib/format";
 import { fileUrl, teamApi, type TeamReport } from "../services/api";
 import { permissions } from "@timesheet/shared";
 import { useAuthStore } from "../store/auth";
@@ -196,13 +197,13 @@ export function Team() {
       {
         id: "approved",
         accessorFn: (row: any) => row.stats.approved,
-        header: () => <span className="block text-right">Approved</span>,
+        header: () => <span className="block text-right">Approved · 90d</span>,
         cell: ({ row }) => <span className="block text-right font-semibold text-success">{row.original.stats.approved}</span>
       },
       {
         id: "rejected",
         accessorFn: (row: any) => row.stats.rejected,
-        header: () => <span className="block text-right">Rejected</span>,
+        header: () => <span className="block text-right">Rejected · 90d</span>,
         cell: ({ row }) => <span className="block text-right text-muted-foreground">{row.original.stats.rejected}</span>
       },
       {
@@ -212,7 +213,7 @@ export function Team() {
         // their approval deadline (sla.service.ts) — and a bare "SLA breaches" on a people page
         // reads as ticket SLAs, which live in ticket-sla.service.ts and are labeled "Ticket SLA"
         // wherever they appear.
-        header: () => <span className="block text-right">Approval SLA breaches</span>,
+        header: () => <span className="block text-right">Approval SLA breaches · 90d</span>,
         cell: ({ row }) => (
           <div className="text-right">
             {row.original.stats.slaBreached > 0 ? (
@@ -226,8 +227,8 @@ export function Team() {
       {
         id: "approvedHours",
         accessorFn: (row: any) => row.stats.approvedHours,
-        header: () => <span className="block text-right">Approved hours</span>,
-        cell: ({ row }) => <span className="block text-right font-semibold">{row.original.stats.approvedHours.toFixed(2)}</span>
+        header: () => <span className="block text-right">Approved hours · 90d</span>,
+        cell: ({ row }) => <span className="block text-right font-semibold">{formatHours(row.original.stats.approvedHours)}</span>
       },
       {
         id: "contact",
@@ -265,37 +266,38 @@ export function Team() {
       {/* Top stats — approver only: every figure here is about approving other people's work. */}
       {canApprove && (
       <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-4">
+        {/* "Now" tiles carry no comparison — their old "vs yesterday" was a subset of the current value,
+            so it could only point up. Period tiles compare like-for-like and say so. A tile that did
+            not load is a dash, never a zero. */}
         <StatCard
-          label="Awaiting approval"
-          value={summary.data?.submitted ?? 0}
+          label="Awaiting approval · now"
+          value={formatNumber(summary.data?.submitted)}
           icon={<Clock className="h-4 w-4" />}
           tone={(summary.data?.submitted ?? 0) > 0 ? "warning" : "default"}
-          trend={computeTrend(summary.data?.submitted ?? 0, summary.data?.submittedYesterday ?? 0, false)}
-          trendLabel="vs yesterday"
         />
         <StatCard
-          label="Approval SLA breached"
-          value={summary.data?.breached ?? 0}
+          label="Approval SLA breaches today"
+          value={formatNumber(summary.data?.breached)}
           icon={<AlertTriangle className="h-4 w-4" />}
           tone={(summary.data?.breached ?? 0) > 0 ? "destructive" : "default"}
-          trend={computeTrend(summary.data?.breached ?? 0, summary.data?.breachedYesterday ?? 0, false)}
-          trendLabel="vs yesterday"
+          trend={summary.data ? computeTrend(summary.data.breached, summary.data.breachedLastWeek, false) : null}
+          trendLabel="vs the same day last week"
+          hint="Approval deadlines that fell today and passed before a decision."
         />
         <StatCard
-          label="Approved this week"
-          value={summary.data?.approvedThisWeek ?? 0}
+          label="Approved hours this week"
+          value={summary.data ? formatHours(summary.data.approvedThisWeek) : NO_VALUE}
           icon={<CheckCircle2 className="h-4 w-4" />}
           tone="success"
-          trend={computeTrend(summary.data?.approvedThisWeek ?? 0, summary.data?.approvedLastWeek ?? 0, true)}
-          trendLabel="vs last week"
+          trend={summary.data ? computeTrend(summary.data.approvedThisWeek, summary.data.approvedLastWeek, true) : null}
+          trendLabel="vs the same days last week"
+          hint="Monday to today."
         />
         <StatCard
-          label="Open escalations"
-          value={summary.data?.openEscalations ?? 0}
+          label="Open escalations · now"
+          value={formatNumber(summary.data?.openEscalations)}
           icon={<ShieldX className="h-4 w-4" />}
           tone={(summary.data?.openEscalations ?? 0) > 0 ? "destructive" : "default"}
-          trend={computeTrend(summary.data?.openEscalations ?? 0, summary.data?.openEscalationsYesterday ?? 0, false)}
-          trendLabel="vs yesterday"
         />
       </div>
       )}
@@ -390,7 +392,7 @@ export function Team() {
                         <span>Approved: <span className="font-semibold text-success">{person.stats.approved}</span></span>
                         <span>Rejected: {person.stats.rejected}</span>
                         <span>Approval SLA breaches: {person.stats.slaBreached > 0 ? <Badge variant="destructive">{person.stats.slaBreached}</Badge> : "0"}</span>
-                        <span>Approved hours: <span className="font-semibold text-foreground">{person.stats.approvedHours.toFixed(2)}</span></span>
+                        <span>Approved hours (90 days): <span className="font-semibold text-foreground">{formatHours(person.stats.approvedHours)}</span></span>
                       </div>
                     </div>
                   );
