@@ -28,10 +28,11 @@ import { tenantContext } from "../config/tenant-context.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { generateStatusReport } from "../services/ai.service.js";
-import { resolveVisiblePeopleNames, withoutHiddenPeople } from "../services/people-visibility.service.js";
 import { computeTimesheetCost } from "../services/billing-rate.service.js";
 import { buildTimesheetAnalytics } from "../services/timesheet-analytics.service.js";
 import { buildAdminSummary } from "../services/admin-summary.service.js";
+import { buildLeaderboard, buildTicketInsights, buildTicketSummary, istWeekStarts, weekIndexFor, weekLabel } from "../services/ticket-analytics.service.js";
+import { median } from "../services/workspace-metrics.js";
 import {
   GROUP_BY_KEYS,
   REPORT_INCLUDE,
@@ -127,334 +128,22 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
 });
 
 /**
- * Ticket metrics for the Reports page — kept separate from /admin-summary
- * (already a large batched payload) for cleaner separation of concerns.
+ * Ticket metrics for the Reports page — kept separate from /admin-summary (already a large batched
+ * payload). Definitions and windows: services/ticket-analytics.service.ts.
  */
 // Broadened to every authenticated member (was reports:view). Team leads and employees can now see workspace productivity — see docs note on the org-visibility change.
 reportRouter.get("/ticket-summary", async (_req, res) => {
-  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-  const sinceLocal = startOfLocalDay();
-
-  const [
-    byStatus,
-    byPriority,
-    byAssignee,
-    openSlaBreaches,
-    openSlaBreachesYesterday,
-    createdThisWeek,
-    resolvedThisWeek,
-    resolvedLastWeek,
-    recentlyResolved,
-    recentlyResolvedLastWeek
-  ] = await Promise.all([
-    prisma.ticket.groupBy({ by: ["status"], where: { deletedAt: null }, _count: true }),
-    prisma.ticket.groupBy({ by: ["priority"], where: { deletedAt: null }, _count: true }),
-    prisma.ticket.groupBy({ by: ["assigneeId"], where: { deletedAt: null, assigneeId: { not: null } }, _count: true }),
-    prisma.ticket.count({ where: { deletedAt: null, slaBreachAt: { not: null }, status: { notIn: ["RESOLVED", "CLOSED"] } } }),
-    prisma.ticket.count({
-      where: { deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] }, slaBreachAt: { not: null, lt: sinceLocal } }
-    }),
-    prisma.ticket.count({ where: { deletedAt: null, createdAt: { gte: weekAgo } } }),
-    prisma.ticket.count({ where: { deletedAt: null, resolvedAt: { gte: weekAgo } } }),
-    prisma.ticket.count({ where: { deletedAt: null, resolvedAt: { gte: twoWeeksAgo, lt: weekAgo } } }),
-    prisma.ticket.findMany({
-      where: { deletedAt: null, resolvedAt: { not: null } },
-      select: { createdAt: true, resolvedAt: true },
-      orderBy: { resolvedAt: "desc" },
-      take: 200
-    }),
-    prisma.ticket.findMany({
-      where: { deletedAt: null, resolvedAt: { gte: twoWeeksAgo, lt: weekAgo } },
-      select: { createdAt: true, resolvedAt: true }
-    })
-  ]);
-
-  // Prisma groupBy can't include relations, so resolve assignee names with a second query
-  // — the same manual-join pattern /admin-summary uses for byProject.
-  //
-  // Deactivated people are dropped: this is a screen, and a departed colleague holding a lane in
-  // the workload bar is a comparison against somebody who has left. The status counts above are NOT
-  // narrowed to match — their tickets are still open and still somebody's problem. See
-  // people-visibility.service.ts for where that line is drawn and why.
-  const assignees = await resolveVisiblePeopleNames(byAssignee.map((row) => row.assigneeId));
-  const visibleByAssignee = withoutHiddenPeople(byAssignee, (row) => row.assigneeId, assignees);
-
-  // Prisma has no native duration aggregate, so average resolution time is reduced in-app.
-  const avgResolutionHours =
-    recentlyResolved.length > 0
-      ? recentlyResolved.reduce(
-          (sum, t) => sum + (t.resolvedAt!.getTime() - t.createdAt.getTime()) / (1000 * 60 * 60),
-          0
-        ) / recentlyResolved.length
-      : 0;
-  const avgResolutionHoursLastWeek =
-    recentlyResolvedLastWeek.length > 0
-      ? recentlyResolvedLastWeek.reduce(
-          (sum, t) => sum + (t.resolvedAt!.getTime() - t.createdAt.getTime()) / (1000 * 60 * 60),
-          0
-        ) / recentlyResolvedLastWeek.length
-      : 0;
-
-  res.json({
-    total: byStatus.reduce((sum, row) => sum + row._count, 0),
-    byStatus,
-    byPriority,
-    byAssignee: visibleByAssignee.rows.map((row) => ({
-      ...row,
-      assignee: assignees.get(row.assigneeId!)!
-    })),
-    hiddenInactiveAssignees: visibleByAssignee.hiddenInactive,
-    openSlaBreaches,
-    openSlaBreachesYesterday,
-    createdThisWeek,
-    resolvedThisWeek,
-    resolvedLastWeek,
-    avgResolutionHours: Number(avgResolutionHours.toFixed(1)),
-    avgResolutionHoursLastWeek: Number(avgResolutionHoursLastWeek.toFixed(1))
-  });
+  res.json(await buildTicketSummary());
 });
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
-/** Monday 00:00 UTC of the week containing `date`. */
-function startOfWeekUtc(date: Date): Date {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const day = d.getUTCDay();
-  const diff = (day + 6) % 7; // days since Monday (Sun=0 -> 6)
-  d.setUTCDate(d.getUTCDate() - diff);
-  return d;
-}
-
-/** `count` Monday-anchored week-start boundaries, oldest first, ending with the current week. */
-function recentWeekStarts(count: number): Date[] {
-  const current = startOfWeekUtc(new Date());
-  return Array.from({ length: count }, (_, i) => new Date(current.getTime() - (count - 1 - i) * WEEK_MS));
-}
-
-/** Which bucket (by index into `weekStarts`) a date falls into, or -1 if before the first week. */
-function weekIndexFor(date: Date, weekStarts: Date[]): number {
-  for (let i = weekStarts.length - 1; i >= 0; i--) {
-    if (date.getTime() >= weekStarts[i].getTime()) return i;
-  }
-  return -1;
-}
-
-const CYCLE_TIME_BUCKETS = [
-  { label: "< 4h", maxHours: 4 },
-  { label: "4-24h", maxHours: 24 },
-  { label: "1-3d", maxHours: 72 },
-  { label: "3-7d", maxHours: 168 },
-  { label: "7-14d", maxHours: 336 },
-  { label: "14d+", maxHours: Infinity }
-];
-
 /**
- * Bundled ticket analytics for the Insights page — velocity, SLA compliance, cycle time
- * distribution, module hotspots, reopen rate, first-response time, per-assignee workload,
- * and estimate-vs-actual variance. Kept as one batched call (Promise.all), same style as
- * /admin-summary and /ticket-summary, since the Insights page loads all of it together.
+ * Bundled ticket analytics for the Insights page — velocity, SLA compliance, cycle time, module
+ * hotspots, reopen rate, first-response time, per-assignee workload and estimate-vs-actual, over the
+ * last eight IST weeks. Definitions and windows: services/ticket-analytics.service.ts.
  */
 // Broadened to every authenticated member (was reports:view). Team leads and employees can now see workspace productivity — see docs note on the org-visibility change.
 reportRouter.get("/ticket-insights", async (_req, res) => {
-  const velocityWeeks = recentWeekStarts(8);
-  const heatmapWeeks = recentWeekStarts(6);
-  const rangeStart = velocityWeeks[0];
-  const heatmapRangeStart = heatmapWeeks[0];
-
-  const [
-    createdInRange,
-    resolvedInRange,
-    cycleTimeSample,
-    moduleGroups,
-    statusChangeAudits,
-    ticketsWithComments,
-    assignedTickets,
-    ticketsWithEstimate
-  ] = await Promise.all([
-    prisma.ticket.findMany({ where: { deletedAt: null, createdAt: { gte: rangeStart } }, select: { createdAt: true } }),
-    prisma.ticket.findMany({
-      where: { deletedAt: null, resolvedAt: { gte: rangeStart } },
-      select: { resolvedAt: true, dueAt: true }
-    }),
-    prisma.ticket.findMany({
-      where: { deletedAt: null, resolvedAt: { not: null } },
-      select: { createdAt: true, resolvedAt: true },
-      orderBy: { resolvedAt: "desc" },
-      take: 300
-    }),
-    prisma.ticket.groupBy({
-      by: ["moduleId"],
-      where: { deletedAt: null, moduleId: { not: null } },
-      _count: true,
-      orderBy: { _count: { moduleId: "desc" } },
-      take: 10
-    }),
-    prisma.auditLog.findMany({
-      where: { action: "ticket.status_changed", entity: "Ticket" },
-      select: { entityId: true, metadata: true }
-    }),
-    prisma.ticket.findMany({
-      where: { deletedAt: null },
-      select: { id: true, createdAt: true, comments: { orderBy: { createdAt: "asc" }, take: 1, select: { createdAt: true } } },
-      take: 500
-    }),
-    prisma.ticket.findMany({
-      where: { deletedAt: null, assigneeId: { not: null } },
-      select: { assigneeId: true, createdAt: true, resolvedAt: true }
-    }),
-    prisma.ticket.findMany({
-      where: { deletedAt: null, estimatedHours: { not: null } },
-      select: { id: true, key: true, title: true, estimatedHours: true }
-    })
-  ]);
-
-  // --- Velocity: tickets created vs resolved per week ---
-  const velocity = velocityWeeks.map((weekStart) => ({
-    weekStart: weekStart.toISOString().slice(0, 10),
-    created: 0,
-    resolved: 0
-  }));
-  for (const t of createdInRange) {
-    const i = weekIndexFor(t.createdAt, velocityWeeks);
-    if (i >= 0) velocity[i].created += 1;
-  }
-  for (const t of resolvedInRange) {
-    const i = weekIndexFor(t.resolvedAt!, velocityWeeks);
-    if (i >= 0) velocity[i].resolved += 1;
-  }
-
-  // --- SLA compliance: % of that week's resolutions that beat their due date ---
-  const slaCompliance = velocityWeeks.map((weekStart) => ({
-    weekStart: weekStart.toISOString().slice(0, 10),
-    compliant: 0,
-    breached: 0
-  }));
-  for (const t of resolvedInRange) {
-    if (!t.dueAt) continue;
-    const i = weekIndexFor(t.resolvedAt!, velocityWeeks);
-    if (i < 0) continue;
-    if (t.resolvedAt! <= t.dueAt) slaCompliance[i].compliant += 1;
-    else slaCompliance[i].breached += 1;
-  }
-  const slaComplianceWithPct = slaCompliance.map((w) => ({
-    ...w,
-    pct: w.compliant + w.breached > 0 ? Math.round((w.compliant / (w.compliant + w.breached)) * 100) : null
-  }));
-
-  // --- Cycle time distribution ---
-  const cycleTimeHistogram = CYCLE_TIME_BUCKETS.map((b) => ({ bucket: b.label, count: 0 }));
-  for (const t of cycleTimeSample) {
-    const hours = (t.resolvedAt!.getTime() - t.createdAt.getTime()) / (1000 * 60 * 60);
-    const idx = CYCLE_TIME_BUCKETS.findIndex((b) => hours < b.maxHours);
-    cycleTimeHistogram[idx === -1 ? CYCLE_TIME_BUCKETS.length - 1 : idx].count += 1;
-  }
-
-  // --- Bug hotspot by module ---
-  const moduleIds = moduleGroups.map((g) => g.moduleId).filter((id): id is string => Boolean(id));
-  const modules = await prisma.projectModule.findMany({
-    where: { id: { in: moduleIds } },
-    select: { id: true, name: true, project: { select: { name: true } } }
-  });
-  const hotspotByModule = moduleGroups.map((g) => {
-    const mod = modules.find((m) => m.id === g.moduleId);
-    return { moduleId: g.moduleId, moduleName: mod?.name ?? "Unknown", projectName: mod?.project.name ?? "Unknown", count: g._count };
-  });
-
-  // --- Reopen rate: of tickets ever resolved (per audit trail), how many were later reopened ---
-  const everResolved = new Set<string>();
-  const everReopened = new Set<string>();
-  for (const row of statusChangeAudits) {
-    const meta = row.metadata as { to?: string } | null;
-    if (!row.entityId || !meta?.to) continue;
-    if (meta.to === "RESOLVED") everResolved.add(row.entityId);
-    if (meta.to === "REOPENED") everReopened.add(row.entityId);
-  }
-  const reopenRate = {
-    reopenedCount: everReopened.size,
-    everResolvedCount: everResolved.size,
-    pct: everResolved.size > 0 ? Math.round((everReopened.size / everResolved.size) * 100) : null
-  };
-
-  // --- First-response time: createdAt -> first comment ---
-  const firstResponseSamples = ticketsWithComments
-    .filter((t) => t.comments.length > 0)
-    .map((t) => (t.comments[0].createdAt.getTime() - t.createdAt.getTime()) / (1000 * 60 * 60));
-  const firstResponseHours = {
-    avgHours: firstResponseSamples.length > 0 ? Number((firstResponseSamples.reduce((s, h) => s + h, 0) / firstResponseSamples.length).toFixed(1)) : null,
-    sampleSize: firstResponseSamples.length
-  };
-
-  // --- Workload heatmap: assignee x week, open-ticket count ---
-  //
-  // Narrowed to people still active BEFORE the sort and the top-15 cut, not after. Filtering a
-  // ranked list afterwards would let a departed colleague go on consuming one of the fifteen
-  // slots and push a current one off the chart — the heatmap would be short a person AND wrong
-  // about who carries the most.
-  const assignedIds = Array.from(new Set(assignedTickets.map((t) => t.assigneeId!).filter(Boolean)));
-  const assigneeUsers = await resolveVisiblePeopleNames(assignedIds);
-  const assigneeIds = assignedIds.filter((id) => assigneeUsers.has(id));
-  const hiddenInactiveAssignees = assignedIds.length - assigneeIds.length;
-  const hoursLoggedRows = await prisma.timesheet.findMany({
-    where: { deletedAt: null, userId: { in: assigneeIds }, workDate: { gte: heatmapRangeStart } },
-    select: { userId: true, workDate: true, totalHours: true }
-  });
-
-  const workloadRows = assigneeIds
-    .map((assigneeId) => {
-      const userTickets = assignedTickets.filter((t) => t.assigneeId === assigneeId);
-      const userHours = hoursLoggedRows.filter((h) => h.userId === assigneeId);
-      const cells = heatmapWeeks.map((weekStart) => {
-        const weekEnd = new Date(weekStart.getTime() + WEEK_MS);
-        const openCount = userTickets.filter(
-          (t) => t.createdAt < weekEnd && (!t.resolvedAt || t.resolvedAt >= weekEnd)
-        ).length;
-        const hoursLogged = userHours
-          .filter((h) => h.workDate >= weekStart && h.workDate < weekEnd)
-          .reduce((sum, h) => sum + Number(h.totalHours), 0);
-        return { weekStart: weekStart.toISOString().slice(0, 10), openCount, hoursLogged: Number(hoursLogged.toFixed(1)) };
-      });
-      return {
-        assigneeId,
-        assigneeName: assigneeUsers.get(assigneeId)!,
-        cells,
-        totalOpen: cells.reduce((s, c) => s + c.openCount, 0)
-      };
-    })
-    .sort((a, b) => b.totalOpen - a.totalOpen)
-    .slice(0, 15);
-
-  // --- Estimate vs. actual variance ---
-  const estimateTicketIds = ticketsWithEstimate.map((t) => t.id);
-  const actualByTicket = await prisma.timesheet.groupBy({
-    by: ["ticketId"],
-    where: { deletedAt: null, ticketId: { in: estimateTicketIds } },
-    _sum: { totalHours: true }
-  });
-  const estimateVsActual = ticketsWithEstimate
-    .map((t) => {
-      const actual = Number(actualByTicket.find((a) => a.ticketId === t.id)?._sum.totalHours ?? 0);
-      const estimated = Number(t.estimatedHours);
-      return { ticketKey: t.key, title: t.title, estimatedHours: estimated, actualHours: actual, varianceHours: Number((actual - estimated).toFixed(2)) };
-    })
-    .filter((row) => row.actualHours > 0)
-    .sort((a, b) => Math.abs(b.varianceHours) - Math.abs(a.varianceHours))
-    .slice(0, 50);
-
-  res.json({
-    velocity,
-    slaCompliance: slaComplianceWithPct,
-    cycleTimeHistogram,
-    hotspotByModule,
-    reopenRate,
-    firstResponseHours,
-    workloadHeatmap: {
-      weeks: heatmapWeeks.map((w) => w.toISOString().slice(0, 10)),
-      rows: workloadRows,
-      hiddenInactive: hiddenInactiveAssignees
-    },
-    estimateVsActual
-  });
+  res.json(await buildTicketInsights());
 });
 
 const SECURITY_SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
@@ -548,7 +237,8 @@ function computeRiskScore(openFindings: Array<{ severity: (typeof SECURITY_SEVER
  */
 // Broadened to every authenticated member (was reports:view). NOTE: this deliberately exposes the workspace's security findings / SBOM to all staff — an internal-transparency decision, reversible by restoring requirePermission(REPORTS_VIEW).
 reportRouter.get("/security-insights", async (_req, res) => {
-  const weeks = recentWeekStarts(8);
+  // IST weeks, the same buckets the Insights page uses (services/ticket-analytics.service.ts).
+  const weeks = istWeekStarts(8, new Date());
   const rangeStart = weeks[0];
   const sinceLocal = startOfLocalDay();
   const yesterdayLocal = new Date(sinceLocal);
@@ -643,9 +333,9 @@ reportRouter.get("/security-insights", async (_req, res) => {
     >;
   const openBySeverity = countBySeverity(openFindings);
 
-  const findingsOverTime = weeks.map((weekStart) => ({
-    weekStart: weekStart.toISOString().slice(0, 10),
-    count: findingsInRange.filter((f) => weekIndexFor(f.createdAt, weeks) === weeks.indexOf(weekStart)).length
+  const findingsOverTime = weeks.map((weekStart, index) => ({
+    weekStart: weekLabel(weekStart),
+    count: findingsInRange.filter((f) => weekIndexFor(f.createdAt, weeks) === index).length
   }));
 
   // Proof where there is proof, the old approximation where there is not — see this route's header
@@ -655,8 +345,9 @@ reportRouter.get("/security-insights", async (_req, res) => {
       ? (f.verifiedFixedAt.getTime() - f.firstSeenAt.getTime()) / (1000 * 60 * 60)
       : (f.updatedAt.getTime() - f.createdAt.getTime()) / (1000 * 60 * 60)
   );
-  const meanTimeToRemediateHours =
-    remediationHours.length > 0 ? remediationHours.reduce((sum, hours) => sum + hours, 0) / remediationHours.length : 0;
+  // The MEDIAN over the eight-week window, and null — not 0h — when nothing was remediated in it. A
+  // mean let one finding that sat open for a year set the figure, and 0 claimed instant fixes.
+  const medianTimeToRemediateHours = median(remediationHours);
   const verifiedFixedCount = resolvedFindings.filter((f) => f.verifiedFixedAt).length;
 
   const riskScore = computeRiskScore(openFindings);
@@ -668,7 +359,11 @@ reportRouter.get("/security-insights", async (_req, res) => {
     openBySeverity,
     byType: SECURITY_TYPES.map((type) => ({ type, count: byType.find((row) => row.type === type)?._count ?? 0 })),
     findingsOverTime,
-    meanTimeToRemediateHours: Number(meanTimeToRemediateHours.toFixed(1)),
+    meanTimeToRemediateHours: medianTimeToRemediateHours === null ? null : Number(medianTimeToRemediateHours.toFixed(1)),
+    /** Same figure under its true name — the median — and the sample it covers. The old key stays
+     *  for callers that read it; it now carries the median and is null when nothing was remediated. */
+    medianTimeToRemediateHours: medianTimeToRemediateHours === null ? null : Number(medianTimeToRemediateHours.toFixed(1)),
+    remediatedCount: remediationHours.length,
     /** How many of the findings behind that average were confirmed gone by a scan rather than
      *  estimated from `updatedAt`. Reported beside the average, never folded into it, so a reader can
      *  see how much of the number is measurement. */
@@ -763,11 +458,13 @@ reportRouter.get("/sbom-inventory", async (_req, res) => {
  *    retroactively rewrote history.
  * 3. Hours with no rate available are reported as `unratedHours` instead of silently contributing
  *    0 — "we don't know" and "it was free" are not the same statement.
- * 4. `totalCostUsd`/`avgCostPerTicket` are computed over ALL tickets; they were previously derived
- *    from the top-25 slice, so both headline numbers were wrong whenever more than 25 tickets had
- *    cost.
- *
- * The response is strictly additive — existing consumers (Insights.tsx) keep working unchanged.
+ * 4. Totals are computed over ALL tickets; they were previously derived from the top-25 slice, so
+ *    both headline numbers were wrong whenever more than 25 tickets had cost.
+ * 5. PER CURRENCY. Each entry is priced in its project's billing currency (the frozen
+ *    `billedCurrency`; for an entry approved before snapshots, the currency approval would have
+ *    used). Those were added into one total that the page printed with a hardcoded "$". Totals are
+ *    now one per currency — never summed across them, the same refusal attestations make — and each
+ *    row carries its own currency.
  */
 // Broadened to every authenticated member (was reports:view). NOTE: exposes workspace cost figures to all staff — reversible by restoring requirePermission(REPORTS_VIEW).
 reportRouter.get("/cost-insights", async (_req, res) => {
@@ -783,7 +480,9 @@ reportRouter.get("/cost-insights", async (_req, res) => {
         billable: true,
         billedAmount: true,
         billedRate: true,
-        user: { select: { hourlyRate: true } }
+        billedCurrency: true,
+        user: { select: { hourlyRate: true } },
+        project: { select: { billingCurrency: true } }
       }
     }),
     // Reported so the UI can explain the drop rather than leaving it looking like data loss.
@@ -794,12 +493,18 @@ reportRouter.get("/cost-insights", async (_req, res) => {
     })
   ]);
 
+  /** Keyed `${ticketId}|${currency}`: a ticket's cost is only ever added up within one currency. */
   const costByTicket = new Map<string, number>();
   const hoursByTicket = new Map<string, number>();
   let unratedHours = 0;
+  const fallbackCurrency = settings.defaultCurrency || "USD";
 
   for (const row of timesheets) {
     if (!row.ticketId) continue;
+    // The snapshot's own currency; for a row approved before snapshots, the currency approval would
+    // have used — the project's billing currency, then the workspace default (billing-rate.service.ts).
+    const currency = row.billedCurrency || row.project.billingCurrency || fallbackCurrency;
+    const key = `${row.ticketId}|${currency}`;
     const { amount, unratedHours: rowUnrated } = computeTimesheetCost([
       {
         totalHours: row.totalHours,
@@ -810,81 +515,64 @@ reportRouter.get("/cost-insights", async (_req, res) => {
       }
     ]);
     const hours = Number(row.totalHours);
-    costByTicket.set(row.ticketId, (costByTicket.get(row.ticketId) ?? 0) + amount);
-    hoursByTicket.set(row.ticketId, (hoursByTicket.get(row.ticketId) ?? 0) + hours);
+    costByTicket.set(key, (costByTicket.get(key) ?? 0) + amount);
+    hoursByTicket.set(key, (hoursByTicket.get(key) ?? 0) + hours);
     unratedHours += rowUnrated;
   }
 
-  const ticketIds = Array.from(costByTicket.keys());
+  const ticketIds = [...new Set([...costByTicket.keys()].map((key) => key.split("|")[0]))];
   const tickets = await prisma.ticket.findMany({ where: { id: { in: ticketIds } }, select: { id: true, key: true, title: true } });
   const ticketById = new Map(tickets.map((t) => [t.id, t]));
 
-  const allRows = ticketIds
-    .map((id) => ({
-      ticketKey: ticketById.get(id)?.key ?? "?",
-      title: ticketById.get(id)?.title ?? "",
-      hours: Number((hoursByTicket.get(id) ?? 0).toFixed(2)),
-      costUsd: Number((costByTicket.get(id) ?? 0).toFixed(2))
-    }))
-    .sort((a, b) => b.costUsd - a.costUsd);
+  const allRows = [...costByTicket.keys()]
+    .map((key) => {
+      const [id, currency] = key.split("|");
+      return {
+        ticketKey: ticketById.get(id)?.key ?? "?",
+        title: ticketById.get(id)?.title ?? "",
+        hours: Number((hoursByTicket.get(key) ?? 0).toFixed(2)),
+        cost: Number((costByTicket.get(key) ?? 0).toFixed(2)),
+        currency
+      };
+    })
+    .sort((a, b) => b.cost - a.cost);
 
-  // Totals over EVERY ticket; only the returned table is capped at 25.
-  const totalCostUsd = allRows.reduce((sum, r) => sum + r.costUsd, 0);
-  const avgCostPerTicket = allRows.length > 0 ? totalCostUsd / allRows.length : 0;
+  // Totals over EVERY ticket, one per currency; only the returned table is capped at 25.
+  const byCurrency = new Map<string, { total: number; tickets: number }>();
+  for (const row of allRows) {
+    const t = byCurrency.get(row.currency) ?? { total: 0, tickets: 0 };
+    t.total += row.cost;
+    t.tickets += 1;
+    byCurrency.set(row.currency, t);
+  }
+  const totalsByCurrency = [...byCurrency.entries()]
+    .map(([currency, t]) => ({
+      currency,
+      total: Number(t.total.toFixed(2)),
+      tickets: t.tickets,
+      avgPerTicket: Number((t.total / t.tickets).toFixed(2))
+    }))
+    .sort((a, b) => b.total - a.total);
   const excludedHoursByStatus = Object.fromEntries(excluded.map((e) => [e.status, Number(e._sum.totalHours ?? 0)]));
 
   res.json({
-    totalCostUsd: Number(totalCostUsd.toFixed(2)),
-    avgCostPerTicket: Number(avgCostPerTicket.toFixed(2)),
+    totalsByCurrency,
     rows: allRows.slice(0, 25),
-    // Additive fields — see the header comment.
     basis: "APPROVED_BILLABLE" as const,
-    ticketCount: allRows.length,
+    ticketCount: ticketIds.length,
     unratedHours: Number(unratedHours.toFixed(2)),
     excludedDraftHours: excludedHoursByStatus.DRAFT ?? 0,
     excludedRejectedHours: excludedHoursByStatus.REJECTED ?? 0
   });
 });
 
-/** Opt-in team leaderboard — gated behind GlobalTicketSettings.enableLeaderboard. Framed as recognition, not surveillance. */
+/** Opt-in team leaderboard — gated behind GlobalTicketSettings.enableLeaderboard. Framed as
+ *  recognition, not surveillance: the last LEADERBOARD_WINDOW_DAYS of resolutions, people only. */
 // Broadened to every authenticated member (was reports:view). Team leads and employees can now see workspace productivity — see docs note on the org-visibility change.
 reportRouter.get("/leaderboard", async (_req, res) => {
   const settings = await prisma.globalTicketSettings.findUnique({ where: { id: "global" } });
   if (!settings?.enableLeaderboard) throw new AppError(403, "The team leaderboard is disabled for this workspace.");
-
-  const resolved = await prisma.ticket.findMany({
-    where: { deletedAt: null, resolvedAt: { not: null }, assigneeId: { not: null } },
-    select: { assigneeId: true, createdAt: true, resolvedAt: true }
-  });
-
-  const byAssignee = new Map<string, { resolvedCount: number; totalCycleHours: number }>();
-  for (const t of resolved) {
-    const entry = byAssignee.get(t.assigneeId!) ?? { resolvedCount: 0, totalCycleHours: 0 };
-    entry.resolvedCount += 1;
-    entry.totalCycleHours += (t.resolvedAt!.getTime() - t.createdAt.getTime()) / (1000 * 60 * 60);
-    byAssignee.set(t.assigneeId!, entry);
-  }
-
-  // A ranking of people, so it ranks people who are here. Leaving somebody who has left at the top
-  // of a board framed as recognition is the single most conspicuous version of this bug — and the
-  // ranking is against a fixed all-time resolved count, so a departed high performer would hold
-  // first place permanently, with nobody able to overtake them.
-  const users = await resolveVisiblePeopleNames(byAssignee.keys());
-  const assigneeIds = Array.from(byAssignee.keys()).filter((id) => users.has(id));
-
-  const rows = assigneeIds
-    .map((id) => {
-      const entry = byAssignee.get(id)!;
-      return {
-        assigneeId: id,
-        assigneeName: users.get(id)!,
-        resolvedCount: entry.resolvedCount,
-        avgCycleHours: Number((entry.totalCycleHours / entry.resolvedCount).toFixed(1))
-      };
-    })
-    .sort((a, b) => b.resolvedCount - a.resolvedCount);
-
-  res.json({ rows, hiddenInactive: byAssignee.size - assigneeIds.length });
+  res.json(await buildLeaderboard());
 });
 
 /**

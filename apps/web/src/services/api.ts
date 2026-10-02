@@ -921,22 +921,32 @@ export interface TicketSummary {
   /** Assignees left out of `byAssignee` because they are no longer active. `total` and the status
    *  counts still include their tickets — the work stays, only the person's row goes. */
   hiddenInactiveAssignees?: number;
+  /** Not RESOLVED and not CLOSED, now. */
+  openTickets: number;
+  /** Open and past `dueAt`, now — independent of the SLA sweep. Point in time: no comparison. */
   openSlaBreaches: number;
-  openSlaBreachesYesterday: number;
+  /** IST week to date. */
   createdThisWeek: number;
   resolvedThisWeek: number;
+  /** The same weekdays of last week, to the same moment. */
   resolvedLastWeek: number;
-  avgResolutionHours: number;
-  avgResolutionHoursLastWeek: number;
+  /** Median hours created → resolved over the last `windowDays`, and the window before it. Null when
+   *  nothing was resolved — never 0h. */
+  resolution: { medianHours: number | null; sampleSize: number; windowDays: number; prevMedianHours: number | null; prevSampleSize: number };
 }
 
 export interface TicketInsights {
+  /** The window every figure covers: eight IST weeks starting `from`. */
+  window: { from: string; weeks: number };
   velocity: Array<{ weekStart: string; created: number; resolved: number }>;
   slaCompliance: Array<{ weekStart: string; compliant: number; breached: number; pct: number | null }>;
   cycleTimeHistogram: Array<{ bucket: string; count: number }>;
   hotspotByModule: Array<{ moduleId: string; moduleName: string; projectName: string; count: number }>;
+  /** Of tickets resolved in the window, the share reopened afterwards. Never above 100%. */
   reopenRate: { reopenedCount: number; everResolvedCount: number; pct: number | null };
-  firstResponseHours: { avgHours: number | null; sampleSize: number };
+  /** Median hours to the first reply by someone other than the reporter, an agent or a system
+   *  account, over tickets raised in the window; `unanswered` have had no such reply. */
+  firstResponseHours: { medianHours: number | null; sampleSize: number; unanswered: number };
   workloadHeatmap: {
     weeks: string[];
     rows: Array<{
@@ -952,11 +962,10 @@ export interface TicketInsights {
 }
 
 export interface CostInsights {
-  /** Across ALL costed tickets, not just the `rows` slice below. */
-  totalCostUsd: number;
-  avgCostPerTicket: number;
-  /** Top 25 by cost — the totals above are not derived from this slice. */
-  rows: Array<{ ticketKey: string; title: string; hours: number; costUsd: number }>;
+  /** Across ALL costed tickets, one per currency — never added across currencies. */
+  totalsByCurrency: Array<{ currency: string; total: number; tickets: number; avgPerTicket: number }>;
+  /** Top 25 by cost — the totals above are not derived from this slice. Each in its own currency. */
+  rows: Array<{ ticketKey: string; title: string; hours: number; cost: number; currency: string }>;
   /** Optional: added alongside the approved-billable-only correction. Older API builds omit them,
    *  hence optional — the UI degrades to just the totals. */
   basis?: "APPROVED_BILLABLE";
@@ -972,7 +981,8 @@ export interface LeaderboardRow {
   assigneeId: string;
   assigneeName: string;
   resolvedCount: number;
-  avgCycleHours: number;
+  /** Median hours created → resolved, over the leaderboard's window. */
+  medianCycleHours: number | null;
 }
 
 export interface SecurityInsights {
@@ -985,7 +995,11 @@ export interface SecurityInsights {
    *  for the bar it is drawing. */
   byType: Array<{ type: SecurityFindingType; count: number }>;
   findingsOverTime: Array<{ weekStart: string; count: number }>;
-  meanTimeToRemediateHours: number;
+  /** Now the MEDIAN over the eight-week window (the key kept its old name); null when nothing was
+   *  remediated in it. */
+  meanTimeToRemediateHours: number | null;
+  medianTimeToRemediateHours: number | null;
+  remediatedCount: number;
   /** How many of the findings behind that average were confirmed gone by a scan rather than
    *  estimated from `updatedAt` — see report.controller.ts's /security-insights header for what the
    *  two halves of the average measure. */
@@ -1146,7 +1160,7 @@ export const reportApi = {
   sbomInventory: async () => (await api.get<SbomInventory>("/reports/sbom-inventory")).data,
   costInsights: async () => (await api.get<CostInsights>("/reports/cost-insights")).data,
   leaderboard: async () =>
-    (await api.get<{ rows: LeaderboardRow[]; hiddenInactive?: number }>("/reports/leaderboard")).data,
+    (await api.get<{ rows: LeaderboardRow[]; windowDays: number; hiddenInactive?: number }>("/reports/leaderboard")).data,
   /** An empty `projectId` is the ALL-PROJECTS request, not a missing argument — the server reads it
    *  as "the whole portfolio" and answers with a summary plus a section per project. */
   statusReport: async (projectId: string, periodDays = 7) =>

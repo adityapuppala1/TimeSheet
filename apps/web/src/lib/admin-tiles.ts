@@ -11,7 +11,7 @@
  *   - A figure that did not load is "—", never 0. The security risk score read `?? 0` and was toned
  *     "success" — a failed request rendered as a clean bill of health.
  */
-import type { AdminSummary } from "../services/api";
+import type { AdminSummary, TicketSummary } from "../services/api";
 import { formatHours, formatNumber, NO_VALUE } from "./format";
 import { computeTrend, type Trend } from "./trend";
 
@@ -105,6 +105,50 @@ export function reportsAdminTiles(summary: AdminSummary | undefined): Tile[] {
       label: "Open escalations · now",
       value: count(summary?.openEscalations),
       tone: (summary?.openEscalations ?? 0) > 0 ? "warning" : "default"
+    }
+  ];
+}
+
+/**
+ * The Reports page's ticket tile row, from `GET /reports/ticket-summary`. Open work and SLA
+ * breaches are "now" (from `dueAt`, so they hold whether or not the SLA sweep runs); resolutions are
+ * IST week-to-date against the same weekdays last week; resolution time is a median over a stated
+ * window — it was the mean of the last 200 resolutions of all time, and "0h" when there were none.
+ */
+export function reportsTicketTiles(summary: TicketSummary | undefined): Tile[] {
+  const resolution = summary?.resolution;
+  return [
+    {
+      label: "Open tickets · now",
+      value: count(summary?.openTickets),
+      tone: (summary?.openTickets ?? 0) > 0 ? "warning" : "default",
+      hint: "Not resolved and not closed."
+    },
+    {
+      label: "Ticket SLA breaches · now",
+      value: count(summary?.openSlaBreaches),
+      tone: (summary?.openSlaBreaches ?? 0) > 0 ? "destructive" : "default",
+      hint: "Open tickets past their due date."
+    },
+    {
+      label: "Resolved this week",
+      value: count(summary?.resolvedThisWeek),
+      tone: "success",
+      trend: summary ? computeTrend(summary.resolvedThisWeek, summary.resolvedLastWeek, true) : null,
+      trendLabel: "vs the same days last week",
+      hint: "Monday to now."
+    },
+    {
+      label: `Median resolution · ${resolution?.windowDays ?? 28} days`,
+      value: resolution ? formatHours(resolution.medianHours) : NO_VALUE,
+      trend:
+        resolution && resolution.medianHours !== null && resolution.prevMedianHours !== null
+          ? computeTrend(resolution.medianHours, resolution.prevMedianHours, false)
+          : null,
+      trendLabel: `vs the ${resolution?.windowDays ?? 28} days before`,
+      hint: resolution
+        ? `Created to resolved, over ${formatNumber(resolution.sampleSize)} ticket${resolution.sampleSize === 1 ? "" : "s"} resolved in the window.`
+        : undefined
     }
   ];
 }

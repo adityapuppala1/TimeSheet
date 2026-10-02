@@ -112,8 +112,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { safeHtml } from "../lib/safe-html";
-import { computeTrend } from "../lib/trend";
-import { reportsAdminTiles } from "../lib/admin-tiles";
+import { reportsAdminTiles, reportsTicketTiles } from "../lib/admin-tiles";
 import { QueryError } from "../components/QueryState";
 import {
   activityTypeApi,
@@ -3219,9 +3218,7 @@ export function ReportsPage() {
   // "now" tiles carry no delta; period tiles carry a printed comparison; a failed load is a dash —
   // see lib/admin-tiles.ts for why each of the old "vs yesterday" badges was wrong.
   const summaryTiles = reportsAdminTiles(analytics.data);
-  const openTickets = (ticketAnalytics.data?.byStatus ?? [])
-    .filter((row) => row.status !== "RESOLVED" && row.status !== "CLOSED")
-    .reduce((sum, row) => sum + row._count, 0);
+  const ticketTiles = reportsTicketTiles(ticketAnalytics.data);
 
   return (
     <Workspace title="Reports & Exports" subtitle="Download operational reports and inspect utilization analytics." icon={<FileSpreadsheet className="h-5 w-5" />}>
@@ -3243,7 +3240,10 @@ export function ReportsPage() {
         <CardHeader className="flex-col items-start justify-between gap-3 space-y-0 sm:flex-row sm:items-center">
           <div>
             <CardTitle>Project hours</CardTitle>
-            <CardDescription>Aggregate across the workspace — drill into a project from the table view.</CardDescription>
+            <CardDescription>
+              Logged hours (submitted and approved) per project, across the workspace and all time — drill into a project
+              from the table view.
+            </CardDescription>
           </div>
         </CardHeader>
         <CardContent>
@@ -3274,36 +3274,15 @@ export function ReportsPage() {
       </Card>
 
       <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-4">
-        <StatCard label="Open tickets" value={openTickets} tone={openTickets > 0 ? "warning" : "default"} />
-        <StatCard
-          label="Ticket SLA breaches"
-          value={ticketAnalytics.data?.openSlaBreaches ?? 0}
-          tone={(ticketAnalytics.data?.openSlaBreaches ?? 0) > 0 ? "destructive" : "default"}
-          trend={computeTrend(ticketAnalytics.data?.openSlaBreaches ?? 0, ticketAnalytics.data?.openSlaBreachesYesterday ?? 0, false)}
-          trendLabel="vs yesterday"
-        />
-        <StatCard
-          label="Resolved this week"
-          value={ticketAnalytics.data?.resolvedThisWeek ?? 0}
-          tone="success"
-          trend={computeTrend(ticketAnalytics.data?.resolvedThisWeek ?? 0, ticketAnalytics.data?.resolvedLastWeek ?? 0, true)}
-          trendLabel="vs last week"
-        />
-        <StatCard
-          label="Avg. resolution time"
-          value={`${ticketAnalytics.data?.avgResolutionHours ?? 0}h`}
-          trend={computeTrend(
-            ticketAnalytics.data?.avgResolutionHours ?? 0,
-            ticketAnalytics.data?.avgResolutionHoursLastWeek ?? 0,
-            false
-          )}
-          trendLabel="vs last week"
-        />
+        {ticketTiles.map((tile) => (
+          <StatCard key={tile.label} label={tile.label} value={tile.value} tone={tile.tone} trend={tile.trend} trendLabel={tile.trendLabel} hint={tile.hint} />
+        ))}
       </div>
+      {ticketAnalytics.isError && !ticketAnalytics.data && <QueryError what="the ticket summary" onRetry={() => ticketAnalytics.refetch()} compact />}
       <Card>
         <CardHeader>
           <CardTitle>Tickets by priority</CardTitle>
-          <CardDescription>Open, in-progress, and closed tickets across the workspace, grouped by priority.</CardDescription>
+          <CardDescription>Every ticket in the workspace, open and closed, by priority — critical first.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="h-72">

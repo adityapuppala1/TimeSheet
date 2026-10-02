@@ -34,7 +34,9 @@ import { DataTable } from "../components/ui/data-table";
 import { Skeleton } from "../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { InactivePeopleNote } from "../components/InactivePeopleNote";
-import { reportApi, settingsApi } from "../services/api";
+import { QueryError } from "../components/QueryState";
+import { formatDayMonth, formatHours, formatMoney, formatNumber, formatPercent, NO_VALUE } from "../lib/format";
+import { reportApi, settingsApi, type CostInsights } from "../services/api";
 import { PageHeader } from "../components/PageHeader";
 import { EmptyState } from "../components/ui/empty-state";
 
@@ -54,13 +56,13 @@ const estimateVsActualColumns: ColumnDef<any, any>[] = [
     id: "estimated",
     accessorFn: (row: any) => row.estimatedHours,
     header: "Estimated",
-    cell: ({ row }) => `${row.original.estimatedHours.toFixed(1)}h`
+    cell: ({ row }) => formatHours(row.original.estimatedHours)
   },
   {
     id: "actual",
     accessorFn: (row: any) => row.actualHours,
     header: "Actual",
-    cell: ({ row }) => `${row.original.actualHours.toFixed(1)}h`
+    cell: ({ row }) => formatHours(row.original.actualHours)
   },
   {
     id: "variance",
@@ -69,7 +71,7 @@ const estimateVsActualColumns: ColumnDef<any, any>[] = [
     cell: ({ row }) => (
       <span className={row.original.varianceHours > 0 ? "text-destructive" : "text-success"}>
         {row.original.varianceHours > 0 ? "+" : ""}
-        {row.original.varianceHours.toFixed(1)}h
+        {formatHours(row.original.varianceHours)}
       </span>
     )
   }
@@ -86,8 +88,9 @@ const costColumns: ColumnDef<any, any>[] = [
       </>
     )
   },
-  { id: "hours", accessorFn: (row: any) => row.hours, header: "Hours", cell: ({ row }) => `${row.original.hours.toFixed(1)}h` },
-  { id: "cost", accessorFn: (row: any) => row.costUsd, header: "Cost", cell: ({ row }) => `$${row.original.costUsd.toFixed(2)}` }
+  { id: "hours", accessorFn: (row: any) => row.hours, header: "Hours", cell: ({ row }) => formatHours(row.original.hours) },
+  // In the ticket's own billing currency — the "$" this used to hardcode was wrong for every other one.
+  { id: "cost", accessorFn: (row: any) => row.cost, header: "Cost", cell: ({ row }) => formatMoney(row.original.cost, row.original.currency) }
 ];
 
 const leaderboardColumns: ColumnDef<any, any>[] = [
@@ -99,7 +102,7 @@ const leaderboardColumns: ColumnDef<any, any>[] = [
   },
   { id: "teammate", accessorFn: (row: any) => row.assigneeName, header: "Teammate", cell: ({ row }) => <span className="font-medium">{row.original.assigneeName}</span> },
   { id: "resolved", accessorFn: (row: any) => row.resolvedCount, header: "Resolved" },
-  { id: "avgCycle", accessorFn: (row: any) => row.avgCycleHours, header: "Avg. cycle time", cell: ({ row }) => `${row.original.avgCycleHours}h` }
+  { id: "medianCycle", accessorFn: (row: any) => row.medianCycleHours, header: "Median cycle time", cell: ({ row }) => formatHours(row.original.medianCycleHours) }
 ];
 
 const AXIS_STYLE = { stroke: "hsl(var(--muted-foreground))", fontSize: 12 };
@@ -133,11 +136,18 @@ const TICKET_STATUS_LABEL: Record<string, string> = {
   REOPENED: "Reopened"
 };
 
-function formatWeek(iso: string) {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+/** A week's label. The API sends the IST day its Monday falls on; parsed as UTC midnight it named the
+ *  Sunday before anywhere west of Greenwich. */
+function formatWeek(dayKey: string) {
+  return formatDayMonth(dayKey);
 }
 
-function StatTile({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: string; tone?: "warning" | "destructive" }) {
+/** One sentence a screen reader can say instead of a chart (WCAG 1.1.1). */
+function seriesSummary(title: string, rows: Array<{ label: string; parts: Array<[string, number]> }>): string {
+  return title + ": " + rows.map((r) => r.label + " — " + r.parts.map(([name, v]) => name + " " + formatNumber(v)).join(", ")).join("; ") + ".";
+}
+
+function StatTile({ icon, label, value, tone, detail }: { icon: React.ReactNode; label: string; value: string; tone?: "warning" | "destructive"; detail?: string }) {
   return (
     <Card>
       <CardContent className="flex items-center gap-3 pt-6">
@@ -147,6 +157,7 @@ function StatTile({ icon, label, value, tone }: { icon: React.ReactNode; label: 
         <div className="min-w-0">
           <p className="truncate text-xs text-muted-foreground">{label}</p>
           <p className="text-xl font-black tracking-tight">{value}</p>
+          {detail && <p className="text-[11px] leading-snug text-muted-foreground">{detail}</p>}
         </div>
       </CardContent>
     </Card>
@@ -158,6 +169,30 @@ function heatColor(value: number, max: number): string {
   if (max <= 0 || value <= 0) return "transparent";
   const intensity = Math.min(1, value / max);
   return `hsl(var(--primary) / ${0.12 + intensity * 0.68})`;
+}
+
+/** Text that stays readable on the cell: on the darker half of the scale the default foreground
+ *  measured about 1.8:1 against the fill, so those cells switch to the primary's own foreground. */
+function heatTextClass(value: number, max: number): { strong: string; soft: string } {
+  if (max > 0 && value / max > 0.5) return { strong: "text-primary-foreground", soft: "text-primary-foreground/85" };
+  return { strong: "", soft: "text-muted-foreground" };
+}
+
+/** Cost totals, one line per currency — never one figure across currencies. */
+function CostTotals({ totals }: { totals: CostInsights["totalsByCurrency"] }) {
+  if (totals.length === 0) return <p className="mt-1 text-2xl font-black">{NO_VALUE}</p>;
+  return (
+    <div className="mt-1 grid gap-0.5">
+      {totals.map((t) => (
+        <p key={t.currency} className="text-2xl font-black tabular-nums">
+          {formatMoney(t.total, t.currency)}
+          <span className="ml-2 text-xs font-normal text-muted-foreground">
+            {formatNumber(t.tickets)} ticket{t.tickets === 1 ? "" : "s"} · avg {formatMoney(t.avgPerTicket, t.currency)}
+          </span>
+        </p>
+      ))}
+    </div>
+  );
 }
 
 export function Insights() {
@@ -191,20 +226,27 @@ export function Insights() {
       />
 
       {insights.isLoading && <Skeleton className="h-24 w-full" />}
+      {/* No data is not zero: a failed request says so and offers a retry instead of a blank page. */}
+      {insights.isError && !insights.data && <QueryError what="the ticket insights" onRetry={() => insights.refetch()} />}
 
       {data && (
         <>
           <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
             <StatTile
               icon={<RotateCcw className="h-4 w-4" />}
-              label="Reopen rate"
-              value={data.reopenRate.pct === null ? "n/a" : `${data.reopenRate.pct}%`}
+              label="Reopen rate (8wk)"
+              value={formatPercent(data.reopenRate.pct)}
               tone={data.reopenRate.pct !== null && data.reopenRate.pct > 20 ? "warning" : undefined}
+              detail={`${formatNumber(data.reopenRate.reopenedCount)} of ${formatNumber(data.reopenRate.everResolvedCount)} resolved tickets reopened afterwards`}
             />
+            {/* The median, over tickets raised in the window, counting only a reply by someone other
+                than the reporter, an AI agent or an intake/system account — and saying how many have
+                had no reply at all, rather than dropping them. */}
             <StatTile
               icon={<MessageSquare className="h-4 w-4" />}
-              label="Avg. first response"
-              value={data.firstResponseHours.avgHours === null ? "n/a" : `${data.firstResponseHours.avgHours}h`}
+              label="Median first response (8wk)"
+              value={formatHours(data.firstResponseHours.medianHours)}
+              detail={`${formatNumber(data.firstResponseHours.sampleSize)} answered · ${formatNumber(data.firstResponseHours.unanswered)} with no reply yet`}
             />
             <StatTile
               icon={<Clock className="h-4 w-4" />}
@@ -222,12 +264,19 @@ export function Insights() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Ticket status mix</CardTitle>
-                <CardDescription>Every open ticket's lifecycle stage, at a glance.</CardDescription>
+                <CardDescription>Every ticket in the workspace by lifecycle stage — resolved and closed included.</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="h-16">
+                <div
+                  className="h-16"
+                  role="img"
+                  aria-label={seriesSummary("Tickets by status", [
+                    { label: "All tickets", parts: ticketSummary.data.byStatus.map((s) => [TICKET_STATUS_LABEL[s.status] ?? s.status, s._count] as [string, number]) }
+                  ])}
+                >
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
+                      accessibilityLayer
                       layout="vertical"
                       data={[
                         ticketSummary.data.byStatus.reduce<Record<string, number | string>>(
@@ -268,12 +317,19 @@ export function Insights() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Ticket velocity</CardTitle>
-              <CardDescription>Created vs. resolved, by week — a gap widening on "created" is a growing backlog.</CardDescription>
+              <CardDescription>Created vs. resolved, by week (weeks start Monday) — a gap widening on "created" is a growing backlog.</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="h-72">
+              <div
+                className="h-72"
+                role="img"
+                aria-label={seriesSummary(
+                  "Tickets created and resolved per week",
+                  data.velocity.map((w) => ({ label: "week of " + formatWeek(w.weekStart), parts: [["created", w.created], ["resolved", w.resolved]] }))
+                )}
+              >
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={data.velocity.map((w) => ({ ...w, label: formatWeek(w.weekStart) }))}>
+                  <LineChart accessibilityLayer data={data.velocity.map((w) => ({ ...w, label: formatWeek(w.weekStart) }))}>
                     <CartesianGrid {...GRID_STYLE} />
                     <XAxis dataKey="label" {...AXIS_STYLE} />
                     <YAxis {...AXIS_STYLE} allowDecimals={false} />
@@ -293,9 +349,14 @@ export function Insights() {
               <CardDescription>Running totals of created vs. resolved — the gap between the two lines is your current backlog size.</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="h-72">
+              <div
+                className="h-72"
+                role="img"
+                aria-label={`Cumulative tickets over the last ${data.velocity.length} weeks: ${formatNumber(data.velocity.reduce((s, w) => s + w.created, 0))} created and ${formatNumber(data.velocity.reduce((s, w) => s + w.resolved, 0))} resolved.`}
+              >
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart
+                    accessibilityLayer
                     data={data.velocity.reduce<Array<{ label: string; created: number; resolved: number }>>((rows, w) => {
                       const prevCreated = rows.at(-1)?.created ?? 0;
                       const prevResolved = rows.at(-1)?.resolved ?? 0;
@@ -320,12 +381,21 @@ export function Insights() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">SLA compliance</CardTitle>
-                <CardDescription>Resolutions per week that beat their due date vs. missed it.</CardDescription>
+                <CardDescription>
+                  Resolutions per week that met their due date vs. were resolved after it. Tickets without a due date are not counted.
+                </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="h-64">
+                <div
+                  className="h-64"
+                  role="img"
+                  aria-label={seriesSummary(
+                    "Resolutions within and outside their SLA per week",
+                    data.slaCompliance.map((w) => ({ label: "week of " + formatWeek(w.weekStart), parts: [["within SLA", w.compliant], ["breached", w.breached]] }))
+                  )}
+                >
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={data.slaCompliance.map((w) => ({ ...w, label: formatWeek(w.weekStart) }))}>
+                    <BarChart accessibilityLayer data={data.slaCompliance.map((w) => ({ ...w, label: formatWeek(w.weekStart) }))}>
                       <CartesianGrid {...GRID_STYLE} />
                       <XAxis dataKey="label" {...AXIS_STYLE} />
                       <YAxis {...AXIS_STYLE} allowDecimals={false} />
@@ -355,12 +425,16 @@ export function Insights() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Cycle time distribution</CardTitle>
-                <CardDescription>How long resolved tickets took, created-to-resolved (last 300).</CardDescription>
+                <CardDescription>How long tickets resolved in the last {data.velocity.length} weeks took, created to resolved.</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="h-64">
+                <div
+                  className="h-64"
+                  role="img"
+                  aria-label={seriesSummary("Resolved tickets by cycle time", [{ label: "Tickets", parts: data.cycleTimeHistogram.map((b) => [b.bucket, b.count] as [string, number]) }])}
+                >
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={data.cycleTimeHistogram}>
+                    <BarChart accessibilityLayer data={data.cycleTimeHistogram}>
                       <CartesianGrid {...GRID_STYLE} />
                       <XAxis dataKey="bucket" {...AXIS_STYLE} />
                       <YAxis {...AXIS_STYLE} allowDecimals={false} />
@@ -390,9 +464,13 @@ export function Insights() {
               {data.hotspotByModule.length === 0 ? (
                 <EmptyState compact title="No module data yet" description="Hotspots appear once tickets carry a module." />
               ) : (
-                <div className="h-80">
+                <div
+                  className="h-80"
+                  role="img"
+                  aria-label={seriesSummary("Tickets by module", [{ label: "Top modules", parts: data.hotspotByModule.map((m) => [m.moduleName, m.count] as [string, number]) }])}
+                >
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={data.hotspotByModule} layout="vertical" margin={{ left: 24 }}>
+                    <BarChart accessibilityLayer data={data.hotspotByModule} layout="vertical" margin={{ left: 24 }}>
                       <CartesianGrid {...GRID_STYLE} horizontal={false} />
                       <XAxis type="number" {...AXIS_STYLE} allowDecimals={false} />
                       <YAxis type="category" dataKey="moduleName" {...AXIS_STYLE} width={140} />
@@ -420,7 +498,10 @@ export function Insights() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Workload heatmap</CardTitle>
-              <CardDescription>Open tickets per assignee, by week — darker means more open work in that week.</CardDescription>
+              <CardDescription>
+                Open tickets per person, by week, with the hours they logged that week — darker means more open work. People only:
+                AI agents are not on it.
+              </CardDescription>
             </CardHeader>
             <CardContent className="overflow-x-auto p-0">
               {data.workloadHeatmap.rows.length === 0 ? (
@@ -439,12 +520,15 @@ export function Insights() {
                     {data.workloadHeatmap.rows.map((row) => (
                       <TableRow key={row.assigneeId}>
                         <TableCell className="font-medium">{row.assigneeName}</TableCell>
-                        {row.cells.map((cell) => (
-                          <TableCell key={cell.weekStart} className="text-center text-xs" style={{ backgroundColor: heatColor(cell.openCount, maxHeatCell) }}>
-                            <div className="font-semibold">{cell.openCount}</div>
-                            <div className="text-muted-foreground">{cell.hoursLogged}h</div>
-                          </TableCell>
-                        ))}
+                        {row.cells.map((cell) => {
+                          const text = heatTextClass(cell.openCount, maxHeatCell);
+                          return (
+                            <TableCell key={cell.weekStart} className="text-center text-xs" style={{ backgroundColor: heatColor(cell.openCount, maxHeatCell) }}>
+                              <div className={`font-semibold ${text.strong}`}>{cell.openCount}</div>
+                              <div className={text.soft}>{formatHours(cell.hoursLogged)}</div>
+                            </TableCell>
+                          );
+                        })}
                       </TableRow>
                     ))}
                   </TableBody>
@@ -478,17 +562,14 @@ export function Insights() {
           </CardHeader>
           <CardContent className="grid gap-4">
             {costInsights.isLoading && <Skeleton className="h-24 w-full" />}
+            {costInsights.isError && !costInsights.data && <QueryError what="cost per ticket" onRetry={() => costInsights.refetch()} compact />}
             {costInsights.data && (
               <>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="rounded-lg border border-border bg-muted/30 p-4">
-                    <p className="text-xs uppercase text-muted-foreground">Total cost (all tickets)</p>
-                    <p className="mt-1 text-2xl font-black">${costInsights.data.totalCostUsd.toFixed(2)}</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-muted/30 p-4">
-                    <p className="text-xs uppercase text-muted-foreground">Avg. cost per ticket</p>
-                    <p className="mt-1 text-2xl font-black">${costInsights.data.avgCostPerTicket.toFixed(2)}</p>
-                  </div>
+                {/* One line per currency. Each entry is priced in its project's billing currency, and
+                    rupees and dollars added into one "$" total was the figure this replaced. */}
+                <div className="rounded-lg border border-border bg-muted/30 p-4">
+                  <p className="text-xs uppercase text-muted-foreground">Total cost, all tickets</p>
+                  <CostTotals totals={costInsights.data.totalsByCurrency} />
                 </div>
                 {/* Explains why these totals are lower than they used to be: unapproved and
                     rejected hours are no longer counted as cost, and hours with no rate on record
@@ -497,13 +578,13 @@ export function Insights() {
                   Covers {costInsights.data.ticketCount ?? costInsights.data.rows.length} ticket(s)
                   {(costInsights.data.excludedDraftHours ?? 0) + (costInsights.data.excludedRejectedHours ?? 0) > 0 && (
                     <>
-                      {" "}— excludes {(costInsights.data.excludedDraftHours ?? 0).toFixed(1)}h draft and{" "}
-                      {(costInsights.data.excludedRejectedHours ?? 0).toFixed(1)}h rejected
+                      {" "}— excludes {formatHours(costInsights.data.excludedDraftHours ?? 0)} draft and{" "}
+                      {formatHours(costInsights.data.excludedRejectedHours ?? 0)} rejected
                     </>
                   )}
                   {(costInsights.data.unratedHours ?? 0) > 0 && (
                     <>
-                      {" "}— {(costInsights.data.unratedHours ?? 0).toFixed(1)}h have no rate on record and are not priced
+                      {" "}— {formatHours(costInsights.data.unratedHours ?? 0)} have no rate on record and are not priced
                     </>
                   )}
                   . Table shows the top 25 by cost.
@@ -521,10 +602,13 @@ export function Insights() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base"><Trophy className="h-4 w-4 text-primary" />Team leaderboard</CardTitle>
-            <CardDescription>Opt-in — resolved-ticket counts and average cycle time, for recognition.</CardDescription>
+            <CardDescription>
+              Opt-in — tickets resolved in the last {leaderboard.data?.windowDays ?? 90} days and the median cycle time, for recognition. People only.
+            </CardDescription>
           </CardHeader>
           <CardContent className="p-4 pt-0">
             {leaderboard.isLoading && <Skeleton className="h-24 w-full" />}
+            {leaderboard.isError && !leaderboard.data && <QueryError what="the leaderboard" onRetry={() => leaderboard.refetch()} compact />}
             {leaderboard.data && leaderboard.data.rows.length > 0 && (
               <DataTable
                 columns={leaderboardColumns}

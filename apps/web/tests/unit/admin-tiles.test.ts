@@ -4,7 +4,7 @@
  * security risk score used to read `?? 0` and was toned "success".
  */
 import { describe, expect, it } from "vitest";
-import { dashboardAdminTiles, reportsAdminTiles, riskTone } from "../../src/lib/admin-tiles";
+import { dashboardAdminTiles, reportsAdminTiles, reportsTicketTiles, riskTone } from "../../src/lib/admin-tiles";
 import type { AdminSummary } from "../../src/services/api";
 
 const summary = {
@@ -67,5 +67,28 @@ describe("reports tiles", () => {
   it("says a breach from a zero baseline is new, not +100%", () => {
     const tile = reportsAdminTiles(summary).find((t) => t.label === "Approval SLA breaches today")!;
     expect(tile.trend?.isNew).toBe(true);
+  });
+});
+
+describe("reports ticket tiles", () => {
+  const ticketSummary = {
+    openTickets: 9,
+    openSlaBreaches: 2,
+    resolvedThisWeek: 6,
+    resolvedLastWeek: 4,
+    resolution: { medianHours: null, sampleSize: 0, windowDays: 28, prevMedianHours: 12, prevSampleSize: 5 }
+  } as unknown as Parameters<typeof reportsTicketTiles>[0];
+
+  it("says resolution time cannot be measured rather than claiming 0h", () => {
+    const tile = reportsTicketTiles(ticketSummary).find((t) => t.label.startsWith("Median resolution"))!;
+    expect(tile.value).toBe("—");
+    expect(tile.trend ?? null).toBeNull();
+    expect(tile.hint).toMatch(/0 tickets resolved in the window/);
+  });
+
+  it("gives the SLA tile no one-way 'vs yesterday' delta", () => {
+    const tile = reportsTicketTiles(ticketSummary).find((t) => t.label.startsWith("Ticket SLA"))!;
+    expect(tile.trend ?? null).toBeNull();
+    expect(tile.value).toBe("2");
   });
 });

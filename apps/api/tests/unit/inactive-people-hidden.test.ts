@@ -215,6 +215,7 @@ vi.mock("../../src/config/prisma.js", () => {
         aggregate: vi.fn(async () => ({ _sum: { totalHours: 0 }, _count: 0 }))
       },
       auditLog: { findMany: noRows() },
+      ticketComment: { findMany: noRows() },
       projectModule: { findMany: noRows() },
       project: { findMany: noRows() },
       securityFinding: { findMany: noRows(), groupBy: noRows(), count: vi.fn().mockResolvedValue(0) },

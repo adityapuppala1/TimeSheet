@@ -19,7 +19,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard } from "../components/ui/stat-card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
-import { computeTrend } from "../lib/trend";
+import { formatDayMonth, formatHours, formatNumber } from "../lib/format";
+import { riskTone } from "../lib/admin-tiles";
+import { QueryError } from "../components/QueryState";
 import { reportApi } from "../services/api";
 import { PageHeader } from "../components/PageHeader";
 
@@ -76,27 +78,28 @@ export function SecurityInsightsPage() {
       />
 
       {insights.isLoading && <Skeleton className="h-32 w-full" />}
+      {/* A failed request is a dash and a Retry — never an empty page that reads as "no findings". */}
+      {insights.isError && !insights.data && <QueryError what="the security insights" onRetry={() => insights.refetch()} />}
 
       {!insights.isLoading && data && (
         <>
           {/* Five cards, so `xl` gets one row and everything below it wraps 4 + 1 rather than
               squeezing five tiles into a tablet's width. */}
           <div data-tour="security-overview" className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-4 xl:grid-cols-5">
+            {/* "Now" figures, without the old "vs yesterday": that compared today's open set with the
+                part of it already open before today, a number that could only ever go up. */}
             <StatCard
-              label="Open findings"
-              value={data.totalOpen}
+              label="Open findings · now"
+              value={formatNumber(data.totalOpen)}
               icon={<ShieldAlert className="h-4 w-4" />}
               tone={data.totalOpen > 0 ? "warning" : "success"}
-              trend={computeTrend(data.totalOpen, data.totalOpenYesterday, false)}
-              trendLabel="vs yesterday"
+              hint={`${formatNumber(Math.max(0, data.totalOpen - data.totalOpenYesterday))} first seen today.`}
             />
             <StatCard
-              label="Risk score"
-              value={data.riskScore}
+              label="Risk score · now"
+              value={formatNumber(data.riskScore)}
               icon={<TrendingUp className="h-4 w-4" />}
-              tone={data.riskScore > 30 ? "destructive" : data.riskScore > 10 ? "warning" : "success"}
-              trend={computeTrend(data.riskScore, data.riskScoreYesterday, false)}
-              trendLabel="vs yesterday"
+              tone={riskTone(data.riskScore)}
             />
             <StatCard
               label="Critical + high open"
@@ -104,14 +107,16 @@ export function SecurityInsightsPage() {
               icon={<AlertTriangle className="h-4 w-4" />}
               tone={data.openBySeverity.CRITICAL + data.openBySeverity.HIGH > 0 ? "destructive" : "success"}
             />
+            {/* The median over the last eight weeks, and a dash — not "0.0h" — when nothing was
+                remediated in them. A mean let one finding left open for a year set the figure. */}
             <StatCard
-              label="Mean time to remediate"
-              value={`${data.meanTimeToRemediateHours.toFixed(1)}h`}
+              label="Median time to remediate · 8wk"
+              value={formatHours(data.medianTimeToRemediateHours ?? data.meanTimeToRemediateHours)}
               icon={<Clock className="h-4 w-4" />}
               hint={
                 data.verifiedFixedCount > 0
-                  ? `${data.verifiedFixedCount} of these were confirmed gone by a scan; the rest are estimated from when the row last changed.`
-                  : "Estimated from when each finding's row last changed. Turn on verified remediation to measure it instead."
+                  ? `Over ${formatNumber(data.remediatedCount)} findings; ${formatNumber(data.verifiedFixedCount)} confirmed gone by a scan, the rest estimated from when the row last changed.`
+                  : `Over ${formatNumber(data.remediatedCount ?? 0)} findings, estimated from when each finding's row last changed. Turn on verified remediation to measure it instead.`
               }
             />
             {/* The queue this whole feature creates: fixes somebody has claimed and no scan has
@@ -179,9 +184,13 @@ export function SecurityInsightsPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="h-56">
+                <div
+                  className="h-56"
+                  role="img"
+                  aria-label={"Open findings by type: " + data.byType.map((row) => (TYPE_LABEL[row.type] ?? row.type) + " " + formatNumber(row.count)).join(", ") + "."}
+                >
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={data.byType.map((row) => ({ name: TYPE_LABEL[row.type] ?? row.type, count: row.count }))}>
+                    <BarChart accessibilityLayer data={data.byType.map((row) => ({ name: TYPE_LABEL[row.type] ?? row.type, count: row.count }))}>
                       <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                       <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={11} interval={0} angle={-15} textAnchor="end" height={50} />
                       <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} allowDecimals={false} />
@@ -210,12 +219,16 @@ export function SecurityInsightsPage() {
                 <TrendingUp className="h-4 w-4 text-primary" />
                 Findings over time
               </CardTitle>
-              <CardDescription>New security findings ingested per week, last 8 weeks.</CardDescription>
+              <CardDescription>New security findings ingested per week (weeks start Monday), last 8 weeks.</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="h-64">
+              <div
+                className="h-64"
+                role="img"
+                aria-label={"New findings per week: " + data.findingsOverTime.map((w) => "week of " + formatDayMonth(w.weekStart) + " " + formatNumber(w.count)).join(", ") + "."}
+              >
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={data.findingsOverTime} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
+                  <AreaChart accessibilityLayer data={data.findingsOverTime.map((w) => ({ ...w, label: formatDayMonth(w.weekStart) }))} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
                     <defs>
                       <linearGradient id="findingsGrad" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="hsl(var(--destructive))" stopOpacity={0.35} />
@@ -223,7 +236,7 @@ export function SecurityInsightsPage() {
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="weekStart" stroke="hsl(var(--muted-foreground))" fontSize={11} />
+                    <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={11} />
                     <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} allowDecimals={false} />
                     <RTooltip
                       contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }}
