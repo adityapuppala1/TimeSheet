@@ -1,11 +1,11 @@
 {
   "_comment": "Per-rule warning ceiling. See scripts/lint-ratchet.mjs.",
   "rules": {
-    "react-hooks/exhaustive-deps": 25,
-    "sonarjs/cognitive-complexity": 135,
-    "sonarjs/no-nested-conditional": 304,
+    "react-hooks/exhaustive-deps": 21,
+    "sonarjs/cognitive-complexity": 130,
+    "sonarjs/no-nested-conditional": 295,
     "sonarjs/no-nested-functions": 21,
-    "sonarjs/no-nested-template-literals": 111,
+    "sonarjs/no-nested-template-literals": 109,
     "sonarjs/regex-complexity": 11,
     "sonarjs/slow-regex": 49,
     "sonarjs/void-use": 40
