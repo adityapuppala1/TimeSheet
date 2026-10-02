@@ -123,6 +123,20 @@ describe("POST /:orgSlug/v2/Users", () => {
     expect(res.status).toBe(403);
   });
 
+  it("reads a string active:\"False\" on create the way PATCH does, and refuses an unreadable one", async () => {
+    vi.mocked(client.user.findUnique).mockResolvedValue(null);
+    vi.mocked(client.user.count).mockResolvedValue(0);
+    vi.mocked(client.role.findUniqueOrThrow).mockResolvedValue({ id: "role-employee", name: "EMPLOYEE" } as never);
+    vi.mocked(client.user.create).mockResolvedValue({ id: "user-1", name: "N", email: "new.person@example.com", status: "INACTIVE", scimExternalId: null } as never);
+
+    const ok = await request(buildScimApp()).post(`/api/scim/${ORG_SLUG}/v2/Users`).set(scimAuthHeader()).send({ ...validBody, active: "False" });
+    expect(ok.status).toBe(201);
+    expect(client.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "INACTIVE" }) }));
+
+    const bad = await request(buildScimApp()).post(`/api/scim/${ORG_SLUG}/v2/Users`).set(scimAuthHeader()).send({ ...validBody, active: "maybe" });
+    expect(bad.status).toBe(400);
+  });
+
   it("creates an EMPLOYEE-role user on success", async () => {
     vi.mocked(client.user.findUnique).mockResolvedValue(null);
     vi.mocked(client.user.count).mockResolvedValue(0);
@@ -171,6 +185,76 @@ describe("PATCH /:orgSlug/v2/Users/:id — deprovision/reactivate", () => {
 
     expect(res.status).toBe(200);
     expect(client.user.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "ACTIVE" } }));
+  });
+
+  /**
+   * Entra ID's default deprovisioning body, byte for byte. Two things in it break a naive reader:
+   * the value is the STRING "False" (capitalised), not a boolean, and the request is sent as
+   * `application/scim+json` (RFC 7644's media type), which a parser registered for
+   * `application/json` alone skips. Either one turns "this person left the company" into a 200
+   * that changed nothing — or a 400 the IdP retries forever while the account stays live.
+   */
+  const ENTRA_DEPROVISION = '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"Replace","path":"active","value":"False"}]}';
+
+  it("Entra's exact deprovision body (value \"False\", sent as application/scim+json) deactivates the user", async () => {
+    vi.mocked(client.user.findFirst).mockResolvedValue(existingUser as never);
+    vi.mocked(client.user.update).mockResolvedValue({ ...existingUser, status: "INACTIVE" } as never);
+
+    const res = await request(buildScimApp())
+      .patch(`/api/scim/${ORG_SLUG}/v2/Users/user-1`)
+      .set(scimAuthHeader())
+      .set("Content-Type", "application/scim+json")
+      .send(ENTRA_DEPROVISION);
+
+    expect(res.status).toBe(200);
+    expect(client.user.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "INACTIVE" } }));
+    expect(res.body.active).toBe(false);
+  });
+
+  it("the same body sent as application/json is read the same way", async () => {
+    vi.mocked(client.user.findFirst).mockResolvedValue(existingUser as never);
+    vi.mocked(client.user.update).mockResolvedValue({ ...existingUser, status: "INACTIVE" } as never);
+
+    const res = await request(buildScimApp())
+      .patch(`/api/scim/${ORG_SLUG}/v2/Users/user-1`)
+      .set(scimAuthHeader())
+      .set("Content-Type", "application/json")
+      .send(ENTRA_DEPROVISION);
+
+    expect(res.status).toBe(200);
+    expect(client.user.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "INACTIVE" } }));
+  });
+
+  it.each([
+    ["\"True\" with a path", { op: "Replace", path: "active", value: "True" }, "ACTIVE"],
+    ["\"true\" with a path", { op: "replace", path: "active", value: "true" }, "ACTIVE"],
+    ["\"FALSE\" with no path", { op: "Replace", value: { active: "FALSE" } }, "INACTIVE"],
+    ["boolean false with no path", { op: "replace", value: { active: false } }, "INACTIVE"]
+  ])("reads active as %s", async (_label, operation, expected) => {
+    const startedAs = expected === "ACTIVE" ? "INACTIVE" : "ACTIVE";
+    vi.mocked(client.user.findFirst).mockResolvedValue({ ...existingUser, status: startedAs } as never);
+    vi.mocked(client.user.update).mockResolvedValue({ ...existingUser, status: expected } as never);
+    vi.mocked(client.user.count).mockResolvedValue(0);
+
+    const res = await request(buildScimApp())
+      .patch(`/api/scim/${ORG_SLUG}/v2/Users/user-1`)
+      .set(scimAuthHeader())
+      .send({ Operations: [operation] });
+
+    expect(res.status).toBe(200);
+    expect(client.user.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: expected } }));
+  });
+
+  it("an active value that is neither a boolean nor true/false changes nothing", async () => {
+    vi.mocked(client.user.findFirst).mockResolvedValue(existingUser as never);
+
+    const res = await request(buildScimApp())
+      .patch(`/api/scim/${ORG_SLUG}/v2/Users/user-1`)
+      .set(scimAuthHeader())
+      .send({ Operations: [{ op: "Replace", path: "active", value: "no" }] });
+
+    expect(res.status).toBe(200);
+    expect(client.user.update).not.toHaveBeenCalled();
   });
 
   it("404s when the target user doesn't exist", async () => {

@@ -17,7 +17,7 @@
  * discovery endpoints, and PUT (full-replace) on Users — most IdPs work fine with PATCH alone
  * for the lifecycle operations that matter (provision, deprovision, reactivate).
  */
-import { Router, type Request } from "express";
+import express, { Router, type Request } from "express";
 import { z } from "zod";
 import { getTenantClient, prisma } from "../config/prisma.js";
 import { tenantContext } from "../config/tenant-context.js";
@@ -30,6 +30,29 @@ import { decryptSecret } from "../utils/encryption.js";
 import { constantTimeEqual, hashPassword, opaqueToken } from "../utils/security.js";
 
 export const scimRouter = Router();
+
+/**
+ * RFC 7644's media type. The app's global `express.json()` parses `application/json` only, so a
+ * request from an IdP that labels its body correctly (`application/scim+json`, which Entra ID and
+ * Okta send) arrived here with no body at all and was answered 400 — every create and every
+ * deprovision. A body the global parser already read is not parsed twice.
+ */
+scimRouter.use(express.json({ type: ["application/scim+json"], limit: "1mb" }));
+
+/**
+ * SCIM's `active`, as IdPs actually send it. RFC 7643 makes it a boolean, but Entra ID's default
+ * provisioning sends the STRING "True"/"False" (capitalised) unless an app opts into its compliant
+ * mode — and reading only `typeof value === "boolean"` turned Entra's deprovision into a 200 that
+ * left the person active. Anything else is "not said" rather than guessed.
+ */
+export function readScimActive(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const normalised = value.trim().toLowerCase();
+  if (normalised === "true") return true;
+  if (normalised === "false") return false;
+  return undefined;
+}
 
 /** Same tenant-resolution-from-URL-path helper as devops-webhook.controller.ts's
  *  withOrgTenant — duplicated rather than imported since each ingest-style controller is an
@@ -124,7 +147,17 @@ const createUserSchema = z.object({
   userName: z.string().email(),
   externalId: z.string().max(255).optional(),
   name: z.object({ formatted: z.string().optional(), givenName: z.string().optional(), familyName: z.string().optional() }).optional(),
-  active: z.boolean().optional(),
+  // Same "True"/"False" leniency as PATCH below (see readScimActive): an unreadable value fails the
+  // schema rather than being taken as either answer.
+  active: z
+    .unknown()
+    .optional()
+    .transform((value, ctx) => {
+      if (value === undefined) return undefined;
+      const read = readScimActive(value);
+      if (read === undefined) ctx.addIssue({ code: "custom", message: "active must be true or false" });
+      return read;
+    }),
   emails: z.array(z.object({ value: z.string().email() })).optional()
 });
 
@@ -207,9 +240,12 @@ scimRouter.patch("/:orgSlug/v2/Users/:id", async (req, res, next) => {
 
       let nextActive: boolean | undefined;
       for (const operation of parsed.data.Operations) {
-        if (operation.op.toLowerCase() === "replace" && (operation.path === "active" || !operation.path)) {
-          const value = operation.path ? operation.value : (operation.value as { active?: boolean } | undefined)?.active;
-          if (typeof value === "boolean") nextActive = value;
+        // Attribute names are case-insensitive in SCIM (RFC 7643 §2.1), so `path` is compared that way.
+        const path = operation.path?.toLowerCase();
+        if (operation.op.toLowerCase() === "replace" && (path === "active" || !path)) {
+          const raw = path ? operation.value : (operation.value as { active?: unknown } | undefined)?.active;
+          const value = readScimActive(raw);
+          if (value !== undefined) nextActive = value;
         }
       }
 
