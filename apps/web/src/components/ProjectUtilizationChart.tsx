@@ -46,6 +46,13 @@ import {
   YAxis
 } from "recharts";
 import { useMediaQuery } from "../lib/use-media-query";
+import { formatHours, formatPercent } from "../lib/format";
+
+/** The chart as one sentence, for a screen reader (WCAG 1.1.1): every project and its hours. */
+function hoursSummary(rows: ProjectUtilizationRow[]): string {
+  if (rows.length === 0) return "No logged hours per project.";
+  return "Logged hours per project: " + rows.map((r) => r.name + " " + formatHours(r.value)).join(", ") + ".";
+}
 
 export interface ProjectUtilizationRow {
   name: string;
@@ -148,9 +155,9 @@ function HorizontalBars({
   const gutter = gutterFor(rows);
 
   return (
-    <div style={{ height }} data-testid="project-utilization-bars">
+    <div style={{ height }} data-testid="project-utilization-bars" role="img" aria-label={hoursSummary(rows)}>
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={rows} layout="vertical" margin={{ top: 0, right: 56, bottom: 0, left: 0 }}>
+        <BarChart data={rows} layout="vertical" margin={{ top: 0, right: 56, bottom: 0, left: 0 }} accessibilityLayer>
           {/* Vertical rules only: horizontal ones would draw a line through every bar. Solid
               hairline, not dashed — dashing reads as "threshold" when it is just a grid. */}
           <XAxis
@@ -182,7 +189,7 @@ function HorizontalBars({
               borderRadius: 8,
               color: "hsl(var(--popover-foreground))"
             }}
-            formatter={(value: number) => [`${Number(value).toFixed(2)}h`, "Hours"]}
+            formatter={(value: number) => [formatHours(Number(value)), "Logged hours"]}
           />
           <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={18}>
             {rows.map((row) => (
@@ -208,7 +215,7 @@ function HorizontalBars({
               fill="hsl(var(--muted-foreground))"
               stroke="none"
               fontSize={11}
-              formatter={(value: number) => (value > 0 ? `${Number(value).toFixed(value >= 100 ? 0 : 1)}h` : "")}
+              formatter={(value: number) => (value > 0 ? formatHours(Number(value)) : "")}
             />
           </Bar>
         </BarChart>
@@ -248,9 +255,9 @@ function Donut({
 
   return (
     <div className="grid gap-3" data-testid="project-utilization-donut">
-      <div className="h-52">
+      <div className="h-52" role="img" aria-label={hoursSummary(rows)}>
         <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
+          <PieChart accessibilityLayer>
             <Pie
               data={slices}
               dataKey="value"
@@ -275,7 +282,7 @@ function Donut({
                 color: "hsl(var(--popover-foreground))"
               }}
               formatter={(value: number, name: string) => [
-                `${Number(value).toFixed(2)}h · ${share(Number(value)).toFixed(0)}%`,
+                `${formatHours(Number(value))} · ${formatPercent(share(Number(value)))}`,
                 name
               ]}
             />
@@ -295,7 +302,7 @@ function Donut({
             <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: slice.fill }} aria-hidden />
             <span className="min-w-0 flex-1 truncate text-foreground">{slice.name}</span>
             <span className="shrink-0 tabular-nums text-muted-foreground">
-              {slice.value.toFixed(1)}h · {share(slice.value).toFixed(0)}%
+              {formatHours(slice.value)} · {formatPercent(share(slice.value))}
             </span>
           </li>
         ))}

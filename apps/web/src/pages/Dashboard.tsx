@@ -72,9 +72,9 @@ import { computeTrend, type Trend } from "../lib/trend";
 import { cn } from "../lib/utils";
 import { likeForLikeWindow, periodNote, summarisePersonalPeriod } from "../lib/personal-period";
 import { isoToLocalDate, localDateKey } from "../lib/local-day";
-import { formatHours, formatNumber, formatPercent } from "../lib/format";
+import { formatDate, formatHours, formatNumber, formatPercent, NO_VALUE } from "../lib/format";
 import { dashboardAdminTiles } from "../lib/admin-tiles";
-import { QueryState } from "../components/QueryState";
+import { QueryError, QueryState } from "../components/QueryState";
 import { changeApi, dashboardApi, reportApi, ticketApi, timesheetApi, type AdminSummary, type MyMonthRollup, type TicketRow } from "../services/api";
 import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
 import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
@@ -233,6 +233,8 @@ export function Dashboard() {
    * page's Monday-to-today range, any entry earlier in the week silenced the warning all week.
    */
   const daily = useQuery({ queryKey: ["daily-status", "today"], queryFn: () => reportApi.dailyStatus() });
+  /** The person's own rows failed to load — every personal figure would otherwise read as zero. */
+  const personalFailed = timesheets.isError && !timesheets.data;
   /**
    * The unbounded newest-entries page, used ONLY to annotate the two calendars.
    *
@@ -442,8 +444,9 @@ export function Dashboard() {
       />
 
       <FocusLane
-        hours={derived.loggedHours}
-        pendingCount={derived.pendingCount}
+        hours={personalFailed ? null : derived.loggedHours}
+        pendingCount={personalFailed ? null : derived.pendingCount}
+        ticketsFailed={myTickets.isError && !myTickets.data}
         tickets={myTickets.data ?? []}
         periodLabel={periodLabel}
         loading={timesheets.isLoading || myTickets.isLoading}
@@ -461,6 +464,10 @@ export function Dashboard() {
       <MyTicketsBanner tickets={myTickets.data} loading={myTickets.isLoading} />
 
       {/* ---- Hero band: week at a glance / activity / progress ---- */}
+      {/* Your hours did not load: a dash and a Retry in place of three cards that would otherwise all
+          read "0.0h" — a claim that you logged nothing. */}
+      {personalFailed && <QueryError what="your hours for this period" onRetry={() => timesheets.refetch()} />}
+      {!personalFailed && (
       <div data-tour="dashboard-overview" className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <HeroCard delay={0}>
           <WeekAtAGlance
@@ -497,6 +504,7 @@ export function Dashboard() {
           />
         </HeroCard>
       </div>
+      )}
 
       {/* ---- Day timeline — real entries on a real clock, any loaded date ---- */}
       <DayTimeline
@@ -547,12 +555,15 @@ export function Dashboard() {
             <CardTitle className="flex items-center gap-2 text-base">
               <TrendingUp className="h-4 w-4 text-primary" /> Productivity
             </CardTitle>
-            <CardDescription>Your logged hours, {periodLabel}.</CardDescription>
+            <CardDescription>Your logged hours (submitted and approved), {periodLabel}.</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-64">
+            {personalFailed ? (
+              <QueryError what="your hours for this period" onRetry={() => timesheets.refetch()} compact />
+            ) : (
+            <div className="h-64" role="img" aria-label={trendSummary(derived.trend, periodLabel)}>
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={derived.trend}>
+                <AreaChart data={derived.trend} accessibilityLayer>
                   <defs>
                     <linearGradient id="primaryGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.4} />
@@ -567,6 +578,7 @@ export function Dashboard() {
                 </AreaChart>
               </ResponsiveContainer>
             </div>
+            )}
           </CardContent>
         </Card>
 
@@ -600,12 +612,16 @@ function FocusLane({
   hours,
   pendingCount,
   tickets,
+  ticketsFailed,
   periodLabel,
   loading
 }: {
-  hours: number;
-  pendingCount: number;
+  /** Null when the person's hours did not load — a dash, never "0.0h". */
+  hours: number | null;
+  pendingCount: number | null;
   tickets: TicketRow[];
+  /** The ticket list did not load — "0 high-priority" would be a green all-clear nobody measured. */
+  ticketsFailed: boolean;
   periodLabel: string;
   loading: boolean;
 }) {
@@ -635,12 +651,25 @@ function FocusLane({
             </Link>
           )}
         </div>
-        <FocusSignal icon={Clock3} label={`Hours ${periodLabel}`} value={`${hours.toFixed(1)}h`} to="/app/history" tone="primary" />
-        <FocusSignal icon={TicketIcon} label="High-priority work" value={String(urgent)} to="/app/my-work" tone={urgent > 0 ? "warning" : "success"} />
-        <FocusSignal icon={CheckCircle2} label="Awaiting review" value={String(pendingCount)} to="/app/history" tone={pendingCount > 0 ? "warning" : "success"} />
+        <FocusSignal icon={Clock3} label={`Logged hours ${periodLabel}`} value={formatHours(hours)} to="/app/history" tone="primary" />
+        <FocusSignal
+          icon={TicketIcon}
+          label="High-priority work"
+          value={ticketsFailed ? NO_VALUE : formatNumber(urgent)}
+          to="/app/my-work"
+          tone={signalTone(ticketsFailed ? null : urgent)}
+        />
+        <FocusSignal icon={CheckCircle2} label="Awaiting review" value={formatNumber(pendingCount)} to="/app/history" tone={signalTone(pendingCount)} />
       </div>
     </section>
   );
+}
+
+/** Warning when there is something to act on, success when there is measurably nothing, and the
+ *  neutral primary tone when the figure did not load — unknown is not "all clear". */
+function signalTone(count: number | null): "primary" | "warning" | "success" {
+  if (count === null) return "primary";
+  return count > 0 ? "warning" : "success";
 }
 
 function FocusSignal({ icon: Icon, label, value, to, tone }: { icon: typeof Clock3; label: string; value: string; to: string; tone: "primary" | "warning" | "success" }) {
@@ -745,7 +774,7 @@ function WeekAtAGlance({
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="flex items-baseline justify-between">
-          <p className="text-3xl font-black tabular-nums tracking-tight">{hours.toFixed(1)}h</p>
+          <p className="text-3xl font-black tabular-nums tracking-tight">{formatHours(hours)}</p>
           {pendingCount > 0 && <Badge variant="warning">{pendingCount} awaiting review</Badge>}
         </div>
 
@@ -753,7 +782,7 @@ function WeekAtAGlance({
         {segments.length > 0 ? (
           <div className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full">
             {segments.map((s) => (
-              <div key={s.key} className={`${s.bar} rounded-sm`} style={{ width: `${(s.hours / total) * 100}%` }} title={`${s.label}: ${s.hours.toFixed(1)}h`} />
+              <div key={s.key} className={`${s.bar} rounded-sm`} style={{ width: `${(s.hours / total) * 100}%` }} title={s.label + ": " + formatHours(s.hours)} />
             ))}
           </div>
         ) : (
@@ -767,7 +796,7 @@ function WeekAtAGlance({
                 <span className={`h-2 w-2 rounded-full ${s.dot}`} aria-hidden />
                 {s.label}
               </span>
-              <span className="font-semibold tabular-nums">{(byStatus[s.key] ?? 0).toFixed(1)}h</span>
+              <span className="font-semibold tabular-nums">{formatHours(byStatus[s.key] ?? 0)}</span>
             </div>
           ))}
         </div>
@@ -780,12 +809,12 @@ function WeekAtAGlance({
             <p className="mt-1 text-xs text-muted-foreground">days logged, of working days so far</p>
           </div>
           <div>
-            <p className="text-lg font-bold tabular-nums leading-none">{dailyAvg.toFixed(1)}h</p>
+            <p className="text-lg font-bold tabular-nums leading-none">{formatHours(dailyAvg)}</p>
             <p className="mt-1 text-xs text-muted-foreground">avg / logged day</p>
           </div>
           <div>
             <p className="text-lg font-bold tabular-nums leading-none">{busiest.hours > 0 ? busiest.day : "—"}</p>
-            <p className="mt-1 text-xs text-muted-foreground">busiest{busiest.hours > 0 ? ` · ${busiest.hours.toFixed(1)}h` : ""}</p>
+            <p className="mt-1 text-xs text-muted-foreground">busiest{busiest.hours > 0 ? " · " + formatHours(busiest.hours) : ""}</p>
           </div>
         </div>
 
@@ -804,7 +833,7 @@ function WeekAtAGlance({
               <div key={p.label} className="grid gap-1">
                 <div className="flex items-baseline justify-between gap-2 text-sm">
                   <span className="min-w-0 truncate" title={p.label}>{p.label}</span>
-                  <span className="shrink-0 font-semibold tabular-nums">{p.hours.toFixed(1)}h</span>
+                  <span className="shrink-0 font-semibold tabular-nums">{formatHours(p.hours)}</span>
                 </div>
                 <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                   <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(2, (p.hours / topShare) * 100)}%` }} />
@@ -813,7 +842,7 @@ function WeekAtAGlance({
             ))}
             {restProjects > 0 && (
               <p className="text-xs text-muted-foreground">
-                +{restProjects.toFixed(1)}h across {projects.length - topProjects.length} more
+                +{formatHours(restProjects)} across {projects.length - topProjects.length} more
               </p>
             )}
           </div>
@@ -827,6 +856,11 @@ function WeekAtAGlance({
       </CardContent>
     </Card>
   );
+}
+
+/** One sentence a screen reader can say instead of an hours chart (WCAG 1.1.1). */
+function trendSummary(trend: Array<{ day: string; hours: number }>, periodLabel: string): string {
+  return "Logged hours per day, " + periodLabel + ": " + trend.map((d) => d.day + " " + formatHours(d.hours)).join(", ") + ".";
 }
 
 /** The rhythm card's one-line reading of the comparison. Computed, never invented. */
@@ -863,8 +897,7 @@ function ActivityCard({
   const previous = prevHours ?? 0;
   const delta = comparable ? computeTrend(hours, previous, true) : null;
   const up = hours >= previous;
-  const perDay = trend.map((d) => d.day + " " + formatHours(d.hours)).join(", ");
-  const chartSummary = `Logged hours per day, ${periodLabel}: ${perDay}.`;
+  const chartSummary = trendSummary(trend, periodLabel);
 
   return (
     <Card className="flex h-full flex-col">
@@ -947,7 +980,7 @@ function ProgressCard({
   // The caption and the percentage come from the SAME server rollup, so "Xh of Yh" can never again
   // describe a different population from the percentage beside it.
   const approvedDetail = totals
-    ? `${totals.approvedHours.toFixed(1)}h approved of ${(totals.approvedHours + totals.submittedHours).toFixed(1)}h logged ${periodLabel}`
+    ? `${formatHours(totals.approvedHours)} approved of ${formatHours(totals.approvedHours + totals.submittedHours)} logged ${periodLabel}`
     : "Counting…";
 
   return (
@@ -963,7 +996,7 @@ function ProgressCard({
         <TickMeter
           label={`Target to date (${target}h · ${workingDays} working ${workingDays === 1 ? "day" : "days"})`}
           percent={targetPct}
-          detail={`${hours.toFixed(1)}h logged ${periodLabel}`}
+          detail={formatHours(hours) + " logged " + periodLabel}
           tone="primary"
         />
 
@@ -1625,7 +1658,7 @@ function ProjectRollup({ rollup, loading, periodLabel }: { rollup: MyMonthRollup
                                 reads as a bug rather than as something you are responsible for. */}
                             {row.entries === 0 && <Badge variant="muted" className="ml-2">assigned</Badge>}
                           </td>
-                          <td className="p-2 text-right font-semibold tabular-nums">{row.monthHours.toFixed(1)}</td>
+                          <td className="p-2 text-right font-semibold tabular-nums">{formatHours(row.monthHours)}</td>
                           <td className="p-2 text-right tabular-nums text-muted-foreground">{row.entries}</td>
                           <td className="p-2 text-right" data-testid="rollup-open">
                             {row.tickets.open > 0 ? (
@@ -1670,7 +1703,7 @@ function ProjectRollup({ rollup, loading, periodLabel }: { rollup: MyMonthRollup
                               {cmDonePct === null ? <span className="font-normal text-muted-foreground">—</span> : `${cmDonePct}%`}
                             </td>
                           )}
-                          <td className="p-2 text-muted-foreground">{row.lastDate ?? "—"}</td>
+                          <td className="p-2 text-muted-foreground">{formatDate(row.lastDate)}</td>
                           <td className="p-2">
                             <div className="flex items-center gap-2">
                               <Progress value={approvedPct ?? 0} className="h-1.5" />
@@ -1697,14 +1730,14 @@ function ProjectRollup({ rollup, loading, periodLabel }: { rollup: MyMonthRollup
                     <div key={row.id} className="rounded-lg border border-border p-3">
                       <div className="flex items-center justify-between gap-2">
                         <p className="min-w-0 truncate font-medium">{row.name}</p>
-                        <span className="font-semibold tabular-nums">{row.monthHours.toFixed(1)}h</span>
+                        <span className="font-semibold tabular-nums">{formatHours(row.monthHours)}</span>
                       </div>
                       <div className="mt-2 flex items-center gap-2">
                         <Progress value={approvedPct ?? 0} className="h-1.5" />
                         <span className="text-xs font-semibold tabular-nums">{approvedPct === null ? "—" : `${approvedPct}%`}</span>
                       </div>
                       <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                        <span>{row.entries} entries · last {row.lastDate ?? "—"}</span>
+                        <span>{row.entries} entries · last {formatDate(row.lastDate)}</span>
                         <span className="flex items-center gap-1.5">
                           {row.tickets.open > 0 && <Badge variant="info">{row.tickets.open} open</Badge>}
                           {row.tickets.closed > 0 && <Badge variant="success">{row.tickets.closed} closed</Badge>}
@@ -1836,7 +1869,7 @@ function DailyStatusBanner({
       <CheckCircle2 />
       <AlertTitle>Today's timesheet is logged</AlertTitle>
       <AlertDescription>
-        {status.hours.toFixed(2)} hours captured across {status.entries} {status.entries === 1 ? "entry" : "entries"}. Nice.
+        {formatHours(status.hours)} captured across {status.entries} {status.entries === 1 ? "entry" : "entries"}. Nice.
       </AlertDescription>
     </Alert>
   );

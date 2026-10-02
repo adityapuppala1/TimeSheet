@@ -113,6 +113,7 @@ import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { safeHtml } from "../lib/safe-html";
 import { reportsAdminTiles, reportsTicketTiles } from "../lib/admin-tiles";
+import { formatHours, formatNumber } from "../lib/format";
 import { QueryError } from "../components/QueryState";
 import {
   activityTypeApi,
@@ -3247,16 +3248,20 @@ export function ReportsPage() {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="h-80">
+          <div
+            className="h-80"
+            role="img"
+            aria-label={"Logged hours per project: " + projectData.map((p) => p.name + " " + formatHours(p.hours)).join(", ") + "."}
+          >
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={projectData} margin={{ top: 18 }}>
+              <BarChart data={projectData} margin={{ top: 18 }} accessibilityLayer>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis dataKey="code" stroke="hsl(var(--muted-foreground))" fontSize={11} interval={0} />
                 <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
                 <RTooltip
                   contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }}
                   labelFormatter={(_, payload: any) => payload?.[0]?.payload?.name ?? ""}
-                  formatter={(value: number) => [`${Number(value).toFixed(2)}h`, "Hours"]}
+                  formatter={(value: number) => [formatHours(Number(value)), "Logged hours"]}
                 />
                 <Bar dataKey="hours" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]}>
                   <LabelList
@@ -3264,7 +3269,7 @@ export function ReportsPage() {
                     position="top"
                     fill="hsl(var(--muted-foreground))"
                     fontSize={11}
-                    formatter={(value: number) => (value > 0 ? Number(value).toFixed(value >= 100 ? 0 : 1) : "")}
+                    formatter={(value: number) => (value > 0 ? formatHours(Number(value)) : "")}
                   />
                 </Bar>
               </BarChart>
@@ -3285,9 +3290,13 @@ export function ReportsPage() {
           <CardDescription>Every ticket in the workspace, open and closed, by priority — critical first.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="h-72">
+          <div
+            className="h-72"
+            role="img"
+            aria-label={"Tickets by priority: " + priorityData.map((p) => p.name + " " + formatNumber(p.count)).join(", ") + "."}
+          >
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={priorityData}>
+              <BarChart data={priorityData} accessibilityLayer>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} />
                 <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} allowDecimals={false} />

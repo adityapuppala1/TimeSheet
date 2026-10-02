@@ -55,6 +55,7 @@ import {
 import { DateRangePicker } from "../components/ui/date-range-picker";
 import { runInBackground } from "../lib/run-in-background";
 import { localWindowFromToday } from "../lib/local-day";
+import { allocationText, cellFigure, overCapacityMark, ramp, type WorkloadMeasure } from "../lib/workload-cell";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -66,31 +67,6 @@ const initials = (name?: string) =>
     .map((p) => p[0]?.toUpperCase() ?? "")
     .join("");
 
-/**
- * Which step of the capacity ramp a cell sits on.
- *
- * The bands are deliberately uneven. 1-59% is "has room" and does not need four shades to say so;
- * the interesting range is 60-100%, where a planner decides whether one more task fits. Even
- * quintiles would spend most of the palette on distinctions nobody acts on.
- */
-function ramp(cell: WorkloadCellRow): 0 | 1 | 2 | 3 | 4 {
-  if (cell.isOverAllocated) return 4;
-  const pct = cell.allocationPct;
-  if (pct === null || pct === 0) return 0;
-  if (pct < 60) return 1;
-  if (pct < 90) return 2;
-  return 3;
-}
-
-type WorkloadMeasure = "hours" | "tickets" | "points";
-
-/** The figure a cell shows under each measure. "off" and "—" keep their meaning under hours. */
-function cellFigure(cell: WorkloadCellRow, measure: WorkloadMeasure): string {
-  if (measure === "tickets") return cell.ticketCount === 0 ? "—" : String(cell.ticketCount);
-  if (measure === "points") return cell.storyPoints === 0 ? "—" : String(cell.storyPoints);
-  if (cell.timeOffHours > 0 && cell.capacityHours === 0) return "off";
-  return cell.allocationPct === null ? "—" : `${cell.allocationPct}%`;
-}
 
 /** Which project rows are folded; a Set in state, toggled by id. */
 function useCollapsedGroups() {
@@ -455,11 +431,17 @@ export function WorkloadPage() {
                           <td key={cell.bucketStart} className="p-0.5">
                             <Tooltip>
                               <TooltipTrigger asChild>
+                                {/* The state in words as well as colour (WCAG 1.4.1): under Tickets and Points
+                                    the figure is a count, so over-capacity gets a "!" — see lib/workload-cell.ts. */}
                                 <div
                                   className={cn("grid h-9 place-items-center rounded text-[11px] tabular-nums", RAMP_CLASS[step])}
                                   style={rampTextStyle(step)}
+                                  aria-label={`${cellFigure(cell, measure)} — ${allocationText(cell)}`}
                                 >
-                                  {cellFigure(cell, measure)}
+                                  <span>
+                                    {cellFigure(cell, measure)}
+                                    {overCapacityMark(cell, measure) && <span className="ml-0.5 font-black" aria-hidden>{overCapacityMark(cell, measure)}</span>}
+                                  </span>
                                 </div>
                               </TooltipTrigger>
                               <TooltipContent>
@@ -607,7 +589,7 @@ export function WorkloadPage() {
           <span className="inline-block h-3 w-5 rounded-sm bg-capacity-3" /> at capacity
         </span>
         <span className="inline-flex items-center gap-1">
-          <span className="inline-block h-3 w-5 rounded-sm bg-capacity-4" /> over capacity
+          <span className="inline-block h-3 w-5 rounded-sm bg-capacity-4" /> over capacity{measure !== "hours" && <> (marked <span className="font-black">!</span>)</>}
         </span>
         <span className="ml-2">Totals read as booked&nbsp;/&nbsp;logged.</span>
       </div>
