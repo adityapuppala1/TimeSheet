@@ -22,7 +22,17 @@ import { AppError } from "../middleware/error.js";
 import { avatarUpload, preserveTenantContext } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
-import { buildProfilePayload, changePassword, completeSsoLogin, login, refresh, requestPasswordReset, resetPassword, switchActiveRole } from "../services/auth.service.js";
+import {
+  buildProfilePayload,
+  changePassword,
+  completeSsoLogin,
+  endSessions,
+  login,
+  refresh,
+  requestPasswordReset,
+  resetPassword,
+  switchActiveRole
+} from "../services/auth.service.js";
 import { getOnboardingStatus } from "../services/onboarding.service.js";
 import { authenticateLdap, recordSsoLoginSuccess } from "../services/sso.service.js";
 import {
@@ -41,6 +51,7 @@ import { isValidTimezone, normalizePhoneNumber } from "../utils/phone.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
 import { isPrivateIpAddress, parseUserAgent } from "../utils/user-agent.js";
 import { attachDeviceId } from "../utils/device-cookie.js";
+import { REFRESH_COOKIE, clearRefreshCookie, refreshCookieOptions } from "../utils/refresh-cookie.js";
 import { redeemHandoffCode } from "../services/sso-handoff.service.js";
 
 export const authRouter = Router();
@@ -48,17 +59,6 @@ export const authRouter = Router();
 /** Finder codes one address may be sent per hour (security audit #5). */
 export const DISCOVERY_CODES_PER_ADDRESS_PER_HOUR = 3;
 
-const REFRESH_COOKIE = "refreshToken";
-
-function refreshCookieOptions(expiresAt?: Date) {
-  return {
-    httpOnly: true,
-    secure: env.NODE_ENV === "production",
-    sameSite: "lax" as const,
-    path: "/api/auth",
-    expires: expiresAt
-  };
-}
 
 /**
  * Public (unauthenticated) — the login page calls this before rendering, to know which
@@ -145,21 +145,38 @@ authRouter.post("/refresh", async (req, res) => {
   res.json({ accessToken: result.accessToken });
 });
 
-authRouter.post("/logout", requireAuth, async (req, res) => {
-  if (req.sessionId) {
-    await prisma.session.update({ where: { id: req.sessionId }, data: { revokedAt: new Date() } }).catch(() => undefined);
-  } else {
-    // Access token predates the sid claim — fall back to the safest option, revoke everything.
-    await prisma.session.updateMany({ where: { userId: req.user!.id, revokedAt: null }, data: { revokedAt: new Date() } });
+/**
+ * Sign out of THIS browser. Deliberately NOT behind `requireAuth` (security audit #9).
+ *
+ * It used to be, so it inherited every reason `requireAuth` refuses — 503 during maintenance for
+ * anyone but a super admin, 402 on a lapsed plan, 401 once the access token had expired in an idle
+ * tab — and each refusal left the refresh cookie and the server session alive, so the next page load
+ * signed the person straight back in. The session is now named by the refresh cookie (and by an
+ * access token's `sid` when one is sent); see auth.service.ts#endSessions.
+ *
+ * THE COOKIE IS ALWAYS CLEARED and the answer is always 204: before any work here, and again by
+ * app.ts ahead of tenant resolution, so even a workspace that can no longer be resolved removes it.
+ * A revocation that fails is logged — the browser is still signed out, and the session dies with its
+ * own expiry.
+ */
+authRouter.post("/logout", async (req, res) => {
+  clearRefreshCookie(res);
+  const header = req.headers.authorization ?? "";
+  try {
+    await endSessions({
+      refreshToken: req.cookies?.[REFRESH_COOKIE],
+      accessToken: header.startsWith("Bearer ") ? header.slice(7).trim() : undefined
+    });
+  } catch (error) {
+    console.error(`[auth] sign-out could not revoke its session: ${(error as Error).message}`);
   }
-  res.clearCookie(REFRESH_COOKIE, { path: "/api/auth" });
   res.status(204).send();
 });
 
 /** "Log out everywhere" — distinct from /logout, which only ends the calling device's session. */
 authRouter.post("/logout-all", requireAuth, async (req, res) => {
   await prisma.session.updateMany({ where: { userId: req.user!.id, revokedAt: null }, data: { revokedAt: new Date() } });
-  res.clearCookie(REFRESH_COOKIE, { path: "/api/auth" });
+  clearRefreshCookie(res);
   res.status(204).send();
 });
 

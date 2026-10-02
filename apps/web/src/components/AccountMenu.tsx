@@ -28,6 +28,7 @@ import { authApi, fileUrl, systemApi } from "../services/api";
 import { hasUnseenRelease } from "../lib/whats-new-seen";
 import { useAuthStore } from "../store/auth";
 import { runInBackground } from "../lib/run-in-background";
+import { SIGN_OUT_UNCONFIRMED, signOut } from "../lib/sign-out";
 
 export function initialsFor(name?: string) {
   if (!name) return "?";
@@ -70,16 +71,18 @@ export function AccountMenuContent() {
   });
 
   async function handleLogout() {
-    try {
-      await authApi.logout();
-    } catch {
-      // ignore — we still want local cleanup
-    }
-    logoutStore();
-    // Drop every cached server response so the next sign-in starts clean and
-    // we don't briefly flash the previous user's data.
-    queryClient.clear();
-    toast.success("Signed out");
+    const outcome = await signOut({
+      endSession: authApi.logout,
+      clearLocal: () => {
+        logoutStore();
+        // Drop every cached server response so the next sign-in starts clean and
+        // we don't briefly flash the previous user's data.
+        queryClient.clear();
+      }
+    });
+    // "Signed out" only when the server said so — see lib/sign-out.ts for what a silent failure cost.
+    if (outcome === "signed-out") toast.success("Signed out");
+    else toast.error(SIGN_OUT_UNCONFIRMED.title, { description: SIGN_OUT_UNCONFIRMED.description });
     void navigate("/login");
   }
 

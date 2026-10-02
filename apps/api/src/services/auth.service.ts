@@ -30,6 +30,7 @@ import {
   opaqueToken,
   signAccessToken,
   signRefreshToken,
+  verifyAccessToken,
   verifyPassword,
   verifyRefreshToken,
   verifyTokenHash
@@ -661,6 +662,72 @@ export async function refresh(refreshToken: unknown) {
     refreshToken: `${signRefreshToken(payload.sub, session.id, remainingDays, orgId)}.${newSecret}`,
     refreshTokenExpiresAt: session.expiresAt
   };
+}
+
+/* ================================= Sign-out ================================= */
+
+/** The `sub`/`sid` a signed token names, or null when it is absent, forged, or for another workspace.
+ *  Expiry is ignored on purpose — see `endSessions`. */
+function claimsFrom(verify: () => { sub?: unknown; sid?: unknown; org?: unknown }, orgId: string) {
+  try {
+    const claims = verify();
+    if (typeof claims.sub !== "string") return null;
+    if (typeof claims.org === "string" && claims.org !== orgId) return null;
+    return { sub: claims.sub, sid: typeof claims.sid === "string" ? claims.sid : undefined };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ends the session(s) the presented credentials name. What `/logout` calls (security audit #9).
+ *
+ * WHY THE REFRESH COOKIE IS ENOUGH. Sign-out used to require a valid ACCESS token, through
+ * `requireAuth` — so it answered 503 to everyone but a super admin during maintenance, 402 on a
+ * lapsed plan, and 401 once the 15-minute token had expired in a tab left open. Each time the
+ * refresh cookie and the server session survived, and the next page load signed the person straight
+ * back in. The cookie is the credential that keeps a session alive, so it is the right thing to
+ * name the session that should die: its JWT is signed by this server and carries the session id.
+ *
+ * EXPIRY IS IGNORED, the signature is not. An expired access token or refresh JWT still names a
+ * session this server issued to whoever holds it, and ending it is the only thing it can be used
+ * for here. A token minted for another workspace is ignored.
+ *
+ * Revokes nothing — and throws nothing — when nothing valid was presented. Returns how many rows
+ * were revoked, for the audit trail.
+ */
+export async function endSessions(credentials: { refreshToken?: unknown; accessToken?: string }): Promise<{ userId: string | null; revoked: number }> {
+  const { orgId } = requireTenantContext();
+  const named: Array<{ sid: string; sub: string }> = [];
+
+  if (typeof credentials.refreshToken === "string") {
+    // `<JWT>.<secret>` — the JWT itself has two dots, so split on the LAST one (see `refresh`).
+    const jwtPart = credentials.refreshToken.slice(0, Math.max(0, credentials.refreshToken.lastIndexOf(".")));
+    const fromCookie = jwtPart ? claimsFrom(() => verifyRefreshToken(jwtPart, { ignoreExpiration: true }), orgId) : null;
+    if (fromCookie?.sid) named.push({ sid: fromCookie.sid, sub: fromCookie.sub });
+  }
+
+  const token = credentials.accessToken;
+  const fromAccess = token ? claimsFrom(() => verifyAccessToken(token, { ignoreExpiration: true }), orgId) : null;
+  if (fromAccess?.sid) named.push({ sid: fromAccess.sid, sub: fromAccess.sub });
+
+  const now = new Date();
+  // One person per call in practice — the cookie and the token come from the same browser. Scoped by
+  // userId as well as id anyway, so a mismatched pair can only ever end its own rows.
+  let revoked = 0;
+  for (const sub of new Set(named.map((entry) => entry.sub))) {
+    const ids = [...new Set(named.filter((entry) => entry.sub === sub).map((entry) => entry.sid))];
+    revoked += (await prisma.session.updateMany({ where: { id: { in: ids }, userId: sub, revokedAt: null }, data: { revokedAt: now } })).count;
+  }
+  if (named.length > 0) return { userId: named[0].sub, revoked };
+
+  // An access token from before the `sid` claim existed: the old behaviour, revoke all of that
+  // person's sessions — and only for an UNEXPIRED one, as the requireAuth-guarded route demanded.
+  if (token && fromAccess && claimsFrom(() => verifyAccessToken(token), orgId)) {
+    const { count } = await prisma.session.updateMany({ where: { userId: fromAccess.sub, revokedAt: null }, data: { revokedAt: now } });
+    return { userId: fromAccess.sub, revoked: count };
+  }
+  return { userId: null, revoked: 0 };
 }
 
 /* ============================== Password change ============================== */

@@ -121,11 +121,17 @@ export function signAccessToken(userId: string, sessionId: string, orgId?: strin
   });
 }
 
-export function verifyAccessToken(token: string): AccessTokenPayload {
+/**
+ * `ignoreExpiration` exists for exactly one caller: sign-out (auth.service.ts#endSessions), which
+ * should still end the session an expired token names. The signature, issuer and audience are
+ * checked either way — an expired token is still one this server minted.
+ */
+export function verifyAccessToken(token: string, opts: { ignoreExpiration?: boolean } = {}): AccessTokenPayload {
   return jwt.verify(token, env.JWT_ACCESS_SECRET, {
     algorithms: [JWT_ALGORITHM],
     issuer: JWT_ISSUER,
-    audience: JWT_AUDIENCE
+    audience: JWT_AUDIENCE,
+    ignoreExpiration: opts.ignoreExpiration ?? false
   }) as AccessTokenPayload;
 }
 
@@ -140,10 +146,11 @@ export function signRefreshToken(userId: string, sessionId: string, days: number
   });
 }
 
-export function verifyRefreshToken(token: string): { sub: string; sid: string; org?: string } {
+export function verifyRefreshToken(token: string, opts: { ignoreExpiration?: boolean } = {}): { sub: string; sid: string; org?: string } {
   return jwt.verify(token, env.JWT_REFRESH_SECRET, {
     algorithms: [JWT_ALGORITHM],
     issuer: JWT_ISSUER,
-    audience: JWT_AUDIENCE
+    audience: JWT_AUDIENCE,
+    ignoreExpiration: opts.ignoreExpiration ?? false
   }) as { sub: string; sid: string; org?: string };
 }

@@ -95,6 +95,7 @@ import { resolveTenant } from "./middleware/tenant.js";
 import { signupRouter, signupStatusHandler } from "./controllers/signup.controller.js";
 import { mountSignupRoutes } from "./middleware/signup-limits.js";
 import { mountMailRouteLimiters } from "./middleware/auth-limits.js";
+import { clearRefreshCookieUpFront } from "./utils/refresh-cookie.js";
 import { salesLeadRouter } from "./controllers/sales-lead.controller.js";
 
 export const app = express();
@@ -483,6 +484,11 @@ mountSignupRoutes(app, { router: signupRouter, statusHandler: signupStatusHandle
 // signup's limiter above; a company sends one enquiry, a script sends thousands.
 const salesLeadLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 5, standardHeaders: true });
 app.use("/api/contact", salesLeadLimiter, salesLeadRouter);
+
+// Sign-out removes the refresh cookie even when the workspace can no longer be resolved (suspended,
+// deleted): the clearing Set-Cookie goes on the response HERE, before `resolveTenant` can refuse, and
+// rides out on whatever answer follows. The route itself does the revocation. Security audit #9.
+app.post("/api/auth/logout", clearRefreshCookieUpFront);
 
 // Every other /api/* route needs to know which tenant it's serving before it can touch
 // `prisma` — mounted after /health, /uploads, and the SSO routes (none of which need the

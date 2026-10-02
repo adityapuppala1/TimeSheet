@@ -74,6 +74,7 @@ import { usePlanningFeatures } from "../lib/use-planning";
 import { askAiApi, authApi, searchApi, type PlanningEffective } from "../services/api";
 import { toast } from "./ui/toaster";
 import { toggleTheme as switchTheme } from "../lib/theme";
+import { SIGN_OUT_UNCONFIRMED, signOut } from "../lib/sign-out";
 
 function serverMessage(err: any, fallback: string) {
   return err?.response?.data?.message ?? fallback;
@@ -208,14 +209,16 @@ export function CommandPalette({ open, onOpenChange, onOpenShortcuts }: Props) {
   const queryClient = useQueryClient();
   async function logout() {
     onOpenChange(false);
-    try {
-      await authApi.logout();
-    } catch {
-      // swallow — we still want local cleanup
-    }
-    logoutStore();
-    queryClient.clear();
-    toast.success("Signed out. See you again soon.");
+    const outcome = await signOut({
+      endSession: authApi.logout,
+      clearLocal: () => {
+        logoutStore();
+        queryClient.clear();
+      }
+    });
+    // Same honesty rule as the account menu — see lib/sign-out.ts.
+    if (outcome === "signed-out") toast.success("Signed out. See you again soon.");
+    else toast.error(SIGN_OUT_UNCONFIRMED.title, { description: SIGN_OUT_UNCONFIRMED.description });
     void navigate("/login");
   }
 
