@@ -107,9 +107,16 @@ describe("GET /timesheets/approval-queue", () => {
     expect((vi.mocked(client.timesheet.findMany).mock.calls[0][0] as any).take).toBe(100);
   });
 
-  it("keeps the table's newest-work-first order, so paging is stable", async () => {
+  it("keeps the table's newest-work-first order, with an id tiebreak so paging is stable", async () => {
+    // Two entries with the same day and start time (two people, or one person on two projects) had
+    // no defined order between them, so one could appear on page 1 AND page 2 while another
+    // appeared on neither.
     await queue();
-    expect((vi.mocked(client.timesheet.findMany).mock.calls[0][0] as any).orderBy).toEqual([{ workDate: "desc" }, { startTime: "desc" }]);
+    expect((vi.mocked(client.timesheet.findMany).mock.calls[0][0] as any).orderBy).toEqual([
+      { workDate: "desc" },
+      { startTime: "desc" },
+      { id: "asc" }
+    ]);
   });
 
   it("applies project, activity, date and search filters on the server, not to one page in the browser", async () => {

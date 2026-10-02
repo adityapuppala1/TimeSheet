@@ -728,12 +728,15 @@ export async function bindVerificationToRecord(attemptId: string, record: { time
  * attempt row itself is kept (it is the audit trail of a check that really happened) — only its
  * link to this entry goes, and the caller records the returned ids in its own audit entry.
  *
- * TIMESHEET context only: an APPROVAL attempt bound to the same row records the reviewer's check,
- * which an edit before the decision cannot have happened after.
+ * One context at a time. By default TIMESHEET: an APPROVAL attempt bound to the same row records the
+ * reviewer's check, which an edit before the decision cannot have happened after. Reopening an
+ * approved entry passes APPROVAL — that undoes the decision the reviewer's check vouched for, and
+ * left linked, attestations (which read "approver verified" off the entry alone) would credit it to
+ * the next approval.
  */
-export async function unbindTimesheetVerification(timesheetId: string): Promise<string[]> {
+export async function unbindTimesheetVerification(timesheetId: string, context: "TIMESHEET" | "APPROVAL" = "TIMESHEET"): Promise<string[]> {
   const bound = await prisma.faceVerificationAttempt.findMany({
-    where: { timesheetId, context: "TIMESHEET" },
+    where: { timesheetId, context },
     select: { id: true }
   });
   if (bound.length === 0) return [];

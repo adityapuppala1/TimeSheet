@@ -72,9 +72,11 @@ vi.mock("../../src/services/billing-rate.service.js", async () => {
 vi.mock("../../src/services/domain-events.js", () => ({ emitDomainEvent: vi.fn() }));
 
 const { timesheetRouter } = await import("../../src/controllers/timesheet.controller.js");
-const { errorHandler } = await import("../../src/middleware/error.js");
+const { errorHandler, AppError } = await import("../../src/middleware/error.js");
 const { dispatchNotification } = await import("../../src/services/notify.service.js");
 const { audit } = await import("../../src/services/audit.service.js");
+const face = await import("../../src/services/face.service.js");
+const sla = await import("../../src/services/sla.service.js");
 
 const ID_1 = "11111111-1111-4111-8111-111111111111";
 const ID_2 = "22222222-2222-4222-8222-222222222222";
@@ -176,6 +178,10 @@ beforeEach(() => {
   client = fakeClient();
   vi.mocked(dispatchNotification).mockClear();
   vi.mocked(audit).mockClear();
+  vi.mocked(face.isFaceVerificationRequired).mockResolvedValue(false);
+  vi.mocked(face.consumeVerification).mockClear();
+  vi.mocked(face.unbindTimesheetVerification).mockClear();
+  vi.mocked(sla.computeApprovalDeadline).mockClear();
 });
 
 const notified = (category: string) => vi.mocked(dispatchNotification).mock.calls.map((c) => c[0]).filter((n) => n.category === category);
@@ -362,6 +368,23 @@ describe("reopening an approved entry", () => {
     expect((await reopen()).status).toBe(422);
   });
 
+  it("starts a new review round: submittedAt is now, so approval latency counts this round", async () => {
+    const before = Date.now();
+    await reopen();
+    const submittedAt = rows.get(ID_1)!.submittedAt as Date;
+    expect(submittedAt).toBeInstanceOf(Date);
+    expect(submittedAt.getTime()).toBeGreaterThanOrEqual(before);
+    // The same instant the new deadline is computed from.
+    expect(vi.mocked(sla.computeApprovalDeadline).mock.calls[0][0]).toEqual(submittedAt);
+  });
+
+  it("unlinks the first approval's identity check, so it is never credited to the next approval", async () => {
+    vi.mocked(face.unbindTimesheetVerification).mockResolvedValueOnce(["approval-attempt-1"]);
+    await reopen();
+    expect(face.unbindTimesheetVerification).toHaveBeenCalledWith(ID_1, "APPROVAL");
+    expect(audited("timesheet.reopened")[0][4]).toMatchObject({ approvalVerificationUnlinked: ["approval-attempt-1"] });
+  });
+
   it("lands once: a second reopen racing the first gets 409 and sends nothing", async () => {
     const stale = { ...rows.get(ID_1)! };
     vi.mocked(client.timesheet.findFirst).mockResolvedValue(stale as never);
@@ -369,5 +392,70 @@ describe("reopening an approved entry", () => {
     expect((await reopen()).status).toBe(409);
     expect(notified("timesheet.reopened")).toHaveLength(1);
     expect(audited("timesheet.reopened")).toHaveLength(1);
+  });
+});
+
+/**
+ * The approver's identity check is single-use (audit 2026-10 R3, timesheet minors). It used to be
+ * spent BEFORE the status and scope checks, so an approval the server then refused — not yours to
+ * decide (403), already decided (422) — burned a webcam capture and sent the approver to take
+ * another for nothing.
+ */
+describe("the identity check is spent only on an approval that can land", () => {
+  beforeEach(() => {
+    vi.mocked(face.isFaceVerificationRequired).mockResolvedValue(true);
+  });
+
+  it("is not spent when the entry is the approver's own (403)", async () => {
+    rows.set(ID_1, entry(ID_1, MANAGER.id));
+    const res = await request(buildApp()).patch(`/api/timesheets/${ID_1}/approve`).send({ faceVerificationId: "attempt-1" });
+    expect(res.status).toBe(403);
+    expect(face.consumeVerification).not.toHaveBeenCalled();
+  });
+
+  it("is not spent when the entry was already decided (422)", async () => {
+    rows.set(ID_1, entry(ID_1, EMPLOYEE.id, "APPROVED"));
+    const res = await request(buildApp()).patch(`/api/timesheets/${ID_1}/approve`).send({ faceVerificationId: "attempt-1" });
+    expect(res.status).toBe(422);
+    expect(face.consumeVerification).not.toHaveBeenCalled();
+  });
+
+  it("is spent, bound to the entry, on an approval that goes through", async () => {
+    const res = await request(buildApp()).patch(`/api/timesheets/${ID_1}/approve`).send({ faceVerificationId: "attempt-1" });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(face.consumeVerification).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(face.consumeVerification).mock.calls[0][0]).toMatchObject({ verificationId: "attempt-1", context: "APPROVAL", timesheetId: ID_1 });
+  });
+
+  it("still refuses an approval without a passing check, writing nothing", async () => {
+    vi.mocked(face.consumeVerification).mockRejectedValueOnce(new AppError(428, "Identity verification is required before this can be submitted."));
+    const res = await request(buildApp()).patch(`/api/timesheets/${ID_1}/approve`).send({});
+    expect(res.status).toBe(428);
+    expect(rows.get(ID_1)!.status).toBe("SUBMITTED");
+  });
+
+  it("bulk: is not spent when every row is refused", async () => {
+    rows.set(ID_1, entry(ID_1, MANAGER.id));
+    rows.set(ID_2, entry(ID_2, EMPLOYEE.id, "REJECTED"));
+    const res = await request(buildApp()).patch("/api/timesheets/decide-bulk").send({ ids: [ID_1, ID_2], decision: "approve", faceVerificationId: "attempt-1" });
+    expect(res.status).toBe(200);
+    expect(res.body.done).toBe(0);
+    expect(face.consumeVerification).not.toHaveBeenCalled();
+  });
+
+  it("bulk: is spent once, on the first row that can land, for the whole batch", async () => {
+    rows.set(ID_1, entry(ID_1, MANAGER.id));
+    const res = await request(buildApp()).patch("/api/timesheets/decide-bulk").send({ ids: [ID_1, ID_2], decision: "approve", faceVerificationId: "attempt-1" });
+    expect(res.body).toMatchObject({ done: 1 });
+    expect(face.consumeVerification).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(face.consumeVerification).mock.calls[0][0]).toMatchObject({ timesheetId: ID_2 });
+  });
+
+  it("bulk: a failed check fails the whole batch, as before, with nothing written", async () => {
+    vi.mocked(face.consumeVerification).mockRejectedValueOnce(new AppError(428, "That identity check has expired — please verify again."));
+    const res = await request(buildApp()).patch("/api/timesheets/decide-bulk").send({ ids: [ID_1, ID_2], decision: "approve", faceVerificationId: "attempt-1" });
+    expect(res.status).toBe(428);
+    expect(rows.get(ID_1)!.status).toBe("SUBMITTED");
+    expect(rows.get(ID_2)!.status).toBe("SUBMITTED");
   });
 });

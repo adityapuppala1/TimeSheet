@@ -55,6 +55,7 @@ const { timesheetRouter } = await import("../../src/controllers/timesheet.contro
 const { errorHandler } = await import("../../src/middleware/error.js");
 const face = await import("../../src/services/face.service.js");
 const { audit } = await import("../../src/services/audit.service.js");
+const sla = await import("../../src/services/sla.service.js");
 
 const ID = "11111111-1111-4111-8111-111111111111";
 const PROJECT_A = "22222222-2222-4222-8222-222222222222";
@@ -175,6 +176,15 @@ describe("a material change to a SUBMITTED entry", () => {
     expect(updateData()?.approvalDeadline).toEqual(new Date("2026-10-04T00:00:00.000Z"));
   });
 
+  it("clears the old breach and resolves its escalation — the restarted clock has not been missed", async () => {
+    // The breach marker is also the sweep's "already handled" flag: left set, the new deadline could
+    // pass unnoticed, while the open Escalation kept chasing somebody about the old claim.
+    vi.mocked(sla.resolveEscalationsFor).mockClear();
+    await patch({ startTime: "08:00" });
+    expect(updateData()).toMatchObject({ slaBreachAt: null, escalatedAt: null });
+    expect(sla.resolveEscalationsFor).toHaveBeenCalledWith(ID);
+  });
+
   it("refuses moving it to a project the AUTHOR is not assigned to", async () => {
     const res = await patch({ projectId: PROJECT_B, moduleId: MODULE_B });
     expect(res.status, JSON.stringify(res.body)).toBe(403);
@@ -199,6 +209,7 @@ describe("a wording change to a SUBMITTED entry", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(face.unbindTimesheetVerification).not.toHaveBeenCalled();
     expect(updateData()).not.toHaveProperty("approvalDeadline");
+    expect(updateData()).not.toHaveProperty("slaBreachAt");
   });
 });
 

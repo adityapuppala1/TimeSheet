@@ -244,7 +244,9 @@ timesheetRouter.get("/approval-queue", requirePermission(permissions.TIMESHEETS_
         attachments: true,
         user: { select: { id: true, name: true, email: true, avatarUrl: true } }
       },
-      orderBy: [{ workDate: "desc" }, { startTime: "desc" }],
+      // `id` last: rows sharing a day and a start time otherwise have no defined order, and an
+      // OFFSET page over an undefined order can repeat one row and skip another.
+      orderBy: [{ workDate: "desc" }, { startTime: "desc" }, { id: "asc" }],
       skip: (page - 1) * pageSize,
       take: pageSize
     }),
@@ -669,6 +671,13 @@ timesheetRouter.post("/submit-with-files", requirePermission(permissions.TIMESHE
  * you in your reporting line who has a manager of their own. The authority is loaded once per
  * request and passed in, so a hundred-row bulk decision walks the reporting line once.
  *
+ * THE IDENTITY CHECK IS SPENT AFTER THE REFUSALS. Approval's face check is single-use, and it used
+ * to be consumed before the status and scope checks — so a 403 (not yours to decide) or a 422
+ * (already decided) burned the approver's webcam capture and sent them to take another. The approve
+ * core takes the spend as `verifyIdentity` and calls it once the entry is known to be theirs to
+ * decide, immediately before the write. (A race lost at the conditional write itself — two reviewers
+ * in the same instant — can still spend one: the check has to precede the write it authorises.)
+ *
  * A DECISION LANDS ONCE. The status read above each write is advice, not a lock: two reviewers (or
  * one double-click) can both read SUBMITTED. The write is therefore conditional on the row STILL
  * being SUBMITTED, and the loser gets a 409 before any email or audit is sent — otherwise the
@@ -702,8 +711,33 @@ async function writeDecision(id: string, data: Prisma.TimesheetUncheckedUpdateMa
 /** The one self-decision the rule allows is a sole approver's, and its audit row says so. */
 const selfDecision = (authorId: string, reviewerId: string) => (authorId === reviewerId ? { soleApprover: true } : undefined);
 
-async function approveCore(id: string, reviewerUser: Reviewer, authority: ApprovalAuthority) {
+/** Spends the approver's identity check against the entry about to be approved. */
+type VerifyIdentity = (timesheetId: string) => Promise<void>;
+const NO_IDENTITY_CHECK: VerifyIdentity = async () => undefined;
+
+/** The approval gate for this request: a no-op unless the workspace's face policy covers the
+ *  approver, and then a single spend of the check they sent — however many rows it covers. */
+async function approvalIdentityCheck(req: { user?: { id: string }; body?: { faceVerificationId?: unknown } }): Promise<VerifyIdentity> {
+  const approverId = req.user!.id;
+  if (!(await isFaceVerificationRequired(approverId, "APPROVAL"))) return NO_IDENTITY_CHECK;
+  let spent: Promise<string> | null = null;
+  return async (timesheetId) => {
+    spent ??= consumeVerification({
+      verificationId: typeof req.body?.faceVerificationId === "string" ? req.body.faceVerificationId : undefined,
+      userId: approverId,
+      context: "APPROVAL",
+      timesheetId
+    });
+    await spent;
+  };
+}
+
+/** A refused identity check: it fails a whole bulk batch rather than one row of it. */
+const isIdentityRefusal = (error: unknown) => error instanceof AppError && error.statusCode === 428;
+
+async function approveCore(id: string, reviewerUser: Reviewer, authority: ApprovalAuthority, verifyIdentity = NO_IDENTITY_CHECK) {
   const existing = await loadUndecided(id, "approve", authority);
+  await verifyIdentity(existing.id);
 
   // Freeze the rate that applies to these hours, in the SAME write that approves them — see
   // services/billing-rate.service.ts for why approval is the correct moment and why this can
@@ -835,18 +869,12 @@ async function rejectCore(id: string, reason: string, reviewerUser: Reviewer, au
 
 timesheetRouter.patch("/:id/approve", requirePermission(permissions.TIMESHEETS_APPROVE), async (req, res) => {
   // Identity gate on the APPROVER — approval is where the hours become payable, which makes it
-  // at least as worth protecting as submission. Checked before the status write so a failed
-  // check changes nothing. (Rejection is deliberately ungated: it moves no money, and demanding
-  // a webcam capture to DECLINE something only discourages review.)
-  if (await isFaceVerificationRequired(req.user!.id, "APPROVAL")) {
-    await consumeVerification({
-      verificationId: typeof req.body?.faceVerificationId === "string" ? req.body.faceVerificationId : undefined,
-      userId: req.user!.id,
-      context: "APPROVAL",
-      timesheetId: String(req.params.id)
-    });
-  }
-  res.json(await approveCore(String(req.params.id), req.user!, await loadApprovalAuthority(req.user!.id)));
+  // at least as worth protecting as submission. Spent after the status and scope checks and before
+  // the write, so a refusal costs no check and a failed check changes nothing. (Rejection is
+  // deliberately ungated: it moves no money, and demanding a webcam capture to DECLINE something
+  // only discourages review.)
+  const verifyIdentity = await approvalIdentityCheck(req);
+  res.json(await approveCore(String(req.params.id), req.user!, await loadApprovalAuthority(req.user!.id), verifyIdentity));
 });
 
 /**
@@ -861,7 +889,9 @@ timesheetRouter.patch("/:id/approve", requirePermission(permissions.TIMESHEETS_A
  *
  * THE IDENTITY CHECK IS CONSUMED ONCE for the batch, not once per row: it asserts the APPROVER's
  * presence at decision time, and demanding ten webcam captures to approve ten rows would push
- * managers toward not using the gate at all. The batch audit records it covered the whole set.
+ * managers toward not using the gate at all. The batch audit records it covered the whole set. It is
+ * spent on the first row that passes its own checks (and bound to that row), so a batch every row of
+ * which is refused spends nothing; a failed check fails the whole batch, as it always did.
  */
 timesheetRouter.patch("/decide-bulk", requirePermission(permissions.TIMESHEETS_APPROVE), async (req, res) => {
   const ids: unknown = req.body?.ids;
@@ -873,24 +903,17 @@ timesheetRouter.patch("/decide-bulk", requirePermission(permissions.TIMESHEETS_A
   if (!decision) throw new AppError(422, "decision must be approve or reject.");
   if (decision === "reject" && !reason) throw new AppError(422, "Rejection reason is required");
 
-  if (decision === "approve" && (await isFaceVerificationRequired(req.user!.id, "APPROVAL"))) {
-    await consumeVerification({
-      verificationId: typeof req.body?.faceVerificationId === "string" ? req.body.faceVerificationId : undefined,
-      userId: req.user!.id,
-      context: "APPROVAL",
-      timesheetId: ids[0] as string
-    });
-  }
-
+  const verifyIdentity = decision === "approve" ? await approvalIdentityCheck(req) : NO_IDENTITY_CHECK;
   const authority = await loadApprovalAuthority(req.user!.id);
   let done = 0;
   const failed: Array<{ id: string; reason: string }> = [];
   for (const id of ids as string[]) {
     try {
-      if (decision === "approve") await approveCore(id, req.user!, authority);
+      if (decision === "approve") await approveCore(id, req.user!, authority, verifyIdentity);
       else await rejectCore(id, reason, req.user!, authority);
       done++;
     } catch (error) {
+      if (isIdentityRefusal(error)) throw error;
       failed.push({ id, reason: error instanceof AppError ? error.message : "Could not decide this entry." });
     }
   }
@@ -945,6 +968,9 @@ timesheetRouter.post("/:id/reopen", requirePermission(permissions.TIMESHEETS_APP
   assertMayDecide(await loadApprovalAuthority(req.user!.id), existing.userId);
 
   const project = await prisma.project.findUnique({ where: { id: existing.projectId }, select: { slaApprovalHours: true } });
+  // A new review round, so it is submitted NOW: keeping the first round's `submittedAt` made the
+  // approval-latency figures count the time the entry sat approved as time it waited for review.
+  const submittedAt = new Date();
   const claimed = await prisma.timesheet.updateMany({
     where: { id: existing.id, status: "APPROVED", deletedAt: null },
     data: {
@@ -952,13 +978,20 @@ timesheetRouter.post("/:id/reopen", requirePermission(permissions.TIMESHEETS_APP
       reviewedAt: null,
       reviewedById: null,
       ...clearRateSnapshotPatch(),
-      approvalDeadline: computeApprovalDeadline(new Date(), project?.slaApprovalHours),
+      submittedAt,
+      approvalDeadline: computeApprovalDeadline(submittedAt, project?.slaApprovalHours),
       slaBreachAt: null,
       escalatedAt: null
     }
   });
   if (claimed.count === 0) throw new AppError(409, "This entry was reopened or changed a moment ago — refresh to see where it stands.");
   const item = await prisma.timesheet.findUniqueOrThrow({ where: { id: existing.id }, include: DECISION_INCLUDE });
+
+  // The undone approval's identity check vouched for THAT approval. Attestations read "approver
+  // verified" off the entry alone, so left linked it would be credited to whoever approves next —
+  // possibly someone the face policy does not cover at all. The attempt row stays as the record of a
+  // check that really happened; only its link to this entry goes.
+  const approvalVerificationUnlinked = await unbindTimesheetVerification(item.id, "APPROVAL");
 
   await audit(req.user!.id, "timesheet.reopened", "Timesheet", item.id, {
     reason,
@@ -970,6 +1003,7 @@ timesheetRouter.post("/:id/reopen", requirePermission(permissions.TIMESHEETS_APP
       billedAmount: existing.billedAmount == null ? null : Number(existing.billedAmount),
       billedCurrency: existing.billedCurrency
     },
+    ...(approvalVerificationUnlinked.length > 0 ? { approvalVerificationUnlinked } : {}),
     ...selfDecision(item.userId, req.user!.id)
   });
 
@@ -1275,7 +1309,10 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
    * claim from the one that was submitted, even though it keeps its id and its SUBMITTED status (an
    * author fixing a typo must not have to re-submit, so status is deliberately left alone). Two
    * things follow, and a wording fix triggers neither:
-   *  - the reviewer is deciding something new, so the approval clock restarts from now;
+   *  - the reviewer is deciding something new, so the approval clock restarts from now — and with
+   *    it goes the old clock's breach and escalation. `slaBreachAt` is also the SLA sweep's
+   *    "already handled" marker, so leaving it set meant the NEW deadline could pass unnoticed,
+   *    while the open Escalation went on chasing somebody about the old claim;
    *  - the submit-time identity check vouched for the old claim, so its "verified" binding is
    *    dropped below, after the write succeeds.
    */
@@ -1285,9 +1322,12 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
     workDate.getTime() !== existing.workDate.getTime() ||
     next.startTime !== existing.startTime ||
     next.endTime !== existing.endTime;
-  if (materialChange && existing.status === "SUBMITTED") {
+  const restartsClock = materialChange && existing.status === "SUBMITTED";
+  if (restartsClock) {
     const project = await prisma.project.findUnique({ where: { id: next.projectId }, select: { slaApprovalHours: true } });
     data.approvalDeadline = computeApprovalDeadline(new Date(), project?.slaApprovalHours);
+    data.slaBreachAt = null;
+    data.escalatedAt = null;
   }
 
   // An APPROVED entry carries a frozen rate. If the hours moved, the frozen AMOUNT has to move
@@ -1337,6 +1377,7 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
   ];
   for (const [field, from, to] of compare) if (from !== to) changes[field] = { from, to };
 
+  if (restartsClock) await resolveEscalationsFor(updated.id);
   const identityVerificationDropped = materialChange ? await unbindTimesheetVerification(updated.id) : [];
 
   await audit(req.user!.id, "timesheet.updated", "Timesheet", updated.id, {

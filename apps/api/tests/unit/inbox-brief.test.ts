@@ -186,6 +186,14 @@ describe("the figures come from the existing definitions", () => {
     const ownCall = timesheetCount.mock.calls.find((c) => (c[0] as any).where.userId === "u-1");
     expect((ownCall![0] as any).where.workDate).toEqual(new Date("2026-10-01T00:00:00.000Z"));
   });
+
+  it("does not count a REJECTED entry as time logged, exactly as /daily-status does not", async () => {
+    // A refused entry is meant to be re-logged. Counting it said "Time logged today" to somebody
+    // whose only entry today had just been sent back.
+    await buildDailyBrief({ id: "u-1", permissions: [] }, NOW);
+    const ownCall = timesheetCount.mock.calls.find((c) => (c[0] as any).where.userId === "u-1");
+    expect((ownCall![0] as any).where.status).toEqual({ not: "REJECTED" });
+  });
 });
 
 describe("tone, and what 'all clear' is allowed to mean", () => {

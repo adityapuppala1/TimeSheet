@@ -76,7 +76,9 @@ export async function buildDailyBrief(
       ? loadApprovalAuthority(user.id).then((authority) => prisma.timesheet.count({ where: awaitingReviewWhere(authority) }))
       : Promise.resolve(0),
     signOffsWaitingOn(user.id),
-    prisma.timesheet.count({ where: { userId: user.id, workDate: today, deletedAt: null } }),
+    // REJECTED left out, as `/daily-status` leaves it out: a refused entry is meant to be re-logged,
+    // so it is not "time logged today" — it is the reason today still needs logging.
+    prisma.timesheet.count({ where: { userId: user.id, workDate: today, deletedAt: null, status: { not: "REJECTED" } } }),
     canSeeRisk ? latestRedProjectCount() : Promise.resolve(0),
     // The bell's own predicate: a row marked done or still snoozed is not "unread" anywhere else,
     // so the brief must not say "Unread notifications: 4" beside a bell that says 0.
