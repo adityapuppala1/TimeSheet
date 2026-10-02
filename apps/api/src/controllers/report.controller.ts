@@ -124,7 +124,7 @@ reportRouter.get("/daily-status", async (req, res) => {
  * each one used to get wrong. With no `from`/`to` it answers for today.
  */
 reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
-  res.json(await buildAdminSummary(req.query, { viewerId: req.user!.id }));
+  res.json(await buildAdminSummary(req.query, new Date(), { viewerId: req.user!.id }));
 });
 
 /**

@@ -32,7 +32,9 @@ vi.mock("../../src/config/prisma.js", () => {
     return null;
   };
   const model = (name: string) => new Proxy({}, { get: (_t, method: string) => async (args: any) => answer(name, method, args) });
-  return { prisma: new Proxy({}, { get: (_t, name: string) => model(name) }) };
+  // The admin summary's distinct-day counts are one raw COUNT(DISTINCT …) query — an empty workspace answers 0.
+  const queryRaw = async () => [{ n: 0 }];
+  return { prisma: new Proxy({}, { get: (_t, name: string) => (name === "$queryRaw" ? queryRaw : model(name)) }) };
 });
 vi.mock("../../src/middleware/auth.js", () => ({
   requireAuth: (req: any, _res: unknown, next: () => void) => {
@@ -69,8 +71,9 @@ describe("admin-summary — pending approvals", () => {
     const res = await request(buildApp()).get("/api/reports/admin-summary");
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     const pending = timesheetCalls("count").filter((args) => args?.where?.status === "SUBMITTED");
-    // Both the figure and its "vs yesterday" comparison.
-    expect(pending).toHaveLength(2);
+    // One figure: "Pending approvals" describes NOW, so it carries no one-way "vs yesterday" delta
+    // (workspace analytics M4) — but it is still the approvals queue's own scoped count.
+    expect(pending).toHaveLength(1);
     for (const args of pending) {
       expect([...args.where.userId.notIn].sort()).toEqual(["boss-1", "viewer-1"]);
     }

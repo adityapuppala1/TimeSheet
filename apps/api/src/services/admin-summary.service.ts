@@ -168,8 +168,8 @@ function closedInWindow(window: InstantRange): Prisma.TicketWhereInput {
 
 export async function buildAdminSummary(
   query: { from?: unknown; to?: unknown },
-  options: { viewerId?: string } = {},
-  now: Date = new Date()
+  now: Date = new Date(),
+  options: { viewerId?: string } = {}
 ) {
   // "Pending approvals" is the approvals queue's own count for THIS viewer — SUBMITTED, not their
   // own, not their managers' (timesheet-approval-scope.service.ts). Without a viewer it falls back to

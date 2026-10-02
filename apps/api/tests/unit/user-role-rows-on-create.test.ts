@@ -91,7 +91,8 @@ describe("prisma/seed.ts", () => {
     return { client: client as unknown as PrismaClient, calls };
   }
 
-  it("writes the founder's UserRole row — every account's own role, the way the backfill did", async () => {
+  // The whole seed runs here, bcrypt and all — under a full parallel suite that can pass 10 s.
+  it("writes the founder's UserRole row — every account's own role, the way the backfill did", { timeout: 45_000 }, async () => {
     const { seedTenant } = await import("../../prisma/seed.js");
     const people = [
       { id: "founder-id", roleId: "role-SUPER_ADMIN" },

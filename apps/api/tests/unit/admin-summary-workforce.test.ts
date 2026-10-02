@@ -106,7 +106,9 @@ function groupBy(rows: Array<Record<string, any>>, args: any) {
 vi.mock("../../src/config/prisma.js", () => ({
   prisma: {
     user: {
-      count: vi.fn(async (args: any) => (state.noWorkforce && args?.where?.role ? 0 : PEOPLE.filter((p) => personMatches(p, args?.where)).length))
+      count: vi.fn(async (args: any) => (state.noWorkforce && args?.where?.role ? 0 : PEOPLE.filter((p) => personMatches(p, args?.where)).length)),
+      // The reporting lines "Pending approvals" is scoped by (timesheet-approval-scope.service.ts) — none here.
+      findMany: vi.fn(async () => [])
     },
     project: {
       count: vi.fn(async () => 3),
