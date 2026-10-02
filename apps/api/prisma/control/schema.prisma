@@ -151,6 +151,16 @@ model Organization {
   suspendedReason String?   @db.Text
   /// When the workspace entered GRACE — the clock the suspension deadline is measured from.
   graceStartedAt  DateTime?
+  /// The Stripe subscription whose failed renewal put this workspace into GRACE — and, if the grace
+  /// window ran out, SUSPENDED. Null for every other reason a workspace is lapsed or suspended.
+  ///
+  /// WHY A COLUMN AND NOT `suspendedReason`. The reason is free text an operator can also write — the
+  /// console's edit dialog pre-fills it, so an operator suspending a non-paying workspace by hand
+  /// saves "A renewal payment failed." verbatim. Matching on that text would let the next paid invoice
+  /// lift an operator's deliberate suspension. This is set only by the webhook, kept by the lifecycle
+  /// worker's GRACE → SUSPENDED step, and cleared whenever an operator moves the status: it is what
+  /// lets `invoice.paid` for exactly this subscription restore a workspace suspended for not paying it.
+  nonPaymentSubscriptionId String? @db.VarChar(255)
 
   /// --- Trial retention programme (3.12.0) ---------------------------------------------------
   /// The address the workspace was signed up (or provisioned) with. Kept HERE, in the control

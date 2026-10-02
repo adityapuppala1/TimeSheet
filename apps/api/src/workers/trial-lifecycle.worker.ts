@@ -182,6 +182,9 @@ export async function runTrialLifecycleTick(now = Date.now()): Promise<{ warned:
   });
 
   for (const org of overdue) {
+    // `suspendedReason` and `nonPaymentSubscriptionId` are deliberately left as GRACE set them. The
+    // second is what lets a payment that lands after today restore the workspace (billing.controller
+    // `invoice.paid`); clearing it here would strand a customer whose card is retried on day 16.
     await controlPrisma.organization.update({
       where: { id: org.id },
       data: { status: "SUSPENDED", suspendedAt: new Date(now) }

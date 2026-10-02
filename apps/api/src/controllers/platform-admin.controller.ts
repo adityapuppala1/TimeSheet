@@ -325,6 +325,10 @@ platformAdminRouter.patch("/organizations/:id", requirePlatformAdmin, requirePla
     data.suspendedAt = null;
     if (!("suspendedReason" in req.body)) data.suspendedReason = null;
   }
+  // An operator who MOVES the status has made the lifecycle decision their own, so the webhook's
+  // "lapsed for not paying sub_X" marker goes: `invoice.paid` restores only what non-payment caused,
+  // never an operator's suspension. Re-saving the dialog with the status unchanged is not a decision.
+  if (req.body.status && req.body.status !== before.status) data.nonPaymentSubscriptionId = null;
   const org = await controlPrisma.organization.update({ where: { id: String(req.params.id) }, data }).catch(() => null);
   if (!org) throw new AppError(404, "Organization not found");
 

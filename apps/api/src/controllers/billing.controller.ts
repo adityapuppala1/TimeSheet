@@ -370,6 +370,7 @@ billingWebhookRouter.post("/webhook", express.raw({ type: "application/json" }),
             status: "ACTIVE",
             graceStartedAt: null,
             suspendedReason: null,
+            nonPaymentSubscriptionId: null,
             trialEndsAt: null,
             trialTier: null
           }
@@ -413,7 +414,10 @@ billingWebhookRouter.post("/webhook", express.raw({ type: "application/json" }),
       if (org && org.status === "ACTIVE") {
         await controlPrisma.organization.update({
           where: { id: org.id },
-          data: { status: "GRACE", graceStartedAt: new Date(), suspendedReason: "A renewal payment failed." }
+          // `nonPaymentSubscriptionId` is the machine-readable half of the reason: it survives the
+          // worker's GRACE → SUSPENDED step and is what lets `invoice.paid` below tell a suspension
+          // for not paying THIS subscription from an operator's — see the column's schema comment.
+          data: { status: "GRACE", graceStartedAt: new Date(), suspendedReason: "A renewal payment failed.", nonPaymentSubscriptionId: subscriptionId }
         });
         forgetOrgStatus(org.id);
         await notifyPaymentFailed(org.slug, org.name);
@@ -422,12 +426,19 @@ billingWebhookRouter.post("/webhook", express.raw({ type: "application/json" }),
       // The other half. Restoring on payment is what makes the grace state recoverable, and the
       // cache is cleared explicitly rather than waited out — ten seconds of "still locked" straight
       // after handing over a card is exactly when a customer decides the product is broken.
+      //
+      // FROM SUSPENDED TOO, when the suspension was for not paying this subscription. The worker
+      // suspends a lapsed workspace after 14 days, and Stripe keeps retrying past that — so the
+      // payment that should end it often arrives after. Ignoring it left a customer charged for a
+      // workspace that no longer resolved. An operator's suspension carries no marker and is never
+      // lifted here.
       const subscriptionId = subscriptionIdFromInvoice(event.data.object as Stripe.Invoice);
       const org = subscriptionId ? await controlPrisma.organization.findUnique({ where: { stripeSubscriptionId: subscriptionId } }) : null;
-      if (org && org.status === "GRACE") {
+      const suspendedForThis = org?.status === "SUSPENDED" && org.nonPaymentSubscriptionId === subscriptionId;
+      if (org && (org.status === "GRACE" || suspendedForThis)) {
         await controlPrisma.organization.update({
           where: { id: org.id },
-          data: { status: "ACTIVE", graceStartedAt: null, suspendedReason: null }
+          data: { status: "ACTIVE", graceStartedAt: null, suspendedAt: null, suspendedReason: null, nonPaymentSubscriptionId: null }
         });
         forgetOrgStatus(org.id);
       }

@@ -117,6 +117,7 @@ describe("POST /billing/webhook — event handling", () => {
         status: "ACTIVE",
         graceStartedAt: null,
         suspendedReason: null,
+        nonPaymentSubscriptionId: null,
         trialEndsAt: null,
         trialTier: null
       }

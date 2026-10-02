@@ -158,4 +158,12 @@ describe("expiry and suspension", () => {
     expect(org.status).toBe("SUSPENDED");
     expect(org.suspendedAt).toBeInstanceOf(Date);
   });
+
+  it("suspends a workspace lapsed for non-payment without forgetting which subscription it owes", async () => {
+    // The marker is what lets the payment that arrives after day 14 restore it (billing.dunning.test.ts).
+    const org = seed({ status: "GRACE", graceStartedAt: new Date(NOW - 15 * DAY), stripeSubscriptionId: "sub_123", nonPaymentSubscriptionId: "sub_123" });
+    await runTrialLifecycleTick(NOW);
+    expect(org.status).toBe("SUSPENDED");
+    expect(org.nonPaymentSubscriptionId).toBe("sub_123");
+  });
 });
