@@ -98,6 +98,14 @@ const control = {
       const row = { ...pending.get(where.id)!, ...data };
       pending.set(where.id, row);
       return row;
+    }),
+    // A conditional write, the way MySQL does it: the WHERE (id AND status) is evaluated against the
+    // row as it is NOW, so of two racing claims exactly one matches.
+    updateMany: vi.fn(async ({ where, data }: { where: { id: string; status?: string }; data: Record<string, unknown> }) => {
+      const row = pending.get(where.id);
+      if (!row || (where.status !== undefined && row.status !== where.status)) return { count: 0 };
+      pending.set(where.id, { ...row, ...data });
+      return { count: 1 };
     })
   },
   platformAuditLog: {
@@ -563,5 +571,23 @@ describe("a role and a status in one PATCH (G13)", () => {
     expect(res.body.message).toMatch(/separately/i);
     expect(pending.size).toBe(0);
     expect(adminRows.get(SUPPORT_C)!.status).toBe("ACTIVE");
+  });
+});
+
+describe("an approval is claimed atomically (G13)", () => {
+  it("runs the action once even when a second approval read the request before the first one wrote", async () => {
+    const queued = await as(OWNER_A, "post", "/retention/org-1/delete", { confirmSlug: "acme" });
+    const id = queued.body.requestId as string;
+    const stale = { ...pending.get(id)! };
+
+    expect((await as(OWNER_B, "post", `/governance/requests/${id}/approve`)).status).toBe(200);
+
+    // The race: another owner's approval read the row while it was still PENDING.
+    control.pendingPlatformAction.findUnique.mockResolvedValueOnce(stale as never);
+    adminRows.set(SUPPORT_C, { ...adminRows.get(SUPPORT_C)!, role: "OWNER" });
+    const second = await as(SUPPORT_C, "post", `/governance/requests/${id}/approve`);
+
+    expect(second.status).toBe(409);
+    expect(deleteWorkspaceUnderPolicy).toHaveBeenCalledTimes(1);
   });
 });

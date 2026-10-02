@@ -191,6 +191,19 @@ export async function approvePlatformAction(requestId: string, approver: { id: s
   const executor = executors.get(row.action as ConsoleTwoPersonAction);
   if (!executor) throw new AppError(500, `No handler is registered for "${row.action}" in this build.`);
 
+  /*
+   * CLAIM IT ATOMICALLY BEFORE RUNNING IT (G13). The status check above read the row; two owners
+   * approving at once both read PENDING and both went on to run the action. The claim is an UPDATE
+   * whose WHERE still says PENDING (and still fresh), so exactly one of them matches — the other is
+   * told it is already decided and runs nothing. The row reads APPROVED while the handler runs, and
+   * becomes FAILED below if the handler refuses.
+   */
+  const claimed = await controlPrisma.pendingPlatformAction.updateMany({
+    where: { id: row.id, status: "PENDING", expiresAt: { gt: new Date() } },
+    data: { status: "APPROVED", approvedById: approver.id, approvedByLabel: approver.email, approvedAt: new Date() }
+  });
+  if (claimed.count !== 1) throw new AppError(409, "That request was decided a moment ago by somebody else.");
+
   let result: unknown;
   try {
     result = await executor({
@@ -221,10 +234,7 @@ export async function approvePlatformAction(requestId: string, approver: { id: s
     throw error;
   }
 
-  await controlPrisma.pendingPlatformAction.update({
-    where: { id: row.id },
-    data: { status: "APPROVED", approvedById: approver.id, approvedByLabel: approver.email, approvedAt: new Date() }
-  });
+  // Already APPROVED by the claim above; only the audit row is left to write.
   await platformAudit("PLATFORM_ADMIN", approver.email, "governance.approved", "PendingPlatformAction", row.id, {
     action: row.action,
     requestedBy: row.requestedByLabel
