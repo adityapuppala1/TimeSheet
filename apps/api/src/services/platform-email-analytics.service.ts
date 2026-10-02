@@ -18,9 +18,8 @@
  * a domain bucket is derived in exactly one place so a malformed address cannot land in two.
  */
 import { controlPrisma } from "../config/control-prisma.js";
+import { platformDayKey, platformDayStart, shiftDayKey } from "../utils/platform-time.js";
 import { PLATFORM_TEMPLATES } from "./platform-mail-templates.js";
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface PlatformCounts {
   sent: number;
@@ -123,17 +122,25 @@ function tally(bucket: Bucket, status: string, isTest: boolean, at: Date): void 
 const withRate = (b: Bucket) => ({ sent: b.sent, failed: b.failed, skipped: b.skipped, test: b.test, successRate: rateOf(b.sent, b.failed), lastSentAt: b.lastSentAt?.toISOString() ?? null });
 
 /**
- * `fromIso`/`toIso` are inclusive calendar dates; omitted bounds default to the last 90 days.
- * Everything is computed from one read of the window — the row count here is platform-scale
- * (thousands, not millions), and one pass keeps every figure on this screen consistent with every
- * other, which grouped queries per card do not guarantee.
+ * `fromIso`/`toIso` are inclusive calendar dates IN THE PLATFORM'S ZONE (India by default); omitted
+ * bounds default to the last 90 days, today included. Everything is computed from one read of the
+ * window — the row count here is platform-scale (thousands, not millions), and one pass keeps every
+ * figure on this screen consistent with every other, which grouped queries per card do not guarantee.
+ *
+ * ONE CALENDAR, END TO END. The window used to be bounded by the process's midnights while every bar
+ * was keyed by UTC's date, so the zero-filled series ran from the day before `from` to yesterday —
+ * today's mail never appeared — and mail sent before 05:30 IST landed on the previous day's bar.
+ * Bounds and keys are now both the platform's day (utils/platform-time.ts).
  */
 export async function getPlatformEmailAnalytics(fromIso?: string, toIso?: string): Promise<PlatformEmailAnalytics> {
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const since = fromIso ? new Date(`${fromIso}T00:00:00`) : new Date(todayStart.getTime() - 89 * DAY_MS);
-  const untilExclusive = toIso ? new Date(new Date(`${toIso}T00:00:00`).getTime() + DAY_MS) : new Date(todayStart.getTime() + DAY_MS);
-  const windowDays = Math.max(1, Math.round((untilExclusive.getTime() - since.getTime()) / DAY_MS));
+  const today = platformDayKey(new Date());
+  const fromKey = fromIso ?? shiftDayKey(today, -89);
+  const toKey = toIso ?? today;
+  const since = platformDayStart(fromKey);
+  const untilExclusive = platformDayStart(shiftDayKey(toKey, 1));
+  const dayKeys: string[] = [];
+  for (let key = fromKey; key <= toKey && dayKeys.length < 1000; key = shiftDayKey(key, 1)) dayKeys.push(key);
+  const windowDays = Math.max(1, dayKeys.length);
 
   const rows = await controlPrisma.platformEmailLog.findMany({
     where: { createdAt: { gte: since, lt: untilExclusive } },
@@ -189,7 +196,7 @@ export async function getPlatformEmailAnalytics(fromIso?: string, toIso?: string
     if (r.dayMarker) tenant.markers.add(r.dayMarker);
     perTenant.set(key, tenant);
 
-    const day = r.createdAt.toISOString().slice(0, 10);
+    const day = platformDayKey(r.createdAt);
     const bucket = perDay.get(day) ?? { day, sent: 0, failed: 0, skipped: 0 };
     if (r.status === "SENT") bucket.sent += 1;
     else if (r.status === "FAILED") bucket.failed += 1;
@@ -211,11 +218,7 @@ export async function getPlatformEmailAnalytics(fromIso?: string, toIso?: string
   }
 
   // Zero-filled, so the x-axis is time rather than "days on which mail happened".
-  const days: PlatformEmailAnalytics["perDay"] = [];
-  for (let t = since.getTime(); t < untilExclusive.getTime(); t += DAY_MS) {
-    const day = new Date(t).toISOString().slice(0, 10);
-    days.push(perDay.get(day) ?? { day, sent: 0, failed: 0, skipped: 0 });
-  }
+  const days: PlatformEmailAnalytics["perDay"] = dayKeys.map((day) => perDay.get(day) ?? { day, sent: 0, failed: 0, skipped: 0 });
 
   const groupOf = new Map(PLATFORM_TEMPLATES.map((t) => [t.key, t.group as string]));
   const templates: PlatformTemplateRow[] = PLATFORM_TEMPLATES.map((def) => ({ key: def.key, group: def.group, ...withRate(perTemplate.get(def.key) ?? emptyBucket()) }));

@@ -35,6 +35,7 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../co
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
+import { consoleRangeForDays } from "../../lib/console-format";
 import { cn } from "../../lib/utils";
 import { platformAdminConsoleApi, type PlatformEmailLogRow, type PlatformEmailTemplateRow } from "../../services/platform-admin-api";
 import {
@@ -88,11 +89,10 @@ const TOOLTIP_STYLE = {
  *  picker for it is chrome nobody uses. */
 const PRESET_DAYS: Record<string, number> = { "7": 7, "30": 30, "90": 90 };
 
+/** India's calendar (the platform's), today included — not UTC's, which between 00:00 and 05:30 IST
+ *  ended the range on yesterday and left today's mail out. */
 function rangeForPreset(preset: string): { from?: string; to?: string } {
-  const days = PRESET_DAYS[preset] ?? 90;
-  const to = new Date();
-  const from = new Date(to.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
-  return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
+  return consoleRangeForDays(PRESET_DAYS[preset] ?? 90);
 }
 
 /** Which preset the current range corresponds to, so the control shows the right segment after a
