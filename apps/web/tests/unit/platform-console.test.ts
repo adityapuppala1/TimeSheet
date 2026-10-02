@@ -2,6 +2,8 @@
  * The console's small decisions that have to agree with the server: which account gate an operator
  * is behind, and how a gated 403 is recognised so the console can route to the form that lifts it.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { accountGateFromError, consoleAccountGate, isQueuedForApproval, issuedCredentialOf, shouldNagForMfa } from "../../src/lib/platform-console";
 
@@ -19,6 +21,28 @@ describe("issuedCredentialOf — the one time an approver sees a new operator's 
     expect(issuedCredentialOf({ action: "retention.delete", result: { deleted: true } })).toBeNull();
     expect(issuedCredentialOf({ action: "admin.create", result: null })).toBeNull();
   });
+});
+
+/* Same lazy `read` helper the sibling guards use (see console-csv.test.ts for why it is a URL). */
+const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+
+describe("every page that calls a two-person route says when it was only queued (M2)", () => {
+  // The API methods whose route can answer 202 with a queued request instead of doing the thing.
+  const QUEUEING_CALLS = ["restoreBackup", "deleteBackup", "deleteUnderPolicy", "updateRetentionSettings", "createAdmin", "setAdminRole", "setAdminStatus"];
+  const PAGES = ["Backups.tsx", "Retention.tsx", "Access.tsx"];
+
+  for (const page of PAGES) {
+    it(`${page} handles a queued answer wherever it calls one`, () => {
+      const source = read(`../../src/pages/platform-admin/${page}`);
+      const calls = QUEUEING_CALLS.filter((name) => source.includes(`.${name}(`));
+      expect(calls.length, `${page} calls none of the queueing routes — drop it from this list`).toBeGreaterThan(0);
+      expect(source, `${page} calls ${calls.join(", ")} but never says "Queued for approval"`).toMatch(/Queued for approval/);
+      if (calls.some((name) => !["createAdmin", "setAdminRole"].includes(name))) {
+        // Routes that answer EITHER done OR queued must look before they claim success.
+        expect(source).toMatch(/isQueuedForApproval\(/);
+      }
+    });
+  }
 });
 
 describe("isQueuedForApproval — a 202 is not a success", () => {

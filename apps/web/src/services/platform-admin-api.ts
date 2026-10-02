@@ -869,8 +869,14 @@ export const platformAdminConsoleApi = {
   setRetentionHold: async (orgId: string, hold: boolean) => (await platformAdminApi.post<{ id: string; slug: string; retentionHold: boolean }>(`/retention/${orgId}/hold`, { hold })).data,
   sendRetentionMarker: async (orgId: string, marker: string) =>
     (await platformAdminApi.post<{ ok: boolean; status: string; marker: string; to: string | null; subject?: string }>(`/retention/${orgId}/send/${encodeURIComponent(marker)}`)).data,
+  /** Two-person: answers 202 with a QUEUED request (see `isQueuedForApproval`), never the deletion
+   *  itself — that only happens when another owner approves it on the Approvals page. */
   deleteUnderPolicy: async (orgId: string, confirmSlug: string) =>
-    (await platformAdminApi.post<{ deleted: boolean; databaseName: string | null; snapshot?: { taken: boolean; path?: string; reason?: string }; confirmationSent?: boolean }>(`/retention/${orgId}/delete`, { confirmSlug })).data,
+    (
+      await platformAdminApi.post<
+        { deleted: boolean; databaseName: string | null; snapshot?: { taken: boolean; path?: string; reason?: string }; confirmationSent?: boolean } | PlatformActionQueued
+      >(`/retention/${orgId}/delete`, { confirmSlug })
+    ).data,
 
   feedback: async () => (await platformAdminApi.get<TrialFeedbackAnalytics>("/feedback")).data,
   /** The Signups page — funnel, self-serve vs console by day, recent workspaces, failures, domains. */
@@ -928,9 +934,16 @@ export const platformAdminConsoleApi = {
    */
   downloadBackup: async (id: string) =>
     (await platformAdminApi.get(`/backups/${encodeURIComponent(id)}/download`, { responseType: "blob" })).data as Blob,
+  /** Two-person, like the deletion: a 202 QUEUED request, not a restore. */
   restoreBackup: async (id: string, organizationId: string, confirmSlug: string) =>
-    (await platformAdminApi.post<{ restored: true; organizationId: string; slug: string; databaseName: string; status: string }>(`/backups/${encodeURIComponent(id)}/restore`, { organizationId, confirmSlug })).data,
-  deleteBackup: async (id: string) => (await platformAdminApi.delete<{ deleted: true; id: string }>(`/backups/${encodeURIComponent(id)}`)).data
+    (
+      await platformAdminApi.post<{ restored: true; organizationId: string; slug: string; databaseName: string; status: string } | PlatformActionQueued>(
+        `/backups/${encodeURIComponent(id)}/restore`,
+        { organizationId, confirmSlug }
+      )
+    ).data,
+  /** Two-person: a 202 QUEUED request, not a deletion. */
+  deleteBackup: async (id: string) => (await platformAdminApi.delete<{ deleted: true; id: string } | PlatformActionQueued>(`/backups/${encodeURIComponent(id)}`)).data
 };
 
 /** The public doors a retention email opens. Cross-tenant; no auth; the token is the credential. */

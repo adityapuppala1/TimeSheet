@@ -298,7 +298,10 @@ function QueueRow({ row, markers }: { row: RetentionQueueRow; markers: string[] 
   const del = useMutation({
     mutationFn: () => platformAdminConsoleApi.deleteUnderPolicy(row.id, confirmSlug),
     onSuccess: (r) => {
-      toast.success(`${row.slug} deleted`, { description: r.snapshot?.taken ? `Snapshot: ${r.snapshot.path}` : `No snapshot (${r.snapshot?.reason ?? "disabled"})` });
+      // Two-person: what comes back is a QUEUED request — the workspace still exists until another
+      // owner approves it. Reporting "deleted" here told operators it was gone when it was not.
+      if (isQueuedForApproval(r)) toast.success("Queued for approval", { description: r.message });
+      else toast.success(`${row.slug} deleted`, { description: r.snapshot?.taken ? `Snapshot: ${r.snapshot.path}` : `No snapshot (${r.snapshot?.reason ?? "disabled"})` });
       setDeleteOpen(false);
       void invalidate();
     },

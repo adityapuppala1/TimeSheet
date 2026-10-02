@@ -30,6 +30,7 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../co
 import { toast } from "../../components/ui/toaster";
 import { platformAdminConsoleApi, type SnapshotFile } from "../../services/platform-admin-api";
 import { BackupSchedulesTab } from "./BackupSchedules";
+import { isQueuedForApproval } from "../../lib/platform-console";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, formatBytes, KpiCard, KpiGrid, Num, PRIMARY_BTN, shortDateTime } from "./console-ui";
 
 const errorMessageOf = (error: unknown) => (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
@@ -49,7 +50,9 @@ function RestoreDialog({ file, onClose }: { file: SnapshotFile | null; onClose: 
   const restore = useMutation({
     mutationFn: () => platformAdminConsoleApi.restoreBackup(file!.id, file!.organizationId!, confirmSlug),
     onSuccess: (r) => {
-      toast.success(`${r.slug} restored`, { description: `Database ${r.databaseName} recreated. The workspace is ${r.status} with its deletion held.` });
+      // Two-person: the usual answer is a 202 with a request id, and nothing has been restored yet.
+      if (isQueuedForApproval(r)) toast.success("Queued for approval", { description: r.message });
+      else toast.success(`${r.slug} restored`, { description: `Database ${r.databaseName} recreated. The workspace is ${r.status} with its deletion held.` });
       setConfirmSlug("");
       onClose();
       void queryClient.invalidateQueries({ queryKey: ["platform-admin"] });
@@ -95,8 +98,9 @@ function DeleteDialog({ file, onClose }: { file: SnapshotFile | null; onClose: (
   const queryClient = useQueryClient();
   const remove = useMutation({
     mutationFn: () => platformAdminConsoleApi.deleteBackup(file!.id),
-    onSuccess: () => {
-      toast.success("Snapshot deleted");
+    onSuccess: (r) => {
+      if (isQueuedForApproval(r)) toast.success("Queued for approval", { description: r.message });
+      else toast.success("Snapshot deleted");
       onClose();
       void queryClient.invalidateQueries({ queryKey: ["platform-admin", "backups"] });
     },
