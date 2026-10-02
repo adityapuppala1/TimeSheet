@@ -147,6 +147,41 @@ export function originLooksLikeWorkspace(origin: string | undefined): boolean {
   }
 }
 
+/**
+ * `isOriginAllowed`, asked about ONE request rather than about the deployment — what the CORS
+ * middleware and the cookie-bearing auth routes use (middleware/origin-check.ts).
+ *
+ * The one difference is the `ROOT_DOMAIN` wildcard (security audit #13). A workspace origin is
+ * allowed only when its hostname IS the request's Host: a page on `acme.<root>` may call
+ * `acme.<root>/api`, never `beta.<root>/api`. Sibling subdomains are "same-site", so the SameSite=Lax
+ * refresh cookie rides along on such a call, and the wildcard used to let one workspace's page read
+ * another's access token out of `/auth/refresh`.
+ *
+ * Nothing legitimate needs the cross-workspace case: the SPA and API share one origin behind nginx
+ * (`proxy_set_header Host $host`) and behind Vite in development, and the platform console and
+ * split deployments are explicit `WEB_ORIGIN` entries, handled exactly as before. Hostnames only —
+ * nginx's `$host` carries no port, and the scheme and port are already pinned against WEB_ORIGIN by
+ * `isWorkspaceOrigin`.
+ */
+export function isOriginAllowedForHost(
+  origin: string | undefined,
+  /** The request's `Host` header, port and all — compared by hostname. */
+  requestHost: string | undefined,
+  allowList: string[],
+  devMode: boolean,
+  rootDomain?: string,
+  isVerifiedDomain?: (hostname: string) => boolean
+): boolean {
+  if (!origin) return true;
+  if (allowList.includes(origin)) return true;
+  if (devMode && PRIVATE_LAN_RE.test(origin)) return true;
+  if (isWorkspaceOrigin(origin, allowList, rootDomain)) {
+    const requestHostname = (requestHost ?? "").split(":")[0].toLowerCase();
+    return new URL(origin).hostname.toLowerCase() === requestHostname;
+  }
+  return isCustomDomainOriginAllowed(origin, allowList, isVerifiedDomain);
+}
+
 export function isOriginAllowed(
   origin: string | undefined,
   allowList: string[],

@@ -21,8 +21,8 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import morgan from "morgan";
-import { isOriginAllowed, originLooksLikeWorkspace } from "./config/origins.js";
-import { isVerifiedCustomDomain } from "./config/custom-domain-origins.js";
+import { isWorkspaceOrigin, originLooksLikeWorkspace } from "./config/origins.js";
+import { requestOriginAllowed, webOriginAllowList } from "./middleware/origin-check.js";
 import { env } from "./config/env.js";
 import { avatarsDir, documentReadDirs, isInsideNonPublicSubtree, isOrgSegment, resolveWithin, storageRoot } from "./config/storage-paths.js";
 import { tenantContext } from "./config/tenant-context.js";
@@ -129,8 +129,8 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
  *
  * In production set `NODE_ENV=production` and pin `WEB_ORIGIN` to your real domain(s) only.
  */
-const allowedOrigins = env.WEB_ORIGIN.split(",").map((value) => value.trim()).filter(Boolean);
-const isDev = env.NODE_ENV !== "production";
+/* The allow-list and the per-request rule live in middleware/origin-check.ts, shared with the auth
+   routes that check Origin themselves. */
 
 /**
  * Why one origin was refused, phrased for whoever has to fix it.
@@ -143,10 +143,15 @@ const isDev = env.NODE_ENV !== "production";
  * Its own function so the ternary is not nested inside a template literal, which the lint ratchet
  * counts and which reads worse than this does.
  */
-function corsRefusalMessage(origin: string | undefined): string {
+function corsRefusalMessage(origin: string | undefined, hostHeader: string | undefined): string {
   // `undefined` cannot reach here — `isOriginAllowed` returns true for a request with no Origin at
   // all, because that is not a cross-origin request. Typed to match the cors callback rather than
   // asserted away, so a future caller cannot be surprised.
+  // A real workspace calling a DIFFERENT workspace's API — refused on purpose (security audit #13),
+  // and not a configuration problem, so it must not send anybody off to edit WEB_ORIGIN.
+  if (origin && isWorkspaceOrigin(origin, webOriginAllowList(), env.ROOT_DOMAIN)) {
+    return `Origin ${origin} is a different workspace than ${hostHeader ?? "this one"}. A workspace's pages may only make signed-in requests to that same workspace.`;
+  }
   if (!originLooksLikeWorkspace(origin)) {
     return `Origin ${origin} is not in this server's allow-list. Add it to WEB_ORIGIN (comma-separated, exact scheme/host/port) and restart the API. Private LAN addresses are accepted automatically in development; public addresses and domains never are, and must be listed.`;
   }
@@ -155,31 +160,31 @@ function corsRefusalMessage(origin: string | undefined): string {
 }
 
 app.use(
-  cors({
-    origin(origin, callback) {
-      if (isOriginAllowed(origin, allowedOrigins, isDev, env.ROOT_DOMAIN, isVerifiedCustomDomain)) return callback(null, true);
-      // A plain Error here falls through errorHandler.ts's generic 500 branch (logged as a
-      // server error) even though this is an expected, correctly-enforced rejection, not a
-      // bug — AppError gives disallowed-origin attempts their own clean 403 instead of noise
-      // in the error log that could mask real 500s.
-      //
-      // The message names the FIX, not just the refusal. Reaching this product over a public IP or a
-      // new domain is an ordinary thing to do, and "not allowed by CORS" sent the last person who hit
-      // it looking at their network rather than at one environment variable. An attacker learns
-      // nothing from it that the 403 did not already tell them.
-      callback(
-        new AppError(
-          403,
-          // NAMES THE LIKELY FIX, and for a multi-workspace deployment that is usually not the
-          // allow-list at all. An origin like `acme.example.com` is a WORKSPACE, and workspaces
-          // cannot be enumerated in a static list — `ROOT_DOMAIN` is what makes every subdomain of
-          // it acceptable at once (config/origins.ts#isWorkspaceOrigin). Somebody who reads only
-          // "add it to WEB_ORIGIN" will add one customer and hit the same wall on the next.
-          corsRefusalMessage(origin)
-        )
-      );
-    },
-    credentials: true
+  // The DELEGATE form, because the decision now depends on the request: a `*.ROOT_DOMAIN` origin is
+  // allowed only for a request to that same host (config/origins.ts#isOriginAllowedForHost).
+  cors((req, callback) => {
+    const origin = req.headers.origin;
+    if (requestOriginAllowed(origin, req.headers.host)) return callback(null, { origin: true, credentials: true });
+    // A plain Error here falls through errorHandler.ts's generic 500 branch (logged as a
+    // server error) even though this is an expected, correctly-enforced rejection, not a
+    // bug — AppError gives disallowed-origin attempts their own clean 403 instead of noise
+    // in the error log that could mask real 500s.
+    //
+    // The message names the FIX, not just the refusal. Reaching this product over a public IP or a
+    // new domain is an ordinary thing to do, and "not allowed by CORS" sent the last person who hit
+    // it looking at their network rather than at one environment variable. An attacker learns
+    // nothing from it that the 403 did not already tell them.
+    callback(
+      new AppError(
+        403,
+        // NAMES THE LIKELY FIX, and for a multi-workspace deployment that is usually not the
+        // allow-list at all. An origin like `acme.example.com` is a WORKSPACE, and workspaces
+        // cannot be enumerated in a static list — `ROOT_DOMAIN` is what makes every subdomain of
+        // it acceptable at once (config/origins.ts#isWorkspaceOrigin). Somebody who reads only
+        // "add it to WEB_ORIGIN" will add one customer and hit the same wall on the next.
+        corsRefusalMessage(origin, req.headers.host)
+      )
+    );
   })
 );
 

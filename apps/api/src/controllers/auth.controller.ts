@@ -18,6 +18,7 @@ import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { requireAuth } from "../middleware/auth.js";
+import { requireAllowedOrigin } from "../middleware/origin-check.js";
 import { AppError } from "../middleware/error.js";
 import { avatarUpload, preserveTenantContext } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
@@ -142,7 +143,8 @@ authRouter.post(
   }
 );
 
-authRouter.post("/refresh", async (req, res) => {
+// `requireAllowedOrigin`: a page on ANOTHER workspace may not spend this cookie (security audit #13).
+authRouter.post("/refresh", requireAllowedOrigin, async (req, res) => {
   const token = req.cookies?.[REFRESH_COOKIE];
   const result = await refresh(token);
   // Null for a grace-window replay (a second tab racing the first): it gets an access token and NO
@@ -361,6 +363,8 @@ authRouter.post(
  */
 authRouter.post(
   "/sso/handoff",
+  // Same rule as /refresh: the code is redeemed by the workspace's own page, never a sibling's.
+  requireAllowedOrigin,
   validate(z.object({ body: z.object({ code: z.string().min(1).max(200) }) })),
   async (req, res) => {
     const { orgId } = requireTenantContext();
