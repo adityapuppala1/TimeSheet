@@ -123,6 +123,7 @@ import {
   reportApi,
   timesheetApi,
   userApi,
+  type ApprovalQueueParams,
   type AttestationPayload,
   type AttestationRow,
   type ProjectAssignmentMember,
@@ -2521,17 +2522,51 @@ const APPROVAL_STATUS_VARIANT: Record<string, "success" | "warning" | "destructi
 
 export function ApprovalsPage() {
   const queryClient = useQueryClient();
-  const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: () => timesheetApi.list() });
   const [rejectTarget, setRejectTarget] = useState<{ id: string; user: string } | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   /** The entry whose full detail is open. On a phone the table collapses to cards and the
    *  approver taps a name to get here; on desktop it is the same door, one click on the name. */
   const [detail, setDetail] = useState<any | null>(null);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("SUBMITTED");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<NonNullable<ApprovalQueueParams["status"]>>("SUBMITTED");
   const [projectFilter, setProjectFilter] = useState("all");
   const [activityFilter, setActivityFilter] = useState("all");
   const [range, setRange] = useState<DateRangeValue>({ from: "", to: "" });
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 250);
+    return () => clearTimeout(t);
+  }, [search]);
+  // A filter change is a different set of rows; staying on page 4 of the old one would show page 4
+  // of the new one, or nothing at all.
+  useEffect(() => setPage(1), [statusFilter, projectFilter, activityFilter, range.from, range.to, debouncedSearch]);
+
+  /**
+   * THE QUEUE IS FILTERED AND PAGED BY THE SERVER. It used to be `timesheetApi.list()` — the newest
+   * 100 rows of every status in the workspace — filtered here in the browser, so an entry submitted
+   * on Monday was off the page by Thursday while its SLA escalation mail linked here to find it. Its
+   * own query key, too: it shared `["timesheets"]` with History, and the two pages wanted different
+   * rows from the same cache entry. (Every decision still invalidates the `["timesheets"]` prefix,
+   * which covers this key.)
+   */
+  const queueParams: ApprovalQueueParams = {
+    status: statusFilter,
+    projectId: projectFilter === "all" ? undefined : projectFilter,
+    activityType: activityFilter === "all" ? undefined : activityFilter,
+    from: range.from || undefined,
+    to: range.to || undefined,
+    search: debouncedSearch || undefined,
+    page,
+    pageSize
+  };
+  const timesheets = useQuery({
+    queryKey: ["timesheets", "approval-queue", queueParams],
+    queryFn: () => timesheetApi.approvalQueue(queueParams),
+    placeholderData: (previous) => previous
+  });
 
   const approve = useMutation({
     mutationFn: ({ id, faceVerificationId }: { id: string; faceVerificationId?: string }) =>
@@ -2562,9 +2597,9 @@ export function ApprovalsPage() {
     approve.mutate({ id });
   };
 
-  /** Ticked SUBMITTED rows. Selection follows the FILTERED set (not just the visible page),
-   *  because the filters are client-side over the whole capped list — "select everything
-   *  matching" is exact here, never an approximation the server re-derives. */
+  /** Ticked SUBMITTED rows, on the page in hand. The queue is paged by the server now, so "select
+   *  all" means the undecided rows ON THIS PAGE — exactly the ids the reviewer can see, which is what
+   *  the bulk route is sent. A page holds at most 100, the bulk route's own limit. */
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
   const [bulkRejectReason, setBulkRejectReason] = useState("");
@@ -2648,35 +2683,25 @@ export function ApprovalsPage() {
     }
   };
 
-  const rows: any[] = Array.isArray(timesheets.data) ? timesheets.data : [];
+  const rows: any[] = useMemo(() => timesheets.data?.items ?? [], [timesheets.data]);
+  const total = timesheets.data?.total ?? 0;
+  const awaitingReview = timesheets.data?.awaitingReview;
+  const facets = timesheets.data?.facets;
 
-  // Options come from the rows in hand rather than a second /projects query: the queue can only
-  // ever contain projects that already appear here, and an option that matches nothing is a
-  // filter that looks broken when you pick it.
-  const projectOptions = useMemo(() => {
-    const byId = new Map<string, string>();
-    for (const row of rows) if (row.projectId) byId.set(row.projectId, row.project?.name ?? row.projectId);
-    return [...byId].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
-  }, [rows]);
+  // Options come from the SERVER's facets over the whole scope, not from the page in hand: with
+  // real paging, a project whose rows are all on page 4 would otherwise be missing from the filter
+  // that is the only way to reach them. Still only projects that occur in the queue, so no option
+  // matches nothing.
+  const projectOptions = facets?.projects ?? [];
+  const activityOptions = facets?.activities ?? [];
 
-  const activityOptions = useMemo(
-    () => [...new Set(rows.map((row) => row.activityType).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b))),
-    [rows]
-  );
-
-  // Per-day hover counts for the range picker's calendar — built from the UNFILTERED rows, so the
-  // dots describe what exists on each day, not what the current filters happen to show.
+  // Per-day hover counts for the range picker's calendar — computed by the server over the whole
+  // scope (every status, last 120 days), so the dots describe what exists on each day, not what the
+  // current filters or the current page happen to show.
   const rangeAnnotations = useMemo(() => {
-    const byDay = new Map<string, Record<string, number>>();
-    for (const row of rows) {
-      const day = String(row.workDate).slice(0, 10);
-      const counts = byDay.get(day) ?? {};
-      counts[row.status] = (counts[row.status] ?? 0) + 1;
-      byDay.set(day, counts);
-    }
     const map: CalendarDayAnnotations = {};
-    for (const [day, counts] of byDay) {
-      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    for (const [day, counts] of Object.entries(facets?.days ?? {})) {
+      const total = Object.values(counts).reduce((a: number, b) => a + (b ?? 0), 0);
       map[day] = {
         title: `${total} ${total === 1 ? "entry" : "entries"}`,
         rows: [
@@ -2689,30 +2714,11 @@ export function ApprovalsPage() {
       };
     }
     return map;
-  }, [rows]);
+  }, [facets?.days]);
 
-  // Client-side, because the list route does not paginate — it returns one capped page (100 rows,
-  // newest work first) and always has. Filtering on the server here would mean either inventing
-  // pagination semantics this page's callers do not share, or a second cache key competing with
-  // History's for the same ["timesheets"] data.
-  const filtered = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    return rows.filter((row) => {
-      if (statusFilter !== "ALL" && row.status !== statusFilter) return false;
-      if (projectFilter !== "all" && row.projectId !== projectFilter) return false;
-      if (activityFilter !== "all" && row.activityType !== activityFilter) return false;
-      const day = String(row.workDate).slice(0, 10);
-      if (range.from && day < range.from) return false;
-      if (range.to && day > range.to) return false;
-      if (!needle) return true;
-      return (
-        String(row.user?.name ?? "").toLowerCase().includes(needle) ||
-        String(row.user?.email ?? "").toLowerCase().includes(needle) ||
-        plainText(row.taskDescription).toLowerCase().includes(needle) ||
-        plainText(row.notes).toLowerCase().includes(needle)
-      );
-    });
-  }, [rows, search, statusFilter, projectFilter, activityFilter, range.from, range.to]);
+  // Already filtered: every filter on this page is applied by the server, so the page in hand IS
+  // the filtered set. (It used to be filtered here, over one capped page of the whole workspace.)
+  const filtered = rows;
 
   const filtersActive =
     search.trim() !== "" || statusFilter !== "SUBMITTED" || projectFilter !== "all" || activityFilter !== "all" || Boolean(range.from || range.to);
@@ -2725,9 +2731,9 @@ export function ApprovalsPage() {
     setRange({ from: "", to: "" });
   }
 
-  // The decidable subset of what the filters currently show. Selection is pruned (not cleared)
-  // when a filter change removes rows — ticks the reviewer can still see survive, ticks on rows
-  // that just left the screen do not.
+  // The decidable subset of the page in hand. Selection is pruned (not cleared) when a filter or
+  // page change removes rows — ticks the reviewer can still see survive, ticks on rows that just
+  // left the screen do not.
   const decidable = useMemo(() => filtered.filter((row) => row.status === "SUBMITTED"), [filtered]);
   useEffect(() => {
     setSelected((current) => {
@@ -2747,6 +2753,8 @@ export function ApprovalsPage() {
       return next;
     });
 
+  const deciding = approve.isPending || reject.isPending || decideBulk.isPending;
+
   const approvalColumns = useMemo<ColumnDef<any, any>[]>(
     () => [
       {
@@ -2757,7 +2765,7 @@ export function ApprovalsPage() {
             checked={allDecidableSelected}
             disabled={decidable.length === 0}
             onCheckedChange={toggleAllDecidable}
-            aria-label={`Select all ${decidable.length} undecided entries matching the filters`}
+            aria-label={`Select all ${decidable.length} undecided entries on this page`}
           />
         ),
         // Only SUBMITTED rows get a box: the bulk actions decide, and a tick on an already-decided
@@ -2905,12 +2913,19 @@ export function ApprovalsPage() {
             {/* Only a SUBMITTED entry is awaiting a decision. With the status filter widened past
                 the queue, offering Approve on an already-approved row would be a button that can
                 only fail — the API refuses anything but SUBMITTED for the same reason. */}
+            {/* Disabled while ANY decision is in flight: a second click used to send a second
+                request, and before the server refused the loser that meant two approval mails. */}
             {row.original.status === "SUBMITTED" ? (
               <>
-                <Button variant="success" size="sm" onClick={() => requestApprove(row.original.id)}>
+                <Button variant="success" size="sm" disabled={deciding} onClick={() => requestApprove(row.original.id)}>
                   <Check className="h-4 w-4" />Approve
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => setRejectTarget({ id: row.original.id, user: row.original.user?.name })}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={deciding}
+                  onClick={() => setRejectTarget({ id: row.original.id, user: row.original.user?.name })}
+                >
                   <ShieldX className="h-4 w-4" />Reject
                 </Button>
               </>
@@ -2920,7 +2935,7 @@ export function ApprovalsPage() {
       }
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps -- requestApprove closes over stable refs
-    [approve, faceStatus.data?.requiredForApproval, selected, decidable, allDecidableSelected]
+    [approve, faceStatus.data?.requiredForApproval, selected, decidable, allDecidableSelected, deciding]
   );
 
   return (
@@ -2953,10 +2968,14 @@ export function ApprovalsPage() {
               <Label htmlFor="approval-status">Status</Label>
               {/* Defaults to SUBMITTED so the page opens on the queue it has always shown.
                   Widening it is how an approver checks what they decided last week. */}
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as typeof statusFilter)}>
                 <SelectTrigger id="approval-status"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="SUBMITTED">Awaiting decision</SelectItem>
+                  {/* The count is the server's — SUBMITTED, not yours, within your approval scope —
+                      the same figure the Inbox brief and the reports summary show. */}
+                  <SelectItem value="SUBMITTED">
+                    Awaiting decision{awaitingReview === undefined ? "" : ` (${awaitingReview})`}
+                  </SelectItem>
                   <SelectItem value="APPROVED">Approved</SelectItem>
                   <SelectItem value="REJECTED">Rejected</SelectItem>
                   <SelectItem value="DRAFT">Draft</SelectItem>
@@ -3005,12 +3024,12 @@ export function ApprovalsPage() {
 
       <Card>
         <CardContent className="p-4">
-          {/* The bulk bar. Selection follows the filtered set (the filters are client-side over
-              the whole capped list), so "select all" is exact — never a server approximation. */}
+          {/* The bulk bar. Selection is the undecided rows on the page in hand — the exact ids the
+              reviewer can see — and a page never exceeds the bulk route's 100-row limit. */}
           {selected.size > 0 && (
             <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 p-2.5">
               <p className="text-sm">
-                <strong>{selected.size}</strong> of {decidable.length} undecided entr{decidable.length === 1 ? "y" : "ies"} selected
+                <strong>{selected.size}</strong> of {decidable.length} undecided entr{decidable.length === 1 ? "y" : "ies"} on this page selected
               </p>
               <div className="ml-auto flex items-center gap-2">
                 <Button size="sm" variant="success" disabled={decideBulk.isPending} onClick={() => requestBulkApprove([...selected])}>
@@ -3027,21 +3046,27 @@ export function ApprovalsPage() {
               </div>
             </div>
           )}
+          {/* The table's own pager is off: the server pages, and TablePager below states the
+              server's total. Two pagers describing different sets would be worse than one. */}
           <DataTable
             columns={approvalColumns}
             data={filtered}
             isLoading={timesheets.isLoading}
             enableSearch={false}
+            enablePagination={false}
             emptyMessage={filtersActive ? "No entries match the current filters." : "Nothing pending — you're all caught up."}
-            pageSize={20}
           />
-          {/* The list route returns one capped page of the most recent work and always has. Saying
-              so is the difference between "there is nothing older" and "we did not look." */}
-          {rows.length >= 100 && (
-            <p className="mt-3 text-xs text-muted-foreground">
-              Showing the 100 most recent entries. Older work is on the Reports screen, which queries the full set.
-            </p>
-          )}
+          <TablePager
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            sizes={[25, 50, 100]}
+            onPage={setPage}
+            onPageSize={(n) => {
+              setPageSize(n);
+              setPage(1);
+            }}
+          />
         </CardContent>
       </Card>
 

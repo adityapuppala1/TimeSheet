@@ -757,13 +757,16 @@ test.describe("acting on an entry from any screen", () => {
    * is pinned is that the controls are PRESENT and enabled where they were previously absent.
    */
   test("the day timeline's entry dialog offers Approve and Reject to an approver", async ({ page }) => {
-    const submitted = await withAdminRequest(async (ctx, headers) => {
-      const rows: Array<{ id: string; status: string; workDate: string }> = await (
+    // Somebody ELSE's submitted entry: nobody is offered a decision on their own (segregation of
+    // duties — the server refuses it for every role), so the viewer's own rows prove nothing here.
+    const { submitted, viewerName } = await withAdminRequest(async (ctx, headers) => {
+      const me: { id: string; name: string } = await (await ctx.get("/api/auth/me", { headers })).json();
+      const rows: Array<{ id: string; status: string; workDate: string; userId: string }> = await (
         await ctx.get("/api/timesheets", { headers })
       ).json();
-      return rows.find((row) => row.status === "SUBMITTED") ?? null;
+      return { submitted: rows.find((row) => row.status === "SUBMITTED" && row.userId !== me.id) ?? null, viewerName: me.name };
     });
-    test.skip(!submitted, "no submitted entry in the demo data");
+    test.skip(!submitted, "no submitted entry by anyone else in the demo data");
 
     await signIn(page, "superadmin");
     await page.goto("/app");
@@ -778,7 +781,9 @@ test.describe("acting on an entry from any screen", () => {
     // The dialog opens on whichever block was first; only a SUBMITTED one carries the decision
     // controls, which is itself the rule worth asserting.
     const status = await dialog.getByText(/^(DRAFT|SUBMITTED|APPROVED|REJECTED)$/).first().textContent();
-    if (status?.trim() === "SUBMITTED") {
+    // The dialog's title names the author; the viewer's own SUBMITTED entry carries no decision.
+    const ownEntry = ((await dialog.getByRole("heading").first().textContent()) ?? "").includes(viewerName);
+    if (status?.trim() === "SUBMITTED" && !ownEntry) {
       await expect(dialog.getByRole("button", { name: /^approve$/i })).toBeEnabled();
       await expect(dialog.getByRole("button", { name: /^reject$/i })).toBeEnabled();
     } else {

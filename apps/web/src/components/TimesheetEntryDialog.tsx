@@ -184,8 +184,11 @@ export function TimesheetEntryDialog({
    * identity gate and the reject-reason prompt with it, so no caller has to re-implement either.
    */
   const decision = useTimesheetDecision({ onSettled: onClose });
-  const approveHandler = onApprove ?? (decision.canDecide ? decision.requestApprove : undefined);
-  const rejectHandler = onReject ?? (decision.canDecide ? decision.requestReject : undefined);
+  // Checked per ENTRY, and for passed-in handlers too: nobody is offered a decision on their own
+  // entry or their manager's, whichever page opened the dialog (the server refuses both).
+  const mayDecide = decision.canDecide(entry);
+  const approveHandler = mayDecide ? (onApprove ?? decision.requestApprove) : undefined;
+  const rejectHandler = mayDecide ? (onReject ?? decision.requestReject) : undefined;
 
   return (
     <Dialog open={Boolean(entryId)} onOpenChange={(open) => !open && onClose()}>

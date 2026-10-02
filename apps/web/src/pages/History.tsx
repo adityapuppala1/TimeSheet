@@ -71,14 +71,27 @@ const statusVariant: Record<string, "success" | "warning" | "destructive" | "mut
 
 export function History() {
   const currentUser = useAuthStore((s) => s.user);
-  const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: () => timesheetApi.list(), refetchInterval: 30_000 });
-  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const [status, setStatus] = useState<StatusFilter>("ALL");
   const [projectId, setProjectId] = useState("all");
   const [activity, setActivity] = useState("all");
   const [userId, setUserId] = useState("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  /**
+   * THE DATE RANGE GOES TO THE SERVER. It used to filter the list route's default page — the newest
+   * 100 rows — in the browser, so "last month" quietly read low for anyone with more than 100 rows
+   * since then, which is exactly the under-reporting the route's own comment warns about. With a
+   * range the route filters in SQL and raises its cap to 2,000; without one it returns the newest
+   * page as before. Its own key under the `["timesheets"]` prefix, so every invalidation still
+   * reaches it.
+   */
+  const timesheets = useQuery({
+    queryKey: ["timesheets", "history", { from, to }],
+    queryFn: () => timesheetApi.list({ from: from || undefined, to: to || undefined }),
+    refetchInterval: 30_000,
+    placeholderData: (previous) => previous
+  });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   /** The entry awaiting confirmation. Deleting is irreversible from the user's side, so it never
    *  happens on a single click. */
   const [pendingDelete, setPendingDelete] = useState<any | null>(null);
@@ -192,11 +205,10 @@ export function History() {
       if (projectId !== "all" && row.projectId !== projectId) return false;
       if (activity !== "all" && row.activityType !== activity) return false;
       if (userId !== "all" && (row.userId ?? row.user?.id) !== userId) return false;
-      if (from && String(row.workDate).slice(0, 10) < from) return false;
-      if (to && String(row.workDate).slice(0, 10) > to) return false;
+      // No date test here: the range was applied by the server (see the query above).
       return true;
     });
-  }, [rows, status, projectId, activity, userId, from, to]);
+  }, [rows, status, projectId, activity, userId]);
 
   /**
    * "Logged hours" EXCLUDES rejected work, and that matters more than it looks.
@@ -584,6 +596,13 @@ export function History() {
             emptyMessage="No entries match the current filters."
             pageSize={20}
           />
+          {/* Without a range the route returns the newest 100 rows. Saying so is the difference
+              between "there is nothing older" and "we did not look". */}
+          {!from && !to && rows.length >= 100 && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Showing the 100 most recent entries. Pick a date range to see older work — a range is searched in full.
+            </p>
+          )}
         </CardContent>
       </Card>
 

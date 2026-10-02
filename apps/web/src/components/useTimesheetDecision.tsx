@@ -18,7 +18,9 @@
  * different problems rather than one shared answer to the smaller one.
  *
  * WHO USES THIS: components/TimesheetEntryDialog.tsx (which any page can render), and through it
- * pages/Dashboard.tsx, pages/History.tsx and pages/AdminPages.tsx.
+ * pages/Dashboard.tsx, pages/History.tsx and pages/AdminPages.tsx; and pages/Team.tsx's escalation
+ * list directly — which used to call the approve API bare, skipped the identity check, and so got a
+ * 428 on every face-gated workspace.
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ShieldX } from "lucide-react";
@@ -40,6 +42,7 @@ import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
 import { toast } from "./ui/toaster";
 import { runInBackground } from "../lib/run-in-background";
+import { canDecideTimesheet, type DecidableEntry } from "../lib/timesheet-decision";
 
 function serverMessage(err: any, fallback: string): string {
   return err?.response?.data?.message ?? fallback;
@@ -114,7 +117,7 @@ export function useTimesheetDecision({ onSettled }: UseTimesheetDecisionOptions 
     approve.mutate({ id: entry.id });
   };
 
-  const requestReject = (entry: TimesheetEntryDetail) => {
+  const requestReject = (entry: Pick<TimesheetEntryDetail, "id"> & { user?: { name?: string } | null }) => {
     setRejectTarget({ id: entry.id, user: entry.user?.name ?? "this entry" });
   };
 
@@ -128,7 +131,9 @@ export function useTimesheetDecision({ onSettled }: UseTimesheetDecisionOptions 
     submit.mutate({ id: entry.id });
   };
 
-  const canDecide = Boolean(currentUser?.permissions.includes("timesheets:approve" as never));
+  /** Per ENTRY, not per session: an approver may not decide their own entry or their manager's —
+   *  see lib/timesheet-decision.ts, which mirrors the server's rule. */
+  const canDecide = (entry: DecidableEntry | null | undefined) => canDecideTimesheet(currentUser, entry);
 
   /**
    * The dialogs this hook needs on screen. Rendered by the caller so they land at the top level of

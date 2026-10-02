@@ -6,7 +6,7 @@
  * `managerId`-filtered queries — not a company-wide org chart.
  * WHO calls the backing API: `controllers/team.controller.ts`.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "../components/PageHeader";
 import { EmptyState } from "../components/ui/empty-state";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -31,13 +31,13 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard } from "../components/ui/stat-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
-import { toast } from "../components/ui/toaster";
 import { computeTrend } from "../lib/trend";
-import { fileUrl, teamApi, timesheetApi, type TeamReport } from "../services/api";
+import { fileUrl, teamApi, type TeamReport } from "../services/api";
 import { permissions } from "@timesheet/shared";
 import { useAuthStore } from "../store/auth";
 import { useCardLayout } from "../lib/use-media-query";
 import { runInBackground } from "../lib/run-in-background";
+import { useTimesheetDecision, type TimesheetDecisionState } from "../components/useTimesheetDecision";
 
 function initialsFor(name?: string) {
   if (!name) return "?";
@@ -85,14 +85,15 @@ export function Team() {
   const summary = useQuery({ queryKey: ["team", "sla-summary"], queryFn: teamApi.slaSummary, refetchInterval: 30_000, enabled: canApprove });
   const escalations = useQuery({ queryKey: ["team", "escalations"], queryFn: teamApi.escalations, enabled: canApprove });
 
-  const approve = useMutation({
-    mutationFn: (id: string) => timesheetApi.approve(id),
-    onSuccess: () => {
-      toast.success("Approved");
-      runInBackground(queryClient.invalidateQueries({ queryKey: ["team"] }));
-      runInBackground(queryClient.invalidateQueries({ queryKey: ["timesheets"] }));
-    },
-    onError: (err: any) => toast.error("Approval failed", { description: err?.response?.data?.message ?? "Try again." })
+  /**
+   * Deciding an escalated entry goes through the SAME hook the entry dialog uses. This page used to
+   * call the approve API bare: no identity check, so on a workspace that face-gates approvals every
+   * click came back 428 "Identity verification is required"; no Reject at all; and no pending state,
+   * so a double-click sent two approvals. The hook carries the face flow, the reject-reason prompt
+   * and the per-entry "is this yours to decide" rule with it.
+   */
+  const decision = useTimesheetDecision({
+    onSettled: () => runInBackground(queryClient.invalidateQueries({ queryKey: ["team"] }))
   });
 
   const escalationColumns = useMemo<ColumnDef<any, any>[]>(
@@ -143,16 +144,10 @@ export function Team() {
         id: "action",
         header: () => <span className="block text-right">Action</span>,
         enableSorting: false,
-        cell: ({ row }) => (
-          <div className="text-right">
-            <Button size="sm" variant="success" onClick={() => approve.mutate(row.original.timesheet.id)}>
-              <CheckCircle2 className="h-4 w-4" />Approve
-            </Button>
-          </div>
-        )
+        cell: ({ row }) => <EscalationActions timesheet={row.original.timesheet} decision={decision} className="justify-end" />
       }
     ],
-    [approve]
+    [decision]
   );
 
   const reportColumns = useMemo<ColumnDef<any, any>[]>(
@@ -338,9 +333,7 @@ export function Team() {
                         <span>{String(row.timesheet?.workDate ?? "").slice(0, 10)}</span>
                         <span className="font-semibold text-foreground">{Number(row.timesheet?.totalHours ?? 0).toFixed(2)}h</span>
                       </div>
-                      <Button size="sm" variant="success" className="justify-self-start" onClick={() => approve.mutate(row.timesheet.id)}>
-                        <CheckCircle2 className="h-4 w-4" />Approve
-                      </Button>
+                      <EscalationActions timesheet={row.timesheet} decision={decision} className="justify-self-start" />
                     </div>
                   );
                 })}
@@ -428,6 +421,34 @@ export function Team() {
       <OrgChartCard />
 
       <HoursTrendDialog person={trendFor} onClose={() => setTrendFor(null)} />
+      {decision.dialogs}
+    </div>
+  );
+}
+
+/**
+ * Approve / Reject for one escalated entry. Both stay disabled while any decision from this page
+ * is in flight, and neither is offered on an entry that is not the viewer's to decide (their own,
+ * or their manager's) — the server refuses those, so the buttons would only ever fail.
+ */
+function EscalationActions({
+  timesheet,
+  decision,
+  className
+}: {
+  timesheet: { id: string; userId?: string; user?: { id?: string; name?: string } | null } | null | undefined;
+  decision: TimesheetDecisionState;
+  className?: string;
+}) {
+  if (!timesheet || !decision.canDecide(timesheet)) return null;
+  return (
+    <div className={`flex flex-wrap gap-2 ${className ?? ""}`}>
+      <Button size="sm" variant="outline" disabled={decision.isDeciding} onClick={() => decision.requestReject(timesheet)}>
+        <ShieldX className="h-4 w-4" />Reject
+      </Button>
+      <Button size="sm" variant="success" disabled={decision.isDeciding} onClick={() => decision.requestApprove(timesheet)}>
+        <CheckCircle2 className="h-4 w-4" />Approve
+      </Button>
     </div>
   );
 }

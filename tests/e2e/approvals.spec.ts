@@ -19,25 +19,29 @@ import { withAdminRequest } from "./helpers/admin-request";
  *  session's use. See helpers/sign-in.ts. */
 test.use({ storageState: { cookies: [], origins: [] } });
 
-/** The DataTable footer, which is the only place the FILTERED total is stated out loud. Asserting
- *  against it rather than counting rows is what makes these tests independent of the 20-row page
+/** The server-paged TablePager under the table, which states the FILTERED total out loud ("1–25 of
+ *  57"). Asserting against it rather than counting rows keeps these tests independent of the page
  *  size — a filter that narrows from 41 to 22 does not change how many rows are on screen. */
 async function shownTotal(page: Page): Promise<number> {
-  const footer = page.getByText(/^Showing \d+-\d+ of \d+$/);
+  const footer = page.getByText(/^\d+–\d+ of \d+$/);
   await expect(footer).toBeVisible({ timeout: 15_000 });
   return Number(/of (\d+)$/.exec((await footer.textContent()) ?? "")?.[1]);
 }
 
-/** Status counts straight from the list route the page renders from, so the expectations below are
- *  derived from the same data rather than hardcoded against whatever the demo database holds. */
+/** Status counts straight from the route the page renders from — the server-side, scoped approvals
+ *  queue — so the expectations below are derived from the same data (and the same "not yours, not
+ *  your managers'" scope) rather than hardcoded against whatever the demo database holds. */
 async function statusCounts(): Promise<Record<string, number>> {
   return withAdminRequest(async (ctx, headers) => {
-    const rows: Array<{ status: string }> = await (await ctx.get("/api/timesheets", { headers })).json();
-    expect(Array.isArray(rows), "the approvals list route must return an array").toBe(true);
-    return rows.reduce<Record<string, number>>((acc, row) => {
-      acc[row.status] = (acc[row.status] ?? 0) + 1;
-      return acc;
-    }, {});
+    const counts: Record<string, number> = {};
+    for (const status of ["SUBMITTED", "APPROVED", "REJECTED", "DRAFT"]) {
+      const page: { total: number } = await (
+        await ctx.get(`/api/timesheets/approval-queue?status=${status}&pageSize=1`, { headers })
+      ).json();
+      expect(typeof page.total, "the approvals queue route must report a total").toBe("number");
+      counts[status] = page.total;
+    }
+    return counts;
   });
 }
 
@@ -217,7 +221,8 @@ test.describe("approvals queue", () => {
     const detailRoute = "**/api/timesheets/*";
     await page.route(detailRoute, (route) => {
       const pathname = new URL(route.request().url()).pathname;
-      if (!/^\/api\/timesheets\/[^/]+$/.test(pathname)) return route.continue();
+      // The queue itself lives at /api/timesheets/approval-queue — not a detail request.
+      if (!/^\/api\/timesheets\/(?!approval-queue$)[^/]+$/.test(pathname)) return route.continue();
       detailRequests += 1;
       return detailRequests <= 2
         ? route.fulfill({ status: 503, json: { message: "Temporary detail outage" } })

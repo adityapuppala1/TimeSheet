@@ -810,10 +810,41 @@ export interface TimesheetListParams extends DateWindow {
   scope?: "team";
 }
 
+/** The approvals queue's filters. Every one is applied by the server — see `approvalQueue`. */
+export interface ApprovalQueueParams extends DateWindow {
+  status?: "SUBMITTED" | "APPROVED" | "REJECTED" | "DRAFT" | "ALL";
+  projectId?: string;
+  activityType?: string;
+  search?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface ApprovalQueuePage {
+  items: TimesheetEntryDetail[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** SUBMITTED, not yours, within your approval scope — the same figure the Inbox brief and the
+   *  reports summary show, whatever status this page is filtered to. */
+  awaitingReview: number;
+  facets: {
+    projects: Array<{ id: string; name: string }>;
+    activities: string[];
+    /** Per-day counts by status for the last 120 days, keyed `YYYY-MM-DD`. */
+    days: Record<string, Partial<Record<TimesheetEntryDetail["status"], number>>>;
+  };
+}
+
 export const timesheetApi = {
   /** With a window, the server filters AND raises its row cap. Without one it returns the newest
    *  page, as before — which is why a range must never be filtered in the browser instead. */
   list: async (params?: TimesheetListParams) => (await api.get("/timesheets", { params })).data,
+  /** The approvals queue, filtered and paged by the server and scoped to entries you could decide
+   *  (never your own, never your managers'). It replaced filtering one capped `list()` page in the
+   *  browser, which lost every entry older than the newest 100 rows of the whole workspace. */
+  approvalQueue: async (params: ApprovalQueueParams) =>
+    (await api.get<ApprovalQueuePage>("/timesheets/approval-queue", { params })).data,
   /** One entry by id, with attachments, reviewer and identity badge. Used by the entry dialog
    *  rather than a lookup in the list cache: the list is capped at 100 rows, so an older entry
    *  reached by deep link simply is not in it. */

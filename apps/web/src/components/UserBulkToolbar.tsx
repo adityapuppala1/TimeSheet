@@ -317,12 +317,15 @@ export function TablePager({
   page,
   pageSize,
   total,
+  sizes = [25, 50, 100, 200],
   onPage,
   onPageSize
 }: {
   page: number;
   pageSize: number;
   total: number;
+  /** Page sizes on offer. A page whose rows feed a capped bulk action offers nothing above the cap. */
+  sizes?: readonly number[];
   onPage: (page: number) => void;
   onPageSize: (size: number) => void;
 }) {
@@ -339,7 +342,7 @@ export function TablePager({
         <Select value={String(pageSize)} onValueChange={(v) => onPageSize(Number(v))}>
           <SelectTrigger className="h-8 w-[6.5rem]"><SelectValue /></SelectTrigger>
           <SelectContent>
-            {[25, 50, 100, 200].map((n) => (
+            {sizes.map((n) => (
               <SelectItem key={n} value={String(n)}>{n} / page</SelectItem>
             ))}
           </SelectContent>
