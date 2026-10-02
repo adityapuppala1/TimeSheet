@@ -16,7 +16,9 @@ import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
-import { audit } from "./audit.service.js";
+import { audit, type AuditProvenance } from "./audit.service.js";
+import { dispatchTransactional } from "./notify.service.js";
+import { emailShell, templates } from "./mail-templates.js";
 import { getEffectiveSeatLimit } from "./plan-limits.service.js";
 import { countActiveSeats } from "./seat-count.service.js";
 import { rememberWorkspaceMembership, tenantBaseUrl } from "./workspace-directory.service.js";
@@ -131,6 +133,52 @@ export async function switchActiveRole(userId: string, targetRole: RoleName) {
   await audit(userId, "user.role_switched", "User", userId, { from: before.role.name, to: targetRole });
 
   return buildProfilePayload(userId);
+}
+
+/* ============================ Sign-in audit trail ============================ */
+
+/**
+ * An audit row for an authentication event (security audit #16): password sign-in and its failures,
+ * sign-out, a password change, a reset requested and a reset completed. SSO sign-ins write their own
+ * rows inside `completeSsoLogin`.
+ *
+ * NEVER FAILS THE ACTION IT RECORDS — a sign-in must not be refused because the audit table is
+ * locked. And never given a password: metadata carries the address tried, nothing typed into the
+ * password field.
+ */
+function auditAuthEvent(
+  actorId: string | undefined,
+  action: string,
+  entityId: string | undefined,
+  metadata: Record<string, unknown>,
+  provenance: AuditProvenance
+): Promise<void> {
+  return audit(actorId, action, "User", entityId, metadata, provenance).catch((error: unknown) => {
+    console.warn(`[auth] could not write the ${action} audit row: ${(error as Error).message}`);
+  });
+}
+
+/**
+ * "Your password was changed" (security audit #16) — how an owner learns that somebody ELSE changed
+ * it. Not awaited: a slow mail server must not hold up the change it reports, and a failed send is
+ * logged rather than turned into a failed password change. The name goes into `vars` escaped,
+ * because an admin-edited override substitutes vars verbatim (template-store.service.ts#applyVars);
+ * the compiled fallback escapes for itself.
+ */
+function mailPasswordChanged(user: { name: string; email: string }, how: string): void {
+  // Built inside the promise, so even a malformed row cannot throw out of the password change.
+  const send = async () => {
+    const changedAt = new Date().toUTCString();
+    const forgotUrl = `${tenantBaseUrl()}/forgot-password`;
+    const name = user.name ?? "";
+    await dispatchTransactional({
+      to: user.email,
+      templateKey: "account.password_changed",
+      vars: { name: emailShell.escape(name), changedAt, how, forgotUrl },
+      fallback: { subject: "Your TimeSphere password was changed", html: templates.passwordChanged({ name, changedAt, how, forgotUrl }) }
+    });
+  };
+  send().catch((error: unknown) => console.warn(`[auth] could not send the password-changed mail: ${(error as Error).message}`));
 }
 
 /* ============================== Login lockout ============================== */
@@ -488,12 +536,18 @@ export async function login(
   const passwordOk = await verifyPassword(password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
   if (!user || user.deletedAt || !passwordOk) {
     recordFailedLogin(orgId, email);
+    // The address tried, never the password. An unknown address has no actor to name.
+    await auditAuthEvent(user && !user.deletedAt ? user.id : undefined, "auth.login_failed", user?.id, { email, method: "PASSWORD", reason: "invalid_credentials" }, { actorType: "GUEST", actorLabel: "sign-in form", ipAddress });
     throw new AppError(401, "Invalid email or password");
   }
-  if (user.status !== "ACTIVE") throw new AppError(403, "Account is not active");
+  if (user.status !== "ACTIVE") {
+    await auditAuthEvent(user.id, "auth.login_failed", user.id, { email, method: "PASSWORD", reason: "inactive" }, { actorType: "GUEST", actorLabel: "sign-in form", ipAddress });
+    throw new AppError(403, "Account is not active");
+  }
   clearFailedLogins(orgId, email);
 
   const session = await establishSession(user, orgId, { rememberMe, authMethod: "PASSWORD", userAgent, ipAddress, deviceId });
+  await auditAuthEvent(user.id, "auth.login_succeeded", user.id, { method: "PASSWORD", rememberMe }, { ipAddress });
 
   return {
     ...session,
@@ -774,7 +828,10 @@ function claimsFrom(verify: () => { sub?: unknown; sid?: unknown; org?: unknown 
  * Revokes nothing — and throws nothing — when nothing valid was presented. Returns how many rows
  * were revoked, for the audit trail.
  */
-export async function endSessions(credentials: { refreshToken?: unknown; accessToken?: string }): Promise<{ userId: string | null; revoked: number }> {
+export async function endSessions(
+  credentials: { refreshToken?: unknown; accessToken?: string },
+  ipAddress?: string
+): Promise<{ userId: string | null; revoked: number }> {
   const { orgId } = requireTenantContext();
   const named: Array<{ sid: string; sub: string }> = [];
 
@@ -797,12 +854,16 @@ export async function endSessions(credentials: { refreshToken?: unknown; accessT
     const ids = [...new Set(named.filter((entry) => entry.sub === sub).map((entry) => entry.sid))];
     revoked += (await prisma.session.updateMany({ where: { id: { in: ids }, userId: sub, revokedAt: null }, data: { revokedAt: now } })).count;
   }
-  if (named.length > 0) return { userId: named[0].sub, revoked };
+  if (named.length > 0) {
+    await auditAuthEvent(named[0].sub, "auth.logout", named[0].sub, { sessionsEnded: revoked }, { ipAddress });
+    return { userId: named[0].sub, revoked };
+  }
 
   // An access token from before the `sid` claim existed: the old behaviour, revoke all of that
   // person's sessions — and only for an UNEXPIRED one, as the requireAuth-guarded route demanded.
   if (token && fromAccess && claimsFrom(() => verifyAccessToken(token), orgId)) {
     const { count } = await prisma.session.updateMany({ where: { userId: fromAccess.sub, revokedAt: null }, data: { revokedAt: now } });
+    await auditAuthEvent(fromAccess.sub, "auth.logout", fromAccess.sub, { sessionsEnded: count }, { ipAddress });
     return { userId: fromAccess.sub, revoked: count };
   }
   return { userId: null, revoked: 0 };
@@ -810,7 +871,7 @@ export async function endSessions(credentials: { refreshToken?: unknown; accessT
 
 /* ============================== Password change ============================== */
 
-export async function changePassword(userId: string, currentPassword: string, nextPassword: string, currentSessionId?: string) {
+export async function changePassword(userId: string, currentPassword: string, nextPassword: string, currentSessionId?: string, ipAddress?: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   if (!(await verifyPassword(currentPassword, user.passwordHash))) throw new AppError(422, "Current password is incorrect");
   // The shared policy (utils/password-policy.ts) — length, bcrypt's 72-byte limit, the common-password
@@ -841,6 +902,8 @@ export async function changePassword(userId: string, currentPassword: string, ne
     where: { userId, revokedAt: null, ...(currentSessionId ? { id: { not: currentSessionId } } : {}) },
     data: { revokedAt: new Date() }
   });
+  await auditAuthEvent(userId, "auth.password_changed", userId, { via: "profile" }, { ipAddress });
+  mailPasswordChanged(user, "from your profile");
 }
 
 /* ============================== Password reset ============================== */
@@ -865,7 +928,7 @@ async function passwordSignInDisabled(orgId: string): Promise<boolean> {
 }
 
 /** Always succeeds from the caller's point of view (no user enumeration) — only actually creates a token + sends mail if the email matches a real, active account. */
-export async function requestPasswordReset(email: string): Promise<{ resetUrl: string; user: { id: string; name: string; email: string } } | null> {
+export async function requestPasswordReset(email: string, ipAddress?: string): Promise<{ resetUrl: string; user: { id: string; name: string; email: string } } | null> {
   if (await passwordSignInDisabled(requireTenantContext().orgId)) return null;
 
   const user = await prisma.user.findUnique({ where: { email } });
@@ -878,6 +941,8 @@ export async function requestPasswordReset(email: string): Promise<{ resetUrl: s
   if (recent >= RESET_LINKS_PER_ADDRESS_PER_HOUR) return null;
 
   const rawToken = await issueResetToken(user.id, RESET_TOKEN_TTL_MS);
+  // Whoever asked has no session — the row names the account the link was sent for.
+  await auditAuthEvent(undefined, "auth.password_reset_requested", user.id, { email: user.email }, { actorType: "GUEST", actorLabel: "forgot-password form", ipAddress });
 
   const resetUrl = `${tenantBaseUrl()}/reset-password?token=${encodeURIComponent(rawToken)}`;
   return { resetUrl, user: { id: user.id, name: user.name, email: user.email } };
@@ -885,7 +950,7 @@ export async function requestPasswordReset(email: string): Promise<{ resetUrl: s
 
 const INVALID_RESET_LINK = "This reset link is invalid or has expired.";
 
-export async function resetPassword(rawToken: string, nextPassword: string): Promise<void> {
+export async function resetPassword(rawToken: string, nextPassword: string, ipAddress?: string): Promise<void> {
   if (!rawToken) throw new AppError(422, "Reset token is required");
   if (await passwordSignInDisabled(requireTenantContext().orgId)) {
     throw new AppError(
@@ -904,7 +969,7 @@ export async function resetPassword(rawToken: string, nextPassword: string): Pro
   // afterwards. Same message as a bad link — the holder learns nothing about the account's state.
   const resetting = await prisma.user.findUnique({
     where: { id: match.userId },
-    select: { email: true, passwordHash: true, status: true, deletedAt: true }
+    select: { name: true, email: true, passwordHash: true, status: true, deletedAt: true }
   });
   if (!resetting || resetting.deletedAt || resetting.status !== "ACTIVE") throw new AppError(422, INVALID_RESET_LINK);
   // The same policy as change-password. Before the link is spent, so a refused password leaves it
@@ -936,4 +1001,7 @@ export async function resetPassword(rawToken: string, nextPassword: string): Pro
     await tx.user.update({ where: { id: match.userId }, data: { passwordHash, mustChangePassword: false } });
     await tx.session.updateMany({ where: { userId: match.userId, revokedAt: null }, data: { revokedAt: new Date() } });
   });
+  // The link holder acted as the account, authenticated only by the link.
+  await auditAuthEvent(match.userId, "auth.password_reset_completed", match.userId, {}, { actorType: "GUEST", actorLabel: "reset link", ipAddress });
+  mailPasswordChanged(resetting, "with a reset link");
 }

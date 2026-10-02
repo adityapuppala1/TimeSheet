@@ -174,10 +174,13 @@ authRouter.post("/logout", async (req, res) => {
   clearRefreshCookie(res);
   const header = req.headers.authorization ?? "";
   try {
-    await endSessions({
-      refreshToken: req.cookies?.[REFRESH_COOKIE],
-      accessToken: header.startsWith("Bearer ") ? header.slice(7).trim() : undefined
-    });
+    await endSessions(
+      {
+        refreshToken: req.cookies?.[REFRESH_COOKIE],
+        accessToken: header.startsWith("Bearer ") ? header.slice(7).trim() : undefined
+      },
+      req.ip
+    );
   } catch (error) {
     console.error(`[auth] sign-out could not revoke its session: ${(error as Error).message}`);
   }
@@ -321,7 +324,7 @@ authRouter.post(
     await afterReply("forgot-password", async () => {
       // Null for an unknown or inactive address, for a workspace that has password sign-in switched
       // off, and for an address already sent its hourly allowance of links (auth.service.ts).
-      const result = await requestPasswordReset(req.body.email);
+      const result = await requestPasswordReset(req.body.email, req.ip);
       if (!result) return;
       await dispatchTransactional({
         to: result.user.email,
@@ -458,7 +461,7 @@ authRouter.post(
   "/reset-password",
   validate(z.object({ body: z.object({ token: z.string().min(10).max(200), password: z.string().min(8) }) })),
   async (req, res) => {
-    await resetPassword(req.body.token, req.body.password);
+    await resetPassword(req.body.token, req.body.password, req.ip);
     res.status(204).send();
   }
 );
@@ -483,7 +486,7 @@ authRouter.post(
     })
   ),
   async (req, res) => {
-    await changePassword(req.user!.id, req.body.currentPassword, req.body.nextPassword, req.sessionId);
+    await changePassword(req.user!.id, req.body.currentPassword, req.body.nextPassword, req.sessionId, req.ip);
     res.status(204).send();
   }
 );

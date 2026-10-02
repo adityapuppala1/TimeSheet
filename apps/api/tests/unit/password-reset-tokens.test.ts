@@ -22,6 +22,8 @@ import type { PrismaClient } from "@prisma/client";
 import { runInTenant } from "../helpers/tenant-context.js";
 
 vi.mock("../../src/services/audit.service.js", () => ({ audit: vi.fn().mockResolvedValue(undefined) }));
+// The "your password was changed" mail is pinned in auth-audit-trail.test.ts; here it must not try.
+vi.mock("../../src/services/notify.service.js", () => ({ dispatchTransactional: vi.fn().mockResolvedValue({ ok: true }) }));
 // Password sign-in is ON for this workspace — the SSO-only refusal has its own test
 // (auth-mail-routes.test.ts).
 vi.mock("../../src/config/control-prisma.js", () => ({

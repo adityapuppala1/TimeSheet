@@ -27,6 +27,8 @@ vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: { orgAuthM
 vi.mock("../../src/services/maintenance.service.js", () => ({ isMaintenanceActive: vi.fn().mockResolvedValue(false) }));
 vi.mock("../../src/services/org-status.service.js", () => ({ getOrgStatus: vi.fn().mockResolvedValue("ACTIVE") }));
 vi.mock("../../src/services/audit.service.js", () => ({ audit: vi.fn().mockResolvedValue(undefined) }));
+// The "your password was changed" mail is pinned in auth-audit-trail.test.ts; here it must not try.
+vi.mock("../../src/services/notify.service.js", () => ({ dispatchTransactional: vi.fn().mockResolvedValue({ ok: true }) }));
 vi.mock("../../src/services/workspace-directory.service.js", () => ({
   rememberWorkspaceMembership: vi.fn(),
   tenantBaseUrl: () => "https://acme.timesphere.test"

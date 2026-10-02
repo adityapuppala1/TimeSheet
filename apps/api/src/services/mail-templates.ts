@@ -1002,6 +1002,19 @@ export const templates = {
         paragraph(`Hi ${escape(params.name.split(" ")[0])}, an administrator of <strong>${escape(params.workspaceName)}</strong> reviewed your request and did not add you.`) +
         (params.note ? infoCard([["Their note", escape(params.note)]], MUTED) : "") +
         paragraph(`<span style="color:${MUTED};">If you think this is a mistake, ask your manager or the workspace's administrator directly.</span>`)
+    ),
+
+  /** To the account holder, after their password changed — from Profile, or through a reset or
+   *  welcome link (security audit #16). It is how an owner learns that SOMEBODY ELSE changed it, so
+   *  it says when and how, and where to go if it was not them. No credential in it. */
+  passwordChanged: (params: { name: string; changedAt: string; how: string; forgotUrl: string }) =>
+    shell(
+      { title: "Your password was changed", preheader: "If this was you, there is nothing to do.", accentColor: ACCENT },
+      heading("Your password was changed") +
+        paragraph(`Hi ${escape(params.name.split(" ")[0])}, the password for your account was changed ${escape(params.how)} on ${escape(params.changedAt)}. Your other devices were signed out.`) +
+        paragraph("If this was you, there is nothing to do.") +
+        paragraph(button("It wasn't me — reset my password", params.forgotUrl, ACCENT)) +
+        paragraph(`<span style="color:${MUTED};">Then tell your workspace administrator, so they can check the account's recent sign-ins.</span>`)
     )
 };
 

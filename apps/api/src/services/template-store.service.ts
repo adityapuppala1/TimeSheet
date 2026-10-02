@@ -65,7 +65,8 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "change.decided": ["changeKey", "projectName", "title", "changeType", "riskLevel", "riskScore", "activityWindow", "requestedBy", "decision", "decidedBy", "comments", "peopleInvolved", "appUrl"],
   "workspace.join_request": ["requesterName", "requesterEmail", "message", "workspaceName", "reviewUrl", "appUrl"],
   "workspace.join_approved": ["name", "workspaceName", "actionUrl", "actionLabel", "appUrl"],
-  "workspace.join_declined": ["name", "workspaceName", "note", "appUrl"]
+  "workspace.join_declined": ["name", "workspaceName", "note", "appUrl"],
+  "account.password_changed": ["name", "changedAt", "how", "forgotUrl", "appUrl"]
 };
 
 export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
@@ -120,7 +121,10 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
     "To the workspace's super admins when someone from the company's email domain asks to join instead of opening a second workspace.",
   "workspace.join_approved":
     "To the person whose join request was approved — with a single-use, 72-hour link to choose a password, or a sign-in link if they already had an account or the workspace signs in through SSO only.",
-  "workspace.join_declined": "To the person whose join request was declined, with the decider's note if they left one."
+  "workspace.join_declined": "To the person whose join request was declined, with the decider's note if they left one.",
+  // Reviewed: a template KEY containing the word "password", described in prose — not a credential.
+  // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a description string, not a secret
+  "account.password_changed": "To the account holder whenever their password changes — from Profile, or through a reset or welcome link — with a reset link in case it was not them."
 };
 
 export const TEMPLATE_KEYS = Object.keys(TEMPLATE_VARIABLES);
@@ -364,6 +368,12 @@ export function sampleVariables(key: string): Record<string, string> {
       actionLabel: "Choose your password"
     },
     "workspace.join_declined": { name: "Sam Patel", workspaceName: "Northwind", note: "Please use your client's workspace instead." },
+    "account.password_changed": {
+      name: "Sam Patel",
+      changedAt: "Thu, 02 Oct 2026 09:41:00 GMT",
+      how: "from your profile",
+      forgotUrl: "https://northwind.timesphere.local/forgot-password"
+    },
   };
   return samples[key] ?? {};
 }
@@ -412,6 +422,10 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
   "workspace.join_approved": {
     subject: "You're in: {{workspaceName}} approved your request",
     html: compiledTemplates.joinApproved({ name: V("name"), workspaceName: V("workspaceName"), actionUrl: V("actionUrl"), actionLabel: V("actionLabel") })
+  },
+  "account.password_changed": {
+    subject: "Your TimeSphere password was changed",
+    html: compiledTemplates.passwordChanged({ name: V("name"), changedAt: V("changedAt"), how: V("how"), forgotUrl: V("forgotUrl") })
   },
   "workspace.join_declined": {
     subject: "Your request to join {{workspaceName}}",
