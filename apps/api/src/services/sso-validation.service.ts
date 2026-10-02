@@ -53,6 +53,7 @@
 import { X509Certificate } from "node:crypto";
 import { Client as LdapClient } from "ldapts";
 import { assertPublicEgressTarget } from "../utils/egress.js";
+import { buildLdapUserFilter } from "../utils/ldap-filter.js";
 
 export interface SsoTestResult {
   ok: boolean;
@@ -397,12 +398,10 @@ export async function testLdapConnection(input: {
       return { ok: false, message: `The directory refused the service account bind: ${(error as Error).message}` };
     }
 
-    // The filter is only exercised when an address is supplied. Substituted the same way
-    // `authenticateLdap` does, including the RFC 4515 escape — testing an unescaped filter would
-    // pass on input the real login path rejects.
-    const filter = input.probeEmail
-      ? input.userFilter.replace("{{email}}", input.probeEmail.replace(/[\\*()\0]/g, (c) => `\\${c.charCodeAt(0).toString(16).padStart(2, "0")}`))
-      : "(objectClass=*)";
+    // The filter is only exercised when an address is supplied. Built by the SAME function
+    // `authenticateLdap` uses, RFC 4515 escape and every placeholder included — a test that built it
+    // differently could pass on a filter the real login path sends differently.
+    const filter = input.probeEmail ? buildLdapUserFilter(input.userFilter, input.probeEmail) : "(objectClass=*)";
 
     const { searchEntries } = await client.search(input.searchBase, {
       filter,
@@ -415,6 +414,13 @@ export async function testLdapConnection(input: {
       return {
         ok: false,
         message: `Bound successfully, but the filter ${input.userFilter} found nobody matching ${input.probeEmail} under ${input.searchBase}. Check the search base and the filter's attribute name.`
+      };
+    }
+    // Sign-in refuses an ambiguous match (sso.service.ts#authenticateLdap), so the test must say so.
+    if (input.probeEmail && searchEntries.length > 1) {
+      return {
+        ok: false,
+        message: `The filter ${input.userFilter} matched ${searchEntries.length} entries for ${input.probeEmail}. Sign-in needs it to match exactly one person — narrow the filter or the search base.`
       };
     }
 

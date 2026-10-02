@@ -31,6 +31,7 @@ import { AppError } from "../middleware/error.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { JWT_ALGORITHM } from "../utils/security.js";
+import { buildLdapUserFilter } from "../utils/ldap-filter.js";
 import { certificatePems } from "./sso-validation.service.js";
 import { workspaceUrlForSlug } from "./workspace-directory.service.js";
 
@@ -660,12 +661,6 @@ function createLdapClient(config: LdapConfig): LdapClient {
   });
 }
 
-/** Escapes an LDAP filter value per RFC 4515 — the submitted email is untrusted user input
- *  being interpolated into a search filter string, so this is the LDAP-injection defense. */
-function escapeLdapFilterValue(value: string): string {
-  return value.replace(/[\\*()\0]/g, (c) => `\\${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
-}
-
 function firstAttrValue(entry: LdapEntry, name: string): string | null {
   const value = entry[name];
   if (typeof value === "string") return value;
@@ -679,10 +674,10 @@ function firstAttrValue(entry: LdapEntry, name: string): string | null {
  *  shape every other provider produces, so it flows into completeSsoLogin unchanged. */
 export async function authenticateLdap(orgId: string, email: string, password: string): Promise<SsoIdentity> {
   const config = await getEnabledLdapConfig(orgId);
-  const filter = config.userFilter.replace("{{email}}", escapeLdapFilterValue(email));
+  const filter = buildLdapUserFilter(config.userFilter, email);
 
   const serviceClient = createLdapClient(config);
-  let entry: LdapEntry | undefined;
+  let matches: LdapEntry[];
   try {
     await serviceClient.bind(config.bindDn, config.bindCredential);
     const { searchEntries } = await serviceClient.search(config.searchBase, {
@@ -690,13 +685,24 @@ export async function authenticateLdap(orgId: string, email: string, password: s
       scope: "sub",
       attributes: ["dn", "mail", "cn", "displayName"]
     });
-    entry = searchEntries[0];
+    matches = searchEntries;
   } catch {
     throw new AppError(502, "Couldn't reach the directory server — contact your workspace admin.");
   } finally {
     await serviceClient.unbind().catch(() => undefined);
   }
 
+  // EXACTLY ONE, OR NOBODY. This took `searchEntries[0]`, and the order a directory returns several
+  // matches in is not defined — so the typed password was tried against whichever account came back
+  // first, and on success that account's address is who the person became (audit L4). Refused before
+  // any password is tried, and logged for the operator without the address.
+  if (matches.length > 1) {
+    console.warn(`[sso] org ${orgId}: the LDAP user filter matched ${matches.length} directory entries for one sign-in — refused. Make the filter match exactly one person.`);
+    throw new AppError(409, "More than one directory account matches this address, so sign-in can't tell which one is yours. Contact your workspace admin.", {
+      code: "SSO_CONFIG"
+    });
+  }
+  const entry = matches[0];
   if (!entry) throw new AppError(401, "Invalid email or password.");
 
   const userClient = createLdapClient(config);
