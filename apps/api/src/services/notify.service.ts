@@ -339,6 +339,9 @@ export async function dispatchTransactional(args: {
   /** "The rendered body carries a credential." Set it on anything that emails a reset link or a
    *  generated password — see mail.service.ts#SendArgs.sensitive for what it changes and why. */
   sensitive?: boolean;
+  /** Extra headers and a fixed Message-ID — see mail.service.ts#SendArgs.headers. */
+  headers?: Record<string, string>;
+  messageId?: string;
 }) {
   if (!args.to) {
     return { ok: false, status: "SKIPPED" as const, errorMessage: "Recipient missing" };
@@ -351,7 +354,9 @@ export async function dispatchTransactional(args: {
     subject: rendered.subject,
     html: rendered.html,
     template: args.templateKey,
-    sensitive: args.sensitive
+    sensitive: args.sensitive,
+    headers: args.headers,
+    messageId: args.messageId
   });
 }
 

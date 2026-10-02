@@ -1,7 +1,8 @@
 /**
  * WHAT: `postTicketComment`, the ONE way a comment is posted on a ticket — by the app's own comment
  * route, by the MCP `add_ticket_comment` tool and Ask AI's `comment_on_ticket` (both through
- * ticket.service.ts#addTicketCommentForActor), and by the public API.
+ * ticket.service.ts#addTicketCommentForActor), by the public API, and by email intake when a
+ * customer replies to their ticket's confirmation.
  *
  * WHY ONE FUNCTION: the app's route told the reporter, the assignee and the watchers, recorded an
  * audit row and honoured @mentions; the other surfaces posted the row and told nobody, while the
@@ -23,7 +24,7 @@ import { dispatchNotification } from "./notify.service.js";
 import { isProjectMember } from "./ticket.service.js";
 
 /** Which surface posted the comment — recorded on the audit row as `via`. */
-export type TicketCommentVia = "ui" | "api" | "mcp" | "ai_chat";
+export type TicketCommentVia = "ui" | "api" | "mcp" | "ai_chat" | "email";
 
 const USER_SUMMARY = { id: true, name: true, email: true, avatarUrl: true } as const;
 

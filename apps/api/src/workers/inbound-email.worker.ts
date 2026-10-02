@@ -12,7 +12,12 @@ import { simpleParser } from "mailparser";
 import cron from "node-cron";
 import { prisma } from "../config/prisma.js";
 import { getGlobalAISettings } from "../services/ai.service.js";
-import { getGlobalEmailIntakeSettings, processInboundEmail, type ParsedInboundEmail } from "../services/email-intake.service.js";
+import {
+  getGlobalEmailIntakeSettings,
+  processInboundEmail,
+  type InboundMailHeaders,
+  type ParsedInboundEmail
+} from "../services/email-intake.service.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
 import { runOncePerTick } from "../services/job-claim.service.js";
@@ -52,7 +57,57 @@ function flattenAddresses(value: ParsedMailAddress): string[] {
   return objects.flatMap((obj) => obj.value.map((v) => v.address).filter((a): a is string => Boolean(a)));
 }
 
-type ParsedMailAddress = Awaited<ReturnType<typeof simpleParser>>["to"];
+type ParsedMail = Awaited<ReturnType<typeof simpleParser>>;
+type ParsedMailAddress = ParsedMail["to"];
+
+/** A header's value as text: mailparser hands back plain strings for most headers and an address
+ *  object (with a `text` rendering) for address-shaped ones such as Return-Path. */
+function headerText(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && "text" in value) return String((value as { text: unknown }).text ?? "");
+  return undefined;
+}
+
+/**
+ * The headers the intake pipeline's loop guard and reply threading read (email-intake.service.ts).
+ * List-Id is parsed by mailparser into the `list` header's `id`; References may be one id or many.
+ */
+function inboundHeaders(parsed: ParsedMail): InboundMailHeaders {
+  const list = parsed.headers.get("list") as { id?: { id?: string; name?: string } } | undefined;
+  return {
+    autoSubmitted: headerText(parsed.headers.get("auto-submitted")),
+    precedence: headerText(parsed.headers.get("precedence")),
+    listId: list?.id ? list.id.id || list.id.name || "list" : undefined,
+    returnPath: headerText(parsed.headers.get("return-path")),
+    inReplyTo: parsed.inReplyTo,
+    references: asList(parsed.references)
+  };
+}
+
+function asList(value: string | string[] | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  return Array.isArray(value) ? value : [value];
+}
+
+/** A parsed IMAP message as the transport-agnostic shape `processInboundEmail` takes. */
+export function toParsedInboundEmail(parsed: ParsedMail): ParsedInboundEmail {
+  return {
+    from: {
+      address: parsed.from?.value[0]?.address ?? "unknown@unknown",
+      name: parsed.from?.value[0]?.name
+    },
+    to: flattenAddresses(parsed.to),
+    subject: parsed.subject ?? "",
+    text: parsed.text ?? "",
+    html: parsed.html,
+    attachments: parsed.attachments.map((a) => ({
+      filename: a.filename ?? "attachment",
+      contentType: a.contentType,
+      content: a.content
+    })),
+    headers: inboundHeaders(parsed)
+  };
+}
 
 async function pollOnce() {
   const aiSettings = await getGlobalAISettings();
@@ -100,23 +155,7 @@ async function pollOnce() {
           const message = await client.fetchOne(uid, { source: true }, { uid: true });
           if (!message || !message.source) continue;
 
-          const parsed = await simpleParser(message.source);
-          const email: ParsedInboundEmail = {
-            from: {
-              address: parsed.from?.value[0]?.address ?? "unknown@unknown",
-              name: parsed.from?.value[0]?.name
-            },
-            to: flattenAddresses(parsed.to),
-            subject: parsed.subject ?? "",
-            text: parsed.text ?? "",
-            html: parsed.html,
-            attachments: parsed.attachments.map((a) => ({
-              filename: a.filename ?? "attachment",
-              contentType: a.contentType,
-              content: a.content
-            }))
-          };
-
+          const email = toParsedInboundEmail(await simpleParser(message.source));
           const result = await processInboundEmail(email);
           if (result.created) processedCount += 1;
         } catch (error) {

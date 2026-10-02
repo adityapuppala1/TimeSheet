@@ -557,7 +557,9 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
   },
 
   "ticket.received_via_email": {
-    subject: "We received your report — {{ticketKey}}",
+    // The key leads, in brackets, so a reply from a client that drops In-Reply-To still threads
+    // onto the ticket (email-intake.service.ts#findReplyTarget).
+    subject: "[{{ticketKey}}] We received your report",
     bodyHtml: shell({
       preheader: "Our team has been notified and will follow up.",
       accent: COLORS.primary,

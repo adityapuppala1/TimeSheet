@@ -730,7 +730,7 @@ export const templates = {
 
   ticketReceivedViaEmail: (params: { senderName: string; ticketKey: string; title: string; priority: string }) =>
     shell(
-      { title: `We received your report — ${params.ticketKey}`, preheader: "Our team has been notified and will follow up." },
+      { title: `[${params.ticketKey}] We received your report`, preheader: "Our team has been notified and will follow up." },
       heading("Thanks — we've logged this") +
         paragraph(`Hi ${escape(params.senderName.split(" ")[0])}, your email was automatically turned into a tracked ticket. Our team will follow up as needed.`) +
         infoCard([

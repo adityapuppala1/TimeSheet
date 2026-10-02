@@ -378,6 +378,15 @@ interface SendArgs {
    * Absent for `dispatchTransactional()` sends, which have no category and so BCC as before.
    */
   preferenceKey?: string;
+  /**
+   * Extra message headers, and a Message-ID to send under instead of the generated one. Both exist
+   * for email intake's confirmation (email-intake.service.ts): `Auto-Submitted: auto-replied` and
+   * a `Reply-To` (RFC 3834) so another mailbox's autoresponder does not answer it and start a
+   * loop, and a Message-ID derived from the ticket so the customer's reply can be threaded onto it.
+   * Kept on the row's metadata so a retried send carries them too.
+   */
+  headers?: Record<string, string>;
+  messageId?: string;
 }
 
 export interface SendResult {
@@ -477,6 +486,15 @@ async function getBccList(to: string, preferenceKey?: string): Promise<string[]>
   }
 }
 
+/** The extra headers and fixed Message-ID a send asked for (`SendArgs.headers` / `messageId`), as
+ *  nodemailer options. Read from the row's metadata so a retried send carries them too. */
+function requestedHeaders(meta: { headers?: Record<string, string>; requestedMessageId?: string }) {
+  return {
+    ...(meta.headers ? { headers: meta.headers } : {}),
+    ...(meta.requestedMessageId ? { messageId: meta.requestedMessageId } : {})
+  };
+}
+
 /**
  * Attempts ONE delivery of an EmailLog row and records the outcome.
  *
@@ -499,7 +517,7 @@ export async function attemptEmailDelivery(row: {
    *  A failure is then terminal, because there is nothing on the row to try again with. */
   retryable?: boolean;
 }): Promise<SendResult> {
-  const meta = (row.metadata ?? {}) as { bcc?: string[]; cc?: string[] };
+  const meta = (row.metadata ?? {}) as { bcc?: string[]; cc?: string[]; headers?: Record<string, string>; requestedMessageId?: string };
   const body = (row.payload ?? {}) as { html?: string };
   const attempt = row.attempts + 1;
   const now = new Date();
@@ -535,7 +553,8 @@ export async function attemptEmailDelivery(row: {
       cc: meta.cc?.length ? meta.cc : undefined,
       bcc: meta.bcc?.length ? meta.bcc : undefined,
       subject: row.subject,
-      html: body.html ?? ""
+      html: body.html ?? "",
+      ...requestedHeaders(meta)
     });
     const messageId = info.messageId;
     console.info(
@@ -677,7 +696,14 @@ export async function sendMail(
       to: args.to,
       subject: args.subject,
       template: args.template,
-      metadata: { ...(args.metadata ?? {}), bcc, cc, ...(sensitive ? { sensitive: true } : {}) } as any,
+      metadata: {
+        ...(args.metadata ?? {}),
+        bcc,
+        cc,
+        ...(sensitive ? { sensitive: true } : {}),
+        ...(args.headers ? { headers: args.headers } : {}),
+        ...(args.messageId ? { requestedMessageId: args.messageId } : {})
+      } as any,
       status: "QUEUED",
       payload: sensitive ? undefined : ({ html: args.html } as any)
     }

@@ -33,6 +33,7 @@ import { audit } from "./audit.service.js";
 import { classifyTicket, getGlobalAISettings, EXTERNAL_INTAKE_CONFIDENCE_CEILING } from "./ai.service.js";
 import { dispatchNotification, dispatchTransactional, templates } from "./notify.service.js";
 import { computeTicketDueDate, getGlobalTicketSettings, issueTicketKey, PLAIN_TICKET_TYPE_WHERE } from "./ticket.service.js";
+import { tenantBaseUrl } from "./workspace-directory.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
 import { lazyCreateSettings } from "../utils/lazy-create-settings.js";
 
@@ -53,6 +54,18 @@ export interface ParsedInboundEmail {
   text: string;
   html?: string | false;
   attachments: Array<{ filename: string; contentType: string; content: Buffer }>;
+  /** The handful of headers the loop guard and reply threading read. Absent ones are undefined. */
+  headers?: InboundMailHeaders;
+}
+
+export interface InboundMailHeaders {
+  autoSubmitted?: string;
+  precedence?: string;
+  listId?: string;
+  /** Raw `Return-Path` value; `<>` is the null return path every bounce carries. */
+  returnPath?: string;
+  inReplyTo?: string;
+  references?: string[];
 }
 
 export async function getGlobalEmailIntakeSettings() {
@@ -152,9 +165,121 @@ async function saveAttachment(ticketId: string, att: ParsedInboundEmail["attachm
 
 export interface ProcessResult {
   created: boolean;
-  reason?: "NO_PROJECT_CONFIGURED" | "PROJECT_NOT_FOUND";
+  reason?: "NO_PROJECT_CONFIGURED" | "PROJECT_NOT_FOUND" | "AUTOMATED_SENDER";
   ticketId?: string;
   ticketKey?: string;
+  /** Set when the message was a reply, added to this existing ticket as a comment. */
+  appendedTo?: string;
+}
+
+/* ------------------------------------------------------------------------------------------ *
+ * The loop guard (RFC 3834)
+ *
+ * Every message used to become a ticket and earn a confirmation, whoever sent it. Point an
+ * auto-responding mailbox at this one — another helpdesk's acknowledgement, an out-of-office, a
+ * bounce — and each confirmation draws a reply that becomes a ticket that draws a confirmation.
+ * Automated mail is recognised by the signals RFC 3834 and mailing lists use, and dropped before it
+ * can create anything; our own confirmation is stamped so the far side can do the same.
+ * ------------------------------------------------------------------------------------------ */
+
+const BULK_PRECEDENCE = new Set(["bulk", "junk", "list"]);
+const DAEMON_SENDERS = new Set(["mailer-daemon", "postmaster"]);
+
+/** Why this message is automated and must not become a ticket, or null for a person. */
+export function automatedSenderReason(email: ParsedInboundEmail): string | null {
+  const h = email.headers ?? {};
+  const autoSubmitted = h.autoSubmitted?.trim().toLowerCase();
+  if (autoSubmitted && autoSubmitted !== "no") return `Auto-Submitted: ${autoSubmitted}`;
+  const precedence = h.precedence?.trim().toLowerCase();
+  if (precedence && BULK_PRECEDENCE.has(precedence)) return `Precedence: ${precedence}`;
+  if (h.listId?.trim()) return "a mailing-list message (List-Id)";
+  const localPart = (email.from.address.split("@")[0] ?? "").toLowerCase();
+  if (DAEMON_SENDERS.has(localPart)) return `a ${localPart} sender`;
+  // The null return path. Only a header that is PRESENT and empty counts — a message retrieved
+  // without a Return-Path at all is not thereby a bounce.
+  if (h.returnPath !== undefined && h.returnPath.replace(/[<>\s]/g, "") === "") return "a null return path";
+  return null;
+}
+
+/* ------------------------------------------------------------------------------------------ *
+ * Reply threading
+ *
+ * The confirmation is sent under a Message-ID that names the ticket, so a reply's In-Reply-To or
+ * References points straight back at it with nothing to store. Mail clients and providers that
+ * drop or rewrite those headers are covered by the second signal: the ticket key, in brackets, in
+ * the confirmation's subject, which every client keeps on a reply.
+ * ------------------------------------------------------------------------------------------ */
+
+/** The Message-ID the confirmation for `ticketId` is sent under. */
+export function ticketConfirmationMessageId(ticketId: string, host: string): string {
+  return `<ticket-${ticketId}.confirmation@${host}>`;
+}
+
+const CONFIRMATION_ID = /<ticket-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.confirmation@[^>\s]+>/i;
+const SUBJECT_KEY = /\[([A-Z][A-Z0-9]{0,19}-\d{1,9})\]/;
+
+/** The workspace's own host, so the Message-ID's right-hand side is a domain the operator controls. */
+function messageIdHost(): string {
+  try {
+    return new URL(tenantBaseUrl()).hostname || "timesphere.local";
+  } catch {
+    return "timesphere.local";
+  }
+}
+
+/**
+ * The existing ticket this message replies to, or null.
+ *
+ * In-Reply-To / References first: matching our own confirmation's id proves the sender received it.
+ * Then a bracketed key in the subject — but only from the address that opened the ticket, because a
+ * key is guessable (WEB-1, WEB-2, …) and a stranger must not be able to write into somebody else's
+ * ticket by putting "[WEB-12]" in a subject line. Only email-sourced tickets are threaded onto.
+ */
+async function findReplyTarget(email: ParsedInboundEmail) {
+  const ids = [email.headers?.inReplyTo, ...(email.headers?.references ?? [])].filter((v): v is string => Boolean(v));
+  for (const id of ids) {
+    const ticketId = CONFIRMATION_ID.exec(id)?.[1];
+    if (!ticketId) continue;
+    const ticket = await prisma.ticket.findFirst({ where: { id: ticketId.toLowerCase(), deletedAt: null, source: "EMAIL" } });
+    if (ticket) return ticket;
+  }
+
+  const key = SUBJECT_KEY.exec(email.subject || "")?.[1];
+  if (!key) return null;
+  const ticket = await prisma.ticket.findFirst({ where: { key, deletedAt: null, source: "EMAIL" } });
+  if (!ticket?.externalReporterEmail) return null;
+  return ticket.externalReporterEmail.toLowerCase() === email.from.address.toLowerCase() ? ticket : null;
+}
+
+/** Adds a reply to its ticket as a comment by the intake account, naming the real sender. */
+async function appendReply(
+  ticket: { id: string; key: string },
+  email: ParsedInboundEmail,
+  systemUser: { id: string; name: string }
+): Promise<ProcessResult> {
+  // Imported at call time, like ticket.service.ts's assistant helpers: the comment path pulls in the
+  // notification templates, which the rest of this pipeline does not otherwise need at load time.
+  const { postTicketComment } = await import("./ticket-comment.service.js");
+  const bodyText = email.text || (typeof email.html === "string" ? email.html : "");
+  const sender = email.from.name ? `${email.from.name} <${email.from.address}>` : email.from.address;
+  const message = email.html && typeof email.html === "string" ? email.html : plainTextToHtml(bodyText || "(no message body)");
+
+  // Posted through the one comment path, so the ticket's reporter, assignee, watchers and
+  // collaborators hear about the customer's reply exactly as they would a colleague's comment.
+  await postTicketComment({
+    ticketId: ticket.id,
+    author: systemUser,
+    body: `<p><strong>Reply by email from ${escapeHtml(sender)}</strong></p>${message}`,
+    via: "email"
+  });
+  for (const att of email.attachments) {
+    await saveAttachment(ticket.id, att);
+  }
+  await audit(undefined, "email_intake.reply_appended", "Ticket", ticket.id, { from: email.from.address, subject: email.subject }, {
+    actorType: "INTEGRATION",
+    actorLabel: "email-intake"
+  });
+  return { created: false, appendedTo: ticket.key, ticketId: ticket.id, ticketKey: ticket.key };
 }
 
 /**
@@ -164,6 +289,21 @@ export interface ProcessResult {
  * webhook could call this same function with a differently-sourced ParsedInboundEmail.
  */
 export async function processInboundEmail(email: ParsedInboundEmail): Promise<ProcessResult> {
+  const automated = automatedSenderReason(email);
+  if (automated) {
+    console.info(`[email-intake] dropped "${email.subject}" from ${email.from.address} — ${automated}`);
+    return { created: false, reason: "AUTOMATED_SENDER" };
+  }
+
+  // A reply to an existing ticket is added to it, not opened as a new one — and earns no
+  // confirmation, which is also what keeps two mailboxes from answering each other through us.
+  const replyTarget = await findReplyTarget(email);
+  if (replyTarget) {
+    const intakeUser = await prisma.user.findUnique({ where: { email: EMAIL_INTAKE_SYSTEM_EMAIL } });
+    if (!intakeUser) throw new Error(`Email Intake system user (${EMAIL_INTAKE_SYSTEM_EMAIL}) is missing — run the seed script.`);
+    return appendReply(replyTarget, email, intakeUser);
+  }
+
   const rule = await resolveRouting(email);
   const intakeSettings = await getGlobalEmailIntakeSettings();
   const projectId = rule?.projectId ?? intakeSettings.fallbackProjectId ?? null;
@@ -306,12 +446,19 @@ export async function processInboundEmail(email: ParsedInboundEmail): Promise<Pr
     }
   }
 
+  // The confirmation is marked as an automatic reply (RFC 3834) so the far side's autoresponder
+  // ignores it, carries a Reply-To of this intake mailbox so an answer comes back here, and goes out
+  // under a Message-ID naming the ticket so that answer threads onto it (see findReplyTarget). The
+  // subject leads with the key in brackets for clients that drop the threading headers.
+  const replyTo = intakeSettings.imapUser?.includes("@") ? intakeSettings.imapUser : null;
   await dispatchTransactional({
     to: email.from.address,
     templateKey: "ticket.received_via_email",
     vars: { senderName: email.from.name ?? email.from.address.split("@")[0], ticketKey: ticket.key, title: ticket.title, priority: ticket.priority },
+    headers: { "Auto-Submitted": "auto-replied", ...(replyTo ? { "Reply-To": replyTo } : {}) },
+    messageId: ticketConfirmationMessageId(ticket.id, messageIdHost()),
     fallback: {
-      subject: `We received your report — ${ticket.key}`,
+      subject: `[${ticket.key}] We received your report`,
       html: templates.ticketReceivedViaEmail({
         senderName: email.from.name ?? email.from.address.split("@")[0],
         ticketKey: ticket.key,

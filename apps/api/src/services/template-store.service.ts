@@ -537,7 +537,7 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
     })
   },
   "ticket.received_via_email": {
-    subject: "We received your report - {{ticketKey}}",
+    subject: "[{{ticketKey}}] We received your report",
     html: compiledTemplates.ticketReceivedViaEmail({
       senderName: V("senderName"), ticketKey: V("ticketKey"), title: V("title"), priority: V("priority")
     })
