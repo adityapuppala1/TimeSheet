@@ -29,14 +29,8 @@
 import type { AutomationStepKind, Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { changeStates, type ChangeState } from "@timesheet/shared";
-import {
-  activeRiskParameterKeys,
-  assertDependenciesClear,
-  assertLegalChangeTransition,
-  assertReadyFor,
-  isNoOpTransition,
-  ticketStatusFor
-} from "./change.service.js";
+import { isNoOpTransition } from "./change.service.js";
+import { applyChangeTransition, assertChangeTransitionAllowed } from "./change-transition.service.js";
 import { AppError } from "../middleware/error.js";
 import { audit } from "./audit.service.js";
 import { getFlow, type DecoratedFlow } from "./automation-flow.service.js";
@@ -199,11 +193,10 @@ async function performAction(params: {
 
     // EVERY gate the API applies, re-entered here rather than reimplemented. An automation that can
     // walk a change past its own requirements is the one thing this must not become, and the way
-    // that happens is a second code path that forgot one of them.
+    // that happens is a second code path that forgot one of them. Asked BEFORE deciding whether to
+    // move or to propose, so a proposal-only flow never queues a move that could not happen.
     try {
-      assertLegalChangeTransition(from, to);
-      assertReadyFor(change, to, await activeRiskParameterKeys());
-      await assertDependenciesClear(change.id, to);
+      await assertChangeTransitionAllowed(change, to);
     } catch (err: any) {
       return { ...base, outcome: "failed", detail: err?.message ?? "That move was refused." };
     }
@@ -240,21 +233,22 @@ async function performAction(params: {
       return { ...base, outcome: "proposed", detail: "Proposed the move for review.", proposalId: proposal.id };
     }
 
-    const now = new Date();
-    await prisma.$transaction(async (tx) => {
-      // The state and Ticket.status are never written apart — the compatibility hinge ~40 readers
-      // depend on. Same rule the transition route follows.
-      await tx.ticket.update({ where: { id: subject.id! }, data: { status: ticketStatusFor(to) } });
-      await tx.changeRequest.update({
-        where: { id: change.id },
-        data: {
-          state: to,
-          ...(to === "IMPLEMENTING" ? { actualStart: change.actualStart ?? now } : {}),
-          ...(to === "VALIDATION" ? { actualEnd: change.actualEnd ?? now } : {}),
-          ...(to === "CLOSED" ? { closedAt: now, closedById: params.actorId } : {})
-        }
+    // The SAME move the transition route makes — round, timestamps, ticket status, audit, event and
+    // the submission email. This used to write the state and the ticket status alone, so a flow that
+    // submitted a change left it waiting with nobody asked to decide it.
+    const actor = await prisma.user.findUnique({ where: { id: params.actorId }, select: { id: true, name: true } });
+    try {
+      await applyChangeTransition({
+        change,
+        to,
+        actor: { id: params.actorId, name: actor?.name ?? flow.name },
+        note: `Workflow "${flow.name}", step ${order}`,
+        provenance: { actorType: "SYSTEM", actorLabel: `flow:${flow.id}` }
       });
-    });
+    } catch (err: any) {
+      // Refused at the write (nobody to approve it, say), not at the gates above — still an outcome.
+      return { ...base, outcome: "failed", detail: err?.message ?? "That move was refused." };
+    }
     return { ...base, outcome: "ran", detail: `Moved ${change.changeKey} to ${to.toLowerCase().replace(/_/g, " ")}.` };
   }
 

@@ -40,14 +40,10 @@ import { audit } from "../services/audit.service.js";
 import { emitDomainEvent } from "../services/domain-events.js";
 import { getPlanningEntitlements } from "../services/plan-limits.service.js";
 import { issueChangeKey } from "../services/change-key.service.js";
-import { sendChangeDecisionMail, sendChangeSubmittedMail } from "../services/change-mail.service.js";
+import { sendChangeDecisionMail } from "../services/change-mail.service.js";
 import {
   assertChangeManagementEnabled,
   activeRiskParameterKeys,
-  assertLegalChangeTransition,
-  assertDependenciesClear,
-  assertReadyFor,
-  isNoOpTransition,
   canDecideChange,
   computeRiskScore,
   findScheduleConflicts,
@@ -56,10 +52,10 @@ import {
   judgeChangeSlas,
   missingForTransition,
   requiresBackoutPlan,
-  resolveChangeApprovers,
   stateAfterDecision,
-  ticketStatusFor
+  ticketWriteFor
 } from "../services/change.service.js";
+import { applyChangeTransition, CHANGE_INCLUDE } from "../services/change-transition.service.js";
 import { assertTicketVisible, computeTicketDueDate, getGlobalTicketSettings, issueTicketKey, ticketProjectScope } from "../services/ticket.service.js";
 import { CSV_EOL, UTF8_BOM, csvCell } from "../utils/csv.js";
 import PDFDocument from "pdfkit";
@@ -77,46 +73,12 @@ import { createProposal } from "../services/ai-proposal.service.js";
 export const changeRouter = Router();
 changeRouter.use(requireAuth);
 
-const USER_SUMMARY = { id: true, name: true, email: true, avatarUrl: true } as const;
-
 /** The ticket type every change is filed under, so the Tickets page's own type filter can isolate or
  *  exclude them without a second vocabulary. */
 export const CHANGE_TICKET_TYPE = "CHANGE";
 
 /** Ceiling on one CSV export. Stated in the response headers rather than silently applied. */
 const EXPORT_ROW_CAP = 5000;
-
-const CHANGE_INCLUDE = {
-  category: { select: { id: true, name: true, color: true, requiresSecurityReview: true } },
-  source: { select: { id: true, name: true } },
-  application: { select: { id: true, name: true, code: true } },
-  collaborators: { include: { user: { select: USER_SUMMARY } }, orderBy: { createdAt: "asc" } },
-  linkedTickets: {
-    include: { ticket: { select: { id: true, key: true, title: true, status: true, type: true } } },
-    orderBy: { createdAt: "asc" }
-  },
-  approvals: { include: { approver: { select: USER_SUMMARY } }, orderBy: [{ round: "desc" }, { createdAt: "asc" }] },
-  implementationSteps: { orderBy: { stepNumber: "asc" } },
-  testCases: { orderBy: { createdAt: "asc" } },
-  dependencies: { orderBy: { createdAt: "asc" } },
-  ticket: {
-    select: {
-      id: true,
-      key: true,
-      title: true,
-      description: true,
-      status: true,
-      priority: true,
-      dueAt: true,
-      createdAt: true,
-      project: { select: { id: true, code: true, name: true } },
-      module: { select: { id: true, name: true } },
-      reporter: { select: USER_SUMMARY },
-      assignee: { select: USER_SUMMARY },
-      _count: { select: { comments: true, attachments: true } }
-    }
-  }
-} as const satisfies Prisma.ChangeRequestInclude;
 
 /* ------------------------------------------------------------------ *
  * Read
@@ -891,48 +853,6 @@ changeRouter.patch("/:id", requirePermission(permissions.CHANGES_WRITE), validat
  * Approval — submit, decide
  * ------------------------------------------------------------------ */
 
-/**
- * Opens an approval round.
- *
- * A ROUND, not a chain: a change rejected and reworked opens round 2, leaving round 1's decision
- * standing. Overwriting it would erase the record of what was objected to, which is the one thing a
- * change history is for.
- */
-async function openApprovalRound(
-  tx: Prisma.TransactionClient,
-  change: { id: string; ticket: { reporterId: string } },
-  slaHours: number
-): Promise<{ approverIds: string[]; round: number }> {
-  const approvers = await resolveChangeApprovers(change.ticket.reporterId);
-  if (approvers.length === 0) {
-    throw new AppError(
-      409,
-      "There is nobody to approve this change — you have no manager set, and this workspace has no active super admin. Ask an administrator to set your manager."
-    );
-  }
-
-  const previous = await tx.changeApproval.findFirst({
-    where: { changeId: change.id },
-    orderBy: { round: "desc" },
-    select: { round: true }
-  });
-  const round = (previous?.round ?? 0) + 1;
-  const dueAt = new Date(Date.now() + slaHours * 60 * 60 * 1000);
-
-  await tx.changeApproval.createMany({
-    data: approvers.map((a) => ({
-      changeId: change.id,
-      round,
-      approverId: a.approverId,
-      reason: a.reason,
-      status: "PENDING",
-      dueAt
-    }))
-  });
-
-  return { approverIds: approvers.map((a) => a.approverId), round };
-}
-
 const decisionSchema = z.object({
   params: z.object({ id: z.string().uuid() }),
   body: z.object({ decision: z.enum(["APPROVED", "REJECTED"]), comments: z.string().max(4000).optional() }).strict()
@@ -961,6 +881,13 @@ changeRouter.post("/:id/decision", requirePermission(permissions.CHANGES_APPROVE
 
   const round = await prisma.changeApproval.findFirst({ where: { changeId: change.id }, orderBy: { round: "desc" }, select: { round: true } });
   const pending = await prisma.changeApproval.findMany({ where: { changeId: change.id, round: round?.round ?? 1, status: "PENDING" } });
+  // A change waiting with nobody asked. Every door into AWAITING_APPROVAL now opens a round, but a
+  // workflow used to move changes here without one, and those are still in the wild. Answered with
+  // the way out rather than a crash on `pending[0]` — the decision has to be recorded on a row, and
+  // there is none.
+  if (pending.length === 0) {
+    throw new AppError(409, "This change has no open approval round, so there is nothing to decide. Withdraw it to draft and submit it again.");
+  }
   if (!canDecideChange(req, pending)) {
     throw new AppError(403, "Only this change's approver or a super admin can decide it.");
   }
@@ -983,7 +910,7 @@ changeRouter.post("/:id/decision", requirePermission(permissions.CHANGES_APPROVE
       where: { changeId: change.id, round: mine.round, status: "PENDING", id: { not: mine.id } },
       data: { status: "CANCELLED", decidedAt: now }
     });
-    await tx.ticket.update({ where: { id: change.ticket.id }, data: { status: ticketStatusFor(to) } });
+    await tx.ticket.update({ where: { id: change.ticket.id }, data: ticketWriteFor(to, now) });
     return tx.changeRequest.update({
       where: { id: change.id },
       data: { state: to, ...(to === "APPROVED" ? { approvedAt: now } : {}) },
@@ -1019,6 +946,10 @@ const transitionSchema = z.object({
  * reach them however it is called — only a recorded decision writes those two. That is the single
  * rule the module exists to enforce, and it is enforced by the shape of the table rather than by a
  * condition somebody could forget.
+ *
+ * The gates, the writes and everything that follows a move (the approval round, the submission
+ * email, the ticket's status) live in `applyChangeTransition`, shared with the Workflow Studio and
+ * the proposal applier — see that file for why there is exactly one copy.
  */
 changeRouter.post("/:id/transition", requirePermission(permissions.CHANGES_WRITE), validate(transitionSchema), async (req, res) => {
   await assertChangeManagementEnabled();
@@ -1030,51 +961,12 @@ changeRouter.post("/:id/transition", requirePermission(permissions.CHANGES_WRITE
   await assertTicketVisible(req, existing.ticket.projectId);
   assertMayEditChange(req, existing);
 
-  const from = existing.state as ChangeState;
-  const to = req.body.to as ChangeState;
-  // A no-op is answered, not performed. Without this, re-posting the same state opens another
-  // approval round and mails the approver again — which a double-click alone was enough to do.
-  if (isNoOpTransition(from, to)) {
-    return res.json(await prisma.changeRequest.findFirst({ where: { id: existing.id }, include: CHANGE_INCLUDE }));
-  }
-  assertLegalChangeTransition(from, to);
-  assertReadyFor(existing, to, await activeRiskParameterKeys());
-  await assertDependenciesClear(existing.id, to);
-
-  const settings = await getChangeSettings();
-  const now = new Date();
-  let approverIds: string[] = [];
-
-  const updated = await prisma.$transaction(async (tx) => {
-    if (to === "AWAITING_APPROVAL") {
-      const opened = await openApprovalRound(tx, existing, settings.approvalSlaHours);
-      approverIds = opened.approverIds;
-    }
-    await tx.ticket.update({ where: { id: existing.ticket.id }, data: { status: ticketStatusFor(to) } });
-    return tx.changeRequest.update({
-      where: { id: existing.id },
-      data: {
-        state: to,
-        ...(to === "AWAITING_APPROVAL" ? { submittedAt: existing.submittedAt ?? now } : {}),
-        ...(to === "IMPLEMENTING" ? { actualStart: existing.actualStart ?? now } : {}),
-        ...(to === "VALIDATION" ? { actualEnd: existing.actualEnd ?? now } : {}),
-        ...(to === "CLOSED" ? { closedAt: now, closedById: req.user!.id } : {})
-      },
-      include: CHANGE_INCLUDE
-    });
+  const updated = await applyChangeTransition({
+    change: existing,
+    to: req.body.to as ChangeState,
+    actor: req.user!,
+    note: req.body.note
   });
-
-  await audit(req.user!.id, "change.transitioned", "ChangeRequest", updated.id, { from, to, note: req.body.note });
-  emitDomainEvent(`change.${to.toLowerCase()}` as never, { change: updated } as never);
-
-  // Submission is the moment the requirement cares about: it goes to the approver immediately, and
-  // best-effort so a slow mail server cannot lose a transition that already happened.
-  if (to === "AWAITING_APPROVAL") {
-    await sendChangeSubmittedMail(updated, req.user!, approverIds).catch((error) =>
-      console.warn(`[change] submission mail failed for ${updated.changeKey}: ${(error as Error).message}`)
-    );
-  }
-
   res.json(updated);
 });
 

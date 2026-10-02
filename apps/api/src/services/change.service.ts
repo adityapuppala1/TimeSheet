@@ -288,6 +288,22 @@ export function ticketStatusFor(state: ChangeState) {
   return CHANGE_STATE_TO_TICKET_STATUS[state];
 }
 
+/**
+ * Everything written to the change's TICKET when the change enters `state`: the status, and the
+ * two stamps that go with it.
+ *
+ * WHY THE STAMPS: the ticket routes stamp `closedAt` on CLOSED and clear both stamps when a ticket
+ * is live again, and every "done" report, the closed digest and the reopen logic read them. A change
+ * that wrote the status alone left a cancelled change's ticket CLOSED with no `closedAt`, and an
+ * approved change's ticket IN_PROGRESS with a stale `closedAt` — a ticket that was both open and
+ * closed depending on which column you asked.
+ */
+export function ticketWriteFor(state: ChangeState, now: Date): { status: ReturnType<typeof ticketStatusFor>; closedAt?: Date | null; resolvedAt?: Date | null } {
+  const status = ticketStatusFor(state);
+  if (status === "CLOSED") return { status, closedAt: now };
+  return { status, closedAt: null, resolvedAt: null };
+}
+
 /* ------------------------------------------------------------------ *
  * Approval — who is asked, and who may decide
  * ------------------------------------------------------------------ */
