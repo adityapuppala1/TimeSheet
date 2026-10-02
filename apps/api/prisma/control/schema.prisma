@@ -117,6 +117,10 @@ model Organization {
   /// `stripeSubscriptionId`, so a figure reconciled before a resubscribe is visibly stale rather
   /// than silently attributed to a subscription it never described.
   billedSubscriptionId       String?   @db.VarChar(255)
+  /// That subscription's Stripe status when it was reconciled. Only `active` and `past_due` count as
+  /// billed MRR (Stripe's definition); `trialing`, `unpaid` and `paused` are counted apart. Null on a
+  /// figure reconciled before this column existed — read as billable until the next nightly sweep.
+  billedSubscriptionStatus   String?   @db.VarChar(32)
   /// When a reconciliation last SUCCEEDED. Null means the figure above is absent, never zero.
   billedReconciledAt         DateTime?
   /// When one was last ATTEMPTED, success or failure — the two are separate so a run that failed

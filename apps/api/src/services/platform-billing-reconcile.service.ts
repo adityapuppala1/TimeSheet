@@ -21,12 +21,17 @@
  * turns a test red rather than a board slide.
  * ═══════════════════════════════════════════════════════════════════════════════════════════════
  *
- * WHAT THIS NUMBER IS NOT. It is the subscription's RECURRING price — `unit_amount × quantity`, per
- * month. It is not an invoice total: it does not know about a percent-off coupon, a one-off credit,
- * tax, or a proration on this cycle. Those belong to an invoice, and an invoice is a different
- * question ("what did we collect in July?") from the one the revenue screen asks ("what are these
- * customers on the hook for each month?"). Stated here rather than implied, because the difference
- * is exactly the sort of thing somebody later assumes was handled.
+ * WHAT THIS NUMBER IS. The subscription's RECURRING price — `unit_amount × quantity`, per month — NET
+ * OF ITS RECURRING DISCOUNTS, which is Stripe's own MRR definition: a percent-off or amount-off coupon
+ * that runs `forever`, or `repeating` and not yet ended, comes off; a `once` coupon does not (it is a
+ * one-off, not a monthly rate). It is still not an invoice total: a one-off credit, tax and a
+ * proration on this cycle belong to an invoice, which answers "what did we collect in July?" rather
+ * than "what are these customers on the hook for each month?". It used to ignore coupons entirely
+ * while the console called the gap to list price "discounting" — a gap that could not contain one.
+ *
+ * AND ONLY FOR A SUBSCRIPTION THAT BILLS. The status is stored beside the figure, and the revenue
+ * screen counts only `active` and `past_due` (stripe-client.service.ts#BILLABLE_SUBSCRIPTION_STATUSES);
+ * a trialing, unpaid or paused subscription is reconciled and named, but is not billed MRR.
  *
  * FAILURE IS PER WORKSPACE, AND IT IS NAMED. One unreachable org must not abort the sweep, and a
  * workspace whose reconciliation failed must never be folded into the total as zero — a Stripe
@@ -58,15 +63,64 @@ export interface PriceShape {
   recurring?: RecurringShape | null;
 }
 
+export interface CouponShape {
+  id?: string;
+  percent_off?: number | null;
+  amount_off?: number | null;
+  currency?: string | null;
+  /** `once` | `repeating` | `forever`. */
+  duration?: string | null;
+}
+
+/** A Stripe discount, either API shape: the coupon directly on it (older API versions) or under
+ *  `source` (current ones). An unexpanded coupon is its id; an unexpanded DISCOUNT is a bare string. */
+export interface DiscountShape {
+  coupon?: CouponShape | string | null;
+  source?: { coupon?: CouponShape | string | null } | null;
+  /** Unix seconds a `repeating` coupon stops applying; null for `once` and `forever`. */
+  end?: number | null;
+}
+
 export interface ItemShape {
   quantity?: number | null;
   price?: PriceShape | null;
+  discounts?: Array<DiscountShape | string> | null;
 }
 
 export interface SubscriptionShape {
   id?: string;
   status?: string;
   items?: { data?: ItemShape[] } | null;
+  discounts?: Array<DiscountShape | string> | null;
+}
+
+/** The coupon behind a discount, or a throw when it cannot be read — reporting a gross amount as the
+ *  net one is the same silent overstatement as ignoring the discount. */
+function couponOf(discount: DiscountShape | string): CouponShape {
+  const coupon = typeof discount === "string" ? null : (discount.coupon ?? discount.source?.coupon ?? null);
+  if (!coupon || typeof coupon === "string") throw new Error("A discount on this subscription could not be read, so its net monthly amount is unknown.");
+  return coupon;
+}
+
+/** The coupons that reduce a MONTHLY rate today: recurring ones still in their term. */
+function recurringCoupons(discounts: Array<DiscountShape | string> | null | undefined, now: Date): CouponShape[] {
+  return (discounts ?? [])
+    .filter((discount) => typeof discount === "string" || !discount.end || discount.end * 1000 > now.getTime())
+    .map(couponOf)
+    .filter((coupon) => coupon.duration !== "once");
+}
+
+/** An amount for one billing period after its coupons: percentages first, then fixed amounts, never
+ *  below zero. A fixed amount in another currency cannot be subtracted, and says so. */
+function afterCoupons(periodAmount: number, coupons: CouponShape[], currency: string): number {
+  let amount = periodAmount;
+  for (const coupon of coupons) if (coupon.percent_off) amount *= 1 - coupon.percent_off / 100;
+  for (const coupon of coupons) {
+    if (!coupon.amount_off) continue;
+    if ((coupon.currency ?? "").toUpperCase() !== currency) throw new Error("An amount-off coupon is in a different currency from the subscription, so it cannot be netted.");
+    amount -= coupon.amount_off;
+  }
+  return Math.max(0, amount);
 }
 
 /**
@@ -120,12 +174,13 @@ export interface MonthlyAmount {
  * ROUNDED ONCE, AT THE END. Rounding each line and summing accumulates the error across a
  * subscription with several items; one rounding at the boundary is off by at most half a cent.
  */
-export function subscriptionMonthlyMinor(subscription: SubscriptionShape): MonthlyAmount {
+export function subscriptionMonthlyMinor(subscription: SubscriptionShape, now = new Date()): MonthlyAmount {
   const items = subscription.items?.data ?? [];
   if (items.length === 0) throw new Error("The subscription has no line items, so there is nothing to price.");
 
   let exact = 0;
   let currency: string | null = null;
+  let periodMonths = 1;
 
   for (const item of items) {
     const price = item.price;
@@ -147,12 +202,16 @@ export function subscriptionMonthlyMinor(subscription: SubscriptionShape): Month
     }
 
     // `quantity` is the seat count. Null on a licensed price means one; treating it as zero would
-    // report a paying customer as free.
+    // report a paying customer as free. A line's own discounts come off the line, per period.
     const quantity = item.quantity ?? 1;
-    exact += (price.unit_amount * quantity) / months;
+    exact += afterCoupons(price.unit_amount * quantity, recurringCoupons(item.discounts, now), lineCurrency) / months;
+    periodMonths = months;
   }
 
-  return { amountMinor: Math.round(exact), currency: currency || "USD" };
+  // The subscription's discounts come off the whole of it, per billing period — Stripe bills every
+  // line of one subscription on one interval, so the last line's is the subscription's.
+  const monthly = afterCoupons(exact * periodMonths, recurringCoupons(subscription.discounts, now), currency || "USD") / periodMonths;
+  return { amountMinor: Math.round(monthly), currency: currency || "USD" };
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -176,10 +235,27 @@ export interface ReconcileResult {
   at: string;
 }
 
+/** Coupons Stripe returned by id (a discount's coupon is expandable), fetched and put in place so the
+ *  pure arithmetic sees whole objects. Only reached for a subscription that HAS a discount. */
+async function withCoupons(stripe: Stripe, subscription: SubscriptionShape): Promise<SubscriptionShape> {
+  const resolve = async (discounts: Array<DiscountShape | string> | null | undefined) =>
+    Promise.all(
+      (discounts ?? []).map(async (discount) => {
+        if (typeof discount === "string") return discount;
+        const coupon = discount.coupon ?? discount.source?.coupon;
+        return typeof coupon === "string" ? { ...discount, coupon: (await stripe.coupons.retrieve(coupon)) as CouponShape } : discount;
+      })
+    );
+  const items = await Promise.all((subscription.items?.data ?? []).map(async (item) => ({ ...item, discounts: await resolve(item.discounts) })));
+  return { ...subscription, discounts: await resolve(subscription.discounts), items: { data: items } };
+}
+
 /** What Stripe answered, or why it did not. Split out so the loop below reads as the policy it is
  *  and the per-workspace error handling is not tangled into the arithmetic. */
-async function reconcileOne(stripe: Stripe, subscriptionId: string): Promise<MonthlyAmount> {
-  const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+async function reconcileOne(stripe: Stripe, subscriptionId: string): Promise<MonthlyAmount & { status: string }> {
+  // The discounts are expanded so the figure can be NET of them; a coupon still arriving as an id is
+  // fetched by `withCoupons`.
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId, { expand: ["discounts", "items.data.discounts"] });
   if (DEAD_SUBSCRIPTION_STATUSES.has(subscription.status)) {
     // NOT recorded as zero, deliberately. A cancelled subscription still attached to a workspace is
     // a stale column, and a workspace whose list price is $200 showing $0 billed would be rendered
@@ -187,7 +263,7 @@ async function reconcileOne(stripe: Stripe, subscriptionId: string): Promise<Mon
     // fabricate one. Naming it as a failure surfaces the stale id, which is the real problem.
     throw new Error(`Stripe reports this subscription as ${subscription.status}; the stored id no longer describes a live subscription.`);
   }
-  return subscriptionMonthlyMinor(subscription as unknown as SubscriptionShape);
+  return { ...subscriptionMonthlyMinor(await withCoupons(stripe, subscription as unknown as SubscriptionShape)), status: subscription.status };
 }
 
 /**
@@ -223,6 +299,7 @@ export async function reconcileBilledRevenue(): Promise<ReconcileResult> {
           billedMrrMinor: amount.amountMinor,
           billedCurrency: amount.currency,
           billedSubscriptionId: org.stripeSubscriptionId,
+          billedSubscriptionStatus: amount.status,
           billedReconciledAt: at,
           billedReconcileAttemptedAt: at,
           // Cleared on success: a workspace that recovered must stop being named as broken, and a

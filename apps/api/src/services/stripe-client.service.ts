@@ -82,6 +82,14 @@ export async function requireStripeClient(): Promise<StripeContext> {
  */
 export const DEAD_SUBSCRIPTION_STATUSES = new Set<Stripe.Subscription.Status>(["canceled", "incomplete_expired"]);
 
+/**
+ * Statuses whose recurring amount counts as MRR — Stripe's own definition: an `active` subscription,
+ * and a `past_due` one still inside its retries. `trialing` has not paid yet, `unpaid` has given up
+ * collecting, `paused` bills nothing, and `incomplete` never started. Those subscriptions are LIVE
+ * (above), so the plan changer still acts on them; they are just not revenue.
+ */
+export const BILLABLE_SUBSCRIPTION_STATUSES = new Set<string>(["active", "past_due"]);
+
 export async function isStripeConfigured(): Promise<boolean> {
   const settings = await controlPrisma.platformBillingSettings
     .findUnique({ where: { id: "global" }, select: { encryptedSecretKey: true } })

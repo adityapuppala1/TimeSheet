@@ -1584,7 +1584,8 @@ export interface StripeReconciliation {
   subscribedAccounts: number;
   /** How many workspaces are actually in the comparison. */
   comparedAccounts: number;
-  excluded: { neverReconciled: number; failed: number; unpriced: number; notRevenueBearing: number };
+  /** `notBilling`: Stripe says trialing, unpaid or paused — not MRR by Stripe's definition. */
+  excluded: { neverReconciled: number; failed: number; unpriced: number; notRevenueBearing: number; notBilling: number };
   /** The workspaces whose last reconciliation failed, by name. Never folded into the total as zero:
    *  a Stripe outage rendered as a 100% discount is worse than an honest gap. */
   failures: Array<{ orgId: string; slug: string; name: string; message: string }>;
@@ -1592,8 +1593,10 @@ export interface StripeReconciliation {
   listMrrMinor: number;
   /** List MRR of the compared workspaces only — the half that is comparable with `billedMrrMinor`. */
   comparableListMrrMinor: number | null;
-  /** Null means NOT RECONCILED YET, which the console renders as such. It never means a gap of zero. */
+  /** Active and past-due subscriptions, net of recurring discounts, per month. Null means NOT
+   *  RECONCILED YET, which the console renders as such. It never means a gap of zero. */
   billedMrrMinor: number | null;
+  /** List minus billed: coupons, prices in Stripe that differ from the list, and seat-count gaps. */
   discountMinor: number | null;
   discountPercent: number | null;
   currency: string;

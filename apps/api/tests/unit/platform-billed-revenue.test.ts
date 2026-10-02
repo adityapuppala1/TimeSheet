@@ -59,7 +59,14 @@ let subscriptions: Record<string, unknown> = {};
 let retrieveFails: Record<string, string> = {};
 let stripeConfigured = true;
 
-const retrieve = vi.fn(async (id: string) => {
+let coupons: Record<string, unknown> = {};
+const retrieveCoupon = vi.fn(async (id: string) => {
+  const found = coupons[id];
+  if (!found) throw new Error(`No such coupon: ${id}`);
+  return found;
+});
+
+const retrieve = vi.fn(async (id: string, _params?: unknown) => {
   if (retrieveFails[id]) throw new Error(retrieveFails[id]);
   const found = subscriptions[id];
   if (!found) throw new Error(`No such subscription: ${id}`);
@@ -68,7 +75,8 @@ const retrieve = vi.fn(async (id: string) => {
 
 vi.mock("../../src/services/stripe-client.service.js", () => ({
   DEAD_SUBSCRIPTION_STATUSES: new Set(["canceled", "incomplete_expired"]),
-  resolveStripeClient: vi.fn(async () => (stripeConfigured ? { stripe: { subscriptions: { retrieve } }, settings: {} } : null)),
+  BILLABLE_SUBSCRIPTION_STATUSES: new Set(["active", "past_due"]),
+  resolveStripeClient: vi.fn(async () => (stripeConfigured ? { stripe: { subscriptions: { retrieve }, coupons: { retrieve: retrieveCoupon } }, settings: {} } : null)),
   isStripeConfigured: vi.fn(async () => stripeConfigured),
   requireStripeClient: vi.fn()
 }));
@@ -119,9 +127,11 @@ beforeEach(() => {
   orgRows = [];
   updates.length = 0;
   subscriptions = {};
+  coupons = {};
   retrieveFails = {};
   stripeConfigured = true;
   retrieve.mockClear();
+  retrieveCoupon.mockClear();
 });
 
 /* ------------------------------------------------------------------------------------------ */
@@ -165,6 +175,44 @@ describe("subscriptionMonthlyMinor", () => {
         }
       }))
     }
+  });
+
+  const withDiscounts = (base: ReturnType<typeof sub>, discounts: unknown[]) => ({ ...base, discounts });
+  const NOW_S = Math.floor(new Date("2026-10-02T00:00:00Z").getTime() / 1000);
+
+  it("nets a recurring percent-off coupon, as Stripe's MRR does", () => {
+    // $80 list, 25% off forever → $60 a month. The gap to list used to be called "discounting"
+    // while the billed figure ignored every coupon, so it never contained one.
+    const discounted = withDiscounts(sub([{ unit_amount: 800, interval: "month", quantity: 10 }]), [{ source: { type: "coupon", coupon: { percent_off: 25, amount_off: null, currency: null, duration: "forever" } }, end: null }]);
+    expect(subscriptionMonthlyMinor(discounted, new Date(NOW_S * 1000)).amountMinor).toBe(6000);
+  });
+
+  it("nets an amount-off coupon per billing period, normalised to the month", () => {
+    // $960 a year, $120 off each year → $840 a year → $70 a month.
+    const annual = withDiscounts(sub([{ unit_amount: 9600, interval: "year", quantity: 10 }]), [{ coupon: { percent_off: null, amount_off: 12_000, currency: "usd", duration: "repeating" }, end: NOW_S + 86_400 }]);
+    expect(subscriptionMonthlyMinor(annual, new Date(NOW_S * 1000)).amountMinor).toBe(7000);
+  });
+
+  it("leaves out a one-off coupon and one whose repeating term has ended", () => {
+    const once = { coupon: { percent_off: 50, amount_off: null, currency: null, duration: "once" }, end: null };
+    const ended = { coupon: { percent_off: 50, amount_off: null, currency: null, duration: "repeating" }, end: NOW_S - 86_400 };
+    const result = subscriptionMonthlyMinor(withDiscounts(sub([{ unit_amount: 800, interval: "month", quantity: 10 }]), [once, ended]), new Date(NOW_S * 1000));
+    expect(result.amountMinor).toBe(8000);
+  });
+
+  it("applies a line's own discount to that line only", () => {
+    const base = sub([
+      { unit_amount: 800, interval: "month", quantity: 10 },
+      { unit_amount: 500, interval: "month", quantity: 2 }
+    ]);
+    base.items.data[0] = { ...base.items.data[0], discounts: [{ coupon: { percent_off: 50, amount_off: null, currency: null, duration: "forever" }, end: null }] } as (typeof base.items.data)[number];
+    // $80 at half price + $10 = $50.
+    expect(subscriptionMonthlyMinor(base, new Date(NOW_S * 1000)).amountMinor).toBe(5000);
+  });
+
+  it("refuses a discount whose coupon it cannot read, rather than reporting the gross as net", () => {
+    const unreadable = withDiscounts(sub([{ unit_amount: 800, interval: "month", quantity: 10 }]), ["di_123"]);
+    expect(() => subscriptionMonthlyMinor(unreadable, new Date(NOW_S * 1000))).toThrow(/discount/i);
   });
 
   it("takes a MONTHLY subscription as it stands", () => {
@@ -300,6 +348,28 @@ describe("computeBilledReconciliation", () => {
     expect(result.discountMinor).toBeNull();
   });
 
+  it("counts only active and past-due subscriptions as billed — trialing, unpaid and paused are not MRR", () => {
+    const result = reconcile(
+      [
+        billedRow("a", { billedMrrMinor: 8000, billedSubscriptionStatus: "active" }),
+        billedRow("p", { billedMrrMinor: 8000, billedSubscriptionStatus: "past_due" }),
+        billedRow("t", { billedMrrMinor: 8000, billedSubscriptionStatus: "trialing" }),
+        billedRow("u", { billedMrrMinor: 8000, billedSubscriptionStatus: "unpaid" }),
+        billedRow("z", { billedMrrMinor: 8000, billedSubscriptionStatus: "paused" })
+      ],
+      [account("a"), account("p"), account("t"), account("u"), account("z")]
+    );
+    expect(result.comparedAccounts).toBe(2);
+    expect(result.billedMrrMinor).toBe(16_000);
+    expect(result.excluded.notBilling).toBe(3);
+  });
+
+  it("excludes a free Starter workspace with a subscription — it is not a paying customer", () => {
+    const result = reconcile([billedRow("f", { billedMrrMinor: 500 })], [account("f", { planTier: "STARTER" })]);
+    expect(result.excluded.notRevenueBearing).toBe(1);
+    expect(result.comparedAccounts).toBe(0);
+  });
+
   it("excludes a subscribed workspace that has no usage snapshot yet", () => {
     const result = reconcile([billedRow("ghost", { billedMrrMinor: 8000 })], []);
     expect(result.excluded.notRevenueBearing).toBe(1);
@@ -344,6 +414,22 @@ describe("reconcileBilledRevenue", () => {
     const result = await reconcileBilledRevenue();
     expect(result).toMatchObject({ configured: true, attempted: 1, reconciled: 1, failed: [] });
     expect(updates[0].data).toMatchObject({ billedMrrMinor: 6667, billedCurrency: "USD", billedSubscriptionId: "sub_year", billedReconcileError: null });
+  });
+
+  it("asks Stripe for the discounts, stores the subscription's status, and resolves a coupon by id", async () => {
+    orgRows = [{ id: "a", slug: "acme", stripeSubscriptionId: "sub_c" }];
+    coupons.SAVE20 = { id: "SAVE20", percent_off: 20, amount_off: null, currency: null, duration: "forever" };
+    subscriptions.sub_c = {
+      id: "sub_c",
+      status: "past_due",
+      discounts: [{ source: { type: "coupon", coupon: "SAVE20" }, end: null }],
+      items: { data: [{ quantity: 10, price: { unit_amount: 800, currency: "usd", recurring: { interval: "month" } } }] }
+    };
+
+    await reconcileBilledRevenue();
+    expect(retrieve).toHaveBeenCalledWith("sub_c", { expand: ["discounts", "items.data.discounts"] });
+    expect(retrieveCoupon).toHaveBeenCalledWith("SAVE20");
+    expect(updates[0].data).toMatchObject({ billedMrrMinor: 6400, billedSubscriptionStatus: "past_due" });
   });
 
   it("keeps going when one workspace fails, and records WHY against that workspace only", async () => {

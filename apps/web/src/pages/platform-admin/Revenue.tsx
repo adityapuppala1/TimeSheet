@@ -14,8 +14,9 @@
  *
  * THERE IS EXACTLY ONE FIGURE ON THIS PAGE THAT IS NOT LIST PRICE, and it was added as a SECOND
  * number rather than as a reinterpretation of the first: the billed-revenue card at the foot,
- * `BilledRevenue` below. It shows what Stripe actually charges and the gap against list — which is
- * discounting — and it carries its own population, its own labels and its own "not reconciled yet"
+ * `BilledRevenue` below. It shows what Stripe bills (active and past-due subscriptions, net of their
+ * recurring discounts) and the gap against list — coupons, custom prices and seat-count differences —
+ * and it carries its own population, its own labels and its own "not reconciled yet"
  * state. Nothing above it changed meaning, and no list-price label was softened to make room.
  *
  * IT READS SNAPSHOTS. `OrgUsageSnapshot` is written nightly by a worker; nothing on this page opens
@@ -435,7 +436,7 @@ function Loaded({ data }: { data: RevenueOverview }) {
  * as $0, because $0 billed against a real list MRR is a 100% discount — a spectacular claim to make
  * about a deployment whose nightly job simply has not run.
  */
-/** The sentence under the discounting figure. Three states, and the third is a real one: billed
+/** The sentence under the gap-to-list figure. Three states, and the third is a real one: billed
  *  ABOVE list happens (a legacy price, an amount edited by hand in Stripe) and is shown as such
  *  rather than clamped, because the only evidence the two disagree is the sign. */
 function discountHint(stripe: NonNullable<RevenueOverview["stripe"]>): string {
@@ -466,7 +467,7 @@ function BilledRevenue({ stripe }: { stripe: NonNullable<RevenueOverview["stripe
   return (
     <ConsoleSection
       title="Billed revenue vs list price"
-      description="What Stripe actually charges these workspaces, against what their plans advertise. The difference is discounting."
+      description="What Stripe bills these workspaces — active and past-due subscriptions, net of recurring discounts — against what their plans list. The gap holds discounts, prices set in Stripe that differ from the list, and billed seat counts that differ from active seats."
       actions={
         canReconcile ? (
           <Toolbar>
@@ -488,9 +489,9 @@ function BilledRevenue({ stripe }: { stripe: NonNullable<RevenueOverview["stripe
           label="Billed MRR"
           value={money(stripe.billedMrrMinor, currency)}
           /* The two sentences this card exists to keep apart. */
-          hint={reconciled ? "What Stripe charges, normalised to a month" : "Not reconciled yet — this is not a gap of zero"}
+          hint={reconciled ? "Active and past-due, net of recurring coupons, per month" : "Not reconciled yet — this is not a gap of zero"}
         />
-        <Stat label="Discounting" value={money(stripe.discountMinor, currency)} hint={discountHint(stripe)} />
+        <Stat label="Gap to list price" value={money(stripe.discountMinor, currency)} hint={discountHint(stripe)} />
         <Stat
           label="Last reconciled"
           value={stripe.lastReconciledAt ? shortDate(stripe.lastReconciledAt) : "—"}

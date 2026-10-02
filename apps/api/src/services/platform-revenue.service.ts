@@ -37,7 +37,7 @@
 import { controlPrisma } from "../config/control-prisma.js";
 import { platformDate, platformMonthKey } from "../utils/platform-time.js";
 import { MIN_TREND_SNAPSHOTS, scoreAccountHealth, selectSeatOverage, type AccountHealth, type SeatOverageRow, type SeatUsageRow } from "./platform-account-health.js";
-import { isStripeConfigured } from "./stripe-client.service.js";
+import { BILLABLE_SUBSCRIPTION_STATUSES, isStripeConfigured } from "./stripe-client.service.js";
 import { isConverted } from "./trial-conversion.js";
 
 /** Every figure this service produces is derived from an operator-editable LIST price. Carried in
@@ -819,6 +819,9 @@ export interface BilledRow {
   billedCurrency: string | null;
   billedReconciledAt: Date | null;
   billedReconcileError: string | null;
+  /** The subscription's Stripe status at reconciliation. Null on a figure stored before the status
+   *  was — read as billable until the next nightly sweep records it. */
+  billedSubscriptionStatus?: string | null;
 }
 
 export interface StripeReconciliation {
@@ -841,10 +844,13 @@ export interface StripeReconciliation {
     /** Reconciled, but the tier has no list price (Enterprise), so there is nothing to compare the
      *  billed amount against. Including it would fabricate a 100% discount. */
     unpriced: number;
-    /** Reconciled and priced, but the workspace is not revenue-bearing right now — trialling,
-     *  suspended, archived, or with no usage snapshot yet. Its list value is zero or unknown, so
-     *  pairing it with a real billed amount would report a negative discount. */
+    /** Reconciled and priced, but the workspace is not a paying customer right now — trialling,
+     *  free, suspended, archived, or with no usage snapshot yet. Its list value is zero or unknown,
+     *  so pairing it with a real billed amount would report a negative discount. */
     notRevenueBearing: number;
+    /** Reconciled, but Stripe says the subscription is not billing — `trialing`, `unpaid` or
+     *  `paused`. Not MRR by Stripe's own definition, so not in the billed total. */
+    notBilling: number;
   };
   /** The workspaces whose reconciliation failed, BY NAME. An operator cannot chase a count. */
   failures: Array<{ orgId: string; slug: string; name: string; message: string }>;
@@ -855,12 +861,14 @@ export interface StripeReconciliation {
    *  `billedMrrMinor`; comparing whole-fleet list against subscribed-only billed would invent a
    *  discount out of the customers who never had a Stripe subscription. */
   comparableListMrrMinor: number | null;
-  /** What Stripe says those same workspaces pay per month. Null = nothing has been reconciled yet,
-   *  and the console renders that as "not reconciled yet" rather than as a zero gap. */
+  /** What Stripe bills those same workspaces per month: active and past-due subscriptions, net of
+   *  their recurring discounts. Null = nothing has been reconciled yet, and the console renders that
+   *  as "not reconciled yet" rather than as a zero gap. */
   billedMrrMinor: number | null;
-  /** Comparable list minus billed. Positive is a discount; negative means customers are billed
-   *  ABOVE list, which is a real state (a legacy price, a manual override in Stripe) and is shown
-   *  rather than clamped. */
+  /** Comparable list minus billed — the GAP TO LIST PRICE, not "discounting" alone: it holds the
+   *  coupons, any price in Stripe that differs from the list price, and a billed seat quantity that
+   *  differs from the active seats. Negative means billed ABOVE list, a real state (a legacy price, a
+   *  manual override in Stripe) shown rather than clamped. */
   discountMinor: number | null;
   discountPercent: number | null;
   currency: string;
@@ -902,9 +910,13 @@ type BilledVerdict =
 function judgeBilledRow(row: BilledRow, account: RevenueAccount | undefined, prices: TierPrices): BilledVerdict {
   if (row.billedReconcileError) return { kind: "failed" };
   if (row.billedMrrMinor === null) return { kind: "neverReconciled" };
+  // Stripe's MRR counts active and past-due subscriptions only. A trialing, unpaid or paused one has
+  // a recurring price and is not paying it.
+  if (row.billedSubscriptionStatus && !BILLABLE_SUBSCRIPTION_STATUSES.has(row.billedSubscriptionStatus)) return { kind: "notBilling" };
   // No snapshot yet counts here too: a workspace nothing has measured has no list value to compare,
-  // and pairing a real billed amount with an assumed zero is how a discount gets invented.
-  if (!account || !isRevenueBearing(account)) return { kind: "notRevenueBearing" };
+  // and pairing a real billed amount with an assumed zero is how a discount gets invented. A free
+  // Starter workspace is not a paying customer either, whatever Stripe holds for it.
+  if (!account || !isPayingCustomer(account, prices)) return { kind: "notRevenueBearing" };
   const price = prices[account.planTier];
   if (!price || price.perSeatMinor === null) return { kind: "unpriced" };
   return { kind: "compared", listMinor: price.perSeatMinor * billableSeats(account), billedMinor: row.billedMrrMinor, currency: price.currency.toUpperCase() };
@@ -913,7 +925,7 @@ function judgeBilledRow(row: BilledRow, account: RevenueAccount | undefined, pri
 /** The single pass over the subscribed workspaces. Separated from the shaping below so the loop is
  *  about sorting rows into buckets and nothing else. */
 function tallyBilledRows(billed: BilledRow[], accountById: Map<string, RevenueAccount>, prices: TierPrices) {
-  const excluded = { neverReconciled: 0, failed: 0, unpriced: 0, notRevenueBearing: 0 };
+  const excluded = { neverReconciled: 0, failed: 0, unpriced: 0, notRevenueBearing: 0, notBilling: 0 };
   const failures: StripeReconciliation["failures"] = [];
   const currencies = new Set<string>();
   let comparableListMinor = 0;
@@ -992,7 +1004,12 @@ const EXCLUSION_PROSE: Array<{ key: keyof StripeReconciliation["excluded"]; shor
     short: "on a tier with no list price",
     long: (n) => `${n} ${n === 1 ? "is" : "are"} on a tier with no list price, so there is nothing to compare against.`
   },
-  { key: "notRevenueBearing", short: "not revenue-bearing", long: (n) => `${n} ${n === 1 ? "is" : "are"} trialling, suspended or not yet snapshotted.` }
+  { key: "notRevenueBearing", short: "not a paying customer", long: (n) => `${n} ${n === 1 ? "is" : "are"} trialling, free, suspended or not yet snapshotted.` },
+  {
+    key: "notBilling",
+    short: "not billing in Stripe",
+    long: (n) => `${n} ${n === 1 ? "has a subscription that is" : "have subscriptions that are"} trialing, unpaid or paused in Stripe, which is not MRR.`
+  }
 ];
 
 function reconciliationNote(comparedAccounts: number, excluded: StripeReconciliation["excluded"]): string {
@@ -1041,7 +1058,7 @@ export async function reconcileAgainstStripe(mrr: MrrBreakdown, accounts: Revenu
 
   const rows = await controlPrisma.organization.findMany({
     where: { stripeSubscriptionId: { not: null } },
-    select: { id: true, slug: true, name: true, billedMrrMinor: true, billedCurrency: true, billedReconciledAt: true, billedReconcileError: true }
+    select: { id: true, slug: true, name: true, billedMrrMinor: true, billedCurrency: true, billedReconciledAt: true, billedReconcileError: true, billedSubscriptionStatus: true }
   });
 
   return computeBilledReconciliation(
@@ -1052,7 +1069,8 @@ export async function reconcileAgainstStripe(mrr: MrrBreakdown, accounts: Revenu
       billedMrrMinor: row.billedMrrMinor,
       billedCurrency: row.billedCurrency,
       billedReconciledAt: row.billedReconciledAt,
-      billedReconcileError: row.billedReconcileError
+      billedReconcileError: row.billedReconcileError,
+      billedSubscriptionStatus: row.billedSubscriptionStatus
     })),
     accounts,
     prices,
