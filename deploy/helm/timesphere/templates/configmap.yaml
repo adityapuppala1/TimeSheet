@@ -25,6 +25,7 @@ data:
   TENANT_DB_CONNECTION_LIMIT: {{ .Values.env.tenantDbConnectionLimit | quote }}
   ACCESS_TOKEN_TTL: {{ .Values.env.accessTokenTtl | quote }}
   REFRESH_TOKEN_TTL_DAYS: {{ .Values.env.refreshTokenTtlDays | quote }}
+  SESSION_IDLE_TIMEOUT_MINUTES: {{ .Values.env.sessionIdleTimeoutMinutes | quote }}
   {{- with .Values.mail }}
   # Outbound SMTP. GlobalMailSettings in the tenant database overrides all of this at runtime; these
   # are the deployment-level fallback. Empty SMTP_HOST = mail is written to stdout instead of sent,

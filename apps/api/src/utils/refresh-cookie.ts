@@ -15,13 +15,19 @@ import { env } from "../config/env.js";
 export const REFRESH_COOKIE = "refreshToken";
 const REFRESH_COOKIE_PATH = "/api/auth";
 
-export function refreshCookieOptions(expiresAt?: Date) {
+/**
+ * `persistent: false` is an unticked "Remember me" (security audit #14): the cookie gets NO Expires,
+ * which makes it a browser-session cookie — closing the browser ends it, whatever the server-side
+ * session's own expiry says. The default keeps the expiring cookie every SSO, LDAP and pre-existing
+ * session has always had.
+ */
+export function refreshCookieOptions(expiresAt?: Date, persistent = true) {
   return {
     httpOnly: true,
     secure: env.NODE_ENV === "production",
     sameSite: "lax" as const,
     path: REFRESH_COOKIE_PATH,
-    expires: expiresAt
+    expires: persistent ? expiresAt : undefined
   };
 }
 

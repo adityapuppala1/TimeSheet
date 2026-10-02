@@ -42,6 +42,8 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set}
       ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
       REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-14}
+      # Minutes without activity before a session can no longer be refreshed. 0 = off.
+      SESSION_IDLE_TIMEOUT_MINUTES: ${SESSION_IDLE_TIMEOUT_MINUTES:-0}
       API_PORT: 4000
       WEB_ORIGIN: ${WEB_ORIGIN:?WEB_ORIGIN must be set (your production domain)}
       APP_BASE_URL: ${APP_BASE_URL:?APP_BASE_URL must be set (your production domain)}

@@ -111,8 +111,9 @@ authRouter.post(
     // One browser, one session row — see utils/device-cookie.ts for why this is a grouping key
     // and never an authenticator.
     const deviceId = attachDeviceId(req, res);
-    const result = await login(req.body.email, req.body.password, req.body.rememberMe, req.headers["user-agent"], req.ip, deviceId);
-    res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
+    const result = await login(req.body.email, req.body.password, req.body.rememberMe === true, req.headers["user-agent"], req.ip, deviceId);
+    // An unticked "Remember me" gets a browser-session cookie — see utils/refresh-cookie.ts.
+    res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt, result.persistentCookie));
     res.json({ accessToken: result.accessToken, user: result.user });
   }
 );
@@ -144,7 +145,9 @@ authRouter.post("/refresh", async (req, res) => {
   // Null for a grace-window replay (a second tab racing the first): it gets an access token and NO
   // Set-Cookie, so it cannot overwrite the secret the winning rotation just handed out — see
   // auth.service.ts#refresh.
-  if (result.refreshToken) res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
+  if (result.refreshToken) {
+    res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt, result.persistentCookie));
+  }
   res.json({ accessToken: result.accessToken });
 });
 

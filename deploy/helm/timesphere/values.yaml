@@ -157,6 +157,9 @@ env:
   # answer to "can you shorten the access token TTL?".
   accessTokenTtl: 15m
   refreshTokenTtlDays: 14
+  # Minutes without activity before a session can no longer be refreshed; 0 = off. An open tab's
+  # heartbeat counts as activity, so this ends sessions whose browser was closed or asleep that long.
+  sessionIdleTimeoutMinutes: 0
 
 # Outbound email. This was MISSING from the chart entirely — the ConfigMap carried no SMTP keys and
 # the Secret example carried no password, so a Kubernetes install had no way to configure mail

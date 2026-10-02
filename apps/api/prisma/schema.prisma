@@ -395,6 +395,11 @@ model Session {
   /// This is what makes "who is online right now?" answerable: a session can legally live 30
   /// days, so expiresAt alone says "logged in sometime this month", not "using the app now".
   lastSeenAt          DateTime?
+  /// Whether the person ticked "Remember me" on the PASSWORD sign-in that created (or last re-used)
+  /// this row. False: the refresh cookie is a browser-session cookie (no Expires), so closing the
+  /// browser ends it. True: the cookie expires with the session. NULL: SSO, LDAP, and every row from
+  /// before the column existed — they keep the expiring cookie they always had. Security audit #14.
+  rememberMe          Boolean?
 
   @@index([userId, expiresAt])
   @@index([lastSeenAt])

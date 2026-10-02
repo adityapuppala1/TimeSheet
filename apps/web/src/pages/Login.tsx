@@ -255,7 +255,10 @@ export function Login() {
   const [failure, setFailure] = useState<string | undefined>(undefined);
   const form = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: { email: "", password: "", rememberMe: true }
+    // Unticked by default (security audit #14): unticked now means a browser-session cookie, so
+    // closing the browser signs the person out. Staying signed in is the choice somebody makes, not
+    // the one a shared or borrowed machine makes for them.
+    defaultValues: { email: "", password: "", rememberMe: false }
   });
 
   // Defaults to "password enabled, no SSO providers" while loading — the existing,

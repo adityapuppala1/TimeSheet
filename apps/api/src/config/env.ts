@@ -134,6 +134,17 @@ const schema = z.object({
   ENCRYPTION_KEY: z.string().regex(/^[0-9a-f]{64}$/i, "ENCRYPTION_KEY must be a 64-character hex string (32 bytes) — generate one with: openssl rand -hex 32"),
   ACCESS_TOKEN_TTL: z.string().default("15m"),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().default(14),
+  /**
+   * Minutes of inactivity after which a session can no longer be refreshed (security audit #14).
+   * 0, the default, is off — exactly the behaviour every deployment has today.
+   *
+   * "Activity" is `Session.lastSeenAt`, which every authenticated request stamps at most once per
+   * five minutes (middleware/auth.ts) — and an open tab's 15-second heartbeat is a request. So this
+   * ends sessions whose browser has been CLOSED or asleep that long, not ones left open on a desk;
+   * and values under about ten minutes are coarse, because of that five-minute stamp. The access
+   * token already issued still lives out its own TTL (ACCESS_TOKEN_TTL above).
+   */
+  SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().min(0).default(0),
   API_PORT: z.coerce.number().default(4000),
   WEB_ORIGIN: z.string().default("http://localhost:5173"),
   APP_BASE_URL: z.string().default("http://localhost:5173"),

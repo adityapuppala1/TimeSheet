@@ -296,6 +296,8 @@ async function enforceSessionCap(userId: string, keepId: string): Promise<number
 async function establishSession(
   user: { id: string },
   orgId: string,
+  /** `rememberMe` is passed only by PASSWORD sign-in, true or false. Left undefined (SSO, LDAP) it is
+   *  stored as NULL, which keeps the expiring refresh cookie those paths have always had. */
   opts: { rememberMe?: boolean; userAgent?: string; ipAddress?: string; deviceId?: string }
 ) {
   // MAINTENANCE GATE, at the one place every login method funnels through — password, Google,
@@ -377,7 +379,9 @@ async function establishSession(
           refreshRotatedAt: null,
           ipAddress: opts.ipAddress,
           expiresAt,
-          lastSeenAt: new Date()
+          lastSeenAt: new Date(),
+          // A re-used row takes on THIS sign-in's choice, or the cookie would keep the old one's.
+          rememberMe: opts.rememberMe ?? null
         }
       })
     : await prisma.session.create({
@@ -390,7 +394,8 @@ async function establishSession(
           expiresAt,
           // Signing in IS activity. Without this a brand-new row reads as "never used" to every
           // idle-based sweep and to the Profile page's "Last used" column alike.
-          lastSeenAt: new Date()
+          lastSeenAt: new Date(),
+          rememberMe: opts.rememberMe ?? null
         }
       });
 
@@ -416,7 +421,9 @@ async function establishSession(
   return {
     accessToken: signAccessToken(user.id, session.id, orgId),
     refreshToken: `${signRefreshToken(user.id, session.id, days, orgId)}.${refreshSecret}`,
-    refreshTokenExpiresAt: expiresAt
+    refreshTokenExpiresAt: expiresAt,
+    /** False only for an unticked "Remember me" — see utils/refresh-cookie.ts#refreshCookieOptions. */
+    persistentCookie: opts.rememberMe !== false
   };
 }
 
@@ -623,6 +630,20 @@ async function matchRefreshSecret(
   throw new AppError(401, "Invalid refresh token");
 }
 
+/**
+ * SESSION_IDLE_TIMEOUT_MINUTES (security audit #14; 0 = off, the default). A session whose last
+ * activity is older than the limit is revoked rather than refreshed. A row never stamped is judged
+ * by when it was created. See env.ts for what counts as activity.
+ */
+async function refuseIdleSession(session: { id: string; lastSeenAt: Date | null; createdAt: Date }): Promise<void> {
+  const limitMinutes = env.SESSION_IDLE_TIMEOUT_MINUTES;
+  if (limitMinutes <= 0) return;
+  const lastActive = (session.lastSeenAt ?? session.createdAt).getTime();
+  if (Date.now() - lastActive <= limitMinutes * 60_000) return;
+  await prisma.session.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
+  throw new AppError(401, "You were signed out after a period of inactivity.");
+}
+
 export async function refresh(refreshToken: unknown) {
   const { payload, secret } = readRefreshToken(refreshToken);
 
@@ -636,6 +657,7 @@ export async function refresh(refreshToken: unknown) {
   if (!session || session.revokedAt || session.expiresAt < new Date()) {
     throw new AppError(401, "Refresh token expired");
   }
+  await refuseIdleSession(session);
 
   // The session row alone isn't enough: deactivating or soft-deleting an account doesn't
   // necessarily revoke its sessions (SCIM's DELETE /Users/:id only flips status), so without
@@ -659,7 +681,7 @@ export async function refresh(refreshToken: unknown) {
     // — two responses can land in either order — the next refresh matched nothing and the whole
     // session was revoked as a theft. With nothing written, whichever secret the jar holds is valid.
     // The window itself stays anchored to the first rotation, so replays cannot keep it open.
-    return { accessToken, refreshToken: null, refreshTokenExpiresAt: session.expiresAt };
+    return { accessToken, refreshToken: null, refreshTokenExpiresAt: session.expiresAt, persistentCookie: session.rememberMe !== false };
   }
 
   // First rotation off this secret: anchor a new grace window to it.
@@ -674,7 +696,11 @@ export async function refresh(refreshToken: unknown) {
   return {
     accessToken,
     refreshToken: `${signRefreshToken(payload.sub, session.id, remainingDays, orgId)}.${newSecret}`,
-    refreshTokenExpiresAt: session.expiresAt
+    refreshTokenExpiresAt: session.expiresAt,
+    // The choice made at sign-in, kept on the row because this request does not carry it: an
+    // unticked "Remember me" stays a browser-session cookie through every rotation. NULL (SSO, LDAP,
+    // older rows) keeps the expiring cookie.
+    persistentCookie: session.rememberMe !== false
   };
 }
 
