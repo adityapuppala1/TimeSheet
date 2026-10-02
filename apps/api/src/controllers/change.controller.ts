@@ -977,10 +977,22 @@ changeRouter.post("/:id/decision", requirePermission(permissions.CHANGES_APPROVE
   }
 
   const updated = await prisma.$transaction(async (tx) => {
-    await tx.changeApproval.update({
-      where: { id: mine.id },
+    // BOTH WRITES ARE CONDITIONAL on what was read above: this row still PENDING, the change still
+    // AWAITING_APPROVAL. A withdraw to draft (or another approver's decision) that committed in
+    // between used to be overwritten — a change taken back for rework came out APPROVED, its
+    // WITHDRAWN row rewritten as the approval, and whatever was then edited in draft stood approved
+    // unseen. A miss refuses the whole decision, and the transaction takes the other write back.
+    const decided = await tx.changeApproval.updateMany({
+      where: { id: mine.id, status: "PENDING" },
       data: { status: decision, comments: req.body.comments ?? null, decidedAt: now, approverId: req.user!.id }
     });
+    const moved = await tx.changeRequest.updateMany({
+      where: { id: change.id, state: "AWAITING_APPROVAL" },
+      data: { state: to, ...(to === "APPROVED" ? { approvedAt: now } : {}) }
+    });
+    if (decided.count === 0 || moved.count === 0) {
+      throw new AppError(409, "This change was withdrawn or decided while you had it open. Reload it to see where it stands.");
+    }
     // Everybody else in the round is superseded, not decided. Nobody decided on their behalf, and
     // recording otherwise would misstate the history — the same rule the planning chains follow.
     await tx.changeApproval.updateMany({
@@ -988,11 +1000,7 @@ changeRouter.post("/:id/decision", requirePermission(permissions.CHANGES_APPROVE
       data: { status: "CANCELLED", decidedAt: now }
     });
     await tx.ticket.update({ where: { id: change.ticket.id }, data: ticketWriteFor(to, now) });
-    return tx.changeRequest.update({
-      where: { id: change.id },
-      data: { state: to, ...(to === "APPROVED" ? { approvedAt: now } : {}) },
-      include: CHANGE_INCLUDE
-    });
+    return tx.changeRequest.findUniqueOrThrow({ where: { id: change.id }, include: CHANGE_INCLUDE });
   });
 
   await audit(req.user!.id, `change.${to.toLowerCase()}`, "ChangeRequest", change.id, {

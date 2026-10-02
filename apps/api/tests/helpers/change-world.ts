@@ -153,9 +153,17 @@ export function createChangeWorld(seed: { change?: Record<string, unknown>; appr
       findMany: vi.fn(async () => []),
       findFirst: vi.fn(async (args: any = {}) => (args.include?.category ? hydrate() : withTicket())),
       findUnique: vi.fn(async (args: any = {}) => (args.include?.category ? hydrate() : withTicket())),
+      findUniqueOrThrow: vi.fn(async (args: any = {}) => (args.include?.category ? hydrate() : withTicket())),
       update: vi.fn(async (args: any) => {
         Object.assign(change, args.data);
         return args.include?.category ? hydrate() : withTicket();
+      }),
+      // Honours the conditional writes: an id or a state that no longer matches writes nothing.
+      updateMany: vi.fn(async (args: any) => {
+        const where = args.where ?? {};
+        if ((where.id && where.id !== change.id) || (where.state && where.state !== change.state)) return { count: 0 };
+        Object.assign(change, args.data);
+        return { count: 1 };
       })
     },
     changeApproval: {
