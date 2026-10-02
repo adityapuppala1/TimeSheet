@@ -213,7 +213,8 @@ describe("POST /:orgSlug/v2/Users", () => {
 });
 
 describe("PATCH /:orgSlug/v2/Users/:id — deprovision/reactivate", () => {
-  const existingUser = { id: "user-1", name: "Existing Person", email: "existing@example.com", status: "ACTIVE", scimExternalId: null };
+  // What the route selects: the SCIM fields, plus the role rows the last-super-admin rule reads.
+  const existingUser = { id: "user-1", name: "Existing Person", email: "existing@example.com", status: "ACTIVE", scimExternalId: null, deletedAt: null, role: { name: "EMPLOYEE" }, userRoles: [] };
 
   it("replace active:false deactivates the user", async () => {
     vi.mocked(client.user.findFirst).mockResolvedValue(existingUser as never);
@@ -369,7 +370,7 @@ describe("PATCH /:orgSlug/v2/Users/:id — deprovision/reactivate", () => {
 
 describe("DELETE /:orgSlug/v2/Users/:id — soft-deactivate", () => {
   it("sets status to INACTIVE and returns 204", async () => {
-    vi.mocked(client.user.findFirst).mockResolvedValue({ id: "user-1" } as never);
+    vi.mocked(client.user.findFirst).mockResolvedValue({ id: "user-1", status: "ACTIVE", deletedAt: null, role: { name: "EMPLOYEE" }, userRoles: [] } as never);
     vi.mocked(client.user.update).mockResolvedValue({} as never);
 
     const res = await request(buildScimApp()).delete(`/api/scim/${ORG_SLUG}/v2/Users/user-1`).set(scimAuthHeader());
@@ -383,5 +384,116 @@ describe("DELETE /:orgSlug/v2/Users/:id — soft-deactivate", () => {
     vi.mocked(client.user.findFirst).mockResolvedValue(null);
     const res = await request(buildScimApp()).delete(`/api/scim/${ORG_SLUG}/v2/Users/missing`).set(scimAuthHeader());
     expect(res.status).toBe(404);
+  });
+});
+
+/**
+ * The IdP is the source of truth for who works here — except for the one account the workspace
+ * cannot run without. Deprovisioning the last ACTIVE super admin left nobody who could pay, reach SSO
+ * settings or grant super admin, and nothing inside the product could undo it: an ADMIN may not touch
+ * a super admin's account, and the platform rescue refuses an INACTIVE one. Slack's primary-owner
+ * rule: the IdP is told to hand the role on first, with a SCIM error it shows its operator.
+ */
+describe("SCIM deprovisioning and the workspace's last super admin", () => {
+  const founder = {
+    id: "founder",
+    name: "Founder",
+    email: "founder@example.com",
+    status: "ACTIVE",
+    scimExternalId: "entra-1",
+    isAgent: false,
+    deletedAt: null,
+    role: { name: "SUPER_ADMIN" },
+    userRoles: [{ role: { name: "SUPER_ADMIN" } }]
+  };
+
+  /** `user.count` answers two questions here: how many OTHER active super admins there are (its
+   *  where names the SUPER_ADMIN role), and how many seats are taken (the seat sync). */
+  function otherSuperAdmins(count: number) {
+    vi.mocked(client.role.findUniqueOrThrow).mockResolvedValue({ id: "role-sa", name: "SUPER_ADMIN" } as never);
+    vi.mocked(client.user.count).mockImplementation((async (args: { where?: { OR?: unknown } } = {}) => (args.where?.OR ? count : 5)) as never);
+  }
+
+  it("PATCH active:false on the last super admin is refused with a SCIM 409 that says to assign another first", async () => {
+    vi.mocked(client.user.findFirst).mockResolvedValue(founder as never);
+    vi.mocked(client.user.update).mockResolvedValue({ ...founder, status: "INACTIVE" } as never);
+    otherSuperAdmins(0);
+
+    const res = await request(buildScimApp())
+      .patch(`/api/scim/${ORG_SLUG}/v2/Users/founder`)
+      .set(scimAuthHeader())
+      .set("Content-Type", "application/scim+json")
+      .send('{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"Replace","path":"active","value":"False"}]}');
+
+    expect(res.status).toBe(409);
+    expect(res.body.schemas).toContain("urn:ietf:params:scim:api:messages:2.0:Error");
+    expect(res.body.status).toBe("409");
+    expect(res.body.detail).toMatch(/assign another super admin first/i);
+    expect(client.user.update).not.toHaveBeenCalled();
+    expect(mockSyncSubscriptionSeats).not.toHaveBeenCalled();
+  });
+
+  it("DELETE on the last super admin is refused the same way, and changes nothing", async () => {
+    vi.mocked(client.user.findFirst).mockResolvedValue(founder as never);
+    otherSuperAdmins(0);
+
+    const res = await request(buildScimApp()).delete(`/api/scim/${ORG_SLUG}/v2/Users/founder`).set(scimAuthHeader());
+
+    expect(res.status).toBe(409);
+    expect(res.body.detail).toMatch(/assign another super admin first/i);
+    expect(client.user.update).not.toHaveBeenCalled();
+  });
+
+  it("a super admin held only as an extra role counts too", async () => {
+    vi.mocked(client.user.findFirst).mockResolvedValue({ ...founder, role: { name: "EMPLOYEE" }, userRoles: [{ role: { name: "EMPLOYEE" } }, { role: { name: "SUPER_ADMIN" } }] } as never);
+    vi.mocked(client.user.update).mockResolvedValue({ ...founder, status: "INACTIVE" } as never);
+    otherSuperAdmins(0);
+
+    const res = await request(buildScimApp())
+      .patch(`/api/scim/${ORG_SLUG}/v2/Users/founder`)
+      .set(scimAuthHeader())
+      .send({ Operations: [{ op: "replace", path: "active", value: false }] });
+
+    expect(res.status).toBe(409);
+  });
+
+  it("deprovisions a super admin when another active one remains — PATCH and DELETE alike", async () => {
+    vi.mocked(client.user.findFirst).mockResolvedValue(founder as never);
+    vi.mocked(client.user.update).mockResolvedValue({ ...founder, status: "INACTIVE" } as never);
+    otherSuperAdmins(1);
+
+    const patched = await request(buildScimApp())
+      .patch(`/api/scim/${ORG_SLUG}/v2/Users/founder`)
+      .set(scimAuthHeader())
+      .send({ Operations: [{ op: "replace", path: "active", value: false }] });
+    const deleted = await request(buildScimApp()).delete(`/api/scim/${ORG_SLUG}/v2/Users/founder`).set(scimAuthHeader());
+
+    expect(patched.status).toBe(200);
+    expect(deleted.status).toBe(204);
+    expect(client.user.update).toHaveBeenCalledTimes(2);
+  });
+
+  it("an ordinary account is deprovisioned without counting anybody — the IdP stays the source of truth", async () => {
+    vi.mocked(client.user.findFirst).mockResolvedValue({ ...founder, id: "member", role: { name: "EMPLOYEE" }, userRoles: [{ role: { name: "EMPLOYEE" } }] } as never);
+    vi.mocked(client.user.update).mockResolvedValue({ ...founder, id: "member", status: "INACTIVE" } as never);
+
+    const res = await request(buildScimApp()).delete(`/api/scim/${ORG_SLUG}/v2/Users/member`).set(scimAuthHeader());
+
+    expect(res.status).toBe(204);
+    expect(client.role.findUniqueOrThrow).not.toHaveBeenCalled();
+  });
+
+  it("reactivating the last super admin is never refused by this rule", async () => {
+    vi.mocked(client.user.findFirst).mockResolvedValue({ ...founder, status: "INACTIVE" } as never);
+    vi.mocked(client.user.update).mockResolvedValue(founder as never);
+    otherSuperAdmins(0);
+
+    const res = await request(buildScimApp())
+      .patch(`/api/scim/${ORG_SLUG}/v2/Users/founder`)
+      .set(scimAuthHeader())
+      .send({ Operations: [{ op: "replace", path: "active", value: true }] });
+
+    expect(res.status).toBe(200);
+    expect(client.user.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "ACTIVE" } }));
   });
 });

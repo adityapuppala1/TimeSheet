@@ -25,6 +25,7 @@ import { requireTenantContext } from "../config/tenant-context.js";
 import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
 import { hasRoomFor, seatHeadroom, syncSeatsAfterChange, takesASeat } from "../services/seats.service.js";
+import { AUTHORITY_TARGET_SELECT, assertNotLastSuperAdmin, toAuthorityTarget } from "../services/user-authority.service.js";
 import { rememberWorkspaceMembership } from "../services/workspace-directory.service.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { constantTimeEqual, hashPassword, opaqueToken } from "../utils/security.js";
@@ -96,6 +97,27 @@ function toScimUser(user: ScimUserRow, orgSlug: string) {
 }
 
 const USER_SELECT = { id: true, name: true, email: true, status: true, scimExternalId: true } as const;
+
+/**
+ * The one deprovision this endpoint refuses. The IdP is the source of truth for who works here, and
+ * every other deactivation it sends is applied as sent — but deactivating the workspace's last ACTIVE
+ * super admin leaves nobody who can pay, reach SSO settings or grant the role back, and nothing inside
+ * the product can undo it: an ADMIN may not act on a super admin's account, and the platform rescue
+ * refuses an INACTIVE one. Slack's primary-owner rule: the IdP gets a 409, which it shows its
+ * operator, and the role is handed on first. The rule itself is user-authority.service.ts's, so SCIM
+ * counts "a super admin" exactly as User Management does (primary role or a UserRole row).
+ */
+const LAST_SUPER_ADMIN_DETAIL = "This person is the workspace's last active super admin — assign another super admin first, then deprovision them.";
+
+async function lastSuperAdminRefusal(row: Parameters<typeof toAuthorityTarget>[0]): Promise<string | null> {
+  try {
+    await assertNotLastSuperAdmin(toAuthorityTarget(row), { status: "INACTIVE" });
+    return null;
+  } catch (error) {
+    if (error instanceof AppError && error.statusCode === 422) return LAST_SUPER_ADMIN_DETAIL;
+    throw error;
+  }
+}
 
 /**
  * GET /Users — supports the one filter form every IdP actually sends when checking whether a
@@ -247,14 +269,18 @@ function activeFromOperations(operations: Array<{ op: string; path?: string; val
  * state change, not a hard delete.
  *
  * Reactivation takes a seat exactly as provisioning does, and is refused the same way (403, the
- * SCIM error POST already returns) when the plan is full.
+ * SCIM error POST already returns) when the plan is full. Deprovisioning the last super admin is
+ * refused with a 409 (see `lastSuperAdminRefusal`).
  */
 scimRouter.patch("/:orgSlug/v2/Users/:id", async (req, res, next) => {
   try {
     await withOrgTenant(req.params.orgSlug, async () => {
       await requireValidScimToken(req);
       const { orgSlug } = requireTenantContext();
-      const user = await prisma.user.findFirst({ where: { id: String(req.params.id), deletedAt: null }, select: { ...USER_SELECT, isAgent: true } });
+      const user = await prisma.user.findFirst({
+        where: { id: String(req.params.id), deletedAt: null },
+        select: { ...USER_SELECT, isAgent: true, ...AUTHORITY_TARGET_SELECT }
+      });
       if (!user) return res.status(404).json(scimError(404, "User not found"));
 
       const parsed = patchOperationSchema.safeParse(req.body);
@@ -263,6 +289,9 @@ scimRouter.patch("/:orgSlug/v2/Users/:id", async (req, res, next) => {
       const nextActive = activeFromOperations(parsed.data.Operations);
       if (nextActive === undefined) return res.json(toScimUser(user, orgSlug));
       const nextStatus = nextActive ? "ACTIVE" : "INACTIVE";
+
+      const refusal = nextStatus === "INACTIVE" ? await lastSuperAdminRefusal(user) : null;
+      if (refusal) return res.status(409).json(scimError(409, refusal));
 
       if (takesASeat(user, nextStatus)) {
         const seats = await seatHeadroom();
@@ -280,13 +309,16 @@ scimRouter.patch("/:orgSlug/v2/Users/:id", async (req, res, next) => {
 
 /** DELETE /Users/:id — same soft-deprovision semantics as the PATCH active:false path above,
  *  since RFC 7644 leaves the actual server-side effect of DELETE to the implementation and a
- *  hard delete would strand every other table's foreign keys into this user. */
+ *  hard delete would strand every other table's foreign keys into this user. The same refusal for
+ *  the last super admin, too. */
 scimRouter.delete("/:orgSlug/v2/Users/:id", async (req, res, next) => {
   try {
     await withOrgTenant(req.params.orgSlug, async () => {
       await requireValidScimToken(req);
-      const user = await prisma.user.findFirst({ where: { id: String(req.params.id), deletedAt: null }, select: { id: true } });
+      const user = await prisma.user.findFirst({ where: { id: String(req.params.id), deletedAt: null }, select: AUTHORITY_TARGET_SELECT });
       if (!user) return res.status(404).json(scimError(404, "User not found"));
+      const refusal = await lastSuperAdminRefusal(user);
+      if (refusal) return res.status(409).json(scimError(409, refusal));
       await prisma.user.update({ where: { id: user.id }, data: { status: "INACTIVE" } });
       await syncSeatsAfterChange();
       res.status(204).send();
