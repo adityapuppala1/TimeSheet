@@ -65,6 +65,21 @@ export function buildTimesheetWhere(filters: TimesheetReportFilters): Prisma.Tim
   return where;
 }
 
+/**
+ * The ONE row order for the grouped report and every export.
+ *
+ * It only matters at the cap — and there it decides WHICH rows survive. The screen used to read the
+ * oldest rows first and the exports the newest, so past the cap "what you see here is exactly what
+ * the download contains" was false: the screen kept January, the file kept June. Newest-first
+ * everywhere, so a truncated report and a truncated file both keep the most recent work. `id` breaks
+ * ties, so two entries starting at the same minute cannot fall on different sides of the cut.
+ */
+export const REPORT_ORDER_BY = [
+  { workDate: "desc" },
+  { startTime: "asc" },
+  { id: "asc" }
+] satisfies Prisma.TimesheetOrderByWithRelationInput[];
+
 /** Everything an export needs, joined once. */
 export const REPORT_INCLUDE = {
   user: { select: { id: true, name: true, email: true } },
@@ -316,7 +331,8 @@ export async function buildTimesheetReport(
   const rows = await prisma.timesheet.findMany({
     where,
     include: REPORT_INCLUDE,
-    orderBy: [{ workDate: "asc" }, { startTime: "asc" }],
+    // Newest-first, the same order the exports use — see REPORT_ORDER_BY.
+    orderBy: REPORT_ORDER_BY,
     take: REPORT_ROW_LIMIT + 1
   });
 
@@ -396,12 +412,43 @@ export function buildTimesheetSections(rows: ReportRow[], groupBy: GroupByKey): 
   return groupTimesheetRows(rows, groupBy).map((summary) => ({ summary, rows: byKey.get(summary.key) ?? [] }));
 }
 
+/** Display names for the id filters, resolved once per export by `resolveReportFilterNames`. */
+export interface ReportFilterNames {
+  project?: string;
+  user?: string;
+  module?: string;
+  ticket?: string;
+}
+
+/** Names, never ids, for whichever of the four id filters are set. A filter whose row has since
+ *  been removed still gets a word — never the raw id, and never silence. */
+export async function resolveReportFilterNames(filters: TimesheetReportFilters): Promise<ReportFilterNames> {
+  const [project, user, module, ticket] = await Promise.all([
+    filters.projectId ? prisma.project.findUnique({ where: { id: filters.projectId }, select: { name: true, code: true } }) : null,
+    filters.userId ? prisma.user.findUnique({ where: { id: filters.userId }, select: { name: true } }) : null,
+    filters.moduleId ? prisma.projectModule.findUnique({ where: { id: filters.moduleId }, select: { name: true } }) : null,
+    filters.ticketId ? prisma.ticket.findUnique({ where: { id: filters.ticketId }, select: { key: true, title: true } }) : null
+  ]);
+  const projectLabel = project?.code ? `${project.code} — ${project.name}` : project?.name;
+  return {
+    project: projectLabel,
+    user: user?.name,
+    module: module?.name,
+    ticket: ticket ? `${ticket.key} — ${ticket.title}` : undefined
+  };
+}
+
 /** A human-readable one-liner describing what was filtered, printed onto every export so the
  *  document states its own scope. A report that does not say what it covers invites being read as
- *  covering everything. */
-export function describeReportFilters(filters: TimesheetReportFilters): string {
+ *  covering everything — which is what it did when filtered to a project, a person, a module or a
+ *  ticket: those four were left off, so a PDF of one project's rows said "all entries, all time". */
+export function describeReportFilters(filters: TimesheetReportFilters, names: ReportFilterNames = {}): string {
   const parts: string[] = [];
   if (filters.from || filters.to) parts.push(`${filters.from ?? "start"} to ${filters.to ?? "today"}`);
+  if (filters.projectId) parts.push(`project ${names.project ?? "(a removed project)"}`);
+  if (filters.userId) parts.push(`person ${names.user ?? "(a removed person)"}`);
+  if (filters.moduleId) parts.push(`module ${names.module ?? "(a removed module)"}`);
+  if (filters.ticketId) parts.push(`ticket ${names.ticket ?? "(a removed ticket)"}`);
   if (filters.status) parts.push(`status ${filters.status}`);
   if (filters.activityType) parts.push(`activity ${filters.activityType}`);
   if (typeof filters.billable === "boolean") parts.push(filters.billable ? "billable only" : "non-billable only");
@@ -451,6 +498,8 @@ export function buildTimesheetExportDocument(input: {
   workspace: string;
   generatedBy: string;
   reviewers: Map<string, string>;
+  /** Names for the id filters, so the scope line never prints an id — see describeReportFilters. */
+  filterNames?: ReportFilterNames;
   generatedAt?: Date;
 }): TimesheetExportDocument {
   const { rows, filters, groupBy } = input;
@@ -458,7 +507,7 @@ export function buildTimesheetExportDocument(input: {
     workspace: input.workspace,
     title: "Timesheet Report",
     periodLabel: describeReportPeriod(filters, rows),
-    scopeLabel: describeReportFilters(filters),
+    scopeLabel: describeReportFilters(filters, input.filterNames),
     generatedBy: input.generatedBy,
     generatedAt: input.generatedAt ?? new Date(),
     groupBy,

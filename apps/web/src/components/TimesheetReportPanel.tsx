@@ -24,6 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Skeleton } from "./ui/skeleton";
 import { toast } from "./ui/toaster";
 import { activityTypeApi, projectApi, reportApi, userApi, type GroupByKey, type TimesheetReportFilters } from "../services/api";
+import { exportParams } from "../lib/report-export";
 
 const ANY = "any";
 
@@ -95,13 +96,10 @@ export function TimesheetReportPanel() {
   async function download(type: "csv" | "pdf" | "xlsx") {
     setDownloading(type);
     try {
-      // The grouping goes along for xlsx so its Summary sheet matches what is on screen — a
-      // workbook whose summary groups differently from the page that produced it is a support
-      // ticket waiting to happen.
-      const { blob, truncated, rowsIncluded, totalMatching } = await reportApi.download(
-        type,
-        type === "xlsx" ? { ...filters, groupBy } : filters
-      );
+      // The grouping goes along for the workbook AND the PDF so both group as the screen does — a
+      // document grouped differently from the page that produced it is a support ticket waiting
+      // to happen. See lib/report-export.ts.
+      const { blob, truncated, rowsIncluded, totalMatching } = await reportApi.download(type, exportParams(type, filters, groupBy));
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;

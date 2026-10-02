@@ -11,7 +11,7 @@
  * audit trail (`action: "ticket.status_changed"`) is the only durable record of "was this ever
  * resolved, and was it later reopened."
  */
-import { Router, type Request } from "express";
+import { Router, type Request, type Response } from "express";
 import PDFDocument from "pdfkit";
 import {
   permissions,
@@ -35,11 +35,13 @@ import { buildTimesheetAnalytics } from "../services/timesheet-analytics.service
 import {
   GROUP_BY_KEYS,
   REPORT_INCLUDE,
+  REPORT_ORDER_BY,
   REPORT_ROW_LIMIT,
   TIMESHEET_CSV_HEADER,
   buildTimesheetExportDocument,
   buildTimesheetReport,
   buildTimesheetWhere,
+  resolveReportFilterNames,
   resolveReviewerNames,
   timesheetCsvValues,
   toCsvLine,
@@ -1289,6 +1291,21 @@ async function resolveWorkspaceName(): Promise<string> {
   return org?.name ?? ctx.orgSlug ?? "TimeSphere";
 }
 
+/**
+ * The X-Report-* headers every timesheet export carries, and their exposure to a cross-origin page.
+ *
+ * The CSV used to set Rows-Included only, so the download toast read "N of 0". And with no
+ * Access-Control-Expose-Headers a browser hides custom headers from a page on another origin — on a
+ * split-origin deployment the truncation warning could never fire, which is the one thing it is for.
+ * Truncated is derived, not passed: it is true exactly when fewer rows went out than matched.
+ */
+function setReportHeaders(res: Response, counts: { rowsIncluded: number; totalMatching: number }): void {
+  res.setHeader("X-Report-Rows-Included", String(counts.rowsIncluded));
+  res.setHeader("X-Report-Total-Matching", String(counts.totalMatching));
+  if (counts.totalMatching > counts.rowsIncluded) res.setHeader("X-Report-Truncated", "true");
+  res.setHeader("Access-Control-Expose-Headers", "X-Report-Rows-Included, X-Report-Total-Matching, X-Report-Truncated, Content-Disposition");
+}
+
 /** Everything the two exports need, gathered once. Both answer the same question in different
  *  formats, so they must not each decide for themselves what "the rows" are. */
 async function loadExportDocument(req: Request, rowLimit: number) {
@@ -1299,17 +1316,18 @@ async function loadExportDocument(req: Request, rowLimit: number) {
 
   // Counted separately so the document can compare what it is showing against what matched, and
   // say plainly when those differ.
-  const [totalMatching, rows, workspace] = await Promise.all([
+  const [totalMatching, rows, workspace, filterNames] = await Promise.all([
     prisma.timesheet.count({ where }),
     prisma.timesheet.findMany({
       where,
       include: REPORT_INCLUDE,
-      // Newest first so a capped export keeps the most recent work; each section re-sorts its own
-      // rows forwards for reading.
-      orderBy: [{ workDate: "desc" }, { startTime: "asc" }],
+      // Newest first so a capped export keeps the most recent work — the same order (and so the
+      // same rows) as the screen; each section re-sorts its own rows forwards for reading.
+      orderBy: REPORT_ORDER_BY,
       take: rowLimit
     }),
-    resolveWorkspaceName()
+    resolveWorkspaceName(),
+    resolveReportFilterNames(filters)
   ]);
 
   return buildTimesheetExportDocument({
@@ -1319,7 +1337,8 @@ async function loadExportDocument(req: Request, rowLimit: number) {
     groupBy,
     workspace,
     generatedBy: `${req.user!.name} (${req.user!.email})`,
-    reviewers: await resolveReviewerNames(rows)
+    reviewers: await resolveReviewerNames(rows),
+    filterNames
   });
 }
 
@@ -1383,21 +1402,19 @@ reportRouter.get("/export.xlsx", requirePermission(permissions.REPORTS_VIEW), as
   const stamp = new Date().toISOString().slice(0, 10);
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", `attachment; filename="timesheet-report-${stamp}.xlsx"`);
-  res.setHeader("X-Report-Rows-Included", String(report.rowsIncluded));
-  res.setHeader("X-Report-Total-Matching", String(report.totalMatching));
-  if (report.truncated) res.setHeader("X-Report-Truncated", "true");
+  setReportHeaders(res, report);
   await wb.xlsx.write(res);
   res.end();
 });
 
 reportRouter.get("/export.csv", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
   const filters = parseReportFilters(req.query as Record<string, unknown>);
-  const rows = await prisma.timesheet.findMany({
-    where: buildTimesheetWhere(filters),
-    include: REPORT_INCLUDE,
-    orderBy: [{ workDate: "desc" }, { startTime: "asc" }],
-    take: REPORT_ROW_LIMIT
-  });
+  const where = buildTimesheetWhere(filters);
+  const [rows, totalMatching] = await Promise.all([
+    prisma.timesheet.findMany({ where, include: REPORT_INCLUDE, orderBy: REPORT_ORDER_BY, take: REPORT_ROW_LIMIT }),
+    // Counted so the download can say "N of M" — the CSV is the one export that never did.
+    prisma.timesheet.count({ where })
+  ]);
   const reviewers = await resolveReviewerNames(rows);
 
   const lines = [
@@ -1408,10 +1425,9 @@ reportRouter.get("/export.csv", requirePermission(permissions.REPORTS_VIEW), asy
   const stamp = new Date().toISOString().slice(0, 10);
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename=timesheet-report-${stamp}.csv`);
-  res.setHeader("X-Report-Rows-Included", String(rows.length));
-  // A CSV cannot carry a caveat in its body without corrupting the data, so the header is the
-  // only honest channel. Hitting this at all means the filter was too broad to be a report.
-  if (rows.length === REPORT_ROW_LIMIT) res.setHeader("X-Report-Truncated", "true");
+  // A CSV cannot carry a caveat in its body without corrupting the data, so the headers are the
+  // only honest channel. Hitting the cap at all means the filter was too broad to be a report.
+  setReportHeaders(res, { rowsIncluded: rows.length, totalMatching });
   // A BOM, so Excel opens UTF-8 correctly instead of mangling every accented name. Costs three
   // bytes and removes the single most common "your export is broken" report.
   res.send("\uFEFF" + lines.join("\n"));
@@ -1448,7 +1464,7 @@ reportRouter.get("/timesheets/:id/export.csv", requirePermission(permissions.REP
   const day = row.workDate.toISOString().slice(0, 10);
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename=timesheet-entry-${day}-${row.id.slice(0, 8)}.csv`);
-  res.setHeader("X-Report-Rows-Included", "1");
+  setReportHeaders(res, { rowsIncluded: 1, totalMatching: 1 });
   res.send("\uFEFF" + lines.join("\n"));
 });
 
@@ -1477,9 +1493,7 @@ reportRouter.get("/export.pdf", requirePermission(permissions.REPORTS_VIEW), asy
   // Machine-readable truncation, alongside the human-readable warning printed on the page. A
   // caller scripting this export cannot reasonably parse the PDF to discover the document is
   // partial, and "partial" is exactly the thing it must not miss.
-  res.setHeader("X-Report-Total-Matching", String(report.totalMatching));
-  res.setHeader("X-Report-Rows-Included", String(report.rowsIncluded));
-  if (report.truncated) res.setHeader("X-Report-Truncated", "true");
+  setReportHeaders(res, report);
 
   // bufferPages so the footer pass can stamp "Page X of Y" — Y does not exist until the last row
   // has been drawn.
