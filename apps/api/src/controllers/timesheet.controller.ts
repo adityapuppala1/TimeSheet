@@ -90,6 +90,9 @@ function entryText(entry: { taskDescription?: string | null; notes?: string | nu
  * (template-store.service.ts#applyVars): escaped, with its lines kept as `<br />` — exactly what the
  * code default's `quoted()` does with the same text.
  */
+/** A plain var for an override template, which substitutes it verbatim: names, project, reason. */
+const esc = (value: string | null | undefined): string => emailShell.escape(value ?? "");
+
 function quotedVar(text: string): string {
   return emailShell.escape(text).replaceAll(/\r?\n/g, "<br />");
 }
@@ -488,7 +491,18 @@ async function announceSubmission(
     link: "/app/history",
     email: {
       templateKey: "timesheet.submitted",
-      vars: { name: author.name, hours: hours.toFixed(2), date: dateLabel, project, managerName: manager?.name ?? "", ...detailVars, description: quotedVar(detailVars.description) },
+      vars: {
+        name: esc(author.name),
+        hours: hours.toFixed(2),
+        date: dateLabel,
+        project: esc(project),
+        managerName: esc(manager?.name),
+        module: esc(detailVars.module),
+        submodule: esc(detailVars.submodule),
+        activity: esc(detailVars.activity),
+        ticketRef: esc(detailVars.ticketRef),
+        description: quotedVar(detailVars.description)
+      },
       fallback: {
         subject: `Timesheet submitted — ${dateLabel}`,
         html: templates.timesheetSubmitted({ name: author.name, hours, date: dateLabel, project, managerName: manager?.name ?? null, ...entryDetail })
@@ -812,13 +826,13 @@ async function approveCore(id: string, reviewerUser: Reviewer, authority: Approv
     email: {
       templateKey: "timesheet.approved",
       vars: {
-        name: item.user.name,
+        name: esc(item.user.name),
         hours: hours.toFixed(2),
         date: dateLabel,
-        reviewer,
-        project: item.project.name,
-        module: item.module?.name ?? "",
-        submodule: item.submodule?.name ?? "",
+        reviewer: esc(reviewer),
+        project: esc(item.project.name),
+        module: esc(item.module?.name),
+        submodule: esc(item.submodule?.name),
         activity: item.activityType ?? "",
         description: quotedVar(entryText(item))
       },
@@ -872,13 +886,13 @@ async function rejectCore(id: string, reason: string, reviewerUser: Reviewer, au
     email: {
       templateKey: "timesheet.rejected",
       vars: {
-        name: item.user.name,
+        name: esc(item.user.name),
         date: dateLabel,
-        project: item.project.name,
-        reviewer,
-        reason: cleanReason,
-        module: item.module?.name ?? "",
-        submodule: item.submodule?.name ?? "",
+        project: esc(item.project.name),
+        reviewer: esc(reviewer),
+        reason: esc(cleanReason),
+        module: esc(item.module?.name),
+        submodule: esc(item.submodule?.name),
         activity: item.activityType ?? "",
         description: quotedVar(entryText(item))
       },

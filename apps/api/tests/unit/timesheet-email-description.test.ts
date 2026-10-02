@@ -214,6 +214,14 @@ describe("on a decision", () => {
     expectPlainQuote("timesheet.rejected");
   });
 
+  it("escapes the reject reason and names in the override vars, which an admin's template substitutes verbatim", async () => {
+    const res = await request(buildApp()).patch(`/api/timesheets/${ID}/reject`).send({ reason: "<img src=x onerror=alert(1)> wrong" });
+    expect(res.status).toBe(200);
+    const vars = sent("timesheet.rejected").email!.vars as Record<string, unknown>;
+    expect(String(vars.reason)).not.toContain("<img");
+    expect(String(vars.reason)).toContain("&lt;img");
+  });
+
   it("keeps typed markup as text in the override var", async () => {
     row = entry("SUBMITTED", TYPED_MARKUP, "");
     await request(buildApp()).patch(`/api/timesheets/${ID}/approve`).send({});
