@@ -61,8 +61,11 @@ const fail = (msg) => {
 
 async function main() {
   await control.platformAdminUser.deleteMany({ where: { email: THROWAWAY.email } });
+  // SUPPORT: the least role that may run Rescue admin (step 6). Without one the column default,
+  // READ_ONLY, answers that step 403. Not flagged mustChangePassword — this script exercises the
+  // seeded-password BANNER, which is the path for accounts that predate the rotation gate.
   await control.platformAdminUser.create({
-    data: { email: THROWAWAY.email, name: THROWAWAY.name, passwordHash: await bcrypt.hash(THROWAWAY.password, 10), status: "ACTIVE" }
+    data: { email: THROWAWAY.email, name: THROWAWAY.name, role: "SUPPORT", passwordHash: await bcrypt.hash(THROWAWAY.password, 10), status: "ACTIVE" }
   });
 
   const browser = await chromium.launch();
