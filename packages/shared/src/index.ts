@@ -113,9 +113,12 @@ export interface AuthUser {
    *  common case (nobody has granted a second role); a "Switch role" control only makes sense to
    *  show when this has more than one entry. See UserRole in schema.prisma. */
   heldRoles: RoleName[];
-  /** True while this person is using a password an admin set — drives a "choose your own
-   *  password" prompt in the web app; cleared when they change it. */
+  /** True while this person is using a password an admin set; cleared when they change it. */
   mustChangePassword?: boolean;
+  /** True when that flag holds THIS session at the forced change-password screen — only for a session
+   *  established by a password sign-in (SSO and LDAP sessions are never held). From /auth/me and
+   *  /auth/login; every other route answers 403 PASSWORD_CHANGE_REQUIRED meanwhile. */
+  passwordChangeRequired?: boolean;
   permissions: Permission[];
   avatarUrl?: string | null;
   bio?: string | null;
@@ -173,8 +176,9 @@ export const platformCapabilities = {
    *  Everything here is either reversible or a message. */
   PLATFORM_SUPPORT: "platform:support",
   /** Money: plan tiers, the Stripe configuration, an org's tier/seat/AI-budget overrides, and the
-   *  backup policy a tier entitles. Deliberately does NOT include the tenant rescue routes — a
-   *  finance role has no business inside a customer's user table. */
+   *  backup SCHEDULE a tier entitles. Not backup RETENTION (keep count/days, GFS) — how much customer
+   *  data survives is an operator decision since 2026-10 (PLATFORM_OPERATE). Deliberately does NOT
+   *  include the tenant rescue routes — a finance role has no business inside a customer's user table. */
   PLATFORM_BILLING: "platform:billing",
   /** Run the platform: mail/AI/retention/backup configuration, provisioning, org status changes,
    *  maintenance windows, and the snapshot download. */
@@ -245,7 +249,11 @@ export const platformTwoPersonActions = {
   SNAPSHOT_RESTORE: "snapshot.restore",
   SNAPSHOT_DELETE: "snapshot.delete",
   ADMIN_CREATE: "admin.create",
-  ADMIN_ROLE_CHANGE: "admin.role_change"
+  ADMIN_ROLE_CHANGE: "admin.role_change",
+  /** A retention-policy change that makes deletion sooner or more likely (2026-10 audit). */
+  RETENTION_SETTINGS: "retention.settings",
+  /** INACTIVE → ACTIVE for a platform admin, which also issues a new temporary password. */
+  ADMIN_REACTIVATE: "admin.reactivate"
 } as const;
 
 export type PlatformTwoPersonAction = (typeof platformTwoPersonActions)[keyof typeof platformTwoPersonActions];
@@ -255,7 +263,9 @@ export const PLATFORM_TWO_PERSON_LABEL: Record<PlatformTwoPersonAction, string> 
   "snapshot.restore": "Restore a snapshot over a workspace",
   "snapshot.delete": "Delete a pre-deletion snapshot",
   "admin.create": "Create a platform admin account",
-  "admin.role_change": "Change a platform admin's role"
+  "admin.role_change": "Change a platform admin's role",
+  "retention.settings": "Loosen the retention policy's deletion safeguards",
+  "admin.reactivate": "Reactivate a deactivated platform admin"
 };
 
 /** How long a queued request stays approvable. Long enough to find a colleague in another
@@ -1534,8 +1544,9 @@ export interface GlobalPlanningSettings {
 /**
  * The four change types, and why there are four rather than ITIL's three.
  *
- * STANDARD, NORMAL and EMERGENCY are the classic vocabulary: pre-approved routine work, planned work
- * that earns a decision, and work that cannot wait for one.
+ * STANDARD, NORMAL and EMERGENCY are the classic vocabulary: routine low-risk work, planned work that
+ * earns a decision, and work that cannot wait for one. Here every type is still approved — with no
+ * catalogue of pre-authorised templates, a "pre-approved" type the requester picks would be a loophole.
  *
  * MAJOR IS NOT A FOURTH PEER — it is NORMAL escalated, and it exists because two obligations cannot
  * be derived from the risk score:
@@ -1615,10 +1626,11 @@ export const changeStateTransitions: Record<ChangeState, readonly ChangeState[]>
   DRAFT: ["AWAITING_APPROVAL", "CANCELLED"],
   SUBMITTED: ["RISK_ASSESSMENT", "AWAITING_APPROVAL", "DRAFT", "CANCELLED"],
   RISK_ASSESSMENT: ["AWAITING_APPROVAL", "DRAFT", "CANCELLED"],
-  // Nothing manual leads out of here except cancellation. APPROVED and REJECTED are written only by
-  // a recorded decision — see change.service.ts#recordDecision — so no caller can PATCH past the
-  // approver, which is the single rule the whole module exists to enforce.
-  AWAITING_APPROVAL: ["CANCELLED"],
+  // APPROVED and REJECTED are written only by a recorded decision — see change.service.ts — so no
+  // caller can PATCH past the approver, which is the single rule the whole module exists to enforce.
+  // The two manual ways out: withdraw to DRAFT (the plan is frozen while it waits, so editing means
+  // withdrawing; the pending round is settled WITHDRAWN and stays on record) or cancel.
+  AWAITING_APPROVAL: ["DRAFT", "CANCELLED"],
   APPROVED: ["SCHEDULED", "IMPLEMENTING", "CANCELLED"],
   SCHEDULED: ["IMPLEMENTING", "APPROVED", "CANCELLED"],
   IMPLEMENTING: ["VALIDATION", "CANCELLED"],

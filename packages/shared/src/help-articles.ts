@@ -72,11 +72,16 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "If your workspace uses a directory (LDAP / Active Directory), switch to the Directory tab and use your directory credentials.",
       "Press the round fingerprint sensor (or Enter) to sign in — it scans while your credentials are checked, turns green on success and red on failure.",
       "Wrong workspace? Use “Not your workspace? Find yours” at the bottom — every workspace has its own address.",
-      "Only know your email address? Open Find your workspace, type it, and enter the six-digit code sent to that address. You will get a list of every workspace that address can sign in to, with a link to each."
+      "Only know your email address? Open Find your workspace, type it, and enter the six-digit code sent to that address. You will get a list of every workspace that address can sign in to, with a link to each.",
+      "Remember me is off by default. Unticked, your session ends when you close the browser; tick it on your own device to stay signed in for up to 30 days.",
+      "Forgot your password? Use Forgot password: the link works once, for 30 minutes, and at most three are sent to one address an hour. A workspace that signs in through SSO only doesn't offer it — use your company's sign-in button.",
+      "Five wrong passwords lock the account for 5 minutes; each further wrong one locks it for 15, then 60 minutes. Resetting your password lifts the lock straight away.",
+      "If an administrator set your password, you'll be asked to choose your own before anything else opens. You get an email whenever your password changes.",
+      "If single sign-on fails, the sign-in page says why — cancelled, expired, your account isn't active, no free seat, or your administrator hasn't allowed new accounts from your address."
     ],
     notes:
       "Already signed in? Opening /login sends you straight into the app. To sign in as somebody else on a shared machine, sign out first from the profile menu. The fingerprint is the submit button, not a biometric check. Your workspace address is part of who you are signing in as: the same email address can belong to two different workspaces with different names, roles and passwords, so the page always shows which workspace you are about to enter. If your company address has no workspace name in front of it, you will be taken to Find your workspace instead of a sign-in form — there is no one workspace that address belongs to.",
-    keywords: ["login", "log in", "sso", "google", "microsoft", "ldap", "directory", "password", "fingerprint", "workspace", "find workspace", "wrong workspace", "which workspace", "verification code", "two accounts", "same email"]
+    keywords: ["login", "log in", "sso", "google", "microsoft", "ldap", "directory", "password", "fingerprint", "workspace", "find workspace", "wrong workspace", "which workspace", "verification code", "two accounts", "same email", "remember me", "forgot password", "reset password", "locked", "lockout", "too many attempts", "change password"]
   },
   {
     id: "profile-and-appearance",
@@ -156,7 +161,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Attach evidence if useful (files are scanned first when scanning is on), then save. The entry starts as a draft.",
       "Submit it to start the review clock — your manager sees it instantly."
     ],
-    notes: "A daily-cap warning appears when a day's total looks wrong. The dashboard's “No entry for today yet” banner is the shortcut back here.",
+    notes: "A daily-cap warning appears when your own hours for that day (rejected ones aside) pass 12 — it is a warning on this form, not a rule. “Today” is your own calendar day, from your profile's time zone. The dashboard's “No entry for today yet” banner is the shortcut back here.",
     screenshot: "timesheet.png",
     keywords: ["log", "time", "timesheet", "entry", "hours", "submit", "draft", "task", "attachment"]
   },
@@ -167,10 +172,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
     where: "Sidebar → History (your entries), or the dashboard's This week card",
     when: "When you want to know where an entry is in the pipeline.",
     steps: [
-      "DRAFT — only you can see it; edit freely.",
-      "PENDING — submitted, waiting on your manager. Editing pulls it back to draft.",
-      "APPROVED — locked into the record at the rate that applied on approval.",
-      "REJECTED — comes back with the approver's note; fix and resubmit."
+      "DRAFT — not submitted yet. You can edit or delete it; approvers (and anyone who can view reports) can see it, and an approver can edit or submit it for you.",
+      "PENDING — submitted, waiting on a decision. You can still edit it and your reviewer is told; changing the date, times, project or module restarts the review clock and removes the identity-verified badge. A submitted entry can't be deleted.",
+      "APPROVED — locked into the record at the rate that applied on approval. An approver (never you) can Reopen it with a reason: it goes back to pending, the frozen rate is cleared, and you're told.",
+      "REJECTED — comes back with the approver's note. You can't edit or resubmit it: log a fresh entry for that time (the rejected one no longer holds the slot)."
     ],
     keywords: ["status", "draft", "pending", "approved", "rejected", "resubmit", "history"]
   },
@@ -182,9 +187,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
     where: "Sidebar → Approvals",
     when: "The queue opens on what is waiting for your decision.",
     steps: [
-      "Open Approvals — it lists entries awaiting you; the status filter widens it to everything you may see.",
+      "Open Approvals — it lists the entries you can decide, a page at a time, with the total awaiting you at the top. Your own entries are not listed, and nor are those of anyone above you in your reporting line: nobody approves their own hours or their manager's, admins included. Two exceptions keep everyone's hours decidable: someone with no manager can be decided by any other approver, and in a workspace with only one approver, that person decides their own (the audit log says so).",
       "Open an entry for the full detail: task text, attachments, the day's other entries.",
-      "Approve, or reject with a note the person can act on.",
+      "Approve, or reject with a note the person can act on. A bulk rejection emails every submitter, one by one. If someone else decided the entry a moment before you, you're told it was already decided.",
+      "Approved by mistake? Open the entry and Reopen it with a reason — it returns to the queue and its author is told.",
       "Export one entry's full detail when you need it outside the app."
     ],
     notes: "Approval snapshots the billing rate — a rate change next quarter cannot rewrite what was approved today. Identity-verified approvals feed the attestation PDF.",
@@ -204,7 +210,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Duplicate detection warns when an existing ticket looks like the same issue — check it before filing a twin.",
       "Attach screenshots or files (scanned first when scanning is on) and create."
     ],
-    notes: "Tickets can also arrive without this form: email intake, Slack/Teams/Google Chat/Telegram, and public request forms all land as routed tickets when configured.",
+    notes: "Tickets can also arrive without this form: email intake, Slack/Teams/Google Chat/Telegram, and public request forms all land as routed tickets when configured. An email reply to the confirmation (or with the ticket key like [WEB-12] in its subject) is added to that ticket as a comment instead of opening a new one, and automatic replies and bulk mail are ignored. A ticket that needs review can be triaged by the managers and team leads of its project; Mark reviewed (AI Activity Log), assigning it or moving it clears the flag. The CHANGE type isn't offered here — raise a change from Change Management.",
     screenshot: "tickets.png",
     keywords: ["ticket", "raise", "create", "bug", "task", "issue", "priority", "duplicate", "triage"]
   },
@@ -217,7 +223,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     steps: [
       "Switch views from the Views Bar under the title: List, Board, and — with planning on — Timeline and Calendar. Save view keeps the filters, grouping and columns you chose.",
       "Group by Status, Priority, Type, Project, Assignee or Sprint. Each group has a heading (status and priority groups carry their colour dot; project groups their mark) and an Add ticket row at the bottom that opens the dialog pre-filled to land in that group. Filters pre-fill the header's New ticket the same way.",
-      "Change a status from the list: the status pill on a row (or phone card) is a menu of the other statuses. The server decides what is legal; a refusal shows its reason.",
+      "Change a status from the list: the status pill on a row (or phone card) is a menu of the other statuses. The server decides what is legal; a refusal shows its reason. A change's own ticket moves only from its change. Reopening a ticket restarts its SLA clock from now, and so does changing its priority.",
       "On a phone the list is cards rather than a table, twenty at a time — Show more at the bottom adds another twenty and tells you how many are left.",
       "Tick Columns to show or hide columns, including one per custom field and Sprint; a saved view remembers the set.",
       "Open a ticket: drag its sheet wider than 960px or press Maximize, and the fields sit beside Comments and Activity in two columns. Hide activity keeps the details in focus; the choice is remembered in this browser.",
@@ -288,11 +294,12 @@ export const HELP_ARTICLES: HelpArticle[] = [
     where: "Sidebar → Change Management → New change",
     when: "Any production-affecting work that needs assessment, approval and a scheduled window.",
     steps: [
-      "Pick the type: Standard (pre-approved routine), Normal, Emergency, or Major (Normal escalated — forces a backout plan and a post-implementation review).",
+      "Pick the type: Standard (routine, low-risk — still approved like any change), Normal, Emergency (urgent — the same approver, so say why it can't wait), or Major (Normal escalated — forces a backout plan and a post-implementation review).",
       "Fill the risk assessment COMPLETELY — every parameter. A half-filled form under-reports risk, so submission requires all of it.",
       "The score bands the change (Low/Medium/High); the band decides whether a backout plan is mandatory.",
       "Write the implementation, test and communication plans — Draft with AI can propose text you accept per section.",
-      "Schedule it against the calendar; blackout windows are shown so you can dodge them. Then submit for approval."
+      "Schedule it against the calendar; blackout windows are shown so you can dodge them. Scheduling or starting it inside a blackout or an overlapping window needs a written override reason. Then submit for approval.",
+      "Once submitted, the plans, risk answers, window and type are locked — what the approver decides on can't move underneath them. To change them, Withdraw to draft (the round is recorded as withdrawn) and submit again. Moving the window or environment clears an old override reason — write a new one if it still collides."
     ],
     notes: "A change IS a ticket underneath — comments, attachments, watchers and audit come with it. Keys look like HICS-TS-20260819-0001.",
     screenshot: "changes.png",
@@ -308,7 +315,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
     steps: [
       "Open the change and review the risk band, the plans and the schedule.",
       "Approve, or reject with the objection written down — a rejection opens a NEW round rather than overwriting, so the objection survives the rework.",
-      "After approval the runbook stays editable: recording that step 4 failed is work that happens during implementation."
+      "Approving re-checks that the change still has everything submission requires; if not, reject it so the requester can complete it.",
+      "After approval the runbook stays workable by the requester, the implementer and change managers: recording that step 4 failed is work that happens during implementation.",
+      "A change manager can still edit an approved or scheduled change, but changing its plans, risk, window or type sends it back for approval as a new round."
     ],
     notes: "A change cannot move to Implementing while a predecessor is open — the refusal names the blocker.",
     keywords: ["change", "approve", "reject", "approval", "cab", "review", "implementing"]
@@ -323,7 +332,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
     when: "Everyone opens to what's theirs: an engineer sees today's timeline and unlogged time, a manager sees the queue and SLA timers.",
     steps: [
       "The date filter at the top drives EVERY card — change it once and hours, tickets and comparisons all follow.",
-      "Comparisons read against the previous equal-length period, so “vs last period” means what it says.",
+      "Comparisons are like for like — “vs the same days last week” (or the same days some whole weeks earlier) — and the label says so. A figure that describes right now, such as pending approvals, has no comparison. A rise from nothing reads “new”.",
+      "Your personal cards are only your own hours, counting submitted and approved time (drafts and rejected hours are not logged hours). The target meter counts the working days so far. “Project hours” is hours per project — not utilisation. Numbers use the Indian format, and a card that couldn't load shows a dash and Retry rather than zero.",
       "The day timeline shows one lane per person you are entitled to see; the setup checklist retires itself as you finish it. Required face enrollment appears first and cannot be dismissed while incomplete. Super admins also see workspace goals, AI teammates and workflow milestones when available; completed milestones remain in the progress total."
     ],
     screenshot: "dashboard.png",
@@ -337,9 +347,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
     where: "Sidebar → Insights; exports from the report screens",
     when: "Velocity, SLA compliance, cycle-time distribution and workload — computed from the same rows the approvals ran against.",
     steps: [
-      "Open Insights and set the range; every chart follows it.",
-      "Export a 22-column CSV or a real Excel workbook from the report screens.",
-      "Schedule a dashboard to email daily/weekly/monthly — recipients need no account, and the report is built with YOUR access, stopping if you leave.",
+      "Open Insights and set the range; every chart follows it. Weeks start Monday in India's time; resolution and first response are medians, with how many tickets they cover; SLA breaches are counted from each ticket's due date; cost is shown per currency, never added across currencies.",
+      "Export a 22-column CSV, a real Excel workbook or a PDF from the report screens. Each names every filter it was cut to (project, person, module, ticket, dates), the PDF follows the on-screen grouping, and if a report hits the row cap the screen and every export keep the same newest rows.",
+      "Schedule a dashboard to email daily/weekly/monthly — recipients need no account, and the report is built with YOUR access (the same projects the live dashboard shows you). It pauses, with the reason shown, if you leave or lose report access, and it skips the addresses of colleagues who have left. You can always see, pause, resume and delete your own schedules; resuming needs report access.",
       "Charts name only people who are still active; a footnote says how many were left out. Downloads and scheduled emails still cover everybody, so a period you invoice or audit against stays complete."
     ],
     screenshot: "insights.png",
@@ -388,13 +398,15 @@ export const HELP_ARTICLES: HelpArticle[] = [
     where: "Sidebar → User management (admin section)",
     when: "Adding people, changing roles, deactivating leavers.",
     steps: [
-      "Add a user with name, email and role — they receive a one-time password and must change it on first sign-in.",
+      "Add a user with name, email and role — they receive a one-time password and must choose their own the first time they sign in with it; nothing else opens until they do. A password you type yourself can't be a common one or built from their email address.",
+      "Only a super admin can change, reset, sign out, deactivate or delete a super admin, or make anyone a super admin. Nobody can deactivate, delete or demote their own account here, and the workspace's last active super admin can't be removed.",
+      "Reactivating someone takes a seat, just as adding them does — at your plan's limit, free a seat first. A manager must be an active person, and reporting lines can't go round in a loop. AI agent identities are not people: they aren't counted on charts, the team page or the org chart, and don't get timesheet reminders.",
       "Bulk-add via CSV upload when onboarding a team.",
       "Deactivate instead of delete: history is preserved, sign-in is blocked. Force-logout ends someone's sessions immediately.",
       "A deactivated person drops out of every on-screen per-person breakdown — the leaderboard, the workload heatmap, utilisation, and their old manager's team page — so charts describe the team you have. Their tickets, hours and audit trail are untouched, still counted in every total, and still in exports.",
-      "With SCIM configured, your identity provider creates and deactivates accounts automatically — see the SSO article."
+      "With SCIM configured, your identity provider creates and deactivates accounts automatically, Microsoft Entra included — see the SSO article. People added any way can find their workspace by email straight away."
     ],
-    keywords: ["user", "create", "invite", "deactivate", "csv", "bulk", "password", "force logout", "manage users"]
+    keywords: ["user", "create", "invite", "deactivate", "reactivate", "csv", "bulk", "password", "force logout", "manage users", "seat", "super admin", "agent"]
   },
   {
     id: "roles",
@@ -405,7 +417,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
     steps: [
       "Employees log time and raise tickets; team leads and managers also approve and see their people's work.",
       "Admins manage users, projects and most settings; the super admin holds workspace-wide settings, billing and AI controls.",
-      "Hold more than one role? The profile menu gains Switch role — the app re-scopes instantly, no sign-out needed."
+      "Hold more than one role? The profile menu gains Switch role — the app re-scopes instantly, no sign-out needed.",
+      "Only a super admin can grant the super admin role. Someone who holds it while switched into another role still counts as a super admin, and a workspace always keeps at least one active."
     ],
     keywords: ["roles", "permissions", "rbac", "switch role", "admin", "manager", "employee", "access"]
   },
@@ -420,7 +433,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Super admins — or, in a workspace without one, its admins — get a bell notification and an email when a request arrives. Open User management → Requests — the tab shows how many are waiting.",
       "Each request shows the person's name, the address they proved they own, their message, when they asked and how long it has left.",
       "Approve: choose a role — Employee, unless you are a super admin and pick another. The line under the role says how many seats approving uses; at your plan's limit, free a seat or upgrade first.",
-      "They are emailed a link to choose their own password. It works once and expires after 72 hours; after that, Forgot password on the sign-in page still works.",
+      "They are emailed a link to choose their own password. It works once and expires after 72 hours; after that, Forgot password on the sign-in page still works. In a workspace that signs in through SSO only, the email is a link to sign in with their company account instead.",
       "Decline: optionally leave a note. It is emailed to them with the decision.",
       "Decided requests — approved, declined and expired — stay listed below with who decided and when."
     ],
@@ -606,11 +619,16 @@ export const HELP_ARTICLES: HelpArticle[] = [
     when: "Connecting Google, Microsoft/Entra, any SAML IdP or LDAP — and letting the IdP create and close accounts (SCIM).",
     steps: [
       "The connection board shows all five at a glance: Live, Ready (saved but off), Half configured, or Not set up — the same board and folding sections every long settings tab now uses.",
-      "Open a provider's card and enter YOUR OWN app registration — there is no shared client.",
-      "Use Test connection, then prove it: “Require SSO only” stays locked until a real person has signed in that way — the only check that cannot lock everyone out.",
-      "SCIM lives on the same tab: generate the bearer token (shown once), give it and the base URL to your IdP."
+      "Open a provider's card and enter YOUR OWN app registration — there is no shared client. The card shows the exact redirect URL, SAML ACS URL and entity ID to register, each with a copy button; the SAML metadata URL ends in /api/auth/sso/saml/metadata.",
+      "Microsoft: enter your Directory (tenant) ID — new setups require it. An older setup without one accepts any Microsoft organization and personal accounts; its card lists the directories people actually sign in from and offers Restrict to my directory, showing exactly who that would shut out before you confirm.",
+      "Accounts created on first sign-in: anyone your provider accepts gets an Employee account unless you switch that off or list the email domains allowed to (Use your company domains fills them in). For Google, an allowed domain other than gmail.com must also be the person's Google Workspace domain. Each new account is in the audit log and super admins get a bell notification.",
+      "SAML: a signed response or a signed assertion both work (Entra and Google sign only the assertion by default). To roll a certificate over, paste both certificates into the field.",
+      "Use Test connection, then prove it: “Require SSO only” stays locked until a real person has signed in that way — the only check that cannot lock everyone out. While it is on, the last provider anyone signed in through can't be switched off.",
+      "SCIM lives on the same tab: generate the bearer token (shown once), give it and the base URL to your IdP. Your IdP can't deprovision the workspace's last active super admin — assign another super admin first."
     ],
-    keywords: ["sso", "saml", "oidc", "google", "microsoft", "entra", "ldap", "scim", "provisioning", "require sso"]
+    notes:
+      "A Microsoft connection test can check the configuration but not the client secret, so it says “configuration looks valid” — a real sign-in proves the rest. If a sign-in fails, the person sees the reason on the sign-in page. LDAP refuses a search filter that matches two people for one address; narrow the filter.",
+    keywords: ["sso", "saml", "oidc", "google", "microsoft", "entra", "ldap", "scim", "provisioning", "require sso", "tenant id", "directory id", "jit", "allowed domains", "certificate", "redirect uri", "acs"]
   },
   {
     id: "email-setup",
@@ -622,7 +640,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
     steps: [
       "Mail server: your SMTP credentials override the install defaults; the connection test sends a real message.",
       "Email channels & templates: per-template enable, preview, test-send, revert and delivery analytics.",
-      "Email intake: an IMAP mailbox polled for inbound mail — each message becomes a routed ticket; routing rules decide the project."
+      "Email intake: an IMAP mailbox polled for inbound mail — each message becomes a routed ticket; routing rules decide the project.",
+      "A reply to our confirmation (or with the ticket key, like [WEB-12], in its subject) is added to that ticket instead of opening a new one; a reply to a resolved ticket reopens it, and one to a closed ticket opens a linked follow-up. Auto-replies, bounces and bulk mail are skipped so they can't loop — the Mailbox connection card shows how many — while mail arriving through a Google Group or other mailing list is handled normally."
     ],
     keywords: ["email", "smtp", "imap", "templates", "intake", "mail", "delivery", "bounce"]
   },
@@ -715,8 +734,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "AI usage is never billed by us: you pay your model provider directly, under the budget you set on the AI tab."
     ],
     notes:
-      "A tier change emails your workspace's super admins a receipt. A seat count changing on its own does not — that is not a plan change.",
-    keywords: ["billing", "plan", "tier", "seats", "upgrade", "stripe", "payment", "enterprise", "starter", "team"]
+      "A tier change emails your workspace's super admins a receipt. A seat count changing on its own does not — that is not a plan change. If a trial ends or a renewal payment fails, the workspace pauses: everyone sees who can renew it, and a super admin can choose a plan, update the card or export timesheets straight from that page. Paying restores it — even after a suspension for non-payment.",
+    keywords: ["billing", "plan", "tier", "seats", "upgrade", "stripe", "payment", "enterprise", "starter", "team", "lapsed", "paused", "grace", "suspended", "renew"]
   },
   {
     id: "billing-portal-invoices",
@@ -801,7 +820,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "They sign in with it and are prompted to choose their own password. Every previous session of that account is already signed out.",
       "If the lockout is an SSO misconfiguration instead, use Restore password login — it turns password sign-in back on without touching anyone's password."
     ],
-    notes: "The reset is written to the customer's own audit log, attributed to your platform-admin account — they can see it happened.",
+    notes: "The reset is written to the customer's own audit log, attributed to your platform-admin account, and every super admin of that workspace is emailed with your reason — they can see it happened. An account the customer deactivated can't be rescued; Restore password login is recorded in their audit log too.",
     keywords: ["locked out", "rescue", "reset password", "super admin", "forgot password", "sso lockout", "restore password login", "one-time password"]
   },
   {
@@ -812,8 +831,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
     where: "/platform-admin → Change password (sidebar), or the amber banner across the top",
     when: "Immediately after a fresh install, and whenever an operator leaves.",
     steps: [
-      "The console ships with a bootstrap sign-in whose password is printed in the repository. While that password is still in use, an amber banner stays across every console page.",
+      "A new installation prints a generated password for the first sign-in, once. An account on a generated or temporary password must change it before any other console page opens. (Development installs use a known password, and an older install still on it keeps an amber banner.)",
       "Change password: enter the current one and a new one of at least 12 characters.",
+      "In production, owners and operators must also set up a second factor (an authenticator app) before the console opens; turning it off later needs a current code.",
       "Every other console session is signed out at that moment; yours stays.",
       "The banner disappears as soon as the change is accepted."
     ],
@@ -830,6 +850,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "The policy sets the sequence: a check-in on day 10 of the trial, 'your trial has ended' the day it ends, then reminders 30, 60, 80 and 90 days later. The last reminder is the final notice.",
       "After the retention window (90 days by default) the workspace and its database are deleted permanently — unless the customer converted to a paid plan, restored it themselves, or you put it on hold.",
       "Auto-delete after the window is a kill switch. Turn it off and the reminders still go while nothing is ever dropped automatically.",
+      "Changing the policy needs a reason. A change that makes deletion sooner or more likely — a shorter window, a reminder or final notice moved closer to deletion, auto-delete switched on, or no snapshot directory — waits for a second owner's approval.",
       "The queue shows every workspace that ever started as a trial, its six-dot sequence (filled = sent, hollow = skipped as stale, pulsing = due on the next pass), the deletion date, and the reason a deletion is or is not going to happen.",
       "Dry run now shows what the daily 09:30 pass would do. A simulated date is always a dry run — it can never send or delete.",
       "Per workspace you can send any stage now, hold the deletion while a conversation is in progress, or delete under the policy immediately — which asks you to type the slug."
@@ -880,7 +901,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "A snapshot is taken automatically, immediately before the retention programme drops a workspace — only if a Snapshot directory is set under Trial retention → The policy.",
       "The page lists every snapshot with its size, its workspace and whether it can be restored. It also probes the host for mysqldump and mysql: if either is missing, that is why a directory is empty or a Restore is disabled.",
       "Download hands you the .sql file. Restore recreates the database, imports the dump, and reopens the workspace in its grace state with the deletion held — it never signs anyone in or takes a payment.",
-      "A restore is refused if the workspace still has a database. Overwriting a live tenant is not reachable from this console.",
+      "A restore is refused if the workspace still has a database, and a snapshot only ever restores into the workspace it was taken from. Restores and deletions wait for a second owner and show as “Queued for approval” until then.",
+      "The snapshot directory must sit inside the deployment's SNAPSHOT_ROOT, and only snapshot files are listed or downloadable.",
       "Delete removes a snapshot from disk. If its workspace is already gone, that is the last copy — there is no undo."
     ],
     notes: "These are retention snapshots, not platform backups: they only ever cover customers who lapsed and were deleted. Backing up live workspaces is your database's job — see docs/NEW_ORGANIZATION_SETUP.md § 7. After a restore, run npm run db:migrate:tenants if the platform has moved on since the dump was taken.",

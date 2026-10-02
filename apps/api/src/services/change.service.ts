@@ -104,25 +104,8 @@ export function isNoOpTransition(from: ChangeState, to: ChangeState): boolean {
   return from === to;
 }
 
-/**
- * Moves the API allows on top of the shared table, until the shared table carries them itself.
- *
- * AWAITING_APPROVAL → DRAFT is WITHDRAW. Once submitted, a change's plan, risk, schedule and type
- * are locked (see `MATERIAL_CHANGE_FIELDS`), so withdrawing is how a requester changes them: the
- * pending round is settled as WITHDRAWN — it stays on the record — and resubmitting opens the next.
- * It cannot reach APPROVED or REJECTED, so the rule the shared table exists for is untouched.
- *
- * Kept here rather than in `@timesheet/shared` only because that package is edited separately; the
- * union below makes the entry redundant, not wrong, the day it lands there too.
- */
-const API_ONLY_TRANSITIONS: Partial<Record<ChangeState, readonly ChangeState[]>> = {
-  AWAITING_APPROVAL: ["DRAFT"]
-};
-
-/** Every state a change may move to by hand from `from`. The page renders its buttons from this
- *  (via `GET /changes/:id`), so it can never offer a move the API then refuses. */
 export function legalChangeTargets(from: ChangeState): ChangeState[] {
-  return [...new Set([...(changeStateTransitions[from] ?? []), ...(API_ONLY_TRANSITIONS[from] ?? [])])];
+  return [...(changeStateTransitions[from] ?? [])];
 }
 
 export function assertLegalChangeTransition(from: ChangeState, to: ChangeState): void {
