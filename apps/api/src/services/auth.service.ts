@@ -575,7 +575,8 @@ export async function completeSsoLogin(
  */
 const REFRESH_GRACE_PERIOD_MS = 30_000;
 
-export async function refresh(refreshToken: unknown) {
+/** Splits `<JWT>.<opaque-secret>` and verifies the JWT half. Throws the 401 a caller should see. */
+function readRefreshToken(refreshToken: unknown): { payload: { sub: string; sid: string; org?: string }; secret: string } {
   if (typeof refreshToken !== "string" || refreshToken.length === 0) {
     throw new AppError(401, "Missing refresh token");
   }
@@ -599,6 +600,31 @@ export async function refresh(refreshToken: unknown) {
   }
 
   if (!payload?.sid || !payload?.sub) throw new AppError(401, "Invalid refresh token");
+  return { payload, secret };
+}
+
+/**
+ * Which of the session's secrets this one is — the CURRENT one, or the PREVIOUS one replayed inside
+ * the grace window. Anything else is a stale or stolen secret: the session is revoked and a 401
+ * thrown, so the legitimate owner is forced to sign in again.
+ */
+async function matchRefreshSecret(
+  session: { id: string; refreshHash: string; previousRefreshHash: string | null; refreshRotatedAt: Date | null },
+  secret: string
+): Promise<"current" | "previous"> {
+  if (await verifyTokenHash(secret, session.refreshHash)) return "current";
+  const withinGracePeriod =
+    session.previousRefreshHash !== null &&
+    session.refreshRotatedAt !== null &&
+    Date.now() - session.refreshRotatedAt.getTime() < REFRESH_GRACE_PERIOD_MS;
+  if (withinGracePeriod && (await verifyTokenHash(secret, session.previousRefreshHash!))) return "previous";
+
+  await prisma.session.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
+  throw new AppError(401, "Invalid refresh token");
+}
+
+export async function refresh(refreshToken: unknown) {
+  const { payload, secret } = readRefreshToken(refreshToken);
 
   // Same cross-tenant defense as middleware/auth.ts#requireAuth — a refresh token minted
   // under one org shouldn't be honored against another, even though the signing secret is
@@ -623,42 +649,30 @@ export async function refresh(refreshToken: unknown) {
     throw new AppError(401, "Invalid refresh token");
   }
 
-  const matchesCurrent = await verifyTokenHash(secret, session.refreshHash);
-  if (!matchesCurrent) {
-    const withinGracePeriod =
-      session.previousRefreshHash &&
-      session.refreshRotatedAt &&
-      Date.now() - session.refreshRotatedAt.getTime() < REFRESH_GRACE_PERIOD_MS;
-    const matchesPrevious = withinGracePeriod && (await verifyTokenHash(secret, session.previousRefreshHash!));
+  const accessToken = signAccessToken(payload.sub, session.id, orgId);
 
-    if (!matchesPrevious) {
-      // Doesn't match the current secret, and either there's no grace window or it doesn't
-      // match the previous one either — this isn't a benign race, it's a stale/stolen secret
-      // being replayed. Kill the session so the legitimate owner is forced to log in again.
-      await prisma.session.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
-      throw new AppError(401, "Invalid refresh token");
-    }
+  if ((await matchRefreshSecret(session, secret)) === "previous") {
+    // A GRACE-WINDOW REPLAY of the secret that was just rotated away — a second tab, a retried
+    // request. It gets an ACCESS token and nothing else: no new secret, no write, and (in the
+    // controller) no Set-Cookie. Security audit #17: minting a fresh secret here overwrote the one
+    // the first rotation had just handed out, so if the browser's cookie jar ended on THAT response
+    // — two responses can land in either order — the next refresh matched nothing and the whole
+    // session was revoked as a theft. With nothing written, whichever secret the jar holds is valid.
+    // The window itself stays anchored to the first rotation, so replays cannot keep it open.
+    return { accessToken, refreshToken: null, refreshTokenExpiresAt: session.expiresAt };
   }
 
+  // First rotation off this secret: anchor a new grace window to it.
   const newSecret = opaqueToken();
   await prisma.session.update({
     where: { id: session.id },
-    data: matchesCurrent
-      ? // First rotation off this secret: anchor a new grace window to it.
-        { previousRefreshHash: session.refreshHash, refreshHash: await hashToken(newSecret), refreshRotatedAt: new Date() }
-      : // A grace-period replay of the already-rotated-away secret (a second tab, a retried
-        // request, or — in this codebase's Playwright suite — a frozen storageState snapshot
-        // reused by several independent test contexts). Hand back a fresh secret so the
-        // caller keeps working, but deliberately leave previousRefreshHash/refreshRotatedAt
-        // untouched: the grace window stays anchored to the FIRST rotation rather than
-        // sliding forward on every replay, so it can't be kept alive indefinitely.
-        { refreshHash: await hashToken(newSecret) }
+    data: { previousRefreshHash: session.refreshHash, refreshHash: await hashToken(newSecret), refreshRotatedAt: new Date() }
   });
 
   const remainingDays = Math.max(1 / 24, (session.expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
 
   return {
-    accessToken: signAccessToken(payload.sub, session.id, orgId),
+    accessToken,
     refreshToken: `${signRefreshToken(payload.sub, session.id, remainingDays, orgId)}.${newSecret}`,
     refreshTokenExpiresAt: session.expiresAt
   };

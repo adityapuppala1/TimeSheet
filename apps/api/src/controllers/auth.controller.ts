@@ -141,7 +141,10 @@ authRouter.post(
 authRouter.post("/refresh", async (req, res) => {
   const token = req.cookies?.[REFRESH_COOKIE];
   const result = await refresh(token);
-  res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
+  // Null for a grace-window replay (a second tab racing the first): it gets an access token and NO
+  // Set-Cookie, so it cannot overwrite the secret the winning rotation just handed out — see
+  // auth.service.ts#refresh.
+  if (result.refreshToken) res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
   res.json({ accessToken: result.accessToken });
 });
 
