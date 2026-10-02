@@ -26,18 +26,16 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { resolveDashboard, WIDGET_CATALOGUE, WIDGET_TYPES } from "../services/dashboard.service.js";
 import { getPlanningQuota } from "../services/plan-limits.service.js";
-import { ticketProjectScope } from "../services/ticket.service.js";
+import { dashboardProjectIds } from "../services/dashboard-scope.service.js";
 import { isChangeManagementOn } from "../services/change.service.js";
 
 export const dashboardRouter = Router();
 dashboardRouter.use(requireAuth);
 
-/** The viewer's own scope, never the dashboard author's. */
+/** The viewer's own scope, never the dashboard author's — the same function the scheduled email
+ *  uses for its owner, so the emailed copy and the live view cover the same projects. */
 async function visibleProjectIds(req: any): Promise<string[]> {
-  const scope = await ticketProjectScope(req);
-  if (!scope.unrestricted) return scope.projectIds;
-  const all = await prisma.project.findMany({ where: { deletedAt: null }, select: { id: true } });
-  return all.map((p) => p.id);
+  return dashboardProjectIds(req.user);
 }
 
 /** Served rather than duplicated in the client, so the builder can never offer a widget the
@@ -167,7 +165,13 @@ async function clearOtherDefaults(ownerId: string, keepId: string) {
 
 /* ---------- Scheduled delivery ---------- */
 
-dashboardRouter.get("/subscriptions/all", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+/**
+ * Listing and deleting your OWN deliveries needs no permission beyond being their owner. Both used to
+ * demand `reports:view`, so somebody who lost it saw "Nothing scheduled." and got 403 on delete —
+ * while the worker kept sending. The worker now pauses such a delivery (with the reason on the row),
+ * and the owner can still see it and remove it. CREATING one still requires `reports:view`.
+ */
+dashboardRouter.get("/subscriptions/all", async (req, res) => {
   const subscriptions = await prisma.reportSubscription.findMany({
     where: { createdById: req.user!.id },
     include: { dashboard: { select: { id: true, name: true } } },
@@ -228,7 +232,6 @@ dashboardRouter.post(
 
 dashboardRouter.delete(
   "/subscriptions/:id",
-  requirePermission(permissions.REPORTS_VIEW),
   validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
   async (req, res) => {
     const existing = await prisma.reportSubscription.findUnique({ where: { id: String(req.params.id) } });
