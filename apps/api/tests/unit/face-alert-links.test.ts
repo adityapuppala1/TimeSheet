@@ -69,6 +69,7 @@ vi.mock("../../src/services/notify.service.js", () => ({ dispatchNotification: v
 const { sweepEntitlement, runFaceLifecycleSweep } = await import("../../src/workers/face-retention.worker.js");
 const { runIdentityWeeklyDigest } = await import("../../src/workers/identity-weekly-digest.worker.js");
 const { templates } = await import("../../src/services/mail-templates.js");
+const { identityAlertRecipients } = await import("../../src/services/face-alerts.service.js");
 const { dispatchNotification } = await import("../../src/services/notify.service.js");
 
 const sent = (category: string) => vi.mocked(dispatchNotification).mock.calls.map((c) => c[0]).filter((n) => n.category === category);
@@ -100,6 +101,48 @@ describe("who is told, and where they are sent", () => {
     const digests = sent("digest.identity_weekly");
     expect(digests.map((n) => n.userId)).toEqual(["sa-1"]);
     expect(digests[0].link).toBe("/app/settings?tab=face-verification");
+  });
+});
+
+/**
+ * Nobody-to-tell (audit 2026-10 R3, finding 5). With the audience narrowed to super admins and the
+ * subject removed, a flagged check on the ONLY super admin — someone at the owner's session failing
+ * repeated checks, or passing through a virtual camera — alerted an empty list, and a workspace with
+ * no active super admin heard about nothing at all. ADMINs used to be told; they are the fallback.
+ */
+describe("when no super admin is left to tell", () => {
+  beforeEach(() => {
+    state.people = [
+      { id: "sa-1", name: "Sam Super", role: "SUPER_ADMIN" },
+      { id: "ad-1", name: "Ada Admin", role: "ADMIN" },
+      { id: "mg-1", name: "Mo Manager", role: "MANAGER" }
+    ];
+  });
+
+  it("tells the admins about a flagged check on the only super admin", async () => {
+    expect((await identityAlertRecipients("sa-1")).map((r) => r.id)).toEqual(["ad-1"]);
+  });
+
+  it("still tells only the OTHER super admins when there are some", async () => {
+    state.people.push({ id: "sa-2", name: "Sue Super", role: "SUPER_ADMIN" });
+    expect((await identityAlertRecipients("sa-1")).map((r) => r.id)).toEqual(["sa-2"]);
+  });
+
+  it("never tells the subject about their own flagged check, even as an admin", async () => {
+    state.people = state.people.filter((p) => p.role !== "SUPER_ADMIN");
+    expect((await identityAlertRecipients("ad-1")).map((r) => r.id)).toEqual([]);
+  });
+
+  it("falls back to the admins for the digests too, in a workspace with no super admin", async () => {
+    state.people = state.people.filter((p) => p.role !== "SUPER_ADMIN");
+    await runIdentityWeeklyDigest(new Date("2026-10-05T04:30:00.000Z"));
+    expect(sent("digest.identity_weekly").map((n) => n.userId)).toEqual(["ad-1"]);
+  });
+
+  it("is what the flagged-check alert asks, with the subject excluded", () => {
+    const source = readFileSync(new URL("../../src/controllers/face.controller.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    const notify = source.slice(source.indexOf("async function notifyFlagged"));
+    expect(notify.slice(0, notify.indexOf("\n}\n"))).toContain("identityAlertRecipients(subjectUserId)");
   });
 });
 

@@ -618,7 +618,8 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("captur
  * The escalation audience for "someone repeatedly failed to prove they're this person" (or passed
  * through a suspected virtual camera): the workspace's super admins, linked straight to the review
  * log's tab. It used to be every ADMIN plus the person's manager, linked to a bare /app/settings that
- * neither of them can open — see services/face-alerts.service.ts for the choice. In-app always; email
+ * neither of them can open — see services/face-alerts.service.ts for the choice. Never the subject;
+ * and when the subject is the only super admin, the admins instead of nobody. In-app always; email
  * per the workspace's notification toggles. Never includes scores or images.
  */
 async function notifyFlagged(subjectUserId: string, outcome: FaceOutcome, failureCount: number, context: FaceContext): Promise<void> {
@@ -628,9 +629,8 @@ async function notifyFlagged(subjectUserId: string, outcome: FaceOutcome, failur
   });
   if (!subject) return;
 
-  const admins = await identityAlertRecipients();
+  const admins = await identityAlertRecipients(subjectUserId);
   const recipients = new Map<string, string>(admins.map((a) => [a.id, a.name]));
-  recipients.delete(subjectUserId);
 
   const reason =
     outcome === "PASSED"

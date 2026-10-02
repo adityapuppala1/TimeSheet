@@ -111,11 +111,13 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "maintenance.scheduled": "\"Save your work\" warning a super admin sends to online users before a maintenance window — quotes the window and the admin's message.",
 
   "face.enrollment_required": "Sent when the face-verification policy starts covering someone who hasn't enrolled (and as the follow-up reminder).",
-  "face.verification_flagged": "Sent to the person's manager and workspace admins when repeated failed identity checks flag an attempt for review.",
+  "face.verification_flagged":
+    "Sent to the workspace's super admins when repeated failed identity checks flag an attempt for review — never to the person flagged; when they are the only super admin, to the admins instead.",
   "face.review_overdue": "Sent to admins when flagged identity checks have sat unreviewed for more than 48 hours.",
   "face.data_deleted": "Confirmation to the person whose face enrollment/captures were deleted (self-service or by an admin).",
   "face.entitlement_lost": "Sent to admins when the org's plan tier stops including face verification — enforcement pauses and a purge grace window starts.",
-  "digest.identity_weekly": "Monday-morning deterministic identity-assurance recap (checks run, failures, flagged pending) sent to every ADMIN/SUPER_ADMIN.",
+  "digest.identity_weekly":
+    "Monday-morning deterministic identity-assurance recap (checks run, failures, flagged pending) sent to the super admins — the admins, in a workspace with no active super admin.",
   "change.submitted":
     "Sent the moment a change is submitted — to its approver, the requester, and everyone tagged on it. Super admins are BCC'd.",
   "change.decided":
