@@ -66,6 +66,7 @@ import { SearchableSelect } from "./ui/searchable-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { toast } from "./ui/toaster";
 import { runInBackground } from "../lib/run-in-background";
+import { localDateKey } from "../lib/local-date";
 
 const STATUS_VARIANT: Record<string, "success" | "warning" | "destructive" | "muted"> = {
   APPROVED: "success",
@@ -674,7 +675,7 @@ function EntryEditForm({
           <DatePicker
             value={form.workDate}
             onChange={(v) => setForm((f) => ({ ...f, workDate: v }))}
-            maxValue={new Date().toISOString().slice(0, 10)}
+            maxValue={localDateKey()}
           />
         </div>
         <div className="grid gap-1.5">

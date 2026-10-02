@@ -37,6 +37,7 @@ import {
   unbindTimesheetVerification
 } from "../services/face.service.js";
 import { parseDayWindow, workDateFilter } from "../utils/date-window.js";
+import { userClock } from "../services/user-clock.service.js";
 import {
   approvalScopeWhere,
   assertMayDecide,
@@ -419,9 +420,8 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
   const hours = calculateHours(req.body.startTime, req.body.endTime);
   const [year, month, day] = String(req.body.workDate).split("-").map(Number);
   const workDate = new Date(Date.UTC(year, month - 1, day));
-  const today = new Date();
-  const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
-  if (workDate > todayUtc) throw new AppError(422, "Future dates are not allowed");
+  // "Future" on the AUTHOR's calendar, not the server's — see services/user-clock.service.ts.
+  if (workDate > (await userClock(req.user.id)).today) throw new AppError(422, "Future dates are not allowed");
   if (hours <= 0) throw new AppError(422, "End time must be after start time");
   if (hours > 12) throw new AppError(422, "A single entry cannot exceed 12 hours");
   // Before the identity gate, so a refused pairing does not spend somebody's face check.
@@ -1190,9 +1190,8 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
 
   const [year, month, day] = next.workDate.split("-").map(Number);
   const workDate = new Date(Date.UTC(year, month - 1, day));
-  const today = new Date();
-  const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
-  if (workDate > todayUtc) throw new AppError(422, "Future dates are not allowed");
+  // The entry's AUTHOR's calendar decides what "future" means, whoever is editing it.
+  if (workDate > (await userClock(existing.userId)).today) throw new AppError(422, "Future dates are not allowed");
 
   // The module has to belong to the project, and the ticket too — the same pairing check the
   // create path runs (see assertModuleBelongs).

@@ -45,6 +45,7 @@ import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
 import { plainTextLength } from "../lib/safe-html";
 import { runInBackground } from "../lib/run-in-background";
+import { localDateKey } from "../lib/local-date";
 
 const MAX_DAILY_HOURS = 12;
 const OPEN_TICKET_STATUSES = "OPEN,IN_PROGRESS,IN_REVIEW,REOPENED";
@@ -241,7 +242,7 @@ export function Timesheet() {
       activityType: "Development",
       taskDescription: "",
       notes: "",
-      workDate: new Date().toISOString().slice(0, 10),
+      workDate: localDateKey(),
       startTime: "09:30",
       endTime: "18:00"
     }
@@ -372,7 +373,7 @@ export function Timesheet() {
         activityType: "Development",
         taskDescription: "",
         notes: "",
-        workDate: new Date().toISOString().slice(0, 10),
+        workDate: localDateKey(),
         startTime: "09:30",
         endTime: "18:00"
       });
@@ -562,7 +563,7 @@ export function Timesheet() {
                         <DatePicker
                           value={field.value ?? ""}
                           onChange={field.onChange}
-                          maxValue={new Date().toISOString().slice(0, 10)}
+                          maxValue={localDateKey()}
                           placeholder="Pick the work date"
                         />
                       </FormControl>

@@ -6,12 +6,15 @@
  *  - "Pending approvals" on the reports and admin dashboards counted every SUBMITTED row in the
  *    workspace, while the Inbox counted everything but your own and the approvals queue showed yet
  *    another set. All three now use the queue's predicate: SUBMITTED, not yours, not your managers'.
+ *  - `/daily-status` answered "today" with the SERVER's calendar day, so a New York user's evening
+ *    was already tomorrow; it now asks the user's own zone, like the reminder worker and the brief.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import request from "supertest";
 
 const calls = vi.hoisted(() => [] as Array<{ model: string; method: string; args: any }>);
+const viewer = vi.hoisted(() => ({ timezone: "Asia/Kolkata" as string | null }));
 const people = vi.hoisted(() => [
   { id: "boss-1", email: "boss@x.io", managerId: null, status: "ACTIVE", deletedAt: null },
   { id: "viewer-1", email: "viewer@x.io", managerId: "boss-1", status: "ACTIVE", deletedAt: null }
@@ -22,6 +25,7 @@ vi.mock("../../src/config/prisma.js", () => {
   const answer = (model: string, method: string, args: any) => {
     calls.push({ model, method, args });
     if (model === "user" && method === "findMany" && args?.select?.managerId) return people;
+    if (model === "user" && method === "findUnique") return { timezone: viewer.timezone };
     if (method === "count") return 0;
     if (method === "aggregate") return { _sum: { totalHours: 0 }, _count: 0 };
     if (method === "findMany" || method === "groupBy") return [];
@@ -54,6 +58,10 @@ const timesheetCalls = (method: string) => calls.filter((c) => c.model === "time
 
 beforeEach(() => {
   calls.length = 0;
+  viewer.timezone = "Asia/Kolkata";
+});
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("admin-summary — pending approvals", () => {
@@ -66,5 +74,19 @@ describe("admin-summary — pending approvals", () => {
     for (const args of pending) {
       expect([...args.where.userId.notIn].sort()).toEqual(["boss-1", "viewer-1"]);
     }
+  });
+});
+
+describe("daily-status — today is the viewer's own day", () => {
+  it("is 2 October for an IST viewer at 02:00 IST, and 1 October for a New York viewer at the same instant", async () => {
+    vi.useFakeTimers({ now: new Date("2026-10-01T20:30:00.000Z"), toFake: ["Date"] });
+    const ist = await request(buildApp()).get("/api/reports/daily-status");
+    expect(ist.body.date).toBe("2026-10-02");
+
+    viewer.timezone = "America/New_York";
+    const ny = await request(buildApp()).get("/api/reports/daily-status");
+    expect(ny.body.date).toBe("2026-10-01");
+    const aggregate = timesheetCalls("aggregate").at(-1);
+    expect(aggregate.where.workDate).toEqual({ gte: new Date("2026-10-01T00:00:00.000Z"), lte: new Date("2026-10-01T00:00:00.000Z") });
   });
 });

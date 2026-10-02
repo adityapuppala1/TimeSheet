@@ -139,6 +139,13 @@ export function dateKeyToUtc(dateKey: string): Date {
   return new Date(Date.UTC(y, m - 1, d));
 }
 
+/** The recipient's TODAY in `workDate`'s storage form (UTC midnight of their local calendar day).
+ *  Neither the server's local date nor the UTC date — both are wrong for somebody far enough east
+ *  or west, which is everyone in India between midnight and 05:30. */
+export function zonedTodayUtc(instant: Date, timeZone?: string | null, fallbackZone?: string | null): Date {
+  return dateKeyToUtc(zonedParts(instant, timeZone, fallbackZone).dateKey);
+}
+
 /**
  * How far `timeZone` is from UTC at this instant, in milliseconds. Derived by formatting the
  * instant into the zone and reading the wall-clock back as if it were UTC — the difference IS the

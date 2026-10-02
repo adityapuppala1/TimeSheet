@@ -22,12 +22,7 @@ import { permissions } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { computeMyWork } from "./my-work.service.js";
 import { awaitingReviewWhere, loadApprovalAuthority } from "./timesheet-approval-scope.service.js";
-
-/** UTC midnight, matching `Timesheet.workDate`'s DATE semantics — the same normalisation
- *  report.controller.ts's `/daily-status` uses, so "did I log today" means one thing. */
-function todayUtcDate(now: Date): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-}
+import { userClock } from "./user-clock.service.js";
 
 export interface BriefSection {
   /** Stable machine key, so the UI can route a click without string-matching a label. */
@@ -67,7 +62,9 @@ export async function buildDailyBrief(
 ): Promise<DailyBrief> {
   const canApprove = user.permissions.includes(permissions.TIMESHEETS_APPROVE);
   const canSeeRisk = user.permissions.includes(permissions.REPORTS_VIEW);
-  const today = todayUtcDate(now);
+  // The person's own today, from the same helper `/daily-status` uses — this used to take the UTC
+  // date while claiming to match it, so from 00:00 to 05:30 IST it asked about yesterday.
+  const { today } = await userClock(user.id, now);
 
   const [myWork, pendingTimesheets, pendingApprovals, loggedToday, redProjects, unread] = await Promise.all([
     computeMyWork(user.id, now),

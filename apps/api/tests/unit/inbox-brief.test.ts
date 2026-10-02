@@ -20,6 +20,7 @@ const approvalStepCount = vi.fn();
 const notificationCount = vi.fn();
 const riskFindMany = vi.fn();
 const userFindMany = vi.fn();
+const userFindUnique = vi.fn();
 
 vi.mock("../../src/services/my-work.service.js", () => ({ computeMyWork: (...a: unknown[]) => computeMyWork(...a) }));
 vi.mock("../../src/config/prisma.js", () => ({
@@ -28,7 +29,7 @@ vi.mock("../../src/config/prisma.js", () => ({
     approvalStep: { count: (...a: unknown[]) => approvalStepCount(...a) },
     notification: { count: (...a: unknown[]) => notificationCount(...a) },
     projectRiskSnapshot: { findMany: (...a: unknown[]) => riskFindMany(...a) },
-    user: { findMany: (...a: unknown[]) => userFindMany(...a) }
+    user: { findMany: (...a: unknown[]) => userFindMany(...a), findUnique: (...a: unknown[]) => userFindUnique(...a) }
   }
 }));
 
@@ -85,6 +86,7 @@ beforeEach(() => {
   notificationCount.mockResolvedValue(0);
   riskFindMany.mockResolvedValue([]);
   userFindMany.mockResolvedValue([]);
+  userFindUnique.mockResolvedValue({ timezone: "Asia/Kolkata" });
 });
 
 describe("what the brief shows whom", () => {
@@ -161,6 +163,21 @@ describe("the figures come from the existing definitions", () => {
     await buildDailyBrief({ id: "u-1", permissions: [] }, NOW);
     const ownCall = timesheetCount.mock.calls.find((c) => (c[0] as any).where.userId === "u-1");
     expect((ownCall![0] as any).where.workDate).toEqual(new Date("2026-08-17T00:00:00.000Z"));
+  });
+
+  it("asks about the person's own today at 02:00 IST, when UTC is still on yesterday", async () => {
+    // 2026-10-01T20:30Z is 02:00 on 2 October in India. The brief used UTC getters, so between
+    // midnight and 05:30 IST it reported "no time logged today" about the previous day.
+    await buildDailyBrief({ id: "u-1", permissions: [] }, new Date("2026-10-01T20:30:00.000Z"));
+    const ownCall = timesheetCount.mock.calls.find((c) => (c[0] as any).where.userId === "u-1");
+    expect((ownCall![0] as any).where.workDate).toEqual(new Date("2026-10-02T00:00:00.000Z"));
+  });
+
+  it("and a New York user's today at the same instant is still 1 October", async () => {
+    userFindUnique.mockResolvedValue({ timezone: "America/New_York" });
+    await buildDailyBrief({ id: "u-1", permissions: [] }, new Date("2026-10-01T20:30:00.000Z"));
+    const ownCall = timesheetCount.mock.calls.find((c) => (c[0] as any).where.userId === "u-1");
+    expect((ownCall![0] as any).where.workDate).toEqual(new Date("2026-10-01T00:00:00.000Z"));
   });
 });
 

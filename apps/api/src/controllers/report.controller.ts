@@ -49,6 +49,7 @@ import {
 import { buildTimesheetReportWorkbook } from "../services/timesheet-report-xlsx.service.js";
 import { renderTimesheetReportPdf } from "../services/timesheet-report-pdf.service.js";
 import { awaitingReviewWhere, loadApprovalAuthority } from "../services/timesheet-approval-scope.service.js";
+import { userClock } from "../services/user-clock.service.js";
 
 export const reportRouter = Router();
 reportRouter.use(requireAuth);
@@ -83,8 +84,9 @@ reportRouter.get("/employee-summary", async (req, res) => {
  * returned — the caller cannot infer it from the numbers alone.
  */
 reportRouter.get("/daily-status", async (req, res) => {
-  const today = todayUtcDate();
-  const sinceLocal = startOfLocalDay();
+  // The caller's own day (User.timezone, else the workspace zone) — the same answer the Inbox brief
+  // and the daily reminder give. The server's date made a New York evening "tomorrow".
+  const { today, dayStart: sinceLocal } = await userClock(req.user!.id);
   const window = parseDayWindow(req.query);
   const from = window.from ?? today;
   const to = window.to ?? today;
