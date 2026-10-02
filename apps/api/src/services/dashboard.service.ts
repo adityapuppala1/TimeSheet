@@ -21,6 +21,10 @@ import { burnTotalsByCurrency, computeProjectBudgets, progressFromPlan } from ".
 import { buildPlan, dayKey, legacyCategory } from "./plan-schedule.service.js";
 import { latestSnapshots } from "./project-risk.service.js";
 import { loadWorkload } from "./workload.service.js";
+import { istWeekStarts, weekIndexFor } from "./ticket-analytics.service.js";
+import { OPEN_TICKET_STATUS } from "./workspace-metrics.js";
+import { platformToday } from "../utils/date-window.js";
+import { platformDayKey } from "../utils/platform-time.js";
 
 export const WIDGET_TYPES = [
   "OPEN_ITEMS",
@@ -92,6 +96,12 @@ export interface WidgetResult {
 
 const DAY_MS = 86_400_000;
 
+/** "7 Sept" — a week's Monday on the IST calendar, as the widget's axis label. */
+function weekLabelShort(weekStart: Date): string {
+  const [y, m, d] = platformDayKey(weekStart).split("-").map(Number);
+  return new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", timeZone: "UTC" }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
 /** "INR 42% (₹4,200 of ₹10,000)" — one currency's line of the budget-burn hint. */
 function currencyBurnLine(t: { currency: string; burnPct: number | null; burn: number; budget: number }): string {
   return `${t.currency} ${t.burnPct ?? 0}% (${money(t.burn, t.currency)} of ${money(t.budget, t.currency)})`;
@@ -128,12 +138,11 @@ export async function resolveWidget(params: {
   }
 
   const days = Math.min(365, Math.max(7, config.days ?? 30));
-  const since = new Date(Date.now() - days * DAY_MS);
 
   switch (type) {
     case "OPEN_ITEMS": {
       const value = await prisma.ticket.count({
-        where: { projectId: { in: scoped }, deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] } }
+        where: { projectId: { in: scoped }, deletedAt: null, status: OPEN_TICKET_STATUS }
       });
       return { type, shape, value, hint: "not resolved or closed" };
     }
@@ -144,21 +153,33 @@ export async function resolveWidget(params: {
         where: {
           projectId: { in: scoped },
           deletedAt: null,
-          status: { notIn: ["RESOLVED", "CLOSED"] },
+          status: OPEN_TICKET_STATUS,
           // Either promise counts: the planned end date, or the SLA. They mean different things,
           // and a tile that only watched one would quietly under-report.
-          OR: [{ endDate: { lt: now } }, { dueAt: { lt: now } }]
+          //
+          // `endDate` is a CALENDAR DAY (@db.Date): a ticket is late the day after it, so it is
+          // compared with today's date — compared with `now`, it went overdue at 05:30 IST on the day
+          // it was due. `dueAt` is an instant, and the SLA rule (workspace-metrics.ts) applies.
+          OR: [{ endDate: { lt: platformToday(now) } }, { dueAt: { lt: now } }]
         }
       });
       return { type, shape, value, hint: "past a planned end date or an SLA" };
     }
 
     case "HOURS_LOGGED": {
+      // Whole calendar days on the date column, ending today: `workDate >= now - N days` compared a
+      // date with a timestamp, so it dropped the first day and let future-dated entries in.
+      const today = platformToday();
       const agg = await prisma.timesheet.aggregate({
-        where: { projectId: { in: scoped }, status: "APPROVED", deletedAt: null, workDate: { gte: since } },
+        where: {
+          projectId: { in: scoped },
+          status: "APPROVED",
+          deletedAt: null,
+          workDate: { gte: new Date(today.getTime() - (days - 1) * DAY_MS), lte: today }
+        },
         _sum: { totalHours: true }
       });
-      return { type, shape, value: Number(Number(agg._sum.totalHours ?? 0).toFixed(1)), unit: "h", hint: `approved, last ${days} days` };
+      return { type, shape, value: Number(Number(agg._sum.totalHours ?? 0).toFixed(1)), unit: "h", hint: `approved, last ${days} days to today` };
     }
 
     case "BUDGET_BURN": {
@@ -191,36 +212,36 @@ export async function resolveWidget(params: {
     }
 
     case "VELOCITY": {
+      // Whole Monday weeks on the IST calendar, the current one included — the same buckets the
+      // Insights page draws. Rolling 7-day buckets from 30 days back left the oldest holding two days.
+      const weekStarts = istWeekStarts(Math.ceil(days / 7), new Date());
+      const from = weekStarts[0];
       const [created, resolved] = await Promise.all([
         prisma.ticket.findMany({
-          where: { projectId: { in: scoped }, deletedAt: null, createdAt: { gte: since } },
+          where: { projectId: { in: scoped }, deletedAt: null, createdAt: { gte: from } },
           select: { createdAt: true }
         }),
         prisma.ticket.findMany({
-          where: { projectId: { in: scoped }, deletedAt: null, resolvedAt: { gte: since } },
+          where: { projectId: { in: scoped }, deletedAt: null, resolvedAt: { gte: from } },
           select: { resolvedAt: true }
         })
       ]);
-      // Weekly buckets, oldest first. Bucketed here rather than in SQL so the same shape works
-      // regardless of database, and because the volume at this range is small.
-      const weeks = Math.ceil(days / 7);
-      const points: Array<{ label: string; value: number; secondary?: number }> = [];
-      for (let i = weeks - 1; i >= 0; i--) {
-        const start = new Date(Date.now() - (i + 1) * 7 * DAY_MS);
-        const end = new Date(Date.now() - i * 7 * DAY_MS);
-        points.push({
-          label: dayKey(start).slice(5),
-          value: created.filter((c) => c.createdAt >= start && c.createdAt < end).length,
-          secondary: resolved.filter((r) => r.resolvedAt && r.resolvedAt >= start && r.resolvedAt < end).length
-        });
+      const points = weekStarts.map((weekStart) => ({ label: weekLabelShort(weekStart), value: 0, secondary: 0 }));
+      for (const c of created) {
+        const i = weekIndexFor(c.createdAt, weekStarts);
+        if (i >= 0) points[i].value += 1;
       }
-      return { type, shape, points };
+      for (const r of resolved) {
+        const i = r.resolvedAt ? weekIndexFor(r.resolvedAt, weekStarts) : -1;
+        if (i >= 0) points[i].secondary += 1;
+      }
+      return { type, shape, points, hint: "created / resolved per week, weeks start Monday" };
     }
 
     case "STATUS_MIX": {
       const grouped = await prisma.ticket.groupBy({
         by: ["status"],
-        where: { projectId: { in: scoped }, deletedAt: null, status: { notIn: ["CLOSED"] } },
+        where: { projectId: { in: scoped }, deletedAt: null, status: OPEN_TICKET_STATUS },
         _count: { _all: true }
       });
       return {
@@ -233,7 +254,7 @@ export async function resolveWidget(params: {
     case "PRIORITY_MIX": {
       const grouped = await prisma.ticket.groupBy({
         by: ["priority"],
-        where: { projectId: { in: scoped }, deletedAt: null, status: { notIn: ["CLOSED"] } },
+        where: { projectId: { in: scoped }, deletedAt: null, status: OPEN_TICKET_STATUS },
         _count: { _all: true }
       });
       // Fixed severity order, not count order: a tile that reshuffles as numbers move is harder to
@@ -252,7 +273,7 @@ export async function resolveWidget(params: {
       const [grouped, projects] = await Promise.all([
         prisma.ticket.groupBy({
           by: ["projectId"],
-          where: { projectId: { in: scoped }, deletedAt: null, status: { notIn: ["CLOSED"] } },
+          where: { projectId: { in: scoped }, deletedAt: null, status: OPEN_TICKET_STATUS },
           _count: { _all: true }
         }),
         prisma.project.findMany({ where: { id: { in: scoped } }, select: { id: true, name: true } })
@@ -284,12 +305,13 @@ export async function resolveWidget(params: {
     }
 
     case "WORKLOAD_SUMMARY": {
-      const board = await loadWorkload({
-        from: new Date(),
-        to: new Date(Date.now() + 28 * DAY_MS),
-        projectId: config.projectId ?? undefined
-      }).catch(() => null);
-      if (!board || board.rows.length === 0) return { type, shape, unavailable: "Nobody assigned" };
+      // The viewer's own projects — the people assigned to them — not the whole workspace, which is
+      // what a dashboard shared with a project lead used to show. A failure is NOT caught here:
+      // resolveDashboard turns it into "Couldn't load", where `.catch(() => null)` used to turn it
+      // into "Nobody assigned", a claim about the team rather than about the request.
+      const today = platformToday();
+      const board = await loadWorkload({ from: today, to: new Date(today.getTime() + 27 * DAY_MS), projectIds: scoped });
+      if (board.rows.length === 0) return { type, shape, unavailable: "Nobody assigned" };
       const capacity = board.rows.reduce((s, r) => s + r.totals.capacityHours, 0);
       const booked = board.rows.reduce((s, r) => s + r.totals.bookedHours, 0);
       if (capacity === 0) return { type, shape, unavailable: "No capacity in range" };
@@ -329,17 +351,21 @@ export async function resolveWidget(params: {
     }
 
     case "MY_QUEUE": {
-      const rows = await prisma.ticket.findMany({
+      // One person's open queue, sorted here by the promise that comes FIRST (planned end, else SLA),
+      // undated work last. `orderBy dueAt asc` put every undated ticket at the top — MySQL sorts
+      // NULLs first — and ignored the end date the row then displayed.
+      const queue = await prisma.ticket.findMany({
         where: {
           projectId: { in: scoped },
           deletedAt: null,
           assigneeId: viewerId,
-          status: { notIn: ["RESOLVED", "CLOSED"] }
+          status: OPEN_TICKET_STATUS
         },
         select: { key: true, title: true, priority: true, dueAt: true, endDate: true, status: true },
-        orderBy: [{ dueAt: "asc" }],
-        take: 8
+        take: 500
       });
+      const promise = (r: { endDate: Date | null; dueAt: Date | null }) => (r.endDate ?? r.dueAt)?.getTime() ?? Number.POSITIVE_INFINITY;
+      const rows = [...queue].sort((a, b) => promise(a) - promise(b)).slice(0, 8);
       return {
         type,
         shape,

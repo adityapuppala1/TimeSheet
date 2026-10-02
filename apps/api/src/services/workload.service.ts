@@ -482,9 +482,13 @@ export async function loadWorkload(params: {
   granularity?: "day" | "week";
   userIds?: string[];
   projectId?: string;
+  /** Several projects at once — a custom dashboard's scope. People assigned to ANY of them, and
+   *  only those projects' bookings, hours and tickets. Ignored when `projectId` is given. */
+  projectIds?: string[];
   /** V12 7.3: also return the board grouped by project, people inside. */
   groupBy?: "project";
 }): Promise<{ buckets: Bucket[]; rows: WorkloadRow[]; workingDays: number[]; groups?: WorkloadGroup[] }> {
+  const projectScope: string[] | undefined = params.projectId ? [params.projectId] : params.projectIds;
   const settings = await getPlanningSettings();
   const workingDays = settings.workingDays;
   const buckets = buildBuckets(params.from, params.to, params.granularity ?? "week", workingDays);
@@ -502,7 +506,7 @@ export async function loadWorkload(params: {
       // Scoping by project means "people assigned to it", which is the same membership the
       // ticket-assignment rules already use — not "people who happen to have logged time",
       // which would make someone who helped out once look like a team member forever.
-      ...(params.projectId ? { projectAssignments: { some: { projectId: params.projectId } } } : {})
+      ...(projectScope ? { projectAssignments: { some: { projectId: { in: projectScope } } } } : {})
     },
     select: {
       id: true,
@@ -523,7 +527,7 @@ export async function loadWorkload(params: {
     prisma.resourceBooking.findMany({
       where: {
         userId: { in: ids },
-        ...(params.projectId ? { projectId: params.projectId } : {}),
+        ...(projectScope ? { projectId: { in: projectScope } } : {}),
         // Overlap, not containment: a booking that starts before the window and ends inside it
         // is very much on screen, and filtering it out is how a board ends up under-reporting.
         startDate: { lte: params.to },
@@ -542,7 +546,7 @@ export async function loadWorkload(params: {
         // would make "actual" mean something different here from every other number in the app.
         status: "APPROVED",
         workDate: { gte: params.from, lte: params.to },
-        ...(params.projectId ? { projectId: params.projectId } : {})
+        ...(projectScope ? { projectId: { in: projectScope } } : {})
       },
       select: { userId: true, workDate: true, totalHours: true, projectId: true }
     }),
@@ -553,7 +557,7 @@ export async function loadWorkload(params: {
         assigneeId: { in: ids },
         deletedAt: null,
         status: { notIn: [...CLOSED_FOR_LOAD] },
-        ...(params.projectId ? { projectId: params.projectId } : {}),
+        ...(projectScope ? { projectId: { in: projectScope } } : {}),
         OR: [
           { startDate: { lte: params.to }, endDate: { gte: params.from } },
           { startDate: null, dueAt: { gte: params.from, lte: params.to } }
@@ -605,7 +609,7 @@ export async function loadWorkload(params: {
   // The projects on the board: every assignment of these people plus anything booked or
   // ticketed — then the names, in one query.
   const membership = await prisma.userProjectAssignment.findMany({
-    where: { userId: { in: ids }, ...(params.projectId ? { projectId: params.projectId } : {}) },
+    where: { userId: { in: ids }, ...(projectScope ? { projectId: { in: projectScope } } : {}) },
     select: { userId: true, projectId: true }
   });
   const projectIds = new Set<string>(membership.map((m) => m.projectId));

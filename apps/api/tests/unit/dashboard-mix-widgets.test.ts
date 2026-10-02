@@ -43,7 +43,8 @@ describe("PRIORITY_MIX", () => {
     const w = await resolveWidget(params("PRIORITY_MIX") as never);
     expect(groupBy.mock.calls[0][0]).toMatchObject({
       by: ["priority"],
-      where: { projectId: { in: ["p1", "p2"] }, deletedAt: null, status: { notIn: ["CLOSED"] } }
+      // Open = not resolved and not closed (workspace-metrics.ts), the same as OPEN_ITEMS.
+      where: { projectId: { in: ["p1", "p2"] }, deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] } }
     });
     expect((w as any).points).toEqual([
       { label: "critical", value: 2 },

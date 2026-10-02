@@ -72,6 +72,9 @@ function Widget({ widget }: { widget: ResolvedWidget }) {
           </span>
         }
         icon={<BarChart3 className="h-4 w-4" />}
+        // The server says what the figure covers ("approved, last 30 days to today", the budget
+        // per currency). It was computed and then thrown away, so a bare number sat on the tile.
+        hint={widget.hint ?? undefined}
       />
     );
   }
@@ -83,6 +86,7 @@ function Widget({ widget }: { widget: ResolvedWidget }) {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">{widget.title}</CardTitle>
+          {widget.hint && <p className="text-[11px] text-muted-foreground">{widget.hint}</p>}
         </CardHeader>
         <CardContent className="grid gap-1.5">
           {points.length === 0 ? (
