@@ -11,11 +11,16 @@
  * intact: password sign-in, each redirect SSO provider, the LDAP bind, forgot-password, and the
  * "no method configured" dead end. Restyle around a flow; never restructure one to fit a layout.
  *
- * WHY THE FAILURE MESSAGE IS INLINE AND NOT ONLY A TOAST: a toast disappears after a few seconds,
- * which is exactly the wrong behaviour for the one message a person needs while retyping a
- * password — and for lockout text, which explains why the next three attempts will also fail. The
- * toast stays as well, because it is what announces the failure to a screen reader immediately;
- * the inline panel is `role="alert"` and persists until the next attempt.
+ * WHY THE FAILURE MESSAGE IS INLINE AND NOT A TOAST: a toast disappears after a few seconds, which
+ * is exactly the wrong behaviour for the one message a person needs while retyping a password — and
+ * for lockout text, which explains why the next attempts will also fail. The inline panel is
+ * `role="alert"`, so it is announced the moment it appears, and it persists until the next attempt.
+ * It used to be paired with an error toast as well, so a screen reader announced every failure
+ * twice (security audit #19); the toast is gone.
+ *
+ * THE WORKSPACE IS NAMED ON EVERY SIZE (security audit #19): "Sign in to <workspace> · <host>",
+ * from the same public branding read the logo uses and the address bar's own host — the honest
+ * answer to "am I on the right workspace?". It used to appear on desktop only when a logo was set.
  *
  * LAYOUT: a two-panel split at `lg` and up — `AuthBrandPanel` on the LEFT, form on the right —
  * collapsing to the form alone below that. The form is FIRST in the DOM and moved into the second
@@ -56,6 +61,7 @@ import { toast } from "../components/ui/toaster";
 import { apiUrl, authApi, brandingApi, brandingLogoUrl, isMaintenanceLockoutError, type LoginResponse } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { safeReturnTo } from "../utils/return-to";
+import { radioIndexForKey } from "../lib/radio-group-keys";
 import { AuthBrandPanel } from "../components/marketing/AuthBrandPanel";
 import { FingerprintSignIn, type SealState } from "../components/auth/FingerprintSignIn";
 import { GoogleMark, LdapMark, MicrosoftMark, SamlMark } from "../components/ui/provider-marks";
@@ -83,7 +89,8 @@ const ldapSchema = z.object({
 
 type LdapFormData = z.infer<typeof ldapSchema>;
 
-/** Whatever the API said went wrong, kept on screen until the next attempt. */
+/** Whatever the API said went wrong, kept on screen until the next attempt — and the ONLY
+ *  announcement of it: `role="alert"` is read out the moment it renders. */
 function SignInError({ message }: { message: string }) {
   return (
     <p
@@ -91,7 +98,9 @@ function SignInError({ message }: { message: string }) {
       className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-300"
     >
       <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-      <span>{message}</span>
+      <span>
+        <strong className="font-semibold">Sign-in failed.</strong> {message}
+      </span>
     </p>
   );
 }
@@ -126,9 +135,8 @@ function LdapLoginForm({ onSuccess, onStatus }: { onSuccess: (data: LoginRespons
     onSuccess,
     onError: (error: any) => {
       if (isMaintenanceLockoutError(error)) return; // the api interceptor is already navigating to /maintenance
-      const message = messageFor(error);
-      setFailure(message);
-      toast.error("Sign-in failed", { description: message });
+      // Inline only — SignInError is the one announcement (see the file header).
+      setFailure(messageFor(error));
     }
   });
 
@@ -221,6 +229,12 @@ function LdapLoginForm({ onSuccess, onStatus }: { onSuccess: (data: LoginRespons
   );
 }
 
+/** The two local sign-in methods the radio group switches between, in display order. */
+const LOCAL_METHODS = [
+  { id: "password", label: "Password", Mark: Lock },
+  { id: "ldap", label: "Directory", Mark: LdapMark }
+] as const;
+
 /** Shown under the form on phones, where `AuthBrandPanel` is deliberately absent. */
 const MOBILE_PROOF = [
   { icon: ShieldCheck, text: "Rotating sessions" },
@@ -288,6 +302,14 @@ export function Login() {
   const showPasswordForm = passwordEnabled && (!bothLocalMethods || localMethod === "password");
   const showLdapForm = ldapEnabled && (!bothLocalMethods || localMethod === "ldap");
   const [ldapStatus, setLdapStatus] = useState<SealState>("idle");
+  /* Clearing BOTH failure states matters: the seal and the inline error belong to whichever form is
+     on screen, and a person who switches methods after a rejected password would otherwise land on
+     the directory form already showing a red fingerprint for an attempt they have not made here. */
+  const chooseLocalMethod = (method: "password" | "ldap") => {
+    setLocalMethod(method);
+    setLdapStatus("idle");
+    setFailure(undefined);
+  };
 
   const handleLoginSuccess = (data: LoginResponse) => {
     setSession(data.user, data.accessToken);
@@ -305,9 +327,8 @@ export function Login() {
     onSuccess: handleLoginSuccess,
     onError: (error: any) => {
       if (isMaintenanceLockoutError(error)) return; // the api interceptor is already navigating to /maintenance
-      const message = messageFor(error);
-      setFailure(message);
-      toast.error("Sign-in failed", { description: message });
+      // Inline only — SignInError is the one announcement (see the file header).
+      setFailure(messageFor(error));
     }
   });
 
@@ -378,7 +399,10 @@ export function Login() {
               )}
               <h1 className="text-2xl font-black tracking-tight">Welcome back</h1>
               <p className="mt-2 text-sm text-muted-foreground">
-                Sign in to log time, approve work, and review utilization.
+                Sign in to <span className="font-semibold text-foreground">{workspaceName}</span>
+                <span aria-hidden> · </span>
+                <span className="sr-only">, at </span>
+                <span className="break-all">{window.location.host}</span>
               </p>
 
               {ssoMethods.isLoading && <Skeleton className="mt-7 h-10 w-full" />}
@@ -431,31 +455,31 @@ export function Login() {
               )}
 
               {bothLocalMethods && (
+                /* A RADIO GROUP, not tabs (security audit #19): it was `role="tab"` with no tab
+                   panels and no arrow keys — announced as one widget, operated as another. Choosing
+                   one of two ways to sign in is a radio group: one tab stop, arrows move between the
+                   options (lib/radio-group-keys.ts), and the choice is `aria-checked`. */
                 <div
-                  role="tablist"
+                  role="radiogroup"
                   aria-label="Sign-in method"
                   className={`grid grid-cols-2 gap-1 rounded-lg bg-muted p-1 ${ssoProviders.length > 0 ? "" : "mt-7"}`}
+                  onKeyDown={(event) => {
+                    const index = radioIndexForKey(event.key, LOCAL_METHODS.findIndex((m) => m.id === localMethod), LOCAL_METHODS.length);
+                    if (index === null) return;
+                    event.preventDefault();
+                    chooseLocalMethod(LOCAL_METHODS[index].id);
+                    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')[index]?.focus();
+                  }}
                 >
-                  {(
-                    [
-                      { id: "password", label: "Password", Mark: Lock },
-                      { id: "ldap", label: "Directory", Mark: LdapMark }
-                    ] as const
-                  ).map((option) => (
+                  {LOCAL_METHODS.map((option) => (
                     <button
                       key={option.id}
                       type="button"
-                      role="tab"
-                      aria-selected={localMethod === option.id}
-                      /* Clearing BOTH failure states matters: the seal and the inline error belong
-                         to whichever form is on screen, and a person who switches methods after a
-                         rejected password would otherwise land on the directory form already
-                         showing a red fingerprint for an attempt they have not made here. */
-                      onClick={() => {
-                        setLocalMethod(option.id);
-                        setLdapStatus("idle");
-                        setFailure(undefined);
-                      }}
+                      role="radio"
+                      aria-checked={localMethod === option.id}
+                      // Roving tabindex: the group is ONE tab stop, on the chosen option.
+                      tabIndex={localMethod === option.id ? 0 : -1}
+                      onClick={() => chooseLocalMethod(option.id)}
                       className={`focus-ring inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition-all duration-200 ${
                         localMethod === option.id
                           ? "bg-card text-foreground shadow-sm"
