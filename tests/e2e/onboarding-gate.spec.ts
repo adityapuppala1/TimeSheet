@@ -11,8 +11,24 @@
  * a throwaway user: user creation goes through seat limits, invitations and email, and a test that
  * fakes its way past those proves less about the gate than it costs to maintain.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 import { withAdminRequest } from "./helpers/admin-request";
+
+/**
+ * An account an admin creates must choose its own password before the app serves anything else —
+ * the mustChangePassword gate (security audit #11). The drill users below are admin-created, so each
+ * one does that first, through the API, and signs in with its own password. That keeps the gate
+ * under test here the ONBOARDING one.
+ */
+async function chooseOwnPassword(ctx: APIRequestContext, email: string, adminSet: string, own: string) {
+  const login = await ctx.post("/api/auth/login", { data: { email, password: adminSet } });
+  expect(login.ok(), `drill user could not sign in with the admin-set password (${login.status()})`).toBe(true);
+  const changed = await ctx.post("/api/auth/change-password", {
+    headers: { Authorization: `Bearer ${(await login.json()).accessToken}`, "Content-Type": "application/json" },
+    data: { currentPassword: adminSet, nextPassword: own }
+  });
+  expect(changed.status(), `drill user could not choose a password: ${await changed.text()}`).toBe(204);
+}
 
 test.describe("first-run onboarding gate", () => {
   test("no existing user is blocked — the backfill did its job", async () => {
@@ -98,7 +114,8 @@ test.describe("the gate lifts by itself", () => {
    */
   test("completing the profile dismisses the popup without a reload", async ({ page }) => {
     const email = `e2e-gate-lift-${Date.now()}@timesheet.local`;
-    const password = "GateLift@1234";
+    const adminSet = "GateLift@1234";
+    const password = "GateLift@5678";
 
     await withAdminRequest(async (ctx, headers) => {
       const settings = await (await ctx.get("/api/settings/face-verification", { headers })).json();
@@ -107,10 +124,11 @@ test.describe("the gate lifts by itself", () => {
 
       const created = await ctx.post("/api/users", {
         headers,
-        data: { name: "Gate Lift Drill", email, role: "EMPLOYEE", password }
+        data: { name: "Gate Lift Drill", email, role: "EMPLOYEE", password: adminSet }
       });
       expect(created.ok(), `could not create drill user (${created.status()})`).toBe(true);
       const userId = (await created.json()).id as string;
+      await chooseOwnPassword(ctx, email, adminSet, password);
 
       try {
         await page.goto("/login");
@@ -158,7 +176,8 @@ test.describe("the gate lifts by itself", () => {
    */
   test("saving the profile form itself lifts the gate — without touching the timezone field", async ({ page }) => {
     const email = `e2e-gate-form-${Date.now()}@timesheet.local`;
-    const password = "GateForm@1234";
+    const adminSet = "GateForm@1234";
+    const password = "GateForm@5678";
 
     await withAdminRequest(async (ctx, headers) => {
       const settings = await (await ctx.get("/api/settings/face-verification", { headers })).json();
@@ -167,10 +186,11 @@ test.describe("the gate lifts by itself", () => {
 
       const created = await ctx.post("/api/users", {
         headers,
-        data: { name: "Gate Form Drill", email, role: "EMPLOYEE", password }
+        data: { name: "Gate Form Drill", email, role: "EMPLOYEE", password: adminSet }
       });
       expect(created.ok(), `could not create drill user (${created.status()})`).toBe(true);
       const userId = (await created.json()).id as string;
+      await chooseOwnPassword(ctx, email, adminSet, password);
 
       try {
         await page.route("**/api/auth/profile", (route) => {

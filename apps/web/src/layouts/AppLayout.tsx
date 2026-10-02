@@ -13,6 +13,8 @@ import { MaintenanceBanner } from "../components/MaintenanceBanner";
 import { authApi } from "../services/api";
 import { PasswordChangeBanner } from "../components/PasswordChangeBanner";
 import { OnboardingGate } from "../components/OnboardingGate";
+import { ForcedPasswordChange } from "../components/ForcedPasswordChange";
+import { isPasswordChangeRequired } from "../lib/password-change-gate";
 import { FaceModelUpgradePrompt } from "../components/FaceModelUpgradePrompt";
 import { SessionEndedDialog } from "../components/SessionEndedDialog";
 import { MobileNav, Sidebar } from "../components/Sidebar";
@@ -33,7 +35,8 @@ export function AppLayout() {
   // person is. The server's own TZ says where the code runs, not where anyone lives, and using
   // it as a default mislabels every remote user. Silent and once; Profile lets them change it.
   useEffect(() => {
-    if (!user || user.timezone) return;
+    // Not while held at the forced password change: the server refuses the write until it is done.
+    if (!user || user.timezone || isPasswordChangeRequired(user)) return;
     const deviceTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (!deviceTz) return;
     authApi
@@ -50,6 +53,17 @@ export function AppLayout() {
   if (!hydrated) return <AppLoader variant="screen" label="Loading secure workspace…" />;
   // Carries the destination so a deep link survives the round trip through sign-in.
   if (!user) return <Navigate to={loginUrlFor(location)} replace />;
+  // A password an administrator set: the server serves nothing else until it is changed (security
+  // audit #11), so the shell — every query of which would be refused — is not mounted at all. The
+  // heartbeat stays, so a force-logout still reaches this tab.
+  if (isPasswordChangeRequired(user)) {
+    return (
+      <>
+        <ForcedPasswordChange />
+        <SessionEndedDialog />
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">

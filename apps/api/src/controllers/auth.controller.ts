@@ -254,7 +254,10 @@ authRouter.get("/heartbeat", requireAuth, async (_req, res) => {
 });
 
 authRouter.get("/me", requireAuth, async (req, res) => {
-  res.json(await buildProfilePayload(req.user!.id));
+  // `passwordChangeRequired` is a property of THIS session (requireAuth decides it), not of the
+  // user, so it is added here rather than in buildProfilePayload. The SPA renders the forced
+  // change-password screen from it.
+  res.json({ ...(await buildProfilePayload(req.user!.id)), passwordChangeRequired: Boolean(req.passwordChangeRequired) });
 });
 
 /**

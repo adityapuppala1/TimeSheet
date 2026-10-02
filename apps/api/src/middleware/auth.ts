@@ -74,6 +74,9 @@ declare global {
       user?: RequestUser;
       /** The access token's session id, when present (see utils/security.ts#AccessTokenPayload). */
       sessionId?: string;
+      /** True while this PASSWORD session must change the admin-set password first — see
+       *  PASSWORD_CHANGE_ALLOWED below. Set by requireAuth. */
+      passwordChangeRequired?: boolean;
     }
   }
 }
@@ -100,6 +103,35 @@ const GRACE_EXPORT_PATHS = ["/api/reports/"] as const;
  * a member could not already see in the team directory.
  */
 const GRACE_OPEN_PATHS = new Set(["/api/billing/standing"]);
+
+/**
+ * What a session held by the mustChangePassword gate may still reach (security audit #11): exactly
+ * what the SPA's forced change-password screen needs, and nothing else — the profile it renders
+ * from, the change itself, the heartbeat that tells an open tab it was signed out, and the two
+ * sign-outs. (`/auth/refresh` and `/auth/logout` do not run requireAuth at all.)
+ *
+ * Exact paths, not prefixes, for the reason GRACE_EXPORT_PATHS gives: every entry is access granted
+ * to somebody using a password another person knows.
+ */
+const PASSWORD_CHANGE_ALLOWED = new Set([
+  "/api/auth/me",
+  "/api/auth/change-password",
+  "/api/auth/heartbeat",
+  "/api/auth/logout",
+  "/api/auth/logout-all"
+]);
+
+/** Records whether this session is held by the mustChangePassword gate, and refuses anything the
+ *  forced change screen does not need while it is. `req.originalUrl` for the same reason the billing
+ *  gate below uses it: this middleware is mounted per-router. */
+function holdAtPasswordChange(req: Request, required: boolean): void {
+  req.passwordChangeRequired = required;
+  if (required && !PASSWORD_CHANGE_ALLOWED.has(req.originalUrl.split("?")[0])) {
+    throw new AppError(403, "Choose a new password before you continue — the current one was set by an administrator.", {
+      code: "PASSWORD_CHANGE_REQUIRED"
+    });
+  }
+}
 
 export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const header = req.headers.authorization ?? "";
@@ -135,10 +167,12 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
   // so a single-device logout (which revokes that one Session row) takes effect immediately
   // instead of waiting up to ACCESS_TOKEN_TTL for the token to expire on its own. Tokens
   // issued before this change simply have no `sid` and skip this extra check.
+  let establishedBy: string | null = null;
   if (typeof payload.sid === "string") {
-    const session = await prisma.session.findUnique({ where: { id: payload.sid }, select: { revokedAt: true } });
+    const session = await prisma.session.findUnique({ where: { id: payload.sid }, select: { revokedAt: true, authMethod: true } });
     if (!session || session.revokedAt) throw new AppError(401, "Session revoked");
     req.sessionId = payload.sid;
+    establishedBy = session.authMethod ?? null;
   }
 
   const user = await prisma.user.findUnique({
@@ -200,6 +234,19 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
       throw new AppError(402, "This workspace's plan has lapsed. A workspace admin can restore access from Billing.", { code: "PLAN_LAPSED" });
     }
   }
+
+  /*
+   * THE mustChangePassword GATE (security audit #11). An admin created or reset this account, so
+   * the admin knows its password — and until the person chooses their own, a PASSWORD session may
+   * reach only the forced change-password screen. It used to be "a prompt, never a gate", while the
+   * Help manual promised the change was required at first sign-in.
+   *
+   * Only for sessions established BY PASSWORD: an SSO or LDAP sign-in never used the admin's
+   * password, and a session from before sessions recorded their method (NULL) is left alone rather
+   * than guessed at — the gate applies from that person's next password sign-in. Checked after the
+   * maintenance and billing gates, so their answers still take precedence.
+   */
+  holdAtPasswordChange(req, Boolean(user.mustChangePassword) && establishedBy === "PASSWORD");
 
   // Throttled liveness stamp — what makes the admin's "who is online right now?" panel honest.
   // At most one UPDATE per session per 5 minutes, tracked in-memory: unconditionally writing

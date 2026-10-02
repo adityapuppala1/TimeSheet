@@ -4,11 +4,10 @@
  * choosing a password of their own (Profile → change password, or the emailed reset link)
  * clears it.
  *
- * WHY A BANNER AND NOT A BLOCKING MODAL: a forced modal at sign-in trains people to defeat it —
- * the observed behavior is typing the old password with a "1" appended just to get to work. A
- * persistent, dismissible-by-fixing-it prompt gets better passwords, not faster clicks. The
- * banner reappears every session until the flag clears, which is exactly as annoying as it
- * should be.
+ * A PASSWORD session with the flag never sees this banner: it is held at the forced change screen
+ * instead (ForcedPasswordChange.tsx, security audit #11 — the Help manual promised the change was
+ * required, and the API now enforces it). What remains for the banner is a session that did NOT use
+ * the admin's password — SSO or LDAP — or one established before sessions recorded their method.
  *
  * WHO renders this: layouts/AppLayout.tsx, right under the maintenance banner.
  */

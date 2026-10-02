@@ -49,6 +49,10 @@ export type ProfilePayload = {
   role: string;
   heldRoles: RoleName[];
   mustChangePassword: boolean;
+  /** True when THIS session is held at the forced change-password screen: the flag is set and the
+   *  session was established by password (middleware/auth.ts). Set by /login and /auth/me; absent
+   *  from SSO results, which are never gated. */
+  passwordChangeRequired?: boolean;
   permissions: string[];
   avatarUrl: string | null;
   bio: string | null;
@@ -92,8 +96,8 @@ export async function buildProfilePayload(userId: string): Promise<ProfilePayloa
     email: user.email,
     role: user.role.name,
     heldRoles: resolveHeldRoles(user.role.name as RoleName, user.userRoles.map((ur) => ur.role.name as RoleName)),
-    // Drives the web's "choose your own password" prompt after an admin created or reset the
-    // account. A prompt, never a gate — see the schema comment on User.mustChangePassword.
+    // An admin created or reset the account, so the admin knows the password. For a PASSWORD
+    // session this is a gate (middleware/auth.ts); for SSO it only drives the banner.
     mustChangePassword: user.mustChangePassword,
     permissions: user.role.permissions.map((p) => p.permission.key),
     avatarUrl: user.avatarUrl,
@@ -296,9 +300,10 @@ async function enforceSessionCap(userId: string, keepId: string): Promise<number
 async function establishSession(
   user: { id: string },
   orgId: string,
-  /** `rememberMe` is passed only by PASSWORD sign-in, true or false. Left undefined (SSO, LDAP) it is
-   *  stored as NULL, which keeps the expiring refresh cookie those paths have always had. */
-  opts: { rememberMe?: boolean; userAgent?: string; ipAddress?: string; deviceId?: string }
+  /** `rememberMe` and `authMethod` are passed only by PASSWORD sign-in. Left undefined (SSO, LDAP)
+   *  both are stored as NULL: the expiring refresh cookie those paths have always had, and no
+   *  mustChangePassword gate (middleware/auth.ts). */
+  opts: { rememberMe?: boolean; authMethod?: "PASSWORD"; userAgent?: string; ipAddress?: string; deviceId?: string }
 ) {
   // MAINTENANCE GATE, at the one place every login method funnels through — password, Google,
   // Microsoft, SAML and LDAP all terminate here, so none of them can become the forgotten side
@@ -380,8 +385,9 @@ async function establishSession(
           ipAddress: opts.ipAddress,
           expiresAt,
           lastSeenAt: new Date(),
-          // A re-used row takes on THIS sign-in's choice, or the cookie would keep the old one's.
-          rememberMe: opts.rememberMe ?? null
+          // A re-used row takes on THIS sign-in's choice and method, or it would keep the old one's.
+          rememberMe: opts.rememberMe ?? null,
+          authMethod: opts.authMethod ?? null
         }
       })
     : await prisma.session.create({
@@ -395,7 +401,8 @@ async function establishSession(
           // Signing in IS activity. Without this a brand-new row reads as "never used" to every
           // idle-based sweep and to the Profile page's "Last used" column alike.
           lastSeenAt: new Date(),
-          rememberMe: opts.rememberMe ?? null
+          rememberMe: opts.rememberMe ?? null,
+          authMethod: opts.authMethod ?? null
         }
       });
 
@@ -457,7 +464,7 @@ export async function login(
   if (user.status !== "ACTIVE") throw new AppError(403, "Account is not active");
   clearFailedLogins(orgId, email);
 
-  const session = await establishSession(user, orgId, { rememberMe, userAgent, ipAddress, deviceId });
+  const session = await establishSession(user, orgId, { rememberMe, authMethod: "PASSWORD", userAgent, ipAddress, deviceId });
 
   return {
     ...session,
@@ -468,6 +475,8 @@ export async function login(
       role: user.role.name,
       heldRoles: resolveHeldRoles(user.role.name as RoleName, user.userRoles.map((ur) => ur.role.name as RoleName)),
       mustChangePassword: user.mustChangePassword,
+      // This IS a password session, so the flag is the gate — see middleware/auth.ts.
+      passwordChangeRequired: user.mustChangePassword,
       permissions: user.role.permissions.map((p) => p.permission.key),
       avatarUrl: user.avatarUrl,
       bio: user.bio,

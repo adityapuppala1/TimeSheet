@@ -149,8 +149,8 @@ model User {
   passwordHash             String
   /// True while this person is using a password somebody else knows — set by admin creation and
   /// every admin reset, cleared the moment they choose their own (change-password or the emailed
-  /// reset flow). Drives a prompt, never a lockout: forcing a change at a modal is how people end
-  /// up typing their old password with a "1" appended.
+  /// reset flow). A GATE for password sessions (security audit #11): until it clears, requireAuth
+  /// allows only the forced change-password screen. SSO and LDAP sessions are not gated.
   mustChangePassword       Boolean    @default(false)
   /// --- Agent identity (V8 phase 3, decision 2 in docs/AGENTIC_WORK_MANAGEMENT.md §7) ----------
   /// True for the non-login service identity an `AgentProfile` acts as. Making an agent a real
@@ -400,6 +400,10 @@ model Session {
   /// browser ends it. True: the cookie expires with the session. NULL: SSO, LDAP, and every row from
   /// before the column existed — they keep the expiring cookie they always had. Security audit #14.
   rememberMe          Boolean?
+  /// How this session was established: "PASSWORD" for password sign-in. NULL for SSO and LDAP, and
+  /// for every row from before the column existed. The mustChangePassword gate (middleware/auth.ts)
+  /// applies only to PASSWORD sessions — an SSO sign-in never used the password an admin set.
+  authMethod          String?   @db.VarChar(16)
 
   @@index([userId, expiresAt])
   @@index([lastSeenAt])
