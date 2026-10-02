@@ -38,6 +38,10 @@ export function hashPublicFormToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+/** The type a form files its tickets under when none is chosen: the form builder's starting value
+ *  and the column's default. Also where a submission lands when its form still names CHANGE. */
+export const DEFAULT_REQUEST_FORM_TICKET_TYPE = "BUG";
+
 /* ================================================================== *
  * The authored schema
  * ================================================================== */

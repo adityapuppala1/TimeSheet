@@ -19,8 +19,9 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { getPlanningQuota } from "../services/plan-limits.service.js";
 import { assertPlanningCapability } from "../services/planning.service.js";
-import { assertTicketVisible, CHANGE_TICKET_TYPE, ticketProjectScope } from "../services/ticket.service.js";
+import { assertTicketVisible, isChangeTicketType, ticketProjectScope } from "../services/ticket.service.js";
 import {
+  DEFAULT_REQUEST_FORM_TICKET_TYPE,
   hashPublicFormToken,
   issuePublicFormToken,
   REQUEST_FIELD_TYPES,
@@ -62,13 +63,14 @@ const bodySchema = z.object({
   description: z.string().max(2000).nullish(),
   projectId: z.string().uuid(),
   moduleId: z.string().uuid().nullish(),
-  // Not CHANGE: a form submission becomes a plain ticket, and only a change request's own ticket
-  // may carry that type (ticket.service.ts#assertValidTicketType).
+  // Not CHANGE, in any spelling the case-insensitive type column reads as CHANGE: a form submission
+  // becomes a plain ticket, and only a change request's own ticket may carry that type
+  // (ticket.service.ts#assertValidTicketType). Re-saving a form saved before this rule is refused too.
   ticketType: z
     .string()
     .min(1)
     .max(60)
-    .refine((type) => type !== CHANGE_TICKET_TYPE, "A request form can't file tickets as CHANGE — changes are raised from the Changes page.")
+    .refine((type) => !isChangeTicketType(type), "A request form can't file tickets as CHANGE — changes are raised from the Changes page.")
     .optional(),
   defaultPriority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).optional(),
   defaultAssigneeId: z.string().uuid().nullish(),
@@ -138,7 +140,7 @@ requestFormRouter.post(
         description: req.body.description ?? null,
         projectId: req.body.projectId,
         moduleId: req.body.moduleId ?? null,
-        ticketType: req.body.ticketType ?? "BUG",
+        ticketType: req.body.ticketType ?? DEFAULT_REQUEST_FORM_TICKET_TYPE,
         defaultPriority: req.body.defaultPriority ?? "MEDIUM",
         defaultAssigneeId: req.body.defaultAssigneeId ?? null,
         blueprintId: req.body.blueprintId ?? null,
@@ -173,7 +175,7 @@ requestFormRouter.put(
         description: req.body.description ?? null,
         projectId: req.body.projectId,
         moduleId: req.body.moduleId ?? null,
-        ticketType: req.body.ticketType ?? "BUG",
+        ticketType: req.body.ticketType ?? DEFAULT_REQUEST_FORM_TICKET_TYPE,
         defaultPriority: req.body.defaultPriority ?? "MEDIUM",
         defaultAssigneeId: req.body.defaultAssigneeId ?? null,
         blueprintId: req.body.blueprintId ?? null,

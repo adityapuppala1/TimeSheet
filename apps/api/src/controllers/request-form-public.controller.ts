@@ -39,6 +39,7 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { setCustomFieldValues } from "../services/custom-field.service.js";
 import {
+  DEFAULT_REQUEST_FORM_TICKET_TYPE,
   hashPublicFormToken,
   normaliseSubmission,
   renderAnswers,
@@ -46,7 +47,7 @@ import {
   type RequestFormSchema
 } from "../services/request-form.service.js";
 import { EMAIL_INTAKE_SYSTEM_EMAIL } from "../services/email-intake.service.js";
-import { computeTicketDueDate, getGlobalTicketSettings, issueTicketKey } from "../services/ticket.service.js";
+import { computeTicketDueDate, getGlobalTicketSettings, isChangeTicketType, issueTicketKey } from "../services/ticket.service.js";
 import { dispatchFormSubmission } from "../services/automation-dispatch.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 
@@ -132,6 +133,18 @@ requestFormPublicRouter.post("/:token", validate(submitSchema), async (req, res)
 
   const normalised = normaliseSubmission(schema, req.body.answers as Record<string, unknown>);
 
+  // A form saved before forms were refused the CHANGE type can still name it (the
+  // 20261002142000 migration moves the stored ones; a restored backup would bring one back). Its
+  // submissions are filed under the builder's default type instead: a stranger's request must
+  // never become a change nobody raised. Logged, and noted on the audit row, so the form gets fixed.
+  const ticketType = isChangeTicketType(form.ticketType) ? DEFAULT_REQUEST_FORM_TICKET_TYPE : form.ticketType;
+  const typeFallback = ticketType === form.ticketType ? null : { from: form.ticketType, to: ticketType };
+  if (typeFallback) {
+    console.warn(
+      `[request-form] "${form.slug}" files its tickets as ${typeFallback.from}, which only a change request may carry — filed as ${ticketType} instead. Re-save the form with another type.`
+    );
+  }
+
   // The reporter is the seeded intake system account: Ticket.reporterId needs a real User row and
   // the submitter has no account. Their identity lives in the external* fields, exactly as email
   // and chat intake already do.
@@ -158,7 +171,7 @@ requestFormPublicRouter.post("/:token", validate(submitSchema), async (req, res)
         key,
         projectId: form.projectId,
         moduleId: form.moduleId,
-        type: form.ticketType,
+        type: ticketType,
         title: normalised.title,
         description: body,
         priority: form.defaultPriority,
@@ -195,7 +208,7 @@ requestFormPublicRouter.post("/:token", validate(submitSchema), async (req, res)
   // ticket is the thing that matters; a missing custom value is recoverable by a human.
   if (Object.keys(normalised.customFields).length > 0) {
     try {
-      await setCustomFieldValues({ ticketId: ticket.id }, normalised.customFields, { ticketType: form.ticketType });
+      await setCustomFieldValues({ ticketId: ticket.id }, normalised.customFields, { ticketType });
     } catch {
       // Swallowed deliberately — see above. The answers are stored verbatim on the submission, so
       // nothing is lost.
@@ -204,7 +217,8 @@ requestFormPublicRouter.post("/:token", validate(submitSchema), async (req, res)
 
   await audit(undefined, "request_form.submitted", "RequestFormSubmission", submission.id, {
     form: form.slug,
-    ticket: ticket.key
+    ticket: ticket.key,
+    ...(typeFallback ? { ticketTypeFallback: typeFallback } : {})
   }, {
     actorType: "GUEST",
     actorLabel: `request-form:${form.slug}`,
