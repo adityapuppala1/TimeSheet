@@ -5922,7 +5922,10 @@ export interface MyMonthRollup {
   projects: MyMonthProject[];
   truncated: boolean;
   totals: {
+    /** Every non-deleted hour in the period, drafts and rejected included — by-state context only. */
     monthHours: number;
+    /** LOGGED hours: submitted + approved. The denominator of `completion.timesheetPct`. */
+    loggedHours: number;
     approvedHours: number;
     submittedHours: number;
     draftHours: number;

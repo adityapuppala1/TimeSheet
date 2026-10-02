@@ -70,23 +70,13 @@ import { ProjectUtilizationChart } from "../components/ProjectUtilizationChart";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
 import { computeTrend, type Trend } from "../lib/trend";
 import { cn } from "../lib/utils";
+import { isoToLocalDate, likeForLikeWindow, localDateKey, summarisePersonalPeriod } from "../lib/personal-period";
+import { formatHours } from "../lib/format";
 import { changeApi, dashboardApi, reportApi, ticketApi, timesheetApi, type MyMonthRollup, type TicketRow } from "../services/api";
 import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
 import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
 import { useAuthStore } from "../store/auth";
 import { useCardLayout } from "../lib/use-media-query";
-
-/** Mon–Fri days in an inclusive range. The week target scales against this rather than staying
- *  pinned to 40h: a one-day range against a 40h bar reads as a 5% week, and a month reads as 400%,
- *  so the bar stops meaning anything the moment the page can show something other than a week. */
-function countWorkingDays(from: Date, to: Date): number {
-  let count = 0;
-  for (const day = new Date(from); day <= to; day.setDate(day.getDate() + 1)) {
-    const weekday = day.getDay();
-    if (weekday !== 0 && weekday !== 6) count += 1;
-  }
-  return count;
-}
 
 function startOfWeek(date: Date) {
   const d = new Date(date);
@@ -100,16 +90,6 @@ function startOfWeek(date: Date) {
 function toMinutes(time: string): number {
   const [h, m] = String(time).split(":").map(Number);
   return (h || 0) * 60 + (m || 0);
-}
-
-/**
- * "YYYY-MM-DD" from a Date's LOCAL calendar components. Never use toISOString() for day
- * equality: local midnight in any UTC+N timezone converts to the PREVIOUS UTC day, which is
- * exactly the bug that made "today's timeline" render empty in IST while the (server-computed)
- * daily banner correctly said hours were logged.
- */
-function localDateKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 /** The stored workDate is UTC midnight of the intended CALENDAR day, so the day is the first 10
@@ -135,12 +115,6 @@ interface TimesheetRowLite {
    *  is exactly why the timeline lanes by user rather than piling every person onto one track. */
   user?: { id?: string; name?: string };
   userId?: string;
-}
-
-function isoToLocalDate(iso: string): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, (m || 1) - 1, d || 1);
 }
 
 /** Monday-to-today, as ISO. The page's default window — it is what every card showed before there
@@ -203,9 +177,10 @@ export function Dashboard() {
   const [range, setRange] = useState<DateRangeValue>(thisWeekRange);
   const periodLabel = describeRange(range);
   const rangeParams = { from: range.from, to: range.to };
-  /** What the stat deltas are measured against. "vs yesterday" is only true for a single day; over
-   *  any span the server compares the equal-length window before it, and the label has to say so. */
-  const comparisonLabel = range.from === range.to ? "vs the day before" : "vs the previous period";
+  /** What every delta on the page is measured against: the same weekdays, whole weeks earlier — the
+   *  rule the server's admin summary uses too (utils/date-window.ts), so the label is true of both. */
+  const comparison = likeForLikeWindow(range.from, range.to, new Date());
+  const comparisonLabel = comparison?.label ?? "vs the previous period";
   const periodIn = periodPhrase(periodLabel);
 
   const admin = useQuery({
@@ -222,11 +197,32 @@ export function Dashboard() {
   });
   // The range is in the KEY as well as the request: without it React Query serves the previous
   // window's rows from cache and the page shows one period's numbers under another's label.
-  const timesheets = useQuery({ queryKey: ["timesheets", range.from, range.to], queryFn: () => timesheetApi.list(rangeParams) });
+  //
+  // `userId` is the SIGNED-IN person, always. Without it the route hands anyone holding
+  // reports:view — every manager, team lead and admin — the whole workspace's rows, and the cards
+  // below, all headed "your", added up everybody's hours. The cards also refuse any other row
+  // themselves (lib/personal-period.ts), because the calendars merge in the unscoped cache below.
+  const timesheets = useQuery({
+    queryKey: ["timesheets", "mine", user?.id, range.from, range.to],
+    queryFn: () => timesheetApi.list({ ...rangeParams, userId: user?.id }),
+    enabled: Boolean(user?.id)
+  });
+  /** The same person's rows for the comparison window, so "vs the same days last week" is computed
+   *  from that week's own rows rather than from whatever of it the newest-100 page happened to hold. */
+  const previous = useQuery({
+    queryKey: ["timesheets", "mine", user?.id, comparison?.from, comparison?.to],
+    queryFn: () => timesheetApi.list({ from: comparison!.from, to: comparison!.to, userId: user?.id }),
+    enabled: Boolean(user?.id && comparison)
+  });
   // Counted server-side and UNCAPPED. The list above is capped, which silently dropped projects
   // from the rollup on any busy account — see dashboardApi.myMonth.
   const myMonth = useQuery({ queryKey: ["dashboard", "my-month", range.from, range.to], queryFn: () => dashboardApi.myMonth(rangeParams) });
-  const daily = useQuery({ queryKey: ["daily-status", range.from, range.to], queryFn: () => reportApi.dailyStatus(rangeParams) });
+  /**
+   * TODAY, whatever range the page is showing. The banner says "Today's timesheet is logged" or "No
+   * entry for today yet" and drives the SLA warning, so it must not be asked about a week: given the
+   * page's Monday-to-today range, any entry earlier in the week silenced the warning all week.
+   */
+  const daily = useQuery({ queryKey: ["daily-status", "today"], queryFn: () => reportApi.dailyStatus() });
   /**
    * The unbounded newest-entries page, used ONLY to annotate the two calendars.
    *
@@ -285,131 +281,24 @@ export function Dashboard() {
   }, [all, recent.data]);
 
   /**
-   * One pass over the fetched entries feeds every personal surface below.
+   * One pass over the person's own entries feeds every personal surface below — see
+   * lib/personal-period.ts for the definitions (logged = submitted + approved, the target to date,
+   * the like-for-like comparison) and for why it drops anybody else's rows on sight.
    *
    * It takes the SELECTED RANGE rather than computing this-week/this-month from the clock, which is
-   * what made the whole page filterable from one control. The previous-period comparison is the
-   * equal-length window immediately before the range — the only thing a delta can honestly mean for
-   * an arbitrary span. That window is not in `all` (the request only asked for the range), so it is
-   * computed from whatever of it happens to be loaded and reported as null when none of it is.
+   * what made the whole page filterable from one control.
    */
-  const derived = useMemo(() => {
-    const rangeStart = isoToLocalDate(range.from) ?? new Date();
-    const rangeEnd = isoToLocalDate(range.to) ?? rangeStart;
-    const dayCount = Math.max(1, Math.round((rangeEnd.getTime() - rangeStart.getTime()) / 86_400_000) + 1);
-    const prevStart = new Date(rangeStart.getTime() - dayCount * 86_400_000);
-    const todayKey = localDateKey(new Date());
-
-    // The rhythm chart's x-axis. Up to a fortnight it is one bucket per day; beyond that the labels
-    // collide, so days collapse into buckets — a 90-day range drawn as 90 unreadable ticks is worse
-    // than the same shape drawn as twelve.
-    const bucketDays = dayCount <= 14 ? 1 : Math.ceil(dayCount / 12);
-    const bucketCount = Math.ceil(dayCount / bucketDays);
-    const bucketLabel = (index: number) => {
-      const day = new Date(rangeStart.getTime() + index * bucketDays * 86_400_000);
-      if (dayCount <= 7) return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][(day.getDay() + 6) % 7];
-      return day.toLocaleDateString(undefined, { day: "numeric", month: dayCount > 31 ? "short" : undefined });
-    };
-    const buckets: Array<{ day: string; hours: number }> = Array.from({ length: bucketCount }, (_, i) => ({
-      day: bucketLabel(i),
-      hours: 0
-    }));
-
-    let rangeH = 0;
-    let prevH = 0;
-    let prevSeen = 0;
-    let pendingCount = 0;
-    const byStatus = { APPROVED: 0, SUBMITTED: 0, REJECTED: 0, DRAFT: 0 } as Record<string, number>;
-    /** Hours per project in the range. Keyed by the DISPLAY LABEL rather than the id, so entries
-     *  whose project was removed collapse into one honest "No project" row instead of one row per
-     *  orphaned id. */
-    const byProjectLabel = new Map<string, number>();
-    /** Every loaded entry grouped by calendar day — the timeline's date picker reads this. */
-    const entriesByDate = new Map<string, TimesheetRowLite[]>();
-    /** Distinct days that carry at least one entry — the denominator for "average per day logged". */
-    const daysWithEntries = new Set<string>();
-
-    interface ProjectRoll {
-      id: string;
-      name: string;
-      code?: string;
-      monthHours: number;
-      approvedHours: number;
-      entries: number;
-      lastDate: string;
-    }
-    const projects = new Map<string, ProjectRoll>();
-
-    for (const row of allForCalendar) {
-      const hours = Number(row.totalHours ?? 0);
-      const { key: dateKey, local: workDay } = workDateParts(String(row.workDate));
-      if (Number.isNaN(workDay.getTime())) continue;
-
-      const dayList = entriesByDate.get(dateKey) ?? [];
-      dayList.push(row);
-      entriesByDate.set(dateKey, dayList);
-
-      if (workDay >= rangeStart && workDay <= rangeEnd) {
-        // INSIDE the range guard, deliberately. The loop now walks a wider set than the range (see
-        // `allForCalendar`), and a card headed "this week" reporting entries awaiting review from
-        // three months ago would be counting something it does not claim to be showing.
-        if (row.status === "SUBMITTED") pendingCount += 1;
-        rangeH += hours;
-        daysWithEntries.add(dateKey);
-        byStatus[row.status] = (byStatus[row.status] ?? 0) + hours;
-
-        const bucket = buckets[Math.min(bucketCount - 1, Math.floor((workDay.getTime() - rangeStart.getTime()) / 86_400_000 / bucketDays))];
-        if (bucket) bucket.hours += hours;
-
-        const projectLabel = row.project?.code ?? row.project?.name ?? "No project";
-        byProjectLabel.set(projectLabel, (byProjectLabel.get(projectLabel) ?? 0) + hours);
-
-        const key = row.project?.id ?? row.project?.name ?? "unknown";
-        const roll = projects.get(key) ?? {
-          id: key,
-          name: row.project?.name ?? "—",
-          code: row.project?.code,
-          monthHours: 0,
-          approvedHours: 0,
-          entries: 0,
-          lastDate: dateKey
-        };
-        roll.monthHours += hours;
-        if (row.status === "APPROVED") roll.approvedHours += hours;
-        roll.entries += 1;
-        if (dateKey > roll.lastDate) roll.lastDate = dateKey;
-        projects.set(key, roll);
-      }
-      if (workDay >= prevStart && workDay < rangeStart) {
-        prevH += hours;
-        prevSeen += 1;
-      }
-    }
-
-    for (const list of entriesByDate.values()) list.sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
-
-    return {
-      todayKey,
-      dayCount,
-      /** Weekdays in the range — what a 40h-per-week target scales against. A target pinned to 40
-       *  would call a single day a 5% week and a month a 400% one. */
-      workingDays: countWorkingDays(rangeStart, rangeEnd),
-      daysLogged: daysWithEntries.size,
-      rangeHours: rangeH,
-      /** Null, not zero, when none of the previous period was fetched: "no comparison available"
-       *  and "they logged nothing" are different statements and must not look alike. */
-      prevRangeHours: prevSeen > 0 ? prevH : null,
-      pendingCount,
-      byStatus,
-      // Biggest first, so the card can take the top few and total the rest.
-      rangeProjects: [...byProjectLabel.entries()]
-        .map(([label, hours]) => ({ label, hours }))
-        .sort((a, b) => b.hours - a.hours),
-      entriesByDate,
-      projectRows: [...projects.values()].sort((a, b) => b.monthHours - a.monthHours),
-      trend: buckets.map((b) => ({ day: b.day, hours: Number(b.hours.toFixed(2)) }))
-    };
-  }, [allForCalendar, range.from, range.to]);
+  const derived = useMemo(
+    () =>
+      summarisePersonalPeriod({
+        rows: allForCalendar,
+        prevRows: Array.isArray(previous.data) ? (previous.data as TimesheetRowLite[]) : undefined,
+        from: range.from,
+        to: range.to,
+        userId: user?.id
+      }),
+    [allForCalendar, previous.data, range.from, range.to, user?.id]
+  );
 
   /** The timeline's rows grouped by calendar day, from its own role-scoped request. Kept separate
    *  from `derived.entriesByDate` (which is deliberately wider, so the calendars can mark days
@@ -562,7 +451,7 @@ export function Dashboard() {
       />
 
       <FocusLane
-        hours={derived.rangeHours}
+        hours={derived.loggedHours}
         pendingCount={derived.pendingCount}
         tickets={myTickets.data ?? []}
         periodLabel={periodLabel}
@@ -585,11 +474,12 @@ export function Dashboard() {
         <HeroCard delay={0}>
           <WeekAtAGlance
             loading={timesheets.isLoading}
-            hours={derived.rangeHours}
+            hours={derived.loggedHours}
             byStatus={derived.byStatus}
             projects={derived.rangeProjects}
             pendingCount={derived.pendingCount}
             daysLogged={derived.daysLogged}
+            workingDaysToDate={derived.workingDaysToDate}
             trend={derived.trend}
             periodLabel={periodLabel}
             periodIn={periodIn}
@@ -599,17 +489,17 @@ export function Dashboard() {
           <ActivityCard
             loading={timesheets.isLoading}
             trend={derived.trend}
-            hours={derived.rangeHours}
-            prevHours={derived.prevRangeHours}
+            hours={derived.loggedHours}
+            prevHours={derived.prevLoggedHours}
+            comparisonLabel={comparisonLabel}
             periodLabel={periodLabel}
           />
         </HeroCard>
         <HeroCard delay={0.1} className="md:col-span-2 xl:col-span-1">
           <ProgressCard
             loading={timesheets.isLoading}
-            hours={derived.rangeHours}
-            byStatus={derived.byStatus}
-            workingDays={derived.workingDays}
+            hours={derived.loggedHours}
+            workingDays={derived.workingDaysToDate}
             periodLabel={periodIn}
             completion={myMonth.data?.completion}
             totals={myMonth.data?.totals}
@@ -809,20 +699,26 @@ function WeekAtAGlance({
   byStatus,
   pendingCount,
   daysLogged,
+  workingDaysToDate,
   trend,
   projects,
   periodLabel,
   periodIn
 }: {
   loading: boolean;
+  /** LOGGED hours — submitted plus approved. Drafts and rejected hours have their own rows below
+   *  and are never part of this number. */
   hours: number;
   projects: Array<{ label: string; hours: number }>;
   byStatus: Record<string, number>;
   pendingCount: number;
-  /** Distinct days in the range that carry an entry — the denominator for the daily average.
+  /** Distinct days in the range that carry logged hours — the denominator for the daily average.
    *  Counted over the whole range rather than off `trend`, whose buckets group days once the range
    *  is longer than a fortnight and would otherwise flatter the average. */
   daysLogged: number;
+  /** Working days in the range so far — what "weekdays logged" is out of. It was a fixed "/5",
+   *  which read 3/5 on a one-day range and 18/5 over a month. */
+  workingDaysToDate: number;
   /** The same series the rhythm chart uses — read here for the insight rows so this card fills its
    *  height with computed facts rather than empty space. Never a second query. */
   trend: Array<{ day: string; hours: number }>;
@@ -830,8 +726,10 @@ function WeekAtAGlance({
   periodIn: string;
 }) {
   if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
-  const total = hours || 1;
+  // The bar shows EVERY state, so its segments are shares of all four together — the headline
+  // (logged only) would let a draft-heavy week's bar run past 100%.
   const segments = WEEK_SEGMENTS.map((s) => ({ ...s, hours: byStatus[s.key] ?? 0 })).filter((s) => s.hours > 0);
+  const total = segments.reduce((sum, s) => sum + s.hours, 0) || 1;
 
   // ── Insights, all derived from data already on this card — nothing invented, nothing fetched.
   // This block exists because the card is the shortest of the three in its row and stretched to a
@@ -891,8 +789,8 @@ function WeekAtAGlance({
             headline number some context (a busiest day and a daily average) it lacked. */}
         <div className="mt-1 grid grid-cols-3 gap-2 border-t border-border pt-4">
           <div>
-            <p className="text-lg font-bold tabular-nums leading-none">{daysLogged}<span className="text-sm font-medium text-muted-foreground">/5</span></p>
-            <p className="mt-1 text-xs text-muted-foreground">weekdays logged</p>
+            <p className="text-lg font-bold tabular-nums leading-none">{daysLogged}<span className="text-sm font-medium text-muted-foreground">/{workingDaysToDate}</span></p>
+            <p className="mt-1 text-xs text-muted-foreground">days logged, of working days so far</p>
           </div>
           <div>
             <p className="text-lg font-bold tabular-nums leading-none">{dailyAvg.toFixed(1)}h</p>
@@ -944,6 +842,15 @@ function WeekAtAGlance({
   );
 }
 
+/** The rhythm card's one-line reading of the comparison. Computed, never invented. */
+function rhythmNote(hours: number, previous: number, comparisonLabel: string): string {
+  if (hours >= previous) {
+    if (previous === 0) return `New: nothing was logged ${comparisonLabel.replace(/^vs /, "on ")}.`;
+    return `Up ${(hours - previous).toFixed(1)}h ${comparisonLabel}.`;
+  }
+  return `${(previous - hours).toFixed(1)}h behind, ${comparisonLabel}.`;
+}
+
 /** Trackline's "Project Track": a compact single-series chart plus a period-over-period insight
  *  strip. Single series → the title names it, no legend. */
 function ActivityCard({
@@ -951,6 +858,7 @@ function ActivityCard({
   trend,
   hours,
   prevHours,
+  comparisonLabel,
   periodLabel
 }: {
   loading: boolean;
@@ -959,6 +867,8 @@ function ActivityCard({
   /** Null when none of the previous period was loaded. Distinct from 0 on purpose: "nothing to
    *  compare against" and "they logged nothing" must not render as the same claim. */
   prevHours: number | null;
+  /** "vs the same days last week" — printed beside the badge, not hidden in its tooltip. */
+  comparisonLabel: string;
   periodLabel: string;
 }) {
   if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
@@ -966,6 +876,8 @@ function ActivityCard({
   const previous = prevHours ?? 0;
   const delta = comparable ? computeTrend(hours, previous, true) : null;
   const up = hours >= previous;
+  const perDay = trend.map((d) => d.day + " " + formatHours(d.hours)).join(", ");
+  const chartSummary = `Logged hours per day, ${periodLabel}: ${perDay}.`;
 
   return (
     <Card className="flex h-full flex-col">
@@ -976,15 +888,20 @@ function ActivityCard({
               <TrendingUp className="h-4 w-4 text-primary" />
               Daily rhythm
             </CardTitle>
-            <CardDescription>Hours logged per day, {periodLabel}.</CardDescription>
+            <CardDescription>Logged hours (submitted and approved) per day, {periodLabel}.</CardDescription>
           </div>
-          {delta && <TrendBadge trend={delta} label="vs the previous period" />}
+          {delta && (
+            <span className="flex shrink-0 flex-col items-end gap-0.5">
+              <TrendBadge trend={delta} label={comparisonLabel} />
+              <span className="text-[10px] text-muted-foreground">{comparisonLabel}</span>
+            </span>
+          )}
         </div>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-3">
-        <div className="h-36 flex-1">
+        <div className="h-36 flex-1" role="img" aria-label={chartSummary}>
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={trend} margin={{ top: 4, right: 0, bottom: 0, left: -28 }}>
+            <BarChart data={trend} margin={{ top: 4, right: 0, bottom: 0, left: -28 }} accessibilityLayer>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
               <XAxis dataKey="day" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
               <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
@@ -1004,13 +921,7 @@ function ActivityCard({
               up ? "bg-success/10 text-success-ink" : "bg-warning/10 text-warning-ink"
             }`}
           >
-            <span>
-              {up
-                ? previous === 0
-                  ? "First hours of a fresh period — nice start!"
-                  : `Up ${(hours - previous).toFixed(1)}h on the previous period — great momentum!`
-                : `${(previous - hours).toFixed(1)}h behind the previous period's pace so far.`}
-            </span>
+            <span>{rhythmNote(hours, previous, comparisonLabel)}</span>
             <ArrowRight className="h-4 w-4 shrink-0" />
           </div>
         )}
@@ -1024,18 +935,17 @@ function ActivityCard({
 function ProgressCard({
   loading,
   hours,
-  byStatus,
   workingDays,
   periodLabel,
   completion,
   totals
 }: {
   loading: boolean;
+  /** The signed-in person's LOGGED hours (submitted + approved) in the range. */
   hours: number;
-  byStatus: Record<string, number>;
-  /** Mon–Fri days in the selected range. The target scales against this rather than a fixed 40h —
-   *  a one-day range read as a 5% week and a month as 400%, so the bar stopped meaning anything the
-   *  moment the page could show something other than a week. */
+  /** Mon–Fri days in the selected range UP TO TODAY. The target scales against this rather than a
+   *  fixed 40h — a one-day range read as a 5% week and a month as 400% — and stops at today, so a
+   *  Thursday is measured against four days, not against a Friday that has not happened. */
   workingDays: number;
   periodLabel: string;
   /** The three completion shares, counted server-side. Undefined while the rollup is in flight. */
@@ -1043,9 +953,15 @@ function ProgressCard({
   totals?: MyMonthRollup["totals"];
 }) {
   if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
-  const target = Math.max(8, workingDays * 8);
-  const targetPct = Math.min(100, Math.round((hours / target) * 100));
-  const approvedHours = byStatus.APPROVED ?? 0;
+  // No working day yet (a range that starts today on a weekend) has no target to be measured
+  // against: a dash, not 0% and not 100%.
+  const target = workingDays * 8;
+  const targetPct = target > 0 ? Math.min(100, Math.round((hours / target) * 100)) : null;
+  // The caption and the percentage come from the SAME server rollup, so "Xh of Yh" can never again
+  // describe a different population from the percentage beside it.
+  const approvedDetail = totals
+    ? `${totals.approvedHours.toFixed(1)}h approved of ${(totals.approvedHours + totals.submittedHours).toFixed(1)}h logged ${periodLabel}`
+    : "Counting…";
 
   return (
     <Card className="h-full">
@@ -1058,7 +974,7 @@ function ProgressCard({
       </CardHeader>
       <CardContent className="grid gap-5">
         <TickMeter
-          label={`Target (${target}h · ${workingDays} working ${workingDays === 1 ? "day" : "days"})`}
+          label={`Target to date (${target}h · ${workingDays} working ${workingDays === 1 ? "day" : "days"})`}
           percent={targetPct}
           detail={`${hours.toFixed(1)}h logged ${periodLabel}`}
           tone="primary"
@@ -1070,7 +986,7 @@ function ProgressCard({
         <TickMeter
           label="Timesheets approved"
           percent={completion?.timesheetPct ?? null}
-          detail={`${approvedHours.toFixed(1)}h of ${hours.toFixed(1)}h ${periodLabel}`}
+          detail={approvedDetail}
           tone="success"
         />
         <TickMeter
@@ -1679,7 +1595,7 @@ function ProjectRollup({ rollup, loading, periodLabel }: { rollup: MyMonthRollup
         ) : rows.length === 0 ? (
           <EmptyState
             compact
-            title="Nothing logged this month"
+            title={`Nothing logged ${periodPhrase(periodLabel)}`}
             description="No projects assigned yet, and no hours logged."
             action={
               <Button asChild variant="outline" size="sm" className="h-[44px]">

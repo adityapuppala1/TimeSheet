@@ -15,7 +15,8 @@
  * WHO MOUNTS THIS: `app.ts`, after the blanket `resolveTenant`.
  */
 import { Router } from "express";
-import { DAY_MS, parseDayWindow } from "../utils/date-window.js";
+import { DAY_MS, parseDayWindow, platformMonth } from "../utils/date-window.js";
+import { isLoggedStatus } from "../services/workspace-metrics.js";
 import { z } from "zod";
 import { permissions } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
@@ -294,14 +295,14 @@ const pct = (part: number, whole: number): number | null => (whole > 0 ? Math.ro
  */
 dashboardRouter.get("/my-month", async (req, res) => {
   const userId = req.user!.id;
-  const now = new Date();
   const window = parseDayWindow(req.query);
-  const monthStart = window.from ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  // The current month on the PLATFORM's calendar, not UTC's: from 00:00 to 05:30 IST on the 1st,
+  // UTC is still in last month, and the card showed last month under "this month".
+  const thisMonth = platformMonth(new Date());
+  const monthStart = window.from ?? thisMonth.start;
   // Exclusive end: the day AFTER `to`, so the range's own last day is included — see
   // utils/date-window.ts. A `lt: to` here would silently drop it.
-  const monthEnd = window.to
-    ? new Date(window.to.getTime() + DAY_MS)
-    : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const monthEnd = window.to ? new Date(window.to.getTime() + DAY_MS) : thisMonth.end;
 
   // Whether change management is even on decides whether the card gets a third bar or two. Read
   // rather than assumed, and a failure here must not take the whole home page down with it.
@@ -322,7 +323,7 @@ dashboardRouter.get("/my-month", async (req, res) => {
   ]);
 
   const byProject = new Map<string, { monthHours: number; approvedHours: number; entries: number; lastDate: string | null }>();
-  const totals = { monthHours: 0, approvedHours: 0, submittedHours: 0, draftHours: 0, rejectedHours: 0 };
+  const totals = { monthHours: 0, loggedHours: 0, approvedHours: 0, submittedHours: 0, draftHours: 0, rejectedHours: 0 };
 
   for (const e of entries) {
     const hours = Number(e.totalHours ?? 0);
@@ -331,10 +332,16 @@ dashboardRouter.get("/my-month", async (req, res) => {
     else if (e.status === "SUBMITTED") totals.submittedHours += hours;
     else if (e.status === "REJECTED") totals.rejectedHours += hours;
     else totals.draftHours += hours;
+    // LOGGED = submitted + approved (services/workspace-metrics.ts). Drafts and rejected hours stay
+    // in their own totals above and out of every share below — a draft in the denominator made each
+    // half-finished week read as an approvals backlog.
+    const logged = isLoggedStatus(e.status);
+    if (logged) totals.loggedHours += hours;
 
     if (!e.projectId) continue;
     const roll = byProject.get(e.projectId) ?? { monthHours: 0, approvedHours: 0, entries: 0, lastDate: null };
-    roll.monthHours += hours;
+    // A project's `monthHours` is its LOGGED hours, so its approved share means what the total's does.
+    if (logged) roll.monthHours += hours;
     if (e.status === "APPROVED") roll.approvedHours += hours;
     roll.entries += 1;
     const day = e.workDate.toISOString().slice(0, 10);
@@ -440,6 +447,7 @@ dashboardRouter.get("/my-month", async (req, res) => {
     totals: {
       ...totals,
       monthHours: Number(totals.monthHours.toFixed(2)),
+      loggedHours: Number(totals.loggedHours.toFixed(2)),
       approvedHours: Number(totals.approvedHours.toFixed(2)),
       submittedHours: Number(totals.submittedHours.toFixed(2)),
       draftHours: Number(totals.draftHours.toFixed(2)),
@@ -450,7 +458,7 @@ dashboardRouter.get("/my-month", async (req, res) => {
     /** The three bars the home page draws. Each is "done ÷ total" for its own kind of work, so they
      *  are comparable to each other rather than three unrelated numbers sharing a row. */
     completion: {
-      timesheetPct: pct(totals.approvedHours, totals.monthHours),
+      timesheetPct: pct(totals.approvedHours, totals.loggedHours),
       ticketPct: pct(ticketTotals.closed, ticketTotals.open + ticketTotals.closed),
       changePct: changeTotals ? pct(changeTotals.closed, changeTotals.raised) : null
     }

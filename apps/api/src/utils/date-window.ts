@@ -12,9 +12,47 @@
  * parameter is worse than answering the rest of it — the same rule report.controller.ts's
  * `parseReportFilters` already applied to its own filters. A missing or unusable range simply means
  * "the window this endpoint used before there was anything to choose".
+ *
+ * WHOSE CALENDAR: the platform's (`env.TZ`, Asia/Kolkata by default — utils/platform-time.ts). A
+ * `YYYY-MM-DD` here names a day on THAT calendar. Two column kinds need it differently:
+ *   - a `@db.Date` column (`workDate`, a ticket's `endDate`) stores the calendar day itself as UTC
+ *     midnight, so the day key converts straight across (`dateKeyToUtc`);
+ *   - a TIMESTAMP column (`createdAt`, `resolvedAt`) needs the INSTANT that day began there — UTC
+ *     midnight is 05:30 IST, so a window starting at it drops the first five and a half hours of
+ *     the day and borrows them from the day after.
+ * The helpers below compose platform-time.ts and recipient-time.ts; they are not a second clock.
  */
+import { env } from "../config/env.js";
+import { platformDayKey } from "./platform-time.js";
+import { dateKeyToUtc, startOfZonedDayUtc } from "./recipient-time.js";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Today on the platform's calendar, as the UTC-midnight value a `@db.Date` column stores. */
+export function platformToday(now: Date = new Date()): Date {
+  return dateKeyToUtc(platformDayKey(now));
+}
+
+/** The platform-calendar month containing `now`, on a `@db.Date` column: [1st, 1st of next month). */
+export function platformMonth(now: Date = new Date()): { start: Date; end: Date } {
+  const [y, m] = platformDayKey(now).split("-").map(Number);
+  return { start: new Date(Date.UTC(y, m - 1, 1)), end: new Date(Date.UTC(y, m, 1)) };
+}
+
+/** Monday of the platform-calendar week containing `now`, on a `@db.Date` column. */
+export function platformWeekStart(now: Date = new Date()): Date {
+  const today = platformToday(now);
+  return new Date(today.getTime() - ((today.getUTCDay() + 6) % 7) * DAY_MS);
+}
+
+/**
+ * The INSTANT a calendar day began on the platform's clock, for comparing against a timestamp
+ * column. `day` is the UTC-midnight value of that calendar day (what `parseIsoDay` returns). Noon UTC
+ * is on the same calendar day in every zone between UTC−11 and UTC+11, so it is a safe probe.
+ */
+export function platformDayStart(day: Date): Date {
+  return startOfZonedDayUtc(new Date(day.getTime() + DAY_MS / 2), env.TZ);
+}
 
 /** `2026-08-27` → midnight UTC that day. Anything else → undefined. */
 export function parseIsoDay(raw: unknown): Date | undefined {
