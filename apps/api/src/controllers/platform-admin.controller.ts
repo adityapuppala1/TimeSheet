@@ -39,7 +39,7 @@ import { forgetOrgStatus } from "../services/org-status.service.js";
 import { isConverted } from "../services/retention.service.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
 import { requireTenantContext } from "../config/tenant-context.js";
-import { sendPlatformTemplate } from "../services/platform-mail.service.js";
+import { resolvePlatformMailConfig, sendPlatformTemplate } from "../services/platform-mail.service.js";
 import { audit } from "../services/audit.service.js";
 
 export const platformAdminRouter = Router();
@@ -462,13 +462,67 @@ platformAdminRouter.post("/organizations/:id/restore-password-login", requirePla
     after: { passwordLoginEnabled: updated.passwordLoginEnabled, requireSsoOnly: updated.requireSsoOnly }
   });
 
+  /*
+   * AND IN THE CUSTOMER'S OWN LOG (H3), the way the rescue below records itself: a GUEST row carrying
+   * the operator's identity and words. Turning off a security control a customer chose is exactly the
+   * kind of thing they must be able to see from inside their workspace — the platform trail above is
+   * invisible to them. Best-effort AFTER the change: the outage this route ends may be why the tenant
+   * cannot be reached, and the response says whether the row was written.
+   */
+  const actor = req.platformAdmin!;
+  let customerAuditRecorded = true;
+  try {
+    await withOrgTenant(org.slug, async () => {
+      await audit(
+        undefined,
+        "org_auth.password_login_restored_by_platform",
+        "OrgAuthMethod",
+        orgId,
+        { by: actor.email, reason: req.platformReason ?? "platform-admin break-glass", before: { requireSsoOnly: previous?.requireSsoOnly ?? false }, after: { requireSsoOnly: false } },
+        { actorType: "GUEST", actorLabel: `platform-admin:${actor.email}` }
+      );
+    });
+  } catch (error) {
+    customerAuditRecorded = false;
+    console.warn(`[platform-admin] restore-password-login for ${org.slug}: the workspace's own audit row could not be written: ${(error as Error).message}`);
+  }
+
   res.json({
     orgSlug: org.slug,
     passwordLoginEnabled: updated.passwordLoginEnabled,
     requireSsoOnly: updated.requireSsoOnly,
+    customerAuditRecorded,
     message: `Password sign-in is back on for ${org.slug}. Their admin can sign in and fix the SSO configuration.`
   });
 });
+
+/**
+ * Tell a customer that a platform operator reset one of their administrators (H3). Platform mail,
+ * not the workspace's relay — a broken workspace SMTP is one of the reasons a rescue happens — and
+ * every variable is HTML-escaped by `applyPlatformVars`, so the operator's reason cannot inject
+ * markup. The support contact is the deployment's reply-to address, falling back to its From.
+ * Best-effort per recipient: the reset has happened, and a relay failure must not hide the password
+ * the operator now has to hand over. Returns who it reached.
+ */
+async function notifyCustomerOfRescue(input: { orgId: string; slug: string; workspace: string; account: string; recipients: string[]; reason: string; actorEmail: string }) {
+  const config = await resolvePlatformMailConfig().catch(() => null);
+  const vars = {
+    workspace: input.workspace,
+    account: input.account,
+    reason: input.reason,
+    operator: "a TimeSphere platform operator",
+    resetAt: new Date().toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }),
+    supportContact: config?.replyTo || config?.from || "your TimeSphere provider",
+    workspaceUrl: workspaceUrlForSlug(input.slug)
+  };
+  const sends = await Promise.all(
+    input.recipients.map(async (to) => {
+      const sent = await sendPlatformTemplate("security.platform_password_reset", { to, vars, organizationId: input.orgId, metadata: { by: input.actorEmail } }).catch(() => null);
+      return sent?.ok ? to : null;
+    })
+  );
+  return sends.filter((to): to is string => to !== null);
+}
 
 const resetAdminPasswordSchema = z.object({
   body: z.object({ email: z.string().email() }).strict()
@@ -494,7 +548,7 @@ platformAdminRouter.post(
   validate(resetAdminPasswordSchema),
   async (req, res) => {
     const orgId = String(req.params.id);
-    const org = await controlPrisma.organization.findUnique({ where: { id: orgId }, select: { id: true, slug: true, status: true } });
+    const org = await controlPrisma.organization.findUnique({ where: { id: orgId }, select: { id: true, slug: true, name: true, status: true } });
     if (!org) throw new AppError(404, "Organization not found");
     if (org.status !== "ACTIVE") throw new AppError(409, `Workspace "${org.slug}" is ${org.status.toLowerCase()} — there is no administrator to reset yet.`);
 
@@ -511,11 +565,19 @@ platformAdminRouter.post(
       if (user.role.name !== "SUPER_ADMIN") {
         throw new AppError(403, `${email} is not a super administrator of "${org.slug}" — only the workspace owner can be reset from here; their own admins reset everyone else.`);
       }
+      // NOT REACTIVATED (H3). This used to flip an INACTIVE super admin back to ACTIVE as a side effect,
+      // undoing a decision somebody inside the customer's workspace made on purpose — from outside it.
+      if (user.status === "INACTIVE") {
+        throw new AppError(
+          409,
+          `${email} is deactivated in "${org.slug}". The platform does not reactivate a customer's account: another of their super admins can, and if none can, the customer has to ask for that explicitly.`
+        );
+      }
 
       const password = generateTempPassword();
       await client.user.update({
         where: { id: user.id },
-        data: { passwordHash: await hashPassword(password), mustChangePassword: true, status: user.status === "INACTIVE" ? "ACTIVE" : user.status }
+        data: { passwordHash: await hashPassword(password), mustChangePassword: true }
       });
       // The same rule the tenant's own reset applies (user.controller.ts): a new hash evicts
       // nobody by itself, so whoever holds the old sessions is signed out everywhere.
@@ -533,13 +595,29 @@ platformAdminRouter.post(
         { by: actor.email, reason: req.platformReason ?? "platform-admin rescue" },
         { actorType: "GUEST", actorLabel: `platform-admin:${actor.email}` }
       );
-      return { userId: user.id, name: user.name, password };
+      // Who must be told: every active super admin, read while we are inside their database.
+      const superAdmins: Array<{ email: string }> = await client.user.findMany({
+        where: { deletedAt: null, status: "ACTIVE", role: { name: "SUPER_ADMIN" } },
+        select: { email: true }
+      });
+      return { userId: user.id, name: user.name, password, superAdmins: superAdmins.map((u) => u.email.toLowerCase()) };
     });
 
     // ALSO in the control plane's own trail. The row above lands in the customer's log, which is
     // right and is not enough: "which operator went into which workspace, and why" is a question
     // asked of the platform, and no tenant database can answer it about every tenant.
     await platformAuditFor(req)("org_admin.password_reset", "Organization", orgId, { slug: org.slug, targetEmail: email, targetUserId: result.userId });
+
+    // THE CUSTOMER IS TOLD (H3) — every super admin, and the account itself, by the platform's relay.
+    const notified = await notifyCustomerOfRescue({
+      orgId,
+      slug: org.slug,
+      workspace: org.name ?? org.slug,
+      account: email,
+      recipients: [...new Set([...result.superAdmins, email])],
+      reason: req.platformReason ?? "",
+      actorEmail: actor.email
+    });
 
     res.json({
       orgSlug: org.slug,
@@ -548,7 +626,9 @@ platformAdminRouter.post(
       /** Shown once. Not stored, not logged, not mailed — it goes to the customer by whatever channel the operator trusts. */
       temporaryPassword: result.password,
       url: workspaceUrlForSlug(org.slug),
-      message: `One-time password issued for ${email}. They have been signed out everywhere and will be asked to choose their own password at sign-in.`
+      /** Who was emailed that this happened (the workspace's super admins and the account). */
+      notified,
+      message: `One-time password issued for ${email}. They have been signed out everywhere and will be asked to choose their own password at sign-in. ${notified.length} of the workspace's administrators were told by email.`
     });
   }
 );

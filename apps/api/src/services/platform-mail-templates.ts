@@ -22,7 +22,7 @@ const { shell, heading, paragraph, button, ACCENT } = emailShell;
 
 export interface PlatformTemplateDef {
   key: string;
-  group: "Trial retention" | "Signup" | "Sales" | "Operator";
+  group: "Trial retention" | "Signup" | "Sales" | "Operator" | "Support";
   description: string;
   /** Which `{{vars}}` the body may use, in the order the editor lists them. */
   variables: string[];
@@ -550,6 +550,41 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
         alertBlock("{{recentFailures}}") +
         paragraph(button("Open Signups in the console", "{{consoleUrl}}", ACCENT)) +
         paragraph(`<span style="font-size:12px;color:#64748B;">Sent at most once an hour while it continues. The daily summary lists every failure too.</span>`)
+    )
+  },
+  {
+    /*
+     * H3: "Rescue admin" gives a platform operator a working password for a customer's SUPER_ADMIN.
+     * The customer is told: every super admin of the workspace and the account itself get this —
+     * who did it (a platform operator), which account, why in the operator's own words, and who to
+     * contact if they did not ask for it. The one-time password is NEVER in it; it goes to the
+     * customer by whatever channel the operator trusts, and this mail is how a customer who did NOT
+     * ask finds out. Platform mail rather than the workspace's own relay on purpose: a broken
+     * workspace SMTP is one of the reasons a rescue happens at all.
+     */
+    key: "security.platform_password_reset",
+    group: "Support",
+    description: "To every super admin of a workspace, and to the account itself, when a platform operator resets that account's password from the console (Rescue admin). Carries the reason and a support contact — never the password.",
+    variables: ["workspace", "account", "reason", "operator", "resetAt", "supportContact", "workspaceUrl", "appUrl"],
+    sample: {
+      workspace: "Acme Corp",
+      account: "owner@acme.com",
+      reason: "Ticket 4192 — the owner lost access to their mailbox and asked us to reset it",
+      operator: "a TimeSphere platform operator",
+      resetAt: "2 Oct 2026, 14:05",
+      supportContact: "support@timesphere.app",
+      workspaceUrl: "https://acme.timesphere.app",
+      appUrl: "https://timesphere.app"
+    },
+    subject: "A platform operator reset the password of {{account}} in {{workspace}}",
+    html: shell(
+      { title: "An administrator password was reset", preheader: "{{operator}} reset the password of {{account}}." },
+      heading("An administrator password was reset") +
+        paragraph("At {{resetAt}}, {{operator}} reset the password of <strong>{{account}}</strong>, a super administrator of <strong>{{workspace}}</strong>, and signed that account out everywhere.") +
+        paragraph("The reason they gave: <em>{{reason}}</em>") +
+        paragraph("The account was given a one-time password, which has to be replaced at the next sign-in. It is not in this email.") +
+        paragraph("<strong>If nobody in your organisation asked for this</strong>, contact {{supportContact}} straight away, and review the account and your workspace's audit log.") +
+        paragraph(button("Open your workspace", "{{workspaceUrl}}", ACCENT))
     )
   },
   {

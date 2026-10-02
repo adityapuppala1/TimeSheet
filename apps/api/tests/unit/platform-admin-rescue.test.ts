@@ -31,7 +31,11 @@ const ORG = { id: "org-1", slug: "acme", status: "ACTIVE" };
 const ACTOR = { id: "pa-1", name: "Ops", email: "ops@timesphere.app", role: "SUPPORT" as const };
 const REASON = "Ticket 4192 - their SSO broke and nobody can sign in";
 
-const control = { organization: { findUnique: vi.fn() }, platformAuditLog: { create: vi.fn() } };
+const control = {
+  organization: { findUnique: vi.fn() },
+  platformAuditLog: { create: vi.fn() },
+  orgAuthMethod: { findUnique: vi.fn(), upsert: vi.fn() }
+};
 vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: control }));
 
 /*
@@ -60,7 +64,7 @@ vi.mock("../../src/middleware/platform-admin-auth.js", async (importActual) => {
 });
 
 const tenant = {
-  user: { findFirst: vi.fn(), update: vi.fn() },
+  user: { findFirst: vi.fn(), update: vi.fn(), findMany: vi.fn() },
   session: { updateMany: vi.fn() }
 };
 // withOrgTenant would resolve the org, decrypt its DSN and open a client; here it just runs the
@@ -77,6 +81,11 @@ const audit = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../src/services/audit.service.js", () => ({ audit }));
 // Not under test, and they pull in mail + prisma at import time.
 vi.mock("../../src/services/notify.service.js", () => ({ dispatchTransactional: vi.fn() }));
+const sendPlatformTemplate = vi.fn().mockResolvedValue({ ok: true, status: "SENT", emailLogId: "e-1", subject: "s" });
+vi.mock("../../src/services/platform-mail.service.js", () => ({
+  sendPlatformTemplate,
+  resolvePlatformMailConfig: vi.fn().mockResolvedValue({ from: "TimeSphere <no-reply@timesphere.app>", replyTo: "support@timesphere.app" })
+}));
 vi.mock("../../src/services/provisioning.service.js", () => ({ provisionOrganization: vi.fn() }));
 vi.mock("../../src/services/platform-admin-analytics.service.js", () => ({ getPlatformAnalytics: vi.fn() }));
 vi.mock("../../src/services/org-domain.service.js", () => ({ addDomain: vi.fn(), listDomains: vi.fn(), removeDomain: vi.fn(), verifyDomain: vi.fn() }));
@@ -101,6 +110,12 @@ beforeEach(() => {
   tenant.user.findFirst.mockResolvedValue(SUPER);
   tenant.user.update.mockResolvedValue(SUPER);
   tenant.session.updateMany.mockResolvedValue({ count: 3 });
+  tenant.user.findMany.mockResolvedValue([
+    { email: "owner@acme.com", name: "Owner" },
+    { email: "cofounder@acme.com", name: "Co Founder" }
+  ]);
+  control.orgAuthMethod.findUnique.mockResolvedValue({ passwordLoginEnabled: false, requireSsoOnly: true });
+  control.orgAuthMethod.upsert.mockResolvedValue({ passwordLoginEnabled: true, requireSsoOnly: false });
 });
 
 const call = (body: unknown = { email: "Owner@Acme.com" }) =>
@@ -202,10 +217,57 @@ describe("reset-admin-password happy path", () => {
     expect(res.body.temporaryPassword).toMatch(/^[A-Za-z0-9]{12}!7aQ$/);
   });
 
-  it("re-activates a deactivated owner rather than handing back a password that cannot sign in", async () => {
+  it("refuses a DEACTIVATED owner with 409 rather than quietly reactivating them (H3)", async () => {
+    // Somebody in the customer's workspace deactivated this account on purpose. Undoing that from
+    // outside their workspace, as a side effect of a password reset, is not the platform's call.
     tenant.user.findFirst.mockResolvedValue({ ...SUPER, status: "INACTIVE" });
+    const res = await call();
+    expect(res.status).toBe(409);
+    expect(res.body.message).toMatch(/deactivated/i);
+    expect(tenant.user.update).not.toHaveBeenCalled();
+    expect(sendPlatformTemplate).not.toHaveBeenCalled();
+  });
+});
+
+describe("the customer is told (H3)", () => {
+  it("emails every super admin and the rescued account, with the reason and a support contact — never the password", async () => {
+    tenant.user.findMany.mockResolvedValue([
+      { email: "owner@acme.com", name: "Owner" },
+      { email: "cofounder@acme.com", name: "Co Founder" }
+    ]);
+    const res = await call();
+    expect(res.status).toBe(200);
+
+    const sends = sendPlatformTemplate.mock.calls as unknown as [string, { to: string; vars: Record<string, string>; organizationId: string }][];
+    // The rescued owner is also a super admin here — one message each, no duplicate.
+    expect(sends.map(([, args]) => args.to).sort()).toEqual(["cofounder@acme.com", "owner@acme.com"]);
+    for (const [key, args] of sends) {
+      expect(key).toBe("security.platform_password_reset");
+      expect(args.organizationId).toBe(ORG.id);
+      expect(args.vars).toMatchObject({ account: "owner@acme.com", reason: REASON, supportContact: "support@timesphere.app" });
+    }
+    expect(JSON.stringify(sends)).not.toContain(res.body.temporaryPassword);
+  });
+
+  it("reaches the rescued account even when it is not on the super-admin list it was found by", async () => {
+    tenant.user.findMany.mockResolvedValue([{ email: "cofounder@acme.com", name: "Co Founder" }]);
     await call();
-    const update = tenant.user.update.mock.calls[0][0] as { data: { status: string } };
-    expect(update.data.status).toBe("ACTIVE");
+    const recipients = (sendPlatformTemplate.mock.calls as unknown as [string, { to: string }][]).map(([, args]) => args.to).sort();
+    expect(recipients).toEqual(["cofounder@acme.com", "owner@acme.com"]);
+  });
+});
+
+describe("restore-password-login is recorded in the customer's own log (H3)", () => {
+  it("writes a tenant audit row as well as the platform one", async () => {
+    const res = await request(buildApp()).post(`/api/platform-admin/organizations/${ORG.id}/restore-password-login`).set("X-Platform-Reason", REASON).send();
+    expect(res.status).toBe(200);
+    expect(audit).toHaveBeenCalledWith(
+      undefined,
+      "org_auth.password_login_restored_by_platform",
+      "OrgAuthMethod",
+      ORG.id,
+      expect.objectContaining({ by: ACTOR.email, reason: REASON }),
+      expect.objectContaining({ actorType: "GUEST", actorLabel: `platform-admin:${ACTOR.email}` })
+    );
   });
 });
