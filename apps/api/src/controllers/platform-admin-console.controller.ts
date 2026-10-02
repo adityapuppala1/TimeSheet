@@ -65,6 +65,7 @@ import { captureOrgUsageSnapshots, getPlatformAnalytics } from "../services/plat
 import { getBilledRevenueReconciliation, getFleetAccountHealth, getFleetUsageTrend, getOrgUsageProfile, getRevenueOverview } from "../services/platform-revenue.service.js";
 import { reconcileBilledRevenue } from "../services/platform-billing-reconcile.service.js";
 import { getPlatformEmailAnalytics } from "../services/platform-email-analytics.service.js";
+import { getTrialFeedbackAnalytics } from "../services/platform-feedback.service.js";
 import { deleteSnapshot, listSnapshots, restoreSnapshot, snapshotPath } from "../services/platform-backup.service.js";
 import { broadcastMaintenance, getFleetMaintenance, listBroadcasts } from "../services/platform-maintenance.service.js";
 import { getDatabaseMetrics, getFleetHealth, getTenantHealth } from "../services/platform-tenant-health.service.js";
@@ -618,65 +619,11 @@ platformAdminConsoleRouter.post(
 /**
  * Customer feedback, with the analytics an operator actually asks of it: not only how many and how
  * happy, but WHERE the answers came from (which retention stage), WHICH kind of workspace gave them
- * (plan tier and lifecycle state), and whether the score is moving.
- *
- * WHY THE TREND IS BY MONTH AND NOT BY DAY. Feedback arrives in single figures a week even on a
- * healthy platform; a daily series of a 1-to-5 rating is almost all noise and empty buckets. A
- * monthly mean over twelve months is the shortest window in which a change in it means something.
+ * (plan tier and lifecycle state), and whether the score is moving. Aggregated over every answer, by
+ * India's months — see platform-feedback.service.ts.
  */
 platformAdminConsoleRouter.get("/feedback", async (_req, res) => {
-  const rows = await controlPrisma.trialFeedback.findMany({
-    orderBy: { createdAt: "desc" },
-    take: 500,
-    include: { organization: { select: { name: true, slug: true, status: true, planTier: true, trialTier: true } } }
-  });
-
-  const distribution = [1, 2, 3, 4, 5].map((rating) => ({ rating, count: rows.filter((r) => r.rating === rating).length }));
-  const wouldReturn = ["yes", "maybe", "no"].map((answer) => ({ answer, count: rows.filter((r) => r.wouldReturn === answer).length }));
-  const mean = (list: typeof rows) => (list.length ? Number((list.reduce((sum, r) => sum + r.rating, 0) / list.length).toFixed(2)) : null);
-
-  // Per stage: the day-10 check-in and the post-trial reminders are different questions asked of
-  // different moods, and averaging them together hides which one is bad.
-  const stages = [...new Set(rows.map((r) => r.stage))].map((stage) => {
-    const of = rows.filter((r) => r.stage === stage);
-    return { stage, count: of.length, avgRating: mean(of), wouldReturn: of.filter((r) => r.wouldReturn === "yes").length };
-  }).sort((a, b) => b.count - a.count);
-
-  const byStatus = [...new Set(rows.map((r) => r.organization.status))].map((status) => {
-    const of = rows.filter((r) => r.organization.status === status);
-    return { status, count: of.length, avgRating: mean(of) };
-  });
-
-  const byTier = [...new Set(rows.map((r) => r.organization.trialTier ?? r.organization.planTier))].map((tier) => {
-    const of = rows.filter((r) => (r.organization.trialTier ?? r.organization.planTier) === tier);
-    return { tier, count: of.length, avgRating: mean(of) };
-  });
-
-  const now = new Date();
-  const monthly = Array.from({ length: 12 }, (_, i) => {
-    const start = new Date(now.getFullYear(), now.getMonth() - (11 - i), 1);
-    const next = new Date(now.getFullYear(), now.getMonth() - (10 - i), 1);
-    const of = rows.filter((r) => r.createdAt >= start && r.createdAt < next);
-    return { month: start.toISOString().slice(0, 7), count: of.length, avgRating: mean(of) };
-  });
-
-  // The words, not only the scores: the two free-text fields are why this screen exists, so the
-  // response rate on them is worth stating — a wall of rating-only answers means the form is asking
-  // badly, not that customers have nothing to say.
-  const withWords = rows.filter((r) => (r.liked ?? "").trim() || (r.missing ?? "").trim() || (r.comment ?? "").trim()).length;
-
-  res.json({
-    count: rows.length,
-    avgRating: mean(rows),
-    withWords,
-    distribution,
-    wouldReturn,
-    stages,
-    byStatus,
-    byTier,
-    monthly,
-    rows
-  });
+  res.json(await getTrialFeedbackAnalytics());
 });
 
 /* ================================== Sales leads ================================= */

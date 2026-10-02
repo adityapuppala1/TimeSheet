@@ -205,7 +205,10 @@ export function PlatformAdminFeedback() {
             </ConsoleSection>
           </div>
 
-          <ConsoleSection title="Every response" description="Newest first. Verbatim.">
+          <ConsoleSection
+            title={d.rowsTruncated ? `The newest ${d.rows.length} responses` : "Every response"}
+            description={d.rowsTruncated ? `Newest first. Verbatim. ${d.count} in all — every figure above counts them all.` : "Newest first. Verbatim."}
+          >
             {d.rows.length === 0 ? (
               <EmptyState icon={ThumbsUp} title="No feedback yet" description="The first day-10 check-in goes out ten days after a trial starts." />
             ) : (

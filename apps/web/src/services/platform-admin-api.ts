@@ -689,8 +689,12 @@ export interface TrialFeedbackAnalytics {
   stages: Array<{ stage: string; count: number; avgRating: number | null; wouldReturn: number }>;
   byStatus: Array<{ status: OrgStatus; count: number; avgRating: number | null }>;
   byTier: Array<{ tier: PlanTier; count: number; avgRating: number | null }>;
+  /** India's months (the platform's zone), oldest first, labelled with the month they cover. */
   monthly: Array<{ month: string; count: number; avgRating: number | null }>;
+  /** The newest answers, verbatim — capped. Every count above is over ALL answers. */
   rows: TrialFeedbackRow[];
+  /** True when there are more answers than `rows` lists. */
+  rowsTruncated: boolean;
 }
 
 /* ------------------------------------------------------------------------------------------ *
