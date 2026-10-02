@@ -119,8 +119,8 @@ const ANALYTICS_CSV_COLUMNS = (healthByOrg: Map<string, AccountHealthRow>): Arra
   { header: "Plan tier", value: (row) => row.planTier },
   { header: "Reachable", value: (row) => row.reachable },
   { header: "Seats", value: (row) => row.seatCount },
-  { header: "Open tickets", value: (row) => (row.ticketCountsByStatus.OPEN ?? 0) + (row.ticketCountsByStatus.IN_PROGRESS ?? 0) },
-  { header: "Total tickets", value: (row) => Object.values(row.ticketCountsByStatus).reduce((a, b) => a + b, 0) },
+  { header: "Open tickets", value: (row) => row.ticketsOpen },
+  { header: "Total tickets", value: (row) => row.ticketsTotal },
   { header: "AI spend this month (USD)", value: (row) => row.aiSpendThisMonthUsd.toFixed(2) },
   { header: "Emails sent", value: (row) => row.emailsSentThisMonth },
   { header: "Emails failed", value: (row) => row.emailsFailedThisMonth },
@@ -174,18 +174,10 @@ const buildColumns = (healthByOrg: Map<string, AccountHealthRow>): ColumnDef<Org
     }
   },
   { accessorKey: "seatCount", header: "Seats", cell: (info) => info.getValue() },
-  {
-    id: "openTickets",
-    accessorFn: (row) => (row.ticketCountsByStatus.OPEN ?? 0) + (row.ticketCountsByStatus.IN_PROGRESS ?? 0),
-    header: "Open Tickets",
-    cell: (info) => info.getValue()
-  },
-  {
-    id: "totalTickets",
-    accessorFn: (row) => Object.values(row.ticketCountsByStatus).reduce((a, b) => a + b, 0),
-    header: "Total Tickets",
-    cell: (info) => info.getValue()
-  },
+  // The server's one "open" rule (OPEN, IN_PROGRESS, IN_REVIEW, REOPENED), the same the nightly
+  // snapshot uses — this column used to add up OPEN and IN_PROGRESS on its own and disagree with it.
+  { id: "openTickets", accessorFn: (row) => row.ticketsOpen, header: "Open Tickets", cell: (info) => info.getValue() },
+  { id: "totalTickets", accessorFn: (row) => row.ticketsTotal, header: "Total Tickets", cell: (info) => info.getValue() },
   {
     accessorKey: "aiSpendThisMonthUsd",
     header: "AI Spend",
@@ -253,9 +245,11 @@ export function PlatformAdminAnalytics() {
   const [globalFilter, setGlobalFilter] = useState("");
 
   const healthByOrg = useMemo(() => new Map((health.data?.rows ?? []).map((row) => [row.orgId, row])), [health.data]);
-  // The server already sorted at-risk first, then expansion, then healthy. Capped at eight: a list
-  // of forty is a list nobody works through, and the full set is one column away in the table.
-  const attention = useMemo(() => (health.data?.rows ?? []).filter((row) => row.health.band !== "HEALTHY").slice(0, 8), [health.data]);
+  // The server already sorted at-risk first, then expansion, then healthy, and decided who belongs:
+  // a deleted, archived or long-lapsed workspace is never on it — they filled the list and pushed the
+  // live customers off. Capped at eight: a list of forty is a list nobody works through, and the full
+  // set is one column away in the table.
+  const attention = useMemo(() => (health.data?.rows ?? []).filter((row) => row.needsAttention).slice(0, 8), [health.data]);
   const columns = useMemo(() => buildColumns(healthByOrg), [healthByOrg]);
 
   const table = useReactTable({

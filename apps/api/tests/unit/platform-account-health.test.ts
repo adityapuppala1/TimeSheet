@@ -12,7 +12,15 @@
  * at all. A rule nobody can interrogate is a rule that gets nudged to make one customer look better.
  */
 import { describe, expect, it } from "vitest";
-import { MIN_TREND_SNAPSHOTS, SEAT_PRESSURE, hasSeatCeiling, scoreAccountHealth, selectSeatOverage, type AccountHealthInput } from "../../src/services/platform-account-health.js";
+import {
+  MIN_TREND_SNAPSHOTS,
+  SEAT_PRESSURE,
+  attentionExclusion,
+  hasSeatCeiling,
+  scoreAccountHealth,
+  selectSeatOverage,
+  type AccountHealthInput
+} from "../../src/services/platform-account-health.js";
 import { UNLIMITED_SEATS } from "@timesheet/shared";
 
 /** A workspace with nothing wrong with it. Every test below changes ONE thing. */
@@ -175,6 +183,18 @@ describe("delivery and lifecycle", () => {
     expect(result.signals.find((s) => s.id === "unreachable")!.detail).toMatch(/stale/i);
   });
 
+  it("reads an unreachable workspace as Unreachable, not as Never signed in", () => {
+    // The unreachable sweep row carries no last sign-in, and the scorer read that null as "nobody has
+    // ever signed in" — the wrong reason on the card, and a second heavy signal for one outage.
+    const result = score({ reachable: false, daysSinceLastActivity: null });
+    expect(ids({ reachable: false, daysSinceLastActivity: null })).not.toContain("never-used");
+    expect(result.primarySignal.id).toBe("unreachable");
+  });
+
+  it("does not read an unreachable night's zero tickets as work slowing", () => {
+    expect(ids({ reachable: false, ticketsPerDayRecent: 0, ticketsPerDayPrior: 4 })).not.toContain("velocity-down");
+  });
+
   it("clamps the score to 0 rather than going negative when everything is wrong at once", () => {
     const result = score({ status: "SUSPENDED", reachable: false, daysSinceLastActivity: 90, emailsSent: 0, emailsFailed: 40, backupFailures: 5, trialDaysRemaining: -30 });
     expect(result.score).toBe(0);
@@ -237,5 +257,31 @@ describe("selectSeatOverage", () => {
     const tight = scoreAccountHealth({ ...HEALTHY, seatLimit: 10, seatsUsed: Math.ceil(SEAT_PRESSURE * 10) });
     expect(tight.signals.map((s) => s.id)).toContain("seats-tight");
     expect(selectSeatOverage([seat("x", Math.ceil(SEAT_PRESSURE * 10), 10)])).toHaveLength(1);
+  });
+});
+
+describe("attentionExclusion — who never belongs on the Needs attention list", () => {
+  const NOW = new Date("2026-10-02T00:00:00Z");
+  const DAY = 86_400_000;
+  const live = { status: "ACTIVE", retentionDeletedAt: null, trialEndsAt: null, converted: true };
+
+  it("keeps a live workspace", () => {
+    expect(attentionExclusion(live, 90, NOW)).toBeNull();
+  });
+
+  it("drops a workspace deleted under the retention policy, and an archived one", () => {
+    // Their database is gone or retired, so every nightly reading is "unreachable" and they sat at
+    // the top of the list for ever, pushing the live customers off its eight rows.
+    expect(attentionExclusion({ ...live, status: "ARCHIVED", retentionDeletedAt: new Date(NOW.getTime() - DAY) }, 90, NOW)).toBe("deleted");
+    expect(attentionExclusion({ ...live, status: "ARCHIVED" }, 90, NOW)).toBe("archived");
+  });
+
+  it("drops a lapsed trial past the retention window — it is waiting to be deleted, not to be called", () => {
+    const lapsed = { status: "SUSPENDED", retentionDeletedAt: null, trialEndsAt: new Date(NOW.getTime() - 120 * DAY), converted: false };
+    expect(attentionExclusion(lapsed, 90, NOW)).toBe("beyond-retention");
+    // Inside the window it is exactly who the list is for.
+    expect(attentionExclusion({ ...lapsed, trialEndsAt: new Date(NOW.getTime() - 20 * DAY) }, 90, NOW)).toBeNull();
+    // A converted workspace is never "lapsed", whatever its old trial date says.
+    expect(attentionExclusion({ ...lapsed, converted: true }, 90, NOW)).toBeNull();
   });
 });

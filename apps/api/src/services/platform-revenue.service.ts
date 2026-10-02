@@ -36,7 +36,16 @@
  */
 import { controlPrisma } from "../config/control-prisma.js";
 import { platformDate, platformMonthKey } from "../utils/platform-time.js";
-import { MIN_TREND_SNAPSHOTS, scoreAccountHealth, selectSeatOverage, type AccountHealth, type SeatOverageRow, type SeatUsageRow } from "./platform-account-health.js";
+import {
+  MIN_TREND_SNAPSHOTS,
+  attentionExclusion,
+  scoreAccountHealth,
+  selectSeatOverage,
+  type AccountHealth,
+  type AttentionExclusion,
+  type SeatOverageRow,
+  type SeatUsageRow
+} from "./platform-account-health.js";
 import { BILLABLE_SUBSCRIPTION_STATUSES, isStripeConfigured } from "./stripe-client.service.js";
 import { isConverted } from "./trial-conversion.js";
 
@@ -1094,6 +1103,12 @@ export interface AccountHealthRow {
   aiBudgetCeilingUsd: number;
   daysSinceLastActivity: number | null;
   health: AccountHealth;
+  /** On the console's "Needs attention" list: not healthy, and not excluded below. Decided here so
+   *  the list and its reason cannot drift apart in the browser. */
+  needsAttention: boolean;
+  /** Why a workspace is kept off that list — deleted under the policy, archived, or a lapsed trial
+   *  past the retention window. Null for every live workspace. */
+  attentionExclusion: AttentionExclusion | null;
 }
 
 /**
@@ -1103,12 +1118,17 @@ export interface AccountHealthRow {
  * costs one control-plane query set however many customers the deployment has — which is the whole
  * reason the snapshot table exists.
  */
-export async function getFleetAccountHealth(windowDays = 30): Promise<{ rows: AccountHealthRow[]; coverage: { firstDay: string | null; lastDay: string | null }; seatOverage: SeatOverageRow[] }> {
+export async function getFleetAccountHealth(
+  windowDays = 30,
+  retentionDays = 90
+): Promise<{ rows: AccountHealthRow[]; coverage: { firstDay: string | null; lastDay: string | null }; seatOverage: SeatOverageRow[] }> {
   const now = new Date();
-  const since = new Date(now.getTime() - windowDays * DAY_MS);
+  const since = windowStart(windowDays, now);
 
   const [orgs, snapshots, backupFailures] = await Promise.all([
-    controlPrisma.organization.findMany({ select: { id: true, slug: true, name: true, trialEndsAt: true } }),
+    controlPrisma.organization.findMany({
+      select: { id: true, slug: true, name: true, status: true, planTier: true, trialTier: true, trialEndsAt: true, stripeSubscriptionId: true, retentionDeletedAt: true }
+    }),
     controlPrisma.orgUsageSnapshot.findMany({ where: { day: { gte: since } }, orderBy: { day: "asc" } }),
     controlPrisma.backupRun.groupBy({ by: ["organizationId"], where: { status: "FAILED", startedAt: { gte: since } }, _count: { _all: true } })
   ]);
@@ -1130,6 +1150,24 @@ export async function getFleetAccountHealth(windowDays = 30): Promise<{ rows: Ac
     if (!latest) continue;
 
     const velocity = ticketVelocity(series);
+    const exclusion = attentionExclusion({ status: org.status, retentionDeletedAt: org.retentionDeletedAt, trialEndsAt: org.trialEndsAt, converted: isConverted(org) }, retentionDays, now);
+    const daysSinceLastActivity = latest.lastActivityAt ? Math.floor((now.getTime() - latest.lastActivityAt.getTime()) / DAY_MS) : null;
+    const health = scoreAccountHealth({
+      status: latest.status,
+      reachable: latest.reachable,
+      seatsUsed: latest.activeSeats,
+      seatLimit: latest.seatLimit,
+      aiSpendUsd: Number(latest.aiSpendMonthToDateUsd),
+      aiBudgetCeilingUsd: Number(latest.aiBudgetCeilingUsd),
+      daysSinceLastActivity,
+      ticketsPerDayRecent: velocity.recent,
+      ticketsPerDayPrior: velocity.prior,
+      emailsSent: latest.emailsSentMonthToDate,
+      emailsFailed: latest.emailsFailedMonthToDate,
+      backupFailures: failuresByOrg.get(org.id) ?? 0,
+      trialDaysRemaining: org.trialEndsAt ? (org.trialEndsAt.getTime() - now.getTime()) / DAY_MS : null,
+      snapshots: series.length
+    });
     rows.push({
       orgId: org.id,
       slug: org.slug,
@@ -1140,23 +1178,10 @@ export async function getFleetAccountHealth(windowDays = 30): Promise<{ rows: Ac
       seatLimit: latest.seatLimit,
       aiSpendUsd: Number(latest.aiSpendMonthToDateUsd),
       aiBudgetCeilingUsd: Number(latest.aiBudgetCeilingUsd),
-      daysSinceLastActivity: latest.lastActivityAt ? Math.floor((now.getTime() - latest.lastActivityAt.getTime()) / DAY_MS) : null,
-      health: scoreAccountHealth({
-        status: latest.status,
-        reachable: latest.reachable,
-        seatsUsed: latest.activeSeats,
-        seatLimit: latest.seatLimit,
-        aiSpendUsd: Number(latest.aiSpendMonthToDateUsd),
-        aiBudgetCeilingUsd: Number(latest.aiBudgetCeilingUsd),
-        daysSinceLastActivity: latest.lastActivityAt ? Math.floor((now.getTime() - latest.lastActivityAt.getTime()) / DAY_MS) : null,
-        ticketsPerDayRecent: velocity.recent,
-        ticketsPerDayPrior: velocity.prior,
-        emailsSent: latest.emailsSentMonthToDate,
-        emailsFailed: latest.emailsFailedMonthToDate,
-        backupFailures: failuresByOrg.get(org.id) ?? 0,
-        trialDaysRemaining: org.trialEndsAt ? (org.trialEndsAt.getTime() - now.getTime()) / DAY_MS : null,
-        snapshots: series.length
-      })
+      daysSinceLastActivity,
+      health,
+      needsAttention: health.band !== "HEALTHY" && exclusion === null,
+      attentionExclusion: exclusion
     });
   }
 

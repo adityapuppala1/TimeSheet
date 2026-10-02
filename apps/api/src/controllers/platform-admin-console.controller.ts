@@ -1695,7 +1695,8 @@ platformAdminConsoleRouter.get("/analytics/revenue", async (req, res) => {
 /** Per-workspace account health, each band carrying the signal that produced it, plus the seat
  *  overage list — the workspaces at or above 90% of a real seat ceiling. */
 platformAdminConsoleRouter.get("/analytics/health", async (req, res) => {
-  res.json(await getFleetAccountHealth(windowDays(req.query.days, 30)));
+  // The retention window decides when a lapsed trial is past saving and drops off "Needs attention".
+  res.json(await getFleetAccountHealth(windowDays(req.query.days, 30), (await getRetentionSettings()).retentionDays));
 });
 
 /** Seats, tickets and AI spend across the whole fleet, per day. The chart the console could not

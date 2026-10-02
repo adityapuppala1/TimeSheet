@@ -51,6 +51,9 @@ export interface OrgAnalyticsSummary {
   planTier: string;
   seatCount: number;
   ticketCountsByStatus: Record<string, number>;
+  /** OPEN + IN_PROGRESS + IN_REVIEW + REOPENED — `OPEN_TICKET_STATUSES`, the snapshot's own rule. */
+  ticketsOpen: number;
+  ticketsTotal: number;
   aiSpendThisMonthUsd: number;
   /**
    * Outbound mail this month, as a sent/failed pair.
@@ -68,6 +71,20 @@ export interface OrgAnalyticsSummary {
   reachable: boolean;
 }
 
+/** The statuses that count as unfinished work — ONE definition for the live table and the nightly
+ *  snapshot. `REOPENED` is deliberately in here: a reopened ticket is open again, and counting it as
+ *  done makes a struggling workspace look calm. The live page used to count OPEN + IN_PROGRESS only. */
+export const OPEN_TICKET_STATUSES = new Set(["OPEN", "IN_PROGRESS", "IN_REVIEW", "REOPENED"]);
+
+/** A status map's total and its open share, by `OPEN_TICKET_STATUSES`. */
+function ticketTotals(byStatus: Record<string, number>): { ticketsTotal: number; ticketsOpen: number } {
+  const counts = Object.entries(byStatus);
+  return {
+    ticketsTotal: counts.reduce((total, [, count]) => total + count, 0),
+    ticketsOpen: counts.reduce((total, [status, count]) => total + (OPEN_TICKET_STATUSES.has(status) ? count : 0), 0)
+  };
+}
+
 /** India's month to date — the same window the nightly snapshot measures, so the live page and the
  *  history agree. `new Date(y, m, 1)` was the PROCESS's month, which is UTC's wherever `TZ` is unset. */
 const startOfMonth = (): Date => startOfPlatformMonth(new Date());
@@ -82,7 +99,8 @@ async function summarizeOrg(org: { id: string; slug: string; name: string; statu
       // calling countActiveSeats() because this runs against an INJECTED tenant client (it walks
       // every org), not the ambient request-scoped one.
       client.user.count({ where: { status: "ACTIVE", deletedAt: null, isAgent: false } }),
-      client.ticket.groupBy({ by: ["status"], _count: { _all: true } }),
+      // Not counting soft-deleted tickets: a deleted ticket is not work in anybody's backlog.
+      client.ticket.groupBy({ by: ["status"], where: { deletedAt: null }, _count: { _all: true } }),
       client.aIUsageLog.aggregate({ _sum: { costUsdEstimate: true }, where: { createdAt: { gte: startOfMonth() } } }),
       client.user.aggregate({ _max: { lastLoginAt: true } }),
       // Grouped by status rather than two counts: SENT/FAILED/QUEUED come from one scan, and a
@@ -94,6 +112,7 @@ async function summarizeOrg(org: { id: string; slug: string; name: string; statu
 
     const emailByStatus = (status: string) =>
       emailGroups.find((row) => row.status === status)?._count._all ?? 0;
+    const ticketCountsByStatus = Object.fromEntries(ticketGroups.map((g) => [g.status, g._count._all]));
 
     return {
       orgId: org.id,
@@ -102,7 +121,8 @@ async function summarizeOrg(org: { id: string; slug: string; name: string; statu
       status: org.status,
       planTier: org.planTier,
       seatCount,
-      ticketCountsByStatus: Object.fromEntries(ticketGroups.map((g) => [g.status, g._count._all])),
+      ticketCountsByStatus,
+      ...ticketTotals(ticketCountsByStatus),
       aiSpendThisMonthUsd: Number(aiSpend._sum.costUsdEstimate ?? 0),
       emailsSentThisMonth: emailByStatus("SENT"),
       emailsFailedThisMonth: emailByStatus("FAILED"),
@@ -129,6 +149,8 @@ export async function getPlatformAnalytics(): Promise<{ orgs: OrgAnalyticsSummar
         planTier: org.planTier,
         seatCount: 0,
         ticketCountsByStatus: {},
+        ticketsOpen: 0,
+        ticketsTotal: 0,
         aiSpendThisMonthUsd: 0,
         emailsSentThisMonth: 0,
         emailsFailedThisMonth: 0,
@@ -151,6 +173,8 @@ export async function getPlatformAnalytics(): Promise<{ orgs: OrgAnalyticsSummar
         planTier: org.planTier,
         seatCount: 0,
         ticketCountsByStatus: {},
+        ticketsOpen: 0,
+        ticketsTotal: 0,
         aiSpendThisMonthUsd: 0,
         emailsSentThisMonth: 0,
         emailsFailedThisMonth: 0,
@@ -187,9 +211,6 @@ export async function getPlatformAnalytics(): Promise<{ orgs: OrgAnalyticsSummar
  */
 export const USAGE_SNAPSHOT_RETENTION_DAYS = 1100;
 
-/** The statuses that count as unfinished work. `REOPENED` is deliberately in here: a reopened
- *  ticket is open again, and counting it as done makes a struggling workspace look calm. */
-const OPEN_TICKET_STATUSES = new Set(["OPEN", "IN_PROGRESS", "IN_REVIEW", "REOPENED"]);
 
 export interface SnapshotSweepResult {
   /** The platform calendar date every row in this pass was written against (UTC midnight of it). */
@@ -346,22 +367,21 @@ async function readTenantUsage(
       // Counted separately rather than excluded silently — agent adoption is worth seeing, and two
       // columns are what let a test assert that only one of them is ever priced.
       client.user.count({ where: { status: "ACTIVE", deletedAt: null, isAgent: true } }),
-      client.ticket.groupBy({ by: ["status"], _count: { _all: true } }),
+      // Not counting soft-deleted tickets: a deleted ticket is not work in anybody's backlog.
+      client.ticket.groupBy({ by: ["status"], where: { deletedAt: null }, _count: { _all: true } }),
       client.aIUsageLog.aggregate({ _sum: { costUsdEstimate: true }, where: { createdAt: { gte: monthStart } } }),
       client.user.aggregate({ _max: { lastLoginAt: true } }),
       client.emailLog.groupBy({ by: ["status"], where: { createdAt: { gte: monthStart } }, _count: { _all: true } })
     ]);
 
     const ticketCountsByStatus = Object.fromEntries(ticketGroups.map((group) => [group.status, group._count._all]));
-    const counts = Object.entries(ticketCountsByStatus);
     const emailByStatus = (status: string) => emailGroups.find((row) => row.status === status)?._count._all ?? 0;
 
     return {
       activeSeats,
       agentSeats,
       ticketCountsByStatus,
-      ticketsTotal: counts.reduce((total, [, count]) => total + count, 0),
-      ticketsOpen: counts.reduce((total, [status, count]) => total + (OPEN_TICKET_STATUSES.has(status) ? count : 0), 0),
+      ...ticketTotals(ticketCountsByStatus),
       aiSpendMonthToDateUsd: Number(aiSpend._sum.costUsdEstimate ?? 0),
       emailsSentMonthToDate: emailByStatus("SENT"),
       emailsFailedMonthToDate: emailByStatus("FAILED"),

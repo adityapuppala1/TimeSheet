@@ -145,6 +145,61 @@ export function hasSeatCeiling(seatLimit: number): boolean {
 /* The scorer                                                                                  */
 /* ------------------------------------------------------------------------------------------ */
 
+/** Sign-ins and ticket velocity — the engagement half of the score, asked only of a reading that
+ *  actually reached the workspace's database. */
+function engagementSignals(input: AccountHealthInput): HealthSignal[] {
+  const out: HealthSignal[] = [];
+  if (input.daysSinceLastActivity === null) {
+    out.push({
+      id: "never-used",
+      direction: "risk",
+      weight: 35,
+      label: "Never signed in",
+      detail: "No sign-in has ever been recorded in this workspace. It was provisioned and then not adopted."
+    });
+  } else if (input.daysSinceLastActivity >= DORMANT_DAYS) {
+    out.push({
+      id: "dormant",
+      direction: "risk",
+      weight: 40,
+      label: "Dormant",
+      detail: `Nobody has signed in for ${Math.round(input.daysSinceLastActivity)} days.`
+    });
+  } else if (input.daysSinceLastActivity >= QUIET_DAYS) {
+    out.push({
+      id: "quiet",
+      direction: "risk",
+      weight: 20,
+      label: "Gone quiet",
+      detail: `The last sign-in was ${Math.round(input.daysSinceLastActivity)} days ago.`
+    });
+  }
+
+  // Velocity needs BOTH halves of a long-enough window. On a short history there is no signal at
+  // all, which is the correct answer — not a neutral one, and certainly not a confident one.
+  if (input.snapshots >= MIN_TREND_SNAPSHOTS && input.ticketsPerDayRecent !== null && input.ticketsPerDayPrior !== null && input.ticketsPerDayPrior > 0) {
+    const change = (input.ticketsPerDayRecent - input.ticketsPerDayPrior) / input.ticketsPerDayPrior;
+    if (change <= -VELOCITY_DROP) {
+      out.push({
+        id: "velocity-down",
+        direction: "risk",
+        weight: 20,
+        label: "Work slowing",
+        detail: `Tickets raised per day fell from ${round1(input.ticketsPerDayPrior)} to ${round1(input.ticketsPerDayRecent)} across the window.`
+      });
+    } else if (change >= VELOCITY_RISE) {
+      out.push({
+        id: "velocity-up",
+        direction: "expansion",
+        weight: 0,
+        label: "Work accelerating",
+        detail: `Tickets raised per day rose from ${round1(input.ticketsPerDayPrior)} to ${round1(input.ticketsPerDayRecent)} across the window.`
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * Score one workspace.
  *
@@ -207,54 +262,10 @@ export function scoreAccountHealth(input: AccountHealthInput): AccountHealth {
 
   /* --- engagement ------------------------------------------------------------------------ */
 
-  if (input.daysSinceLastActivity === null) {
-    add({
-      id: "never-used",
-      direction: "risk",
-      weight: 35,
-      label: "Never signed in",
-      detail: "No sign-in has ever been recorded in this workspace. It was provisioned and then not adopted."
-    });
-  } else if (input.daysSinceLastActivity >= DORMANT_DAYS) {
-    add({
-      id: "dormant",
-      direction: "risk",
-      weight: 40,
-      label: "Dormant",
-      detail: `Nobody has signed in for ${Math.round(input.daysSinceLastActivity)} days.`
-    });
-  } else if (input.daysSinceLastActivity >= QUIET_DAYS) {
-    add({
-      id: "quiet",
-      direction: "risk",
-      weight: 20,
-      label: "Gone quiet",
-      detail: `The last sign-in was ${Math.round(input.daysSinceLastActivity)} days ago.`
-    });
-  }
-
-  // Velocity needs BOTH halves of a long-enough window. On a short history there is no signal at
-  // all, which is the correct answer — not a neutral one, and certainly not a confident one.
-  if (input.snapshots >= MIN_TREND_SNAPSHOTS && input.ticketsPerDayRecent !== null && input.ticketsPerDayPrior !== null && input.ticketsPerDayPrior > 0) {
-    const change = (input.ticketsPerDayRecent - input.ticketsPerDayPrior) / input.ticketsPerDayPrior;
-    if (change <= -VELOCITY_DROP) {
-      add({
-        id: "velocity-down",
-        direction: "risk",
-        weight: 20,
-        label: "Work slowing",
-        detail: `Tickets raised per day fell from ${round1(input.ticketsPerDayPrior)} to ${round1(input.ticketsPerDayRecent)} across the window.`
-      });
-    } else if (change >= VELOCITY_RISE) {
-      add({
-        id: "velocity-up",
-        direction: "expansion",
-        weight: 0,
-        label: "Work accelerating",
-        detail: `Tickets raised per day rose from ${round1(input.ticketsPerDayPrior)} to ${round1(input.ticketsPerDayRecent)} across the window.`
-      });
-    }
-  }
+  // AN UNREACHABLE READING HAS NO ENGAGEMENT TO SCORE. Its last sign-in is null and its ticket total
+  // zero because the database did not answer, not because nobody used it — scored, that read as
+  // "Never signed in" and "Work slowing" on top of the "Workspace unreachable" that is the truth.
+  if (input.reachable) for (const signal of engagementSignals(input)) add(signal);
 
   /* --- commercial pressure --------------------------------------------------------------- */
 
@@ -368,6 +379,33 @@ export function scoreAccountHealth(input: AccountHealthInput): AccountHealth {
   const bandWord = band === "AT_RISK" ? "At risk" : band === "EXPANSION" ? "Expansion candidate" : "Healthy";
 
   return { band, score, signals, primarySignal, headline: `${bandWord} — ${primarySignal.detail}` };
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* Who belongs on "Needs attention"                                                            */
+/* ------------------------------------------------------------------------------------------ */
+
+export type AttentionExclusion = "deleted" | "archived" | "beyond-retention";
+
+/**
+ * Why a workspace is kept OFF the console's "Needs attention" list, or null when it belongs there.
+ *
+ * The list is eight rows, lowest score first, and it filled with the dead: a workspace deleted under
+ * the retention policy or archived reads "unreachable" every night for ever, and a lapsed trial past
+ * the retention window is waiting to be deleted, not to be phoned. None of them is a conversation an
+ * operator can have, and together they pushed the live customers who were slipping off the card.
+ * They keep their band in the table — the exclusion is only from the list of work.
+ */
+export function attentionExclusion(
+  org: { status: string; retentionDeletedAt: Date | null; trialEndsAt: Date | null; converted: boolean },
+  retentionDays: number,
+  now: Date
+): AttentionExclusion | null {
+  if (org.retentionDeletedAt) return "deleted";
+  if (org.status === "ARCHIVED") return "archived";
+  const lapsedFor = org.trialEndsAt ? (now.getTime() - org.trialEndsAt.getTime()) / 86_400_000 : null;
+  if (!org.converted && lapsedFor !== null && lapsedFor > retentionDays) return "beyond-retention";
+  return null;
 }
 
 /* ------------------------------------------------------------------------------------------ */

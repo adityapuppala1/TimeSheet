@@ -92,7 +92,9 @@ const tenantClient = {
       { status: "SENT", _count: { _all: 30 } },
       { status: "FAILED", _count: { _all: 3 } },
       { status: "QUEUED", _count: { _all: 1 } }
-    ])
+    ]),
+    // The live page's practice-update adoption count. The snapshot never asks it.
+    count: vi.fn(async () => 2)
   }
 };
 
@@ -111,7 +113,7 @@ vi.mock("../../src/utils/encryption.js", () => ({ decryptSecret: (value: string)
 // The platform's zone, as config/env.ts defaults it: a snapshot's day and its month to date are India's.
 vi.mock("../../src/config/env.js", () => ({ env: { TZ: "Asia/Kolkata" } }));
 
-const { captureOrgUsageSnapshots, USAGE_SNAPSHOT_RETENTION_DAYS } = await import("../../src/services/platform-admin-analytics.service.js");
+const { captureOrgUsageSnapshots, getPlatformAnalytics, USAGE_SNAPSHOT_RETENTION_DAYS } = await import("../../src/services/platform-admin-analytics.service.js");
 const { platformDate } = await import("../../src/utils/platform-time.js");
 
 const org = (id: string, overrides: Partial<OrgRow> = {}): OrgRow => ({
@@ -297,7 +299,18 @@ describe("captureOrgUsageSnapshots", () => {
     expect(tenantClient.aIUsageLog.aggregate).toHaveBeenCalled();
     expect(tenantClient.emailLog.groupBy).toHaveBeenCalled();
     expect(tenantClient).not.toHaveProperty("timeEntry");
-    // `groupBy` on tickets selects `status` only — never a title.
-    expect(tenantClient.ticket.groupBy.mock.calls[0][0]).toEqual({ by: ["status"], _count: { _all: true } });
+    // `groupBy` on tickets selects `status` only — never a title — and never counts a deleted ticket.
+    expect(tenantClient.ticket.groupBy.mock.calls[0][0]).toEqual({ by: ["status"], where: { deletedAt: null }, _count: { _all: true } });
+  });
+});
+
+describe("getPlatformAnalytics — the live per-workspace figures", () => {
+  it("counts no soft-deleted ticket, and calls a ticket open by the same rule as the snapshot", async () => {
+    orgs = [org("acme")];
+    const result = await getPlatformAnalytics();
+    expect(tenantClient.ticket.groupBy.mock.calls[0][0]).toMatchObject({ where: { deletedAt: null } });
+    // OPEN + IN_PROGRESS + REOPENED (+ IN_REVIEW). The page counted OPEN + IN_PROGRESS only, so the
+    // live table and the nightly snapshot disagreed about the same backlog.
+    expect(result.orgs[0]).toMatchObject({ ticketsOpen: 7, ticketsTotal: 16 });
   });
 });

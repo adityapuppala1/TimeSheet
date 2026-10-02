@@ -279,7 +279,11 @@ export interface OrgAnalyticsSummary {
   status: string;
   planTier: string;
   seatCount: number;
+  /** Soft-deleted tickets are not counted. */
   ticketCountsByStatus: Record<string, number>;
+  /** OPEN + IN_PROGRESS + IN_REVIEW + REOPENED — the server's one "open" rule, shared with the snapshot. */
+  ticketsOpen: number;
+  ticketsTotal: number;
   aiSpendThisMonthUsd: number;
   /** Outbound mail this month, counts only — every workspace brings its own SMTP, so one org's
    *  credentials expiring is invisible from anywhere else. */
@@ -1663,6 +1667,9 @@ export interface AccountHealthRow {
   aiBudgetCeilingUsd: number;
   daysSinceLastActivity: number | null;
   health: AccountHealth;
+  /** Belongs on "Needs attention": not healthy, and not deleted, archived or lapsed past retention. */
+  needsAttention: boolean;
+  attentionExclusion: "deleted" | "archived" | "beyond-retention" | null;
 }
 
 export interface FleetUsagePoint {

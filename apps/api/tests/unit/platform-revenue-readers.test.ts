@@ -73,7 +73,7 @@ vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: control })
 vi.mock("../../src/config/env.js", () => ({ env: { TZ: "Asia/Kolkata" } }));
 vi.mock("../../src/services/stripe-client.service.js", () => ({ isStripeConfigured: async () => false, DEAD_SUBSCRIPTION_STATUSES: new Set(), BILLABLE_SUBSCRIPTION_STATUSES: new Set(["active", "past_due"]) }));
 
-const { getOrgUsageProfile, getRevenueOverview } = await import("../../src/services/platform-revenue.service.js");
+const { getFleetAccountHealth, getOrgUsageProfile, getRevenueOverview } = await import("../../src/services/platform-revenue.service.js");
 
 const NOW = new Date("2026-10-02T06:00:00Z"); // 11:30 IST on 2 Oct
 const date = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
@@ -105,6 +105,7 @@ const org = (id: string, patch: Record<string, unknown> = {}) => ({
   trialTier: null,
   stripeSubscriptionId: null,
   convertedAt: null,
+  retentionDeletedAt: null,
   ...patch
 });
 
@@ -188,6 +189,28 @@ describe("getRevenueOverview — trial to paid", () => {
     expect(overview.trials.converted).toBe(1);
     expect(overview.trials.medianDaysToConvert).toBe(10);
     expect(control.platformAuditLog.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("getFleetAccountHealth — the Needs attention list", () => {
+  it("keeps deleted, archived and long-lapsed workspaces off the list, and live ones on it", async () => {
+    orgs = [
+      org("gone", { status: "ARCHIVED", retentionDeletedAt: new Date("2026-08-01T00:00:00Z") }),
+      org("stale", { status: "SUSPENDED", planTier: "STARTER", trialTier: "TEAM", trialEndsAt: new Date("2026-05-01T00:00:00Z") }),
+      org("slipping")
+    ];
+    snaps = [
+      snap("gone", "2026-10-02", { status: "ARCHIVED", reachable: false, activeSeats: 0 }),
+      snap("stale", "2026-10-02", { status: "SUSPENDED", planTier: "STARTER", trialTier: "TEAM" }),
+      snap("slipping", "2026-10-02", { status: "GRACE" })
+    ];
+    const health = await getFleetAccountHealth(30, 90);
+    const byId = Object.fromEntries(health.rows.map((row) => [row.orgId, row]));
+    expect(byId.gone.attentionExclusion).toBe("deleted");
+    expect(byId.stale.attentionExclusion).toBe("beyond-retention");
+    expect(byId.slipping.needsAttention).toBe(true);
+    expect(byId.gone.needsAttention).toBe(false);
+    expect(byId.stale.needsAttention).toBe(false);
   });
 });
 
