@@ -63,6 +63,7 @@ import { ChangeContextTab } from "../components/change/ChangeContextTab";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { runInBackground } from "../lib/run-in-background";
+import { canWorkRunbook } from "../utils/change-runbook";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -673,7 +674,7 @@ export function ChangeDetailPage() {
                 dependencies={change.dependencies ?? []}
                 /* Deliberately NOT gated on the post-approval freeze: recording that a step failed is
                    the work that happens after approval. The API applies the same rule. */
-                disabled={!change.canEdit}
+                disabled={!canWorkRunbook(change, isParty)}
               />
             </TabsContent>
 
