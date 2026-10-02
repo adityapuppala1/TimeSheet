@@ -357,7 +357,8 @@ export async function inboxCounts(userId: string, now: Date = new Date()) {
     }),
     prisma.notification.count({ where: { userId, handledAt: null, snoozedUntil: { gt: now } } }),
     prisma.notification.count({ where: { userId, handledAt: { not: null } } }),
-    prisma.notification.count({ where: { userId, readAt: null } })
+    // The bell's predicate, so "unread" here is the bell's badge: a done or snoozed row isn't unread.
+    prisma.notification.count({ where: { ...shownInBell(userId, now), readAt: null } })
   ]);
   return { unhandled, snoozed, handled, unread };
 }
