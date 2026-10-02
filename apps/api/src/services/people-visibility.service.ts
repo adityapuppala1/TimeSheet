@@ -51,6 +51,18 @@ import { prisma } from "../config/prisma.js";
 export const NOT_DEACTIVATED = { status: { not: "INACTIVE" }, deletedAt: null } as const;
 
 /**
+ * NOT_DEACTIVATED, and a person: not an AI agent identity.
+ *
+ * An AI teammate is an ACTIVE user row (agent-identity.ts), so every per-person breakdown that
+ * asked only "not deactivated" listed it as a colleague — on the leaderboard, in the workload
+ * heatmap, as an idle 0% row in utilisation, on the org chart. What an agent did is reported as its
+ * own series (workload.service.ts#loadAgentWorkload), never as a person. Use this for anything that
+ * COUNTS or RANKS people; NOT_DEACTIVATED alone stays right for a filter that must still be able to
+ * pick an agent (the Tickets page's "Raised by").
+ */
+export const COUNTED_PEOPLE = { ...NOT_DEACTIVATED, isAgent: false } as const;
+
+/**
  * Resolve display names for a set of people, keeping only those who are still shown.
  *
  * Returns a Map rather than an array because every caller is replacing the same shape — a

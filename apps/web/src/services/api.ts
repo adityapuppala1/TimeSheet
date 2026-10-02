@@ -1188,17 +1188,31 @@ export const reportApi = {
 export interface UtilisationRow {
   userId: string;
   name: string;
+  /** LOGGED hours: submitted + approved. */
   loggedHours: number;
   billableHours: number;
-  /** Null when the person has no capacity on file and the workspace has no default. Dividing by an
-   *  unknown is how a utilisation chart shows 0% for a contractor nobody configured. */
+  /** Working days in the range up to today, minus time off, times daily capacity. Null when there is
+   *  nothing to divide by — no capacity on file, a range wholly in the future, or wholly on leave.
+   *  Dividing by an unknown is how a utilisation chart shows 0% for a contractor nobody configured. */
   capacityHours: number | null;
+  /** Leave inside the counted days, already taken off `capacityHours`. */
+  timeOffHours: number;
   utilisationPct: number | null;
   billableUtilisationPct: number | null;
+  /** The person's expected share of capacity (100 when unset) — shown beside, never multiplied in. */
+  targetUtilisationPct: number;
 }
 
 export interface TimesheetAnalytics {
-  range: { from: string; to: string; workingDays: number };
+  range: {
+    from: string;
+    to: string;
+    workingDays: number;
+    /** Working days from `from` to today or `to`, whichever is first — what capacity counts. */
+    workingDaysToDate: number;
+    /** The last day capacity counts; null when the range has not started. */
+    capacityThrough: string | null;
+  };
   utilisation: UtilisationRow[];
   approvalLatency: {
     measured: number;
@@ -1215,8 +1229,23 @@ export interface TimesheetAnalytics {
      *  still inside every figure above them. */
     hiddenInactiveApprovers?: number;
   };
-  activityMix: Array<{ activity: string; hours: number; sharePct: number; cost: number | null; unratedEntries: number }>;
-  totals: { hours: number; billableHours: number; entries: number; people: number };
+  activityMix: Array<{
+    activity: string;
+    hours: number;
+    sharePct: number;
+    /** Billed amount per currency — never summed across currencies. Empty when nothing is rated. */
+    costByCurrency: Array<{ currency: string | null; amount: number }>;
+    cost: number | null;
+    unratedEntries: number;
+  }>;
+  totals: {
+    hours: number;
+    billableHours: number;
+    entries: number;
+    people: number;
+    /** Hours in the range that are not LOGGED (drafts, rejected) and so in no figure here. */
+    excluded: { draftHours: number; rejectedHours: number };
+  };
   /** People whose hours are in `totals` but who have no `utilisation` row, because they are no
    *  longer active. Without this the two would look like they disagreed. */
   hiddenInactivePeople?: number;

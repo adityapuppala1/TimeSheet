@@ -108,11 +108,55 @@ function personMatches(person: Person, where: Record<string, any> | undefined): 
       case "managerId":
         if (person.managerId !== condition) return false;
         break;
+      case "isAgent":
+        // Nobody in this directory is an AI agent identity, so the people-counting predicate
+        // (COUNTED_PEOPLE) selects exactly whom NOT_DEACTIVATED does.
+        if (condition !== false) throw new Error(`unsupported isAgent condition: ${JSON.stringify(condition)}`);
+        break;
       default:
         throw new Error(`the fake directory does not understand \`${key}\` — teach it or narrow the query`);
     }
   }
   return true;
+}
+
+/** The `where` shapes the timesheet aggregates write, evaluated rather than ignored. */
+function timesheetMatches(row: Record<string, any>, where: Record<string, any> | undefined): boolean {
+  for (const [key, condition] of Object.entries(where ?? {})) {
+    const value = row[key];
+    if (key === "deletedAt") {
+      if (condition !== null || value !== null) return false;
+    } else if (key === "workDate") {
+      if ((condition.gte && value < condition.gte) || (condition.lte && value > condition.lte)) return false;
+    } else if (condition && typeof condition === "object" && Array.isArray(condition.in)) {
+      if (!condition.in.includes(value)) return false;
+    } else if (typeof condition === "string" || typeof condition === "boolean") {
+      if (value !== condition) return false;
+    } else {
+      throw new Error(`the fake timesheet table does not understand \`${key}\` — teach it or narrow the query`);
+    }
+  }
+  return true;
+}
+
+function groupTimesheets(rows: Array<Record<string, any>>, args: any) {
+  const groups = new Map<string, any>();
+  for (const row of rows.filter((r) => timesheetMatches(r, args?.where))) {
+    const key = args.by.map((k: string) => String(row[k])).join("|");
+    const group = groups.get(key) ?? {
+      ...Object.fromEntries(args.by.map((k: string) => [k, row[k]])),
+      _sum: { totalHours: 0, billedAmount: null },
+      _count: { _all: 0, billedAmount: 0 }
+    };
+    group._sum.totalHours += Number(row.totalHours);
+    if (row.billedAmount != null) {
+      group._sum.billedAmount = (group._sum.billedAmount ?? 0) + Number(row.billedAmount);
+      group._count.billedAmount += 1;
+    }
+    group._count._all += 1;
+    groups.set(key, group);
+  }
+  return [...groups.values()];
 }
 
 vi.mock("../../src/config/prisma.js", () => {
@@ -166,13 +210,15 @@ vi.mock("../../src/config/prisma.js", () => {
       },
       timesheet: {
         findMany: vi.fn(async () => state.timesheets),
-        groupBy: vi.fn(async () => []),
+        // Analytics aggregates in the database now, so the stand-in has to sum like one.
+        groupBy: vi.fn(async (args: any) => groupTimesheets(state.timesheets, args)),
         aggregate: vi.fn(async () => ({ _sum: { totalHours: 0 }, _count: 0 }))
       },
       auditLog: { findMany: noRows() },
       projectModule: { findMany: noRows() },
       project: { findMany: noRows() },
-      securityFinding: { findMany: noRows(), groupBy: noRows(), count: vi.fn().mockResolvedValue(0) }
+      securityFinding: { findMany: noRows(), groupBy: noRows(), count: vi.fn().mockResolvedValue(0) },
+      resourceBooking: { findMany: noRows() }
     }
   };
 });

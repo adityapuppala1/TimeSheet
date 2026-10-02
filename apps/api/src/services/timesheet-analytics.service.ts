@@ -12,34 +12,15 @@
  * paired with a count of what it could not cover, because a median over three of two hundred rows
  * is a different claim from a median over all two hundred and nothing on a chart says which.
  */
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
-import { NOT_DEACTIVATED, resolveVisiblePeopleNames } from "./people-visibility.service.js";
-import { capacityForBucket } from "./workload.service.js";
+import { platformToday } from "../utils/date-window.js";
+import { COUNTED_PEOPLE, resolveVisiblePeopleNames } from "./people-visibility.service.js";
+import { workingDaysBetween } from "./plan-schedule.service.js";
+import { bookedHoursInRange, capacityForBucket } from "./workload.service.js";
 import { getPlanningSettings } from "./planning.service.js";
-import {
-  buildTimesheetWhere,
-  REPORT_INCLUDE,
-  REPORT_ROW_LIMIT,
-  type TimesheetReportFilters
-} from "./timesheet-report.service.js";
-
-/** Inclusive working days between two dates, honouring the workspace's configured working week. */
-function workingDaysBetween(from: Date, to: Date, workingDays: number[]): number {
-  let count = 0;
-  const cursor = new Date(from.getTime());
-  while (cursor <= to) {
-    if (workingDays.includes(cursor.getUTCDay())) count += 1;
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-  return count;
-}
-
-function median(values: number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
-}
+import { buildTimesheetWhere, REPORT_ROW_LIMIT, type TimesheetReportFilters } from "./timesheet-report.service.js";
+import { LOGGED_TIMESHEET_STATUSES, median } from "./workspace-metrics.js";
 
 function percentile(values: number[], p: number): number | null {
   if (values.length === 0) return null;
@@ -91,13 +72,20 @@ function largestRemainderShares<T extends { exactShare: number }>(
 export interface UtilisationRow {
   userId: string;
   name: string;
+  /** LOGGED hours — submitted + approved — in the range. */
   loggedHours: number;
   billableHours: number;
-  /** Null when this person has no capacity on file AND the workspace has no default — dividing by
-   *  an unknown is how a utilisation chart ends up showing 0% for a contractor nobody configured. */
+  /** Working days in the range UP TO TODAY, minus time off, times the person's daily capacity.
+   *  Null when there is nothing to divide by — no capacity on file and no workspace default, a
+   *  range wholly in the future, or a range wholly on leave. */
   capacityHours: number | null;
+  /** Leave booked inside the counted days, already taken off `capacityHours`. */
+  timeOffHours: number;
   utilisationPct: number | null;
   billableUtilisationPct: number | null;
+  /** The share of capacity this person is EXPECTED to spend on logged work (User.plannedUtilizationPct,
+   *  100 when unset). Shown beside utilisation for comparison; never multiplied into capacity. */
+  targetUtilisationPct: number;
 }
 
 export interface ApprovalLatency {
@@ -122,73 +110,235 @@ export interface ActivityMixRow {
   activity: string;
   hours: number;
   sharePct: number;
+  /** The frozen billed amount per currency, largest first. Never summed across currencies — the
+   *  attestation refuses to mix them, and so does this. Empty when no entry carries a rate. */
+  costByCurrency: Array<{ currency: string | null; amount: number }>;
+  /** The single-currency total, or null when there is none or more than one currency. Kept for the
+   *  callers that read one number; `costByCurrency` is the whole answer. */
   cost: number | null;
   unratedEntries: number;
 }
 
 export interface TimesheetAnalytics {
-  range: { from: string; to: string; workingDays: number };
+  range: {
+    from: string;
+    to: string;
+    /** Working days in the whole range. */
+    workingDays: number;
+    /** Working days from `from` to today (platform calendar) or `to`, whichever is earlier — what
+     *  capacity counts. A day that has not happened yet has no capacity to use. */
+    workingDaysToDate: number;
+    /** The last day capacity counts, or null when the range has not started. */
+    capacityThrough: string | null;
+  };
   utilisation: UtilisationRow[];
   approvalLatency: ApprovalLatency;
   activityMix: ActivityMixRow[];
-  totals: { hours: number; billableHours: number; entries: number; people: number };
-  /** People who logged hours in this window but are no longer active, so have no `utilisation`
-   *  row. `totals.people` still counts them — it answers "how many people's work is in these
-   *  numbers", and their work IS in them. Without this field the two would look inconsistent. */
+  totals: {
+    /** Logged hours (submitted + approved), everybody's — including people no longer shown. */
+    hours: number;
+    billableHours: number;
+    /** Entries carrying those logged hours. */
+    entries: number;
+    /** Distinct people with logged hours in the range. */
+    people: number;
+    /** Hours in the range that are NOT logged and therefore in no figure above, so a reader can see
+     *  what was left out rather than wonder why a total is lower than the timesheet screen. Zero
+     *  when the caller filtered on a status of its own. */
+    excluded: { draftHours: number; rejectedHours: number };
+  };
+  /** People who logged hours in this window but are no longer shown (deactivated, or an AI agent),
+   *  so have no `utilisation` row. `totals.people` still counts them — it answers "how many people's
+   *  work is in these numbers", and their work IS in them. */
   hiddenInactivePeople: number;
+  /** True when the approval-latency sample hit its row ceiling (the newest `REPORT_ROW_LIMIT`
+   *  reviewed entries are measured). Every other figure is aggregated in the database and is whole. */
   truncated: boolean;
 }
 
 const DAY_MS = 86_400_000;
+const round2 = (n: number) => Number(n.toFixed(2));
+const round1 = (n: number | null) => (n === null ? null : Number(n.toFixed(1)));
+
+/** The reviewed-entry columns approval latency reads — and nothing else. */
+const LATENCY_SELECT = {
+  submittedAt: true,
+  reviewedAt: true,
+  reviewedById: true,
+  approvalDeadline: true,
+  slaBreachAt: true
+} satisfies Prisma.TimesheetSelect;
+
+type LatencyRow = Prisma.TimesheetGetPayload<{ select: typeof LATENCY_SELECT }>;
+
+const PERSON_SELECT = { id: true, name: true, weeklyCapacityHours: true, plannedUtilizationPct: true } as const;
+
+/**
+ * The people a utilisation table covers: everyone in scope who is still counted (not deactivated,
+ * not an AI agent), whether or not they logged anything — the 0% row is the one a manager most
+ * needs, and it used to be the one that never appeared. Scope follows the filters: one person, the
+ * members of one project, or everybody.
+ */
+async function peopleInScope(filters: TimesheetReportFilters, loggedIds: string[]) {
+  let scope: Prisma.UserWhereInput = {};
+  if (filters.userId) scope = { id: filters.userId };
+  else if (filters.projectId) scope = { projectAssignments: { some: { projectId: filters.projectId } } };
+  const [inScope, loggers] = await Promise.all([
+    prisma.user.findMany({ where: { ...scope, ...COUNTED_PEOPLE }, select: PERSON_SELECT }),
+    // Somebody who logged against the project without being assigned to it is still in its numbers.
+    loggedIds.length
+      ? prisma.user.findMany({ where: { id: { in: loggedIds }, ...COUNTED_PEOPLE }, select: PERSON_SELECT })
+      : Promise.resolve([])
+  ]);
+  return [...new Map([...inScope, ...loggers].map((p) => [p.id, p])).values()];
+}
+
+/** Hours of leave booked per person inside [from, through] — the workload board's own arithmetic. */
+async function timeOffByPerson(ids: string[], from: Date, through: Date, workingDays: number[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (ids.length === 0 || through < from) return out;
+  const bookings = await prisma.resourceBooking.findMany({
+    where: { userId: { in: ids }, isTimeOff: true, startDate: { lte: through }, endDate: { gte: from } },
+    select: { userId: true, startDate: true, endDate: true, hoursPerDay: true }
+  });
+  for (const b of bookings) {
+    const hours = bookedHoursInRange({ ...b, hoursPerDay: Number(b.hoursPerDay) }, from, through, workingDays);
+    out.set(b.userId, (out.get(b.userId) ?? 0) + hours);
+  }
+  return out;
+}
+
+function approvalLatencyOf(rows: LatencyRow[], nameById: Map<string, string>): ApprovalLatency {
+  const timed = rows.filter((r) => r.submittedAt != null);
+  const hoursOf = (r: LatencyRow) => (r.reviewedAt!.getTime() - r.submittedAt!.getTime()) / 3_600_000;
+  const latencies = timed.map(hoursOf);
+  const withDeadline = rows.filter((r) => r.approvalDeadline != null);
+  const breached = withDeadline.filter((r) => r.slaBreachAt != null || r.reviewedAt!.getTime() > r.approvalDeadline!.getTime());
+
+  const perApprover = new Map<string, number[]>();
+  for (const row of timed) {
+    if (!row.reviewedById) continue;
+    perApprover.set(row.reviewedById, [...(perApprover.get(row.reviewedById) ?? []), hoursOf(row)]);
+  }
+  return {
+    measured: timed.length,
+    unmeasurable: rows.length - timed.length,
+    medianHours: round1(median(latencies)),
+    p90Hours: round1(percentile(latencies, 90)),
+    slowestHours: latencies.length ? round1(Math.max(...latencies)) : null,
+    breached: breached.length,
+    breachRatePct: withDeadline.length === 0 ? null : Number(((breached.length / withDeadline.length) * 100).toFixed(1)),
+    byApprover: [...perApprover.entries()]
+      .filter(([id]) => nameById.has(id))
+      .map(([id, values]) => ({ approverId: id, name: nameById.get(id)!, reviewed: values.length, medianHours: round1(median(values)) }))
+      .sort((a, b) => (b.medianHours ?? 0) - (a.medianHours ?? 0)),
+    hiddenInactiveApprovers: [...perApprover.keys()].filter((id) => !nameById.has(id)).length
+  };
+}
+
+type ActivityGroup = {
+  activityType: string;
+  billedCurrency: string | null;
+  _sum: { totalHours: unknown; billedAmount: unknown };
+  _count: { _all: number; billedAmount: number };
+};
+
+/** Hours, share and per-currency cost per activity, from the grouped sums. */
+function activityMixOf(groups: ActivityGroup[]): { rows: ActivityMixRow[]; totalHours: number } {
+  const activities = new Map<string, { hours: number; costs: Map<string | null, number>; unrated: number }>();
+  for (const g of groups) {
+    const entry = activities.get(g.activityType) ?? { hours: 0, costs: new Map<string | null, number>(), unrated: 0 };
+    entry.hours += Number(g._sum.totalHours ?? 0);
+    entry.unrated += g._count._all - g._count.billedAmount;
+    if (g._count.billedAmount > 0) {
+      entry.costs.set(g.billedCurrency, (entry.costs.get(g.billedCurrency) ?? 0) + Number(g._sum.billedAmount ?? 0));
+    }
+    activities.set(g.activityType, entry);
+  }
+  const totalHours = [...activities.values()].reduce((s, a) => s + a.hours, 0);
+  const rows = largestRemainderShares(
+    [...activities.entries()]
+      .map(([activity, a]) => {
+        const costByCurrency = [...a.costs.entries()]
+          .map(([currency, amount]) => ({ currency, amount: round2(amount) }))
+          .sort((x, y) => y.amount - x.amount);
+        return {
+          activity,
+          hours: round2(a.hours),
+          exactShare: totalHours === 0 ? 0 : (a.hours / totalHours) * 100,
+          costByCurrency,
+          cost: costByCurrency.length === 1 ? costByCurrency[0].amount : null,
+          unratedEntries: a.unrated
+        };
+      })
+      .sort((a, b) => b.hours - a.hours)
+  );
+  return { rows, totalHours };
+}
 
 /**
  * Utilisation, approval latency and activity mix over a window.
  *
  * The range is REQUIRED, unlike the grouped report. Utilisation is hours ÷ capacity, and capacity
  * only exists relative to a period — "utilisation, all time" is not a question with an answer.
+ *
+ * THE DEFINITIONS are services/workspace-metrics.ts's: hours are LOGGED hours (submitted +
+ * approved), capacity is the working days from the start of the range up to today, minus leave,
+ * times the person's daily capacity, and target utilisation is reported beside it.
+ *
+ * AGGREGATED IN THE DATABASE. This used to load up to 20,001 fully-joined rows with no order and
+ * cut the list at 20,000, so on a large workspace which rows survived was up to the database and
+ * nothing on screen said a cut had happened. Hours, people and the activity mix are now `groupBy`
+ * sums and are whole; the only row read left is the approval-latency sample, newest first, with
+ * `truncated` saying when it hit the ceiling.
  */
 export async function buildTimesheetAnalytics(
   filters: TimesheetReportFilters & { from: string; to: string }
 ): Promise<TimesheetAnalytics> {
   const from = new Date(`${filters.from}T00:00:00.000Z`);
   const to = new Date(`${filters.to}T00:00:00.000Z`);
+  // Capacity stops at today (platform calendar): a day that has not happened has nothing to use.
+  const today = platformToday();
+  const through = to < today ? to : today;
 
-  const [rows, settings] = await Promise.all([
+  const base = buildTimesheetWhere(filters);
+  // An explicit status filter is the caller's own definition; otherwise hours mean LOGGED hours.
+  const loggedWhere: Prisma.TimesheetWhereInput = filters.status ? base : { ...base, status: { in: LOGGED_TIMESHEET_STATUSES } };
+
+  const [byPerson, byStatus, byActivity, latencyRows, settings] = await Promise.all([
+    prisma.timesheet.groupBy({ by: ["userId", "billable"], where: loggedWhere, _sum: { totalHours: true }, _count: { _all: true } }),
+    prisma.timesheet.groupBy({ by: ["status"], where: base, _sum: { totalHours: true } }),
+    prisma.timesheet.groupBy({
+      by: ["activityType", "billedCurrency"],
+      where: loggedWhere,
+      _sum: { totalHours: true, billedAmount: true },
+      _count: { _all: true, billedAmount: true }
+    }),
     prisma.timesheet.findMany({
-      where: buildTimesheetWhere(filters),
-      include: REPORT_INCLUDE,
+      where: { ...base, reviewedAt: { not: null } },
+      select: LATENCY_SELECT,
+      orderBy: { reviewedAt: "desc" },
       take: REPORT_ROW_LIMIT + 1
     }),
     getPlanningSettings()
   ]);
 
-  const truncated = rows.length > REPORT_ROW_LIMIT;
-  const used = truncated ? rows.slice(0, REPORT_ROW_LIMIT) : rows;
-
-  const workingDayNumbers = Array.isArray(settings.workingDays)
-    ? (settings.workingDays as number[])
-    : [1, 2, 3, 4, 5];
-  const workingDays = workingDaysBetween(from, to, workingDayNumbers);
+  const workingDayNumbers = Array.isArray(settings.workingDays) ? (settings.workingDays as number[]) : [1, 2, 3, 4, 5];
+  const workingDaysToDate = through < from ? 0 : workingDaysBetween(from, through, workingDayNumbers);
 
   // ---------------------------------------------------------------- utilisation
-  //
-  // DEACTIVATED PEOPLE ARE DROPPED, and only here. This function backs exactly one caller —
-  // `/reports/analytics`,
-  // which is a screen — so the narrowing lives in it. The download of the same period comes from
-  // `timesheet-report.service.ts` instead and still contains everybody, which is the intended
-  // difference: an export is a record, a chart is a comparison, and comparing a current team
-  // against people who left is what made this worth changing.
-  //
-  // Utilisation is per-person by definition, so a leaver contributes nothing but a permanently
-  // idle-looking row. The hour TOTALS below are untouched and still count their work.
-  const peopleIds = [...new Set(used.map((r) => r.userId))];
-  const people = peopleIds.length
-    ? await prisma.user.findMany({
-        where: { id: { in: peopleIds }, ...NOT_DEACTIVATED },
-        select: { id: true, name: true, weeklyCapacityHours: true, plannedUtilizationPct: true }
-      })
-    : [];
-  const hiddenInactivePeople = peopleIds.length - people.length;
+  const hoursByPerson = new Map<string, { logged: number; billable: number }>();
+  for (const g of byPerson) {
+    const hours = Number(g._sum.totalHours ?? 0);
+    const entry = hoursByPerson.get(g.userId) ?? { logged: 0, billable: 0 };
+    entry.logged += hours;
+    if (g.billable) entry.billable += hours;
+    hoursByPerson.set(g.userId, entry);
+  }
+  const loggedIds = [...hoursByPerson.keys()];
+  const people = await peopleInScope(filters, loggedIds);
+  const shownIds = new Set(people.map((p) => p.id));
+  const leave = await timeOffByPerson([...shownIds], from, through, workingDayNumbers);
   const defaults = {
     weeklyCapacityHours: Number(settings.defaultWeeklyCapacityHours ?? 40),
     workingDaysPerWeek: workingDayNumbers.length || 5
@@ -196,124 +346,65 @@ export async function buildTimesheetAnalytics(
 
   const utilisation: UtilisationRow[] = people
     .map((person) => {
-      const mine = used.filter((r) => r.userId === person.id);
-      const loggedHours = Number(mine.reduce((s, r) => s + Number(r.totalHours ?? 0), 0).toFixed(2));
-      const billableHours = Number(
-        mine.filter((r) => r.billable).reduce((s, r) => s + Number(r.totalHours ?? 0), 0).toFixed(2)
-      );
-
-      // Reuses the workload board's own capacity function, so a person cannot read as 80% booked
-      // on one screen and 120% utilised on another for the same fortnight.
-      const capacityHours = capacityForBucket(
-        {
-          weeklyCapacityHours: person.weeklyCapacityHours == null ? null : Number(person.weeklyCapacityHours),
-          plannedUtilizationPct: person.plannedUtilizationPct
-        },
-        { workingDays },
+      const hours = hoursByPerson.get(person.id) ?? { logged: 0, billable: 0 };
+      // The workload board's own per-day capacity, WITHOUT the target-utilisation scale: capacity
+      // is what the person has; the target is what they are expected to log against it.
+      const contracted = capacityForBucket(
+        { weeklyCapacityHours: person.weeklyCapacityHours == null ? null : Number(person.weeklyCapacityHours), plannedUtilizationPct: null },
+        { workingDays: workingDaysToDate },
         defaults
       );
-
-      const usable = capacityHours > 0 ? capacityHours : null;
+      const timeOffHours = round2(leave.get(person.id) ?? 0);
+      const available = round2(Math.max(0, contracted - timeOffHours));
+      const usable = available > 0 ? available : null;
       return {
         userId: person.id,
         name: person.name,
-        loggedHours,
-        billableHours,
+        loggedHours: round2(hours.logged),
+        billableHours: round2(hours.billable),
         capacityHours: usable,
-        utilisationPct: usable === null ? null : Number(((loggedHours / usable) * 100).toFixed(1)),
-        billableUtilisationPct: usable === null ? null : Number(((billableHours / usable) * 100).toFixed(1))
+        timeOffHours,
+        utilisationPct: usable === null ? null : Number(((hours.logged / usable) * 100).toFixed(1)),
+        billableUtilisationPct: usable === null ? null : Number(((hours.billable / usable) * 100).toFixed(1)),
+        targetUtilisationPct: person.plannedUtilizationPct ?? 100
       };
     })
-    .sort((a, b) => (b.utilisationPct ?? -1) - (a.utilisationPct ?? -1));
+    .sort((a, b) => (b.utilisationPct ?? -1) - (a.utilisationPct ?? -1) || a.name.localeCompare(b.name));
 
   // ---------------------------------------------------------------- approval latency
-  const reviewed = used.filter((r) => r.reviewedAt != null);
-  const timed = reviewed.filter((r) => r.submittedAt != null);
-  const latencies = timed.map((r) => (r.reviewedAt!.getTime() - r.submittedAt!.getTime()) / 3_600_000);
-
-  const withDeadline = reviewed.filter((r) => r.approvalDeadline != null);
-  const breached = withDeadline.filter(
-    (r) => r.slaBreachAt != null || r.reviewedAt!.getTime() > r.approvalDeadline!.getTime()
-  );
-
-  const perApprover = new Map<string, { name: string; latencies: number[] }>();
-  for (const row of timed) {
-    if (!row.reviewedById) continue;
-    const entry = perApprover.get(row.reviewedById) ?? { name: row.reviewedById, latencies: [] };
-    entry.latencies.push((row.reviewedAt!.getTime() - row.submittedAt!.getTime()) / 3_600_000);
-    perApprover.set(row.reviewedById, entry);
-  }
-  // Same rule for the approver league table: it is a per-person comparison on a screen. The
-  // workspace-level latency figures directly above it (median, p90, slowest, breach rate) are
-  // computed over EVERY reviewed row, including those signed off by somebody since deactivated —
-  // an approval that was slow was slow, and dropping it would flatter the workspace.
-  const nameById = await resolveVisiblePeopleNames(perApprover.keys());
-  const hiddenInactiveApprovers = [...perApprover.keys()].filter((id) => !nameById.has(id)).length;
-
-  const round1 = (n: number | null) => (n === null ? null : Number(n.toFixed(1)));
-
-  const approvalLatency: ApprovalLatency = {
-    measured: timed.length,
-    unmeasurable: reviewed.length - timed.length,
-    medianHours: round1(median(latencies)),
-    p90Hours: round1(percentile(latencies, 90)),
-    slowestHours: latencies.length ? round1(Math.max(...latencies)) : null,
-    breached: breached.length,
-    breachRatePct:
-      withDeadline.length === 0 ? null : Number(((breached.length / withDeadline.length) * 100).toFixed(1)),
-    byApprover: [...perApprover.entries()]
-      .filter(([id]) => nameById.has(id))
-      .map(([id, entry]) => ({
-        approverId: id,
-        name: nameById.get(id)!,
-        reviewed: entry.latencies.length,
-        medianHours: round1(median(entry.latencies))
-      }))
-      .sort((a, b) => (b.medianHours ?? 0) - (a.medianHours ?? 0)),
-    hiddenInactiveApprovers
-  };
+  const truncated = latencyRows.length > REPORT_ROW_LIMIT;
+  const sample = truncated ? latencyRows.slice(0, REPORT_ROW_LIMIT) : latencyRows;
+  // The approver league table is a per-person comparison on a screen, so it names only people still
+  // shown. The workspace-level figures (median, p90, slowest, breach rate) are computed over EVERY
+  // reviewed row, including those signed off by somebody since deactivated — an approval that was
+  // slow was slow, and dropping it would flatter the workspace.
+  const nameById = await resolveVisiblePeopleNames(sample.map((r) => r.reviewedById));
+  const approvalLatency = approvalLatencyOf(sample, nameById);
 
   // ---------------------------------------------------------------- activity mix
-  const totalHours = used.reduce((s, r) => s + Number(r.totalHours ?? 0), 0);
-  const byActivity = new Map<string, { hours: number; cost: number; rated: number; unrated: number }>();
-  for (const row of used) {
-    const bucket = byActivity.get(row.activityType) ?? { hours: 0, cost: 0, rated: 0, unrated: 0 };
-    bucket.hours += Number(row.totalHours ?? 0);
-    if (row.billedAmount != null) {
-      bucket.cost += Number(row.billedAmount);
-      bucket.rated += 1;
-    } else {
-      bucket.unrated += 1;
-    }
-    byActivity.set(row.activityType, bucket);
-  }
-
-  const activityMix: ActivityMixRow[] = largestRemainderShares(
-    [...byActivity.entries()]
-      .map(([activity, b]) => ({
-        activity,
-        hours: Number(b.hours.toFixed(2)),
-        exactShare: totalHours === 0 ? 0 : (b.hours / totalHours) * 100,
-        cost: b.rated === 0 ? null : Number(b.cost.toFixed(2)),
-        unratedEntries: b.unrated
-      }))
-      .sort((a, b) => b.hours - a.hours)
-  );
+  const mix = activityMixOf(byActivity as unknown as ActivityGroup[]);
+  const excluded = (status: "DRAFT" | "REJECTED") =>
+    filters.status ? 0 : round2(Number(byStatus.find((g) => g.status === status)?._sum.totalHours ?? 0));
 
   return {
-    range: { from: filters.from, to: filters.to, workingDays },
+    range: {
+      from: filters.from,
+      to: filters.to,
+      workingDays: workingDaysBetween(from, to, workingDayNumbers),
+      workingDaysToDate,
+      capacityThrough: through < from ? null : through.toISOString().slice(0, 10)
+    },
     utilisation,
     approvalLatency,
-    activityMix,
+    activityMix: mix.rows,
     totals: {
-      hours: Number(totalHours.toFixed(2)),
-      billableHours: Number(
-        used.filter((r) => r.billable).reduce((s, r) => s + Number(r.totalHours ?? 0), 0).toFixed(2)
-      ),
-      entries: used.length,
-      people: peopleIds.length
+      hours: round2(mix.totalHours),
+      billableHours: round2([...hoursByPerson.values()].reduce((s, h) => s + h.billable, 0)),
+      entries: byPerson.reduce((s, g) => s + g._count._all, 0),
+      people: loggedIds.length,
+      excluded: { draftHours: excluded("DRAFT"), rejectedHours: excluded("REJECTED") }
     },
-    hiddenInactivePeople,
+    hiddenInactivePeople: loggedIds.filter((id) => !shownIds.has(id)).length,
     truncated
   };
 }
