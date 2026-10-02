@@ -88,6 +88,31 @@ describe("previousBusinessDayKey, in the recipient's own week", () => {
   ])("%s (weekday %i) -> %s (%s)", (dateKey, weekday, expected) => {
     expect(previousBusinessDayKey({ dateKey, weekday, hour: 9, timeZone: NY })).toBe(expected);
   });
+
+  /**
+   * With "weekdays only" OFF, weekends are working days: the reminder goes out on Saturday and
+   * Sunday too. The look-back did not know that, so Saturday, Sunday AND Monday each escalated the
+   * same Friday — the employee and their manager were emailed three times about one missed day
+   * (audit 2026-10, timesheets smaller). Each morning now asks about the day before it, so every
+   * missed day is escalated once.
+   */
+  it.each([
+    ["2026-08-29", 6, "2026-08-28", "Saturday asks about Friday"],
+    ["2026-08-30", 0, "2026-08-29", "Sunday asks about Saturday"],
+    ["2026-08-31", 1, "2026-08-30", "Monday asks about Sunday"],
+    ["2026-08-25", 2, "2026-08-24", "Tuesday still asks about Monday"]
+  ])("with weekends worked, %s (weekday %i) -> %s (%s)", (dateKey, weekday, expected) => {
+    expect(previousBusinessDayKey({ dateKey, weekday, hour: 9, timeZone: NY }, { weekdaysOnly: false })).toBe(expected);
+  });
+
+  it("with weekends worked, Saturday, Sunday and Monday escalate three different days", () => {
+    const keys = [
+      { dateKey: "2026-08-29", weekday: 6 },
+      { dateKey: "2026-08-30", weekday: 0 },
+      { dateKey: "2026-08-31", weekday: 1 }
+    ].map((p) => previousBusinessDayKey({ ...p, hour: 9, timeZone: NY }, { weekdaysOnly: false }));
+    expect(new Set(keys).size).toBe(3);
+  });
 });
 
 describe("startOfZonedDayUtc", () => {

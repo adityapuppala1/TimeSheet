@@ -90,3 +90,12 @@ describe("daily-status — today is the viewer's own day", () => {
     expect(aggregate.where.workDate).toEqual({ gte: new Date("2026-10-01T00:00:00.000Z"), lte: new Date("2026-10-01T00:00:00.000Z") });
   });
 });
+
+describe("daily-status — rejected hours do not stand", () => {
+  it("leaves REJECTED entries out of the hours and the entry count", async () => {
+    // A refused entry is meant to be re-logged; counting both made a rejected-then-relogged day read
+    // double on the dashboard's hero card. History already excludes them.
+    await request(buildApp()).get("/api/reports/daily-status");
+    expect(timesheetCalls("aggregate").at(-1).where.status).toEqual({ not: "REJECTED" });
+  });
+});

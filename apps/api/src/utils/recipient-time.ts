@@ -119,13 +119,20 @@ export const isWeekendDay = (weekday: number): boolean => weekday === 0 || weekd
  *
  * Computed from the recipient's own local day, so a user whose Monday has not started yet on the
  * server is still asked about *their* Friday rather than the server's Thursday.
+ *
+ * `weekdaysOnly: false` is the workspace saying weekends are WORKED (the reminder goes out on them
+ * too), so the business day before any day is simply the day before it. Skipping the weekend there
+ * made Saturday, Sunday and Monday all escalate the same Friday — three emails to the employee and
+ * three to their manager about one missed day.
  */
-export function previousBusinessDayKey(parts: ZonedParts): string {
+export function previousBusinessDayKey(parts: ZonedParts, options: { weekdaysOnly?: boolean } = {}): string {
   // Monday looks back across the weekend to Friday; Sunday looks back two. Saturday and every
   // weekday look back one — Saturday's "yesterday" IS Friday, so it needs no special case.
   let offset = 1;
-  if (parts.weekday === 1) offset = 3;
-  else if (parts.weekday === 0) offset = 2;
+  if (options.weekdaysOnly !== false) {
+    if (parts.weekday === 1) offset = 3;
+    else if (parts.weekday === 0) offset = 2;
+  }
   const [y, m, d] = parts.dateKey.split("-").map(Number);
   // UTC arithmetic on a date-only value: no zone involved, so no DST cliff to fall off.
   const shifted = new Date(Date.UTC(y, m - 1, d));

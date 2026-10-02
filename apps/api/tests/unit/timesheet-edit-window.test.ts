@@ -287,6 +287,16 @@ describe("submitting an existing draft", () => {
     expect(recipients).toContain(MANAGER.id);
   });
 
+  it("emails the approver too, as a fresh submit does — that is the message asking for a decision", async () => {
+    // The create path deliberately emails the approver; submitting an existing draft sent the
+    // manager an in-app row only, so drafts submitted later reached nobody's inbox.
+    await submit();
+    const toManager = vi.mocked(dispatchNotification).mock.calls.map((call) => call[0]).find((n) => n.userId === MANAGER.id);
+    expect(toManager?.email?.templateKey).toBe("timesheet.submitted");
+    expect(toManager?.email?.vars).toMatchObject({ name: MANAGER.name, managerName: AUTHOR.name, project: "Apollo" });
+    expect(toManager?.link).toBe("/app/approvals");
+  });
+
   for (const status of ["SUBMITTED", "APPROVED", "REJECTED"]) {
     it(`refuses a ${status} entry`, async () => {
       client = mockClient(status);

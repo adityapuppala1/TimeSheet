@@ -180,8 +180,9 @@ export async function runEscalationReminders(now: Date = new Date()): Promise<{ 
     if (!reminderWindow(parts, settings.escalationReminderHour, settings.remindOnWeekdaysOnly).send) continue;
 
     // The business day BEFORE theirs — so a Monday-morning escalation asks about their Friday,
-    // even when the server has not reached Monday yet.
-    const missedLabel = previousBusinessDayKey(parts);
+    // even when the server has not reached Monday yet. With weekends worked it is the calendar day
+    // before, so each missed day is escalated once rather than Friday three times.
+    const missedLabel = previousBusinessDayKey(parts, { weekdaysOnly: settings.remindOnWeekdaysOnly });
     const missedUtc = dateKeyToUtc(missedLabel);
     const dayStart = startOfZonedDayUtc(now, user.timezone, workspaceZone());
 

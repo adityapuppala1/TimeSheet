@@ -92,8 +92,10 @@ reportRouter.get("/daily-status", async (req, res) => {
   const to = window.to ?? today;
   const days = windowDays(from, to);
   const [aggregate, reminded, escalated] = await Promise.all([
+    // REJECTED left out: a refused entry is meant to be re-logged, so counting it beside its
+    // replacement made a rejected-then-relogged day read double. History already excludes them.
     prisma.timesheet.aggregate({
-      where: { userId: req.user!.id, workDate: { gte: from, lte: to }, deletedAt: null },
+      where: { userId: req.user!.id, workDate: { gte: from, lte: to }, deletedAt: null, status: { not: "REJECTED" } },
       _sum: { totalHours: true },
       _count: true
     }),

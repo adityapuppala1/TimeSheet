@@ -411,6 +411,92 @@ async function assertAuthorAssigned(author: { id: string; role: string | null | 
   if (!assigned) throw new AppError(403, "You are not assigned to this project");
 }
 
+/**
+ * The two notifications a submission sends — the author's receipt and the approver's request —
+ * shared by a fresh submit (saveTimesheet) and submitting an existing draft (POST /:id/submit),
+ * because they are the same event. The draft path used to send the manager an in-app row only, so
+ * a draft submitted later reached nobody's inbox while a fresh submit emailed the approver.
+ *
+ * WHAT THE APPROVER ACTUALLY NEEDS. This email used to carry the date, the project and the hours —
+ * enough to know an entry exists, not enough to approve it — so every recipient had to open the app
+ * to answer "what was done". The entry's module, submodule, activity, linked ticket and the
+ * description the author wrote all travel with it now. Empty fields are dropped by the template
+ * rather than printed as dashes.
+ */
+async function announceSubmission(
+  entry: {
+    userId: string;
+    workDate: Date;
+    totalHours: Prisma.Decimal | number | string;
+    activityType: string | null;
+    taskDescription: string | null;
+    notes: string | null;
+    project: { name: string } | null;
+    module?: { name: string } | null;
+    submodule?: { name: string } | null;
+    ticket?: { key: string; title: string } | null;
+  },
+  author: { id: string; name: string },
+  manager: { id: string; name: string } | null
+): Promise<void> {
+  const dateLabel = entry.workDate.toISOString().slice(0, 10);
+  const hours = Number(entry.totalHours);
+  const project = entry.project?.name ?? "";
+  const entryDetail = {
+    module: entry.module?.name ?? null,
+    submodule: entry.submodule?.name ?? null,
+    activity: entry.activityType ?? null,
+    // The task is what was done; the note is why, or what got in the way. Both belong in a mail
+    // whose whole purpose is letting somebody decide without opening the app.
+    description: entryText(entry) || null,
+    ticketRef: entry.ticket ? `${entry.ticket.key} — ${entry.ticket.title}` : null
+  };
+  const detailVars = {
+    module: entryDetail.module ?? "",
+    submodule: entryDetail.submodule ?? "",
+    activity: entryDetail.activity ?? "",
+    description: entryDetail.description ?? "",
+    ticketRef: entryDetail.ticketRef ?? ""
+  };
+
+  await dispatchNotification({
+    userId: entry.userId,
+    category: "timesheet.submitted",
+    title: "Timesheet submitted",
+    body: `${hours.toFixed(2)}h on ${project} for ${dateLabel} sent for approval.`,
+    link: "/app/history",
+    email: {
+      templateKey: "timesheet.submitted",
+      vars: { name: author.name, hours: hours.toFixed(2), date: dateLabel, project, managerName: manager?.name ?? "", ...detailVars },
+      fallback: {
+        subject: `Timesheet submitted — ${dateLabel}`,
+        html: templates.timesheetSubmitted({ name: author.name, hours, date: dateLabel, project, managerName: manager?.name ?? null, ...entryDetail })
+      }
+    }
+  });
+
+  if (manager) {
+    // The approver gets the same detail, and by email as well — this is the message that asks
+    // somebody to make a decision, and it was previously in-app only while the person who needed
+    // no action at all got the email.
+    await dispatchNotification({
+      userId: manager.id,
+      category: "timesheet.submitted",
+      title: `${author.name} submitted a timesheet`,
+      body: `${hours.toFixed(2)}h on ${project} for ${dateLabel} is awaiting your review.`,
+      link: "/app/approvals",
+      email: {
+        templateKey: "timesheet.submitted",
+        vars: { name: manager.name, hours: hours.toFixed(2), date: dateLabel, project, managerName: author.name, ...detailVars },
+        fallback: {
+          subject: `${author.name} submitted a timesheet — ${dateLabel}`,
+          html: templates.timesheetSubmitted({ name: manager.name, hours, date: dateLabel, project, managerName: author.name, ...entryDetail })
+        }
+      }
+    });
+  }
+}
+
 /** Exported for services/mcp-tools.ts's `log_timesheet_entry`, which passes a synthetic
  *  `{ user, body, files }` rather than a real request. Every rule below — the Serializable
  *  overlap check, the project-assignment gate, the identity gate, the sanitisation — has to hold
@@ -546,98 +632,7 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
 
   if (status === "SUBMITTED") {
     emitDomainEvent("timesheet.submitted", { timesheet });
-    const dateLabel = workDate.toISOString().slice(0, 10);
-    const managerName = timesheet.user.manager?.name ?? null;
-
-    /**
-     * WHAT THE APPROVER ACTUALLY NEEDS. This email used to carry the date, the project and the hours
-     * — enough to know an entry exists, not enough to approve it — so every recipient had to open the
-     * app to answer "what was done". The entry's module, submodule, activity, linked ticket and the
-     * description the author wrote all travel with it now. Empty fields are dropped by the template
-     * rather than printed as dashes.
-     */
-    const entryDetail = {
-      module: timesheet.module?.name ?? null,
-      submodule: timesheet.submodule?.name ?? null,
-      activity: timesheet.activityType ?? null,
-      // The task is what was done; the note is why, or what got in the way. Both belong in a mail
-      // whose whole purpose is letting somebody decide without opening the app.
-      description: [timesheet.taskDescription, timesheet.notes].filter((t) => t && t.trim().length > 0).join("\n\n") || null,
-      ticketRef: timesheet.ticket ? `${timesheet.ticket.key} — ${timesheet.ticket.title}` : null
-    };
-
-    await dispatchNotification({
-      userId: req.user.id,
-      category: "timesheet.submitted",
-      title: "Timesheet submitted",
-      body: `${hours.toFixed(2)}h on ${timesheet.project.name} for ${dateLabel} sent for approval.`,
-      link: "/app/history",
-      email: {
-        templateKey: "timesheet.submitted",
-        vars: {
-          name: req.user.name,
-          hours: hours.toFixed(2),
-          date: dateLabel,
-          project: timesheet.project.name,
-          managerName: managerName ?? "",
-          module: entryDetail.module ?? "",
-          submodule: entryDetail.submodule ?? "",
-          activity: entryDetail.activity ?? "",
-          description: entryDetail.description ?? "",
-          ticketRef: entryDetail.ticketRef ?? ""
-        },
-        fallback: {
-          subject: `Timesheet submitted — ${dateLabel}`,
-          html: templates.timesheetSubmitted({
-            name: req.user.name,
-            hours,
-            date: dateLabel,
-            project: timesheet.project.name,
-            managerName,
-            ...entryDetail
-          })
-        }
-      }
-    });
-
-    if (timesheet.user.manager) {
-      // The approver gets the same detail, and by email as well — this is the message that asks
-      // somebody to make a decision, and it was previously in-app only while the person who needed
-      // no action at all got the email.
-      await dispatchNotification({
-        userId: timesheet.user.manager.id,
-        category: "timesheet.submitted",
-        title: `${req.user.name} submitted a timesheet`,
-        body: `${hours.toFixed(2)}h on ${timesheet.project.name} for ${dateLabel} is awaiting your review.`,
-        link: "/app/approvals",
-        email: {
-          templateKey: "timesheet.submitted",
-          vars: {
-            name: timesheet.user.manager.name,
-            hours: hours.toFixed(2),
-            date: dateLabel,
-            project: timesheet.project.name,
-            managerName: req.user.name,
-            module: entryDetail.module ?? "",
-            submodule: entryDetail.submodule ?? "",
-            activity: entryDetail.activity ?? "",
-            description: entryDetail.description ?? "",
-            ticketRef: entryDetail.ticketRef ?? ""
-          },
-          fallback: {
-            subject: `${req.user.name} submitted a timesheet — ${dateLabel}`,
-            html: templates.timesheetSubmitted({
-              name: timesheet.user.manager.name,
-              hours,
-              date: dateLabel,
-              project: timesheet.project.name,
-              managerName: req.user.name,
-              ...entryDetail
-            })
-          }
-        }
-      });
-    }
+    await announceSubmission(timesheet, { id: req.user.id, name: req.user.name }, timesheet.user.manager ?? null);
   }
 
   return timesheet;
@@ -1071,45 +1066,8 @@ timesheetRouter.post("/:id/submit", requirePermission(permissions.TIMESHEETS_WRI
     ...(isOwner ? {} : { onBehalfOf: updated.userId })
   });
 
-  const dateLabel = updated.workDate.toISOString().slice(0, 10);
-  const hours = Number(updated.totalHours);
-  await dispatchNotification({
-    userId: updated.userId,
-    category: "timesheet.submitted",
-    title: "Timesheet submitted",
-    body: `${hours.toFixed(2)}h on ${updated.project!.name} for ${dateLabel} sent for approval.`,
-    link: "/app/history",
-    email: {
-      templateKey: "timesheet.submitted",
-      vars: {
-        name: existing.user.name,
-        hours: hours.toFixed(2),
-        date: dateLabel,
-        project: updated.project!.name,
-        managerName: existing.user.manager?.name ?? ""
-      },
-      fallback: {
-        subject: "Timesheet submitted",
-        html: templates.timesheetSubmitted({
-          name: existing.user.name,
-          hours,
-          date: dateLabel,
-          project: updated.project!.name,
-          managerName: existing.user.manager?.name ?? null
-        })
-      }
-    }
-  });
-
-  if (existing.user.manager) {
-    await dispatchNotification({
-      userId: existing.user.manager.id,
-      category: "timesheet.submitted",
-      title: `${existing.user.name} submitted a timesheet`,
-      body: `${hours.toFixed(2)}h on ${updated.project!.name} for ${dateLabel} is awaiting your review.`,
-      link: "/app/approvals"
-    });
-  }
+  // The same receipt and approver email a fresh submit sends — see announceSubmission.
+  await announceSubmission(updated, { id: existing.userId, name: existing.user.name }, existing.user.manager ?? null);
 
   await respondWithEntry(res, updated);
 });
