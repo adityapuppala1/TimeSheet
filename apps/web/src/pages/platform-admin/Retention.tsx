@@ -64,6 +64,7 @@ import {
   shortDate,
   shortDateTime
 } from "./console-ui";
+import { runInBackground } from "../../lib/run-in-background";
 
 const errorMessageOf = (error: unknown) => (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
 
@@ -98,7 +99,7 @@ function PolicyCard({ settings }: { settings: RetentionSettings }) {
       }),
     onSuccess: () => {
       toast.success("Policy saved");
-      queryClient.invalidateQueries({ queryKey: ["platform-admin"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin"] }));
     },
     onError: (e) => toast.error("Could not save", { description: errorMessageOf(e) })
   });
@@ -179,7 +180,7 @@ function RunCard() {
     onSuccess: (r) => {
       setResult(r);
       setConfirmOpen(false);
-      if (!r.dryRun) queryClient.invalidateQueries({ queryKey: ["platform-admin"] });
+      if (!r.dryRun) runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin"] }));
       toast.success(r.dryRun ? "Dry run complete" : `Pass complete — ${r.sent.length} sent, ${r.deleted.length} deleted`);
     },
     onError: (e) => toast.error("Pass failed", { description: errorMessageOf(e) })
@@ -276,14 +277,14 @@ function QueueRow({ row, markers }: { row: RetentionQueueRow; markers: string[] 
     mutationFn: (v: boolean) => platformAdminConsoleApi.setRetentionHold(row.id, v),
     onSuccess: (r) => {
       toast.success(r.retentionHold ? `${row.slug} held — it will not be deleted` : `${row.slug} released`);
-      invalidate();
+      void invalidate();
     }
   });
   const send = useMutation({
     mutationFn: (marker: string) => platformAdminConsoleApi.sendRetentionMarker(row.id, marker),
     onSuccess: (r) => {
       toast.success(`Sent ${MARKER_LABEL[r.marker] ?? r.marker} to ${r.to}`, { description: r.subject });
-      invalidate();
+      void invalidate();
     },
     onError: (e) => toast.error("Not sent", { description: errorMessageOf(e) })
   });
@@ -292,7 +293,7 @@ function QueueRow({ row, markers }: { row: RetentionQueueRow; markers: string[] 
     onSuccess: (r) => {
       toast.success(`${row.slug} deleted`, { description: r.snapshot?.taken ? `Snapshot: ${r.snapshot.path}` : `No snapshot (${r.snapshot?.reason ?? "disabled"})` });
       setDeleteOpen(false);
-      invalidate();
+      void invalidate();
     },
     onError: (e) => toast.error("Not deleted", { description: errorMessageOf(e) })
   });

@@ -131,6 +131,7 @@ import {
   type NativeBadgeVariant,
   type NativeRuntimeAction
 } from "../../utils/native-model-panel";
+import { runInBackground } from "../../lib/run-in-background";
 
 /** The download statuses worth polling on, straight from the shared list rather than a second copy
  *  of it — the API decides what "in flight" means and the UI agrees by construction. */
@@ -298,7 +299,7 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
     mutationFn: (modelId: string) => settingsApi.startNativeAiDownload(modelId),
     onSuccess: () => {
       toast.success("Download started", { description: "It runs on the server — this page can be closed and the progress will still be here." });
-      invalidateDownloads();
+      void invalidateDownloads();
     },
     // A 507 names both the free space and the size needed; showing it verbatim is the whole point.
     onError: (err) => toast.error("Could not start the download", { description: errorMessage(err) })
@@ -307,7 +308,7 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
     mutationFn: (id: string) => settingsApi.cancelNativeAiDownload(id),
     onSuccess: () => {
       toast.success("Download cancelled", { description: "The partial file was removed." });
-      invalidateDownloads();
+      void invalidateDownloads();
     },
     onError: (err) => toast.error("Could not cancel", { description: errorMessage(err) })
   });
@@ -315,8 +316,8 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
     mutationFn: (id: string) => settingsApi.deleteNativeAiModel(id),
     onSuccess: () => {
       toast.success("Model deleted from this machine's disk");
-      invalidateDownloads();
-      queryClient.invalidateQueries({ queryKey: ["settings", "ai", "native", "capability"] });
+      void invalidateDownloads();
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "ai", "native", "capability"] }));
     },
     onError: (err) => toast.error("Could not delete", { description: errorMessage(err) })
   });
@@ -325,7 +326,7 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
     onSuccess: (status) => {
       if (status.state === "ready") toast.success("The local model is running", { description: status.detail });
       else toast.error(`Runtime is ${status.state}`, { description: status.detail });
-      invalidateRuntime();
+      void invalidateRuntime();
     },
     onError: (err) => toast.error("Could not start the runtime", { description: errorMessage(err) })
   });
@@ -333,7 +334,7 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
     mutationFn: () => settingsApi.stopNativeAiRuntime(),
     onSuccess: (status) => {
       toast.success("Runtime stopped", { description: status.detail });
-      invalidateRuntime();
+      void invalidateRuntime();
     },
     onError: (err) => toast.error("Could not stop the runtime", { description: errorMessage(err) })
   });
@@ -341,7 +342,7 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
     mutationFn: () => settingsApi.restartNativeAiRuntime(),
     onSuccess: (status) => {
       toast.success(`Runtime is ${status.state}`, { description: status.detail });
-      invalidateRuntime();
+      void invalidateRuntime();
     },
     onError: (err) => toast.error("Could not restart the runtime", { description: errorMessage(err) })
   });
@@ -351,7 +352,7 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
       toast.success(`Measured ${result.benchmark.tokensPerSecond} tokens/sec`, {
         description: `First token after ${Math.round(result.benchmark.timeToFirstTokenMs)} ms. This machine can emit about ${result.benchmark.suggestedMaxOutputTokens} tokens inside the 90-second call ceiling.`
       });
-      invalidateDownloads();
+      void invalidateDownloads();
     },
     onError: (err) => toast.error("The benchmark did not finish", { description: errorMessage(err) })
   });
@@ -401,7 +402,7 @@ export function NativeModelRunnerCard({ readOnly }: { readOnly: boolean }) {
           ? `Every AI feature tries it first, declaring ${measured.suggestedMaxOutputTokens} output tokens. Anything asking for more skips it and falls through to the next provider.`
           : "Every AI feature tries it first. It declares no output-token limit — run a benchmark and set one, or a heavy call will spend the full 90 seconds finding out."
       });
-      queryClient.invalidateQueries({ queryKey: ["settings", "ai", "providers"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "ai", "providers"] }));
     },
     onError: (err) => toast.error("Could not make it the primary provider", { description: errorMessage(err, (err as Error)?.message ?? "Try again.") })
   });

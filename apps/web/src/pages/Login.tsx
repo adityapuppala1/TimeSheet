@@ -294,7 +294,7 @@ export function Login() {
     // Back to whatever they were trying to reach, not always the dashboard. `safeReturnTo` is an
     // open-redirect guard, not a formality: `next` comes off the URL, so an unchecked value would
     // send a person who has JUST authenticated to an attacker's page — see utils/return-to.ts.
-    navigate(safeReturnTo(params.get("next")), { replace: true });
+    void navigate(safeReturnTo(params.get("next")), { replace: true });
   };
 
   const mutation = useMutation({

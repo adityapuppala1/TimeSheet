@@ -33,6 +33,7 @@ import { toast } from "./ui/toaster";
 import { statusPageApi, type ServiceStatusValue, type StatusDay, type StatusIncident } from "../services/api";
 import { cn } from "../lib/utils";
 import { groupIncidentsByMonth, incidentMixLabel } from "../lib/incidents";
+import { runInBackground } from "../lib/run-in-background";
 
 const STATUS_TEXT: Record<ServiceStatusValue, string> = {
   OPERATIONAL: "Operational",
@@ -95,7 +96,7 @@ export function ServiceStatusPage() {
   const runNow = useMutation({
     mutationFn: statusPageApi.runNow,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["status-page"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["status-page"] }));
       toast.success("Checked every service just now");
     },
     onError: () => toast.error("Couldn't run the checks")

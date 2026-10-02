@@ -36,7 +36,7 @@ export function BrandingSettingsCard() {
   const upload = useMutation({
     mutationFn: (file: File) => brandingApi.uploadLogo(file),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       toast.success("Logo updated", { description: "It now appears in the sidebar and on the sign-in page." });
     },
     onError: (err: any) =>
@@ -48,7 +48,7 @@ export function BrandingSettingsCard() {
   const remove = useMutation({
     mutationFn: () => brandingApi.removeLogo(),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       toast.success("Logo removed", { description: "The TimeSphere mark is shown again." });
     },
     onError: (err: any) => toast.error("Could not remove the logo", { description: err?.response?.data?.message ?? "Try again." })
@@ -57,7 +57,7 @@ export function BrandingSettingsCard() {
   const saveName = useMutation({
     mutationFn: () => brandingApi.setName(name.trim() || null),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       toast.success("Workspace name saved");
     },
     onError: (err: any) => toast.error("Could not save the name", { description: err?.response?.data?.message ?? "Try again." })

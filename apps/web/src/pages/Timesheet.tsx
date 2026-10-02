@@ -44,6 +44,7 @@ import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRef
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
 import { plainTextLength } from "../lib/safe-html";
+import { runInBackground } from "../lib/run-in-background";
 
 const MAX_DAILY_HOURS = 12;
 const OPEN_TICKET_STATUSES = "OPEN,IN_PROGRESS,IN_REVIEW,REOPENED";
@@ -361,7 +362,7 @@ export function Timesheet() {
       return timesheetApi.submit(payload, draft);
     },
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["timesheets"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["timesheets"] }));
       setFiles([]);
       form.reset({
         projectId: form.getValues("projectId"),

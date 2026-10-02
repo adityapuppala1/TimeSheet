@@ -53,6 +53,7 @@ import {
   type WorkloadRowData
 } from "../services/api";
 import { DateRangePicker } from "../components/ui/date-range-picker";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -177,7 +178,7 @@ export function WorkloadPage() {
     mutationFn: (id: string) => resourceApi.deleteBooking(id),
     onSuccess: () => {
       toast.success("Booking removed");
-      queryClient.invalidateQueries({ queryKey: ["resources"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["resources"] }));
     },
     onError: (err: any) => toast.error("Could not remove", { description: serverMessage(err, "Try again.") })
   });
@@ -729,7 +730,7 @@ function BookingDialog({
     },
     onSuccess: () => {
       toast.success(editing ? "Booking updated" : "Time booked");
-      queryClient.invalidateQueries({ queryKey: ["resources"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["resources"] }));
       onOpenChange(false);
     },
     onError: (err: any) => toast.error("Could not save", { description: serverMessage(err, "Try again.") })

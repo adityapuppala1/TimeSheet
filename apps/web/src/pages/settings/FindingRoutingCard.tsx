@@ -37,6 +37,7 @@ import { Switch } from "../../components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { toast } from "../../components/ui/toaster";
 import { findingRoutingApi, projectApi } from "../../services/api";
+import { runInBackground } from "../../lib/run-in-background";
 
 /** The slice of a project this card needs. `projectApi.list` is untyped and already returns modules
  *  with their submodules (see the API's project.controller.ts), so this narrows rather than fetches. */
@@ -71,10 +72,10 @@ export function FindingRoutingCard({ readOnly }: { readOnly: boolean }) {
   const projectOptions = (projects.data ?? []) as ProjectOption[];
 
   function invalidateRepositoryMaps() {
-    queryClient.invalidateQueries({ queryKey: ["finding-routing", "repository-maps"] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["finding-routing", "repository-maps"] }));
   }
   function invalidatePathRules() {
-    queryClient.invalidateQueries({ queryKey: ["finding-routing", "module-path-rules"] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["finding-routing", "module-path-rules"] }));
   }
   /** Every mutation below reports the server's own message when there is one — the 422 for an
    *  unusable pattern names the limit it broke, and swallowing that would leave an admin guessing. */

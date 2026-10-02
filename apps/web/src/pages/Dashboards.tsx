@@ -43,6 +43,7 @@ import { cn } from "../lib/utils";
 import { usePlanningFeatures } from "../lib/use-planning";
 import { useAuthStore } from "../store/auth";
 import { dashboardApi, type DashboardRow, type ResolvedWidget, type WidgetDescriptorRow } from "../services/api";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -192,7 +193,7 @@ export function DashboardsPage() {
       toast.success("Dashboard saved");
       setEditing(false);
       setSelectedId(saved.id);
-      queryClient.invalidateQueries({ queryKey: ["dashboards"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["dashboards"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: serverMessage(err, "Try again.") })
   });
@@ -202,7 +203,7 @@ export function DashboardsPage() {
     onSuccess: () => {
       toast.success("Dashboard deleted");
       setSelectedId(null);
-      queryClient.invalidateQueries({ queryKey: ["dashboards"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["dashboards"] }));
     },
     onError: (err: any) => toast.error("Could not delete", { description: serverMessage(err, "Try again.") })
   });
@@ -461,7 +462,7 @@ function Deliveries({ dashboards }: { dashboards: DashboardRow[] }) {
     onSuccess: () => {
       toast.success("Delivery scheduled");
       setForm({ name: "", dashboardId: "", cadence: "WEEKLY", hourUtc: "7", recipients: "" });
-      queryClient.invalidateQueries({ queryKey: ["dashboards", "subscriptions"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["dashboards", "subscriptions"] }));
     },
     onError: (err: any) => toast.error("Could not schedule", { description: serverMessage(err, "Try again.") })
   });
@@ -470,7 +471,7 @@ function Deliveries({ dashboards }: { dashboards: DashboardRow[] }) {
     mutationFn: (id: string) => dashboardApi.removeSubscription(id),
     onSuccess: () => {
       toast.success("Delivery removed");
-      queryClient.invalidateQueries({ queryKey: ["dashboards", "subscriptions"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["dashboards", "subscriptions"] }));
     },
     onError: (err: any) => toast.error("Could not remove", { description: serverMessage(err, "Try again.") })
   });

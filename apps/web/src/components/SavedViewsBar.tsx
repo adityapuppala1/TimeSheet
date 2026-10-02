@@ -29,6 +29,7 @@ import { toast } from "./ui/toaster";
 import { usePlanningFeatures } from "../lib/use-planning";
 import { planApi, type SavedViewRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -105,7 +106,7 @@ export function SavedViewsBar({
       setName("");
       setShared(false);
       setOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["plan", "views"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["plan", "views"] }));
       toast.success("View saved");
     },
     onError: (err: any) => toast.error("Could not save the view", { description: serverMessage(err, "Try again.") })

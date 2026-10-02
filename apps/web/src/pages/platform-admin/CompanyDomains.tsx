@@ -26,6 +26,7 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../co
 import { toast } from "../../components/ui/toaster";
 import { platformAdminConsoleApi, platformAdminOrgApi, type CompanyDomainBackfillPlan, type CompanyDomainClaim } from "../../services/platform-admin-api";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, OrgStatusPill, shortDate } from "./console-ui";
+import { runInBackground } from "../../lib/run-in-background";
 
 const errorMessageOf = (error: unknown) => (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
@@ -107,7 +108,7 @@ function BackfillDialog({ plan, onClose }: { plan: CompanyDomainBackfillPlan | n
   const apply = useMutation({
     mutationFn: platformAdminConsoleApi.backfillApply,
     onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: CLAIMS_KEY });
+      runInBackground(queryClient.invalidateQueries({ queryKey: CLAIMS_KEY }));
       toast.success(`Claimed ${plural(result.claimed, "domain")}`, {
         description: result.conflicts ? `${plural(result.conflicts, "conflict")} left for you to decide.` : "No conflicts."
       });
@@ -190,7 +191,7 @@ export function PlatformAdminCompanyDomains() {
   const release = useMutation({
     mutationFn: (claim: CompanyDomainClaim) => platformAdminConsoleApi.releaseCompanyDomain(claim.domain),
     onSuccess: (_result, claim) => {
-      queryClient.invalidateQueries({ queryKey: CLAIMS_KEY });
+      runInBackground(queryClient.invalidateQueries({ queryKey: CLAIMS_KEY }));
       toast.success(`${claim.domain} released`, { description: "People from it can start a workspace of their own again." });
     },
     onError: (error) => toast.error("Could not release the domain", { description: errorMessageOf(error) })

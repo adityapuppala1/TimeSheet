@@ -293,7 +293,7 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
           : "Maintenance mode disabled"
       );
       setDraft(null); // re-seed from the fresh server copy
-      invalidate();
+      void invalidate();
     },
     onError: (error: any) => {
       toast.error("Couldn't save", { description: error?.response?.data?.message ?? "Try again." });
@@ -322,7 +322,7 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
           ? "No active sessions to revoke"
           : `Signed out ${revokedSessions} session${revokedSessions === 1 ? "" : "s"}`
       );
-      invalidate();
+      void invalidate();
     },
     onError: (error: any) => {
       toast.error("Couldn't force logout", { description: error?.response?.data?.message ?? "Try again." });

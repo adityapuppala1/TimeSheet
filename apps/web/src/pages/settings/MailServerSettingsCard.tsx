@@ -23,6 +23,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toaster";
 import { settingsApi } from "../../services/api";
+import { runInBackground } from "../../lib/run-in-background";
 
 interface Draft {
   host: string;
@@ -90,8 +91,8 @@ export function MailServerSettingsCard({ readOnly }: { readOnly: boolean }) {
     onSuccess: () => {
       toast.success("Saved");
       setDraft((d) => (d ? { ...d, password: "" } : d));
-      queryClient.invalidateQueries({ queryKey: ["settings", "mail"] });
-      queryClient.invalidateQueries({ queryKey: ["settings", "mail", "transport-status"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "mail"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "mail", "transport-status"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });

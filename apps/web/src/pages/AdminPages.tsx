@@ -137,6 +137,7 @@ import { ProjectMark } from "../components/ProjectMark";
 import { IDENTITY_COLORS } from "../lib/identity-colors";
 import { cn } from "../lib/utils";
 import { exportStamp, saveBlob } from "../lib/download";
+import { runInBackground } from "../lib/run-in-background";
 
 const roles = ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEAM_LEAD", "EMPLOYEE"];
 
@@ -323,7 +324,7 @@ function UsersPeopleTab() {
     onSuccess: (result) => {
       setSelected(new Set());
       setAllMatchingSelected(false);
-      queryClient.invalidateQueries({ queryKey: ["users"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["users"] }));
       // Bulk reset without an explicit password: each person got their OWN random one-time
       // password, and this response is the only place it will ever exist in plaintext.
       if (result.generatedPasswords?.length) {
@@ -414,7 +415,7 @@ function UsersPeopleTab() {
       }
       setDraft({ name: "", email: "", role: "EMPLOYEE", password: "", managerId: "none", designation: "", githubUsername: "", faceVerificationRequired: false });
       setCreateExtraRoles([]);
-      queryClient.invalidateQueries({ queryKey: ["users"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["users"] }));
     },
     onError: (err: any) => toast.error("Unable to create user", { description: serverMessage(err, "Try again.") })
   });
@@ -437,7 +438,7 @@ function UsersPeopleTab() {
     mutationFn: ({ id, payload }: { id: string; payload: any }) => userApi.update(id, payload),
     onSuccess: () => {
       toast.success("User updated");
-      queryClient.invalidateQueries({ queryKey: ["users"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["users"] }));
     },
     onError: (err: any) => toast.error("Update failed", { description: serverMessage(err, "Try again.") })
   });
@@ -446,7 +447,7 @@ function UsersPeopleTab() {
     mutationFn: userApi.remove,
     onSuccess: () => {
       toast.success("User deactivated");
-      queryClient.invalidateQueries({ queryKey: ["users"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["users"] }));
     },
     onError: (err: any) => toast.error("Delete failed", { description: serverMessage(err, "Try again.") }),
     onSettled: () => setPendingDelete(null)
@@ -476,7 +477,7 @@ function UsersPeopleTab() {
       toast.success(
         revokedSessions === 0 ? "No active sessions — already signed out" : `Signed out ${revokedSessions} session${revokedSessions === 1 ? "" : "s"}`
       );
-      queryClient.invalidateQueries({ queryKey: ["users"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["users"] }));
     },
     onError: (err: any) => toast.error("Sign-out failed", { description: serverMessage(err, "Try again.") }),
     onSettled: () => setPendingLogout(null)
@@ -1322,7 +1323,7 @@ export function ProjectsPage() {
       projectApi.update(payload.id, { name: payload.name.trim(), description: payload.description.trim() || null, color: payload.color }),
     onSuccess: () => {
       toast.success("Project updated");
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["projects"] }));
       setEditingProject(null);
     },
     onError: (err: any) => toast.error("Could not update project", { description: serverMessage(err, "Try again.") })
@@ -1333,7 +1334,7 @@ export function ProjectsPage() {
       payload.kind === "module" ? projectApi.renameModule(payload.id, payload.name) : projectApi.renameSubmodule(payload.id, payload.name),
     onSuccess: () => {
       toast.success("Renamed");
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["projects"] }));
     },
     onError: (err: any) => toast.error("Could not rename", { description: serverMessage(err, "Try again.") })
   });
@@ -1344,7 +1345,7 @@ export function ProjectsPage() {
     onSuccess: () => {
       toast.success("Project created");
       setDraft({ code: "", name: "", description: "" });
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["projects"] }));
     },
     onError: (err: any) => toast.error("Create failed", { description: serverMessage(err, "Try again.") })
   });
@@ -1356,7 +1357,7 @@ export function ProjectsPage() {
       projectApi.update(payload.id, { status: payload.status }),
     onSuccess: (_data, payload) => {
       toast.success(payload.status === "ARCHIVED" ? "Project archived — reactivate it here anytime" : "Project reactivated");
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["projects"] }));
     },
     onError: (err: any) => toast.error("Could not change project status", { description: serverMessage(err, "Try again.") }),
     onSettled: () => setPendingArchive(null)
@@ -1366,7 +1367,7 @@ export function ProjectsPage() {
     onSuccess: () => {
       toast.success("Module added");
       setModuleDraft((d) => ({ ...d, name: "" }));
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["projects"] }));
     },
     onError: (err: any) => toast.error("Could not add module", { description: serverMessage(err, "Try again.") })
   });
@@ -1375,7 +1376,7 @@ export function ProjectsPage() {
     onSuccess: () => {
       toast.success("Submodule added");
       setSubmoduleDraft((d) => ({ ...d, name: "" }));
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["projects"] }));
     },
     onError: (err: any) => toast.error("Could not add submodule", { description: serverMessage(err, "Try again.") })
   });
@@ -1828,7 +1829,7 @@ function ActivityTypesCard() {
     mutationFn: () => activityTypeApi.create(newName.trim()),
     onSuccess: (row) => {
       setNewName("");
-      refresh();
+      void refresh();
       toast.success(`"${row.name}" added`, { description: "It's in the Activity picker for everyone logging time." });
     },
     onError: (err: any) => toast.error("Could not add that activity", { description: serverMessage(err, "Try again.") })
@@ -1838,7 +1839,7 @@ function ActivityTypesCard() {
     mutationFn: (payload: { id: string; name: string }) => activityTypeApi.update(payload.id, { name: payload.name.trim() }),
     onSuccess: () => {
       setEditing(null);
-      refresh();
+      void refresh();
       toast.success("Renamed", { description: "Entries already logged keep the old name — they are a record of what was said at the time." });
     },
     onError: (err: any) => toast.error("Could not rename", { description: serverMessage(err, "Try again.") })
@@ -1847,7 +1848,7 @@ function ActivityTypesCard() {
   const toggle = useMutation({
     mutationFn: (payload: { id: string; isActive: boolean }) => activityTypeApi.update(payload.id, { isActive: payload.isActive }),
     onSuccess: (row) => {
-      refresh();
+      void refresh();
       toast.success(row.isActive ? `"${row.name}" is selectable again` : `"${row.name}" hidden from the picker`, {
         description: row.isActive ? undefined : "Existing entries are untouched and still readable."
       });
@@ -1859,7 +1860,7 @@ function ActivityTypesCard() {
     mutationFn: (id: string) => activityTypeApi.remove(id),
     onSuccess: () => {
       setPendingDelete(null);
-      refresh();
+      void refresh();
       toast.success("Activity deleted");
     },
     // The API's 409 carries the entry count and the advice to disable instead — surfaced verbatim
@@ -2099,7 +2100,7 @@ function ProjectBillingDialog({ project, onClose }: { project: any | null; onClo
       }),
     onSuccess: () => {
       toast.success("Billing settings saved");
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["projects"] }));
       onClose();
     },
     onError: (err: any) => toast.error("Could not save", { description: serverMessage(err, "Try again.") })
@@ -2248,8 +2249,8 @@ function ProjectTeamDialog({ project, onClose }: { project: { id: string; name: 
   }, [assignments.data]);
 
   function invalidate() {
-    queryClient.invalidateQueries({ queryKey: ["project-assignments", project?.id] });
-    queryClient.invalidateQueries({ queryKey: ["projects"] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["project-assignments", project?.id] }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["projects"] }));
   }
 
   const assign = useMutation({
@@ -2469,7 +2470,7 @@ export function ApprovalsPage() {
       timesheetApi.approve(id, faceVerificationId),
     onSuccess: () => {
       toast.success("Approved", { description: "Employee will receive an in-app + email confirmation." });
-      queryClient.invalidateQueries({ queryKey: ["timesheets"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["timesheets"] }));
       // The open detail dialog holds a snapshot taken before the decision. Leaving it up would
       // show a decided entry still offering Approve and Reject.
       setDetail(null);
@@ -2520,7 +2521,7 @@ export function ApprovalsPage() {
       setSelected(new Set());
       setBulkRejectOpen(false);
       setBulkRejectReason("");
-      queryClient.invalidateQueries({ queryKey: ["timesheets"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["timesheets"] }));
     },
     onError: (err: any) => toast.error("Bulk decision failed", { description: serverMessage(err, "Try again.") })
   });
@@ -2536,7 +2537,7 @@ export function ApprovalsPage() {
     mutationFn: ({ id, reason }: { id: string; reason: string }) => timesheetApi.reject(id, reason),
     onSuccess: () => {
       toast.success("Rejected with reason", { description: "The submitter has been notified." });
-      queryClient.invalidateQueries({ queryKey: ["timesheets"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["timesheets"] }));
       setRejectTarget(null);
       setRejectReason("");
       setDetail(null);
@@ -3329,7 +3330,7 @@ function AttestationsCard() {
     onSuccess: (row) => {
       toast.success(`Attestation ${row.reference} issued`);
       setPreview(null);
-      queryClient.invalidateQueries({ queryKey: ["attestations", projectId] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["attestations", projectId] }));
     },
     onError: (err: any) => handleGateError(err, "Couldn't issue the attestation")
   });
@@ -3340,7 +3341,7 @@ function AttestationsCard() {
       toast.success("Attestation voided");
       setVoiding(null);
       setVoidReason("");
-      queryClient.invalidateQueries({ queryKey: ["attestations", projectId] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["attestations", projectId] }));
     },
     onError: (err: any) => toast.error("Couldn't void it", { description: serverMessage(err, "Try again.") })
   });
@@ -3551,7 +3552,7 @@ function AttestationShareDialog({ attestation, onClose }: { attestation: Attesta
     mutationFn: () => attestationApi.shares.create(attestation!.id, { scope, expiresInDays: Number(expiresInDays) }),
     onSuccess: (data) => {
       setMinted({ token: data.token, expiresAt: data.expiresAt });
-      queryClient.invalidateQueries({ queryKey: ["attestation-shares", attestation?.id] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["attestation-shares", attestation?.id] }));
     },
     onError: (err: any) => {
       if (err?.response?.status === 403) {
@@ -3566,7 +3567,7 @@ function AttestationShareDialog({ attestation, onClose }: { attestation: Attesta
     mutationFn: (linkId: string) => attestationApi.shares.revoke(attestation!.id, linkId),
     onSuccess: () => {
       toast.success("Link revoked");
-      queryClient.invalidateQueries({ queryKey: ["attestation-shares", attestation?.id] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["attestation-shares", attestation?.id] }));
     },
     onError: (err: any) => toast.error("Couldn't revoke", { description: serverMessage(err, "Try again.") })
   });
@@ -3639,10 +3640,10 @@ function AttestationShareDialog({ attestation, onClose }: { attestation: Attesta
                     size="sm"
                     variant="ghost"
                     onClick={() => {
-                      copyText(shareUrl).then(() => {
+                      runInBackground(copyText(shareUrl).then(() => {
                         setCopied(true);
                         setTimeout(() => setCopied(false), 1500);
-                      });
+                      }));
                     }}
                   >
                     {copied ? <Check className="h-3.5 w-3.5" /> : <Download className="h-3.5 w-3.5" />}

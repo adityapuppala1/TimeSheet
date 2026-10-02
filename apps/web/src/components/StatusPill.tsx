@@ -26,6 +26,7 @@ import { ticketApi } from "../services/api";
 import { Badge } from "./ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { toast } from "./ui/toaster";
+import { runInBackground } from "../lib/run-in-background";
 
 const label = (s: TicketStatus) => s.replace(/_/g, " ");
 
@@ -37,8 +38,8 @@ export function StatusPill({ ticketId, status, onOpenTicket, className }: Readon
     mutationFn: (next: TicketStatus) => ticketApi.updateStatus(ticketId, next),
     onSuccess: () => {
       toast.success("Status updated");
-      queryClient.invalidateQueries({ queryKey: ["tickets"] });
-      queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["tickets"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] }));
     },
     onError: (err: any) =>
       toast.error("Could not change the status", {

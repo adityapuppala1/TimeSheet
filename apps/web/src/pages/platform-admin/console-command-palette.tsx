@@ -80,7 +80,7 @@ export function ConsoleCommandPalette({ open, onOpenChange, onSignOut }: { open:
 
   const jump = (to: string) => {
     onOpenChange(false);
-    navigate(to);
+    void navigate(to);
   };
 
   return (

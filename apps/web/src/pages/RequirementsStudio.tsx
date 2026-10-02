@@ -40,6 +40,7 @@ function emptyReason(show: StudioFilters["show"]): string {
   return "No document matches these filters.";
 }
 import { requirementsDocApi, type RequirementsDocRow, type RequirementsImportProposedTurnRow } from "../services/api";
+import { runInBackground } from "../lib/run-in-background";
 
 const IMPORT_ACCEPT = {
   "application/pdf": [".pdf"],
@@ -150,9 +151,9 @@ export function RequirementsStudioPage() {
   const create = useMutation({
     mutationFn: () => requirementsDocApi.create({ title: title.trim(), docType }),
     onSuccess: (doc) => {
-      queryClient.invalidateQueries({ queryKey: ["requirements-docs"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["requirements-docs"] }));
       resetDialog();
-      navigate(`/app/requirements/${doc.id}`);
+      void navigate(`/app/requirements/${doc.id}`);
     },
     onError: (err: any) => toast.error("Could not start the interview", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -164,7 +165,7 @@ export function RequirementsStudioPage() {
       const doc = importDocId ? { id: importDocId } : await requirementsDocApi.create({ title: title.trim(), docType });
       if (!importDocId) {
         setImportDocId(doc.id);
-        queryClient.invalidateQueries({ queryKey: ["requirements-docs"] });
+        runInBackground(queryClient.invalidateQueries({ queryKey: ["requirements-docs"] }));
       }
       return { docId: doc.id, result: await requirementsDocApi.importAnalyze(doc.id, importFile) };
     },
@@ -204,10 +205,10 @@ export function RequirementsStudioPage() {
       await requirementsDocApi.interviewTurn(importDocId, {});
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["requirements-docs"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["requirements-docs"] }));
       const docId = importDocId!;
       resetDialog();
-      navigate(`/app/requirements/${docId}`);
+      void navigate(`/app/requirements/${docId}`);
     },
     onError: (err: any) => {
       setImportStage("reviewing");
@@ -220,7 +221,7 @@ export function RequirementsStudioPage() {
     // transcript — identical to any freshly-created, not-yet-started document.
     const docId = importDocId;
     resetDialog();
-    if (docId) navigate(`/app/requirements/${docId}`);
+    if (docId) void navigate(`/app/requirements/${docId}`);
   }
 
   function updateImportRowAnswer(index: number, answer: string) {

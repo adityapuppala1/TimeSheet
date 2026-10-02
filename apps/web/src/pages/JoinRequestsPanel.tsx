@@ -26,6 +26,7 @@ import { toast } from "../components/ui/toaster";
 import { billingApi, joinRequestApi, type JoinRequestRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { approveErrorMessage, expiresInLabel, grantableRoles, seatLine } from "../utils/join-requests";
+import { runInBackground } from "../lib/run-in-background";
 
 export const PENDING_JOIN_REQUESTS_KEY = ["join-requests", "pending"] as const;
 
@@ -56,9 +57,9 @@ function ApproveDialog({ request, onClose }: { request: JoinRequestRow | null; o
       toast.success(result.linked ? `${request!.name} already had an account — linked` : `${request!.name} was added`, {
         description: result.linked ? "No new seat was used." : "They've been emailed a link to choose their password."
       });
-      queryClient.invalidateQueries({ queryKey: ["join-requests"] });
-      queryClient.invalidateQueries({ queryKey: ["users"] });
-      queryClient.invalidateQueries({ queryKey: ["billing", "status"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["join-requests"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["users"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["billing", "status"] }));
       onClose();
     },
     onError: (err) => setRefusal(approveErrorMessage(err))
@@ -128,7 +129,7 @@ function DeclineDialog({ request, onClose }: { request: JoinRequestRow | null; o
     mutationFn: () => joinRequestApi.decline(request!.id, note.trim()),
     onSuccess: () => {
       toast.success(`Declined ${request!.name}'s request`, { description: "They've been told by email." });
-      queryClient.invalidateQueries({ queryKey: ["join-requests"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["join-requests"] }));
       setNote("");
       onClose();
     },

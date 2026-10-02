@@ -35,6 +35,7 @@ import { cn } from "../../lib/utils";
 import { platformAdminOrgApi, type OrgListRow, type OrgStatus, type PlanTier, type ResetAdminPasswordResult } from "../../services/platform-admin-api";
 import { exportCsv, type CsvColumn } from "../../utils/console-csv";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, FieldGrid, OrgStatusPill, PRIMARY_BTN, TierPill, Toolbar } from "./console-ui";
+import { runInBackground } from "../../lib/run-in-background";
 
 /* The status pill is `console-ui.tsx`'s `OrgStatusPill` now — one map for the whole console. The
    local copy here was missing GRACE entirely (it renders `undefined` as a variant), which is
@@ -276,7 +277,7 @@ export function PlatformAdminOrganizations() {
         onOpenChange={(open) => !open && setEditing(null)}
         onSaved={() => {
           setEditing(null);
-          queryClient.invalidateQueries({ queryKey: ["platform-admin", "organizations"] });
+          runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "organizations"] }));
         }}
       />
       <DomainsDialog org={domainsFor} onOpenChange={(open) => !open && setDomainsFor(null)} />
@@ -286,7 +287,7 @@ export function PlatformAdminOrganizations() {
         onOpenChange={(open) => !open && setProvisioning(null)}
         onProvisioned={() => {
           setProvisioning(null);
-          queryClient.invalidateQueries({ queryKey: ["platform-admin", "organizations"] });
+          runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "organizations"] }));
         }}
       />
     </ConsolePage>

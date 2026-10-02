@@ -38,6 +38,7 @@ import { copyText } from "../../lib/clipboard";
 import { cn } from "../../lib/utils";
 import { EmptyState } from "../../components/ui/empty-state";
 import { agoLabel, mcpCredentialsVerdict, mcpEndpointVerdict, mcpToolsVerdict } from "../../lib/settings-state";
+import { runInBackground } from "../../lib/run-in-background";
 
 const PREFIX = "mcp";
 const OPEN_KEY = "ts.settings.mcp.open";
@@ -51,10 +52,10 @@ function CopyableSecret({ value }: { value: string }) {
         size="sm"
         variant="ghost"
         onClick={() => {
-          copyText(value).then(() => {
+          runInBackground(copyText(value).then(() => {
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
-          });
+          }));
         }}
       >
         {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
@@ -175,7 +176,7 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
       setNewUserId("");
       setNewTools([]);
       setNewExpiry("");
-      queryClient.invalidateQueries({ queryKey: ["settings", "mcp"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "mcp"] }));
     },
     onError: (err: any) =>
       toast.error("Could not create credential", { description: err?.response?.data?.message ?? "Try again." })
@@ -184,7 +185,7 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
     mutationFn: (id: string) => settingsApi.revokeMcpCredential(id),
     onSuccess: () => {
       toast.success("Credential revoked");
-      queryClient.invalidateQueries({ queryKey: ["settings", "mcp"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "mcp"] }));
     },
     onError: () => toast.error("Could not revoke", { description: "Try again." })
   });

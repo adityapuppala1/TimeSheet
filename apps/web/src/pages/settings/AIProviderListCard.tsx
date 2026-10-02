@@ -92,7 +92,7 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
     mutationFn: (id: string) => settingsApi.deleteAiProvider(id),
     onSuccess: () => {
       toast.success("Provider removed");
-      invalidate();
+      void invalidate();
     },
     onError: (err: any) => toast.error("Could not remove", { description: err?.response?.data?.message ?? "Try again." })
   });

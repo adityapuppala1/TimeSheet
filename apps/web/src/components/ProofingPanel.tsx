@@ -33,6 +33,7 @@ import { Skeleton } from "./ui/skeleton";
 import { Textarea } from "./ui/textarea";
 import { usePlanningFeatures } from "../lib/use-planning";
 import { fileUrl, proofApi, type ProofAnnotationRow, type TicketAttachmentRow } from "../services/api";
+import { runInBackground } from "../lib/run-in-background";
 
 // Local rather than imported from Tickets.tsx: this panel is rendered BY that page, so importing
 // back into it would close an import cycle. Same one-liner the approvals panel keeps for the same
@@ -78,7 +79,7 @@ export function ProofingPanel({ attachments }: { attachments: TicketAttachmentRo
   });
 
   function refresh() {
-    queryClient.invalidateQueries({ queryKey: ["proofs", selected?.id] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["proofs", selected?.id] }));
   }
 
   const add = useMutation({

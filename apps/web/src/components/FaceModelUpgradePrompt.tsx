@@ -26,6 +26,7 @@ import { useAuthStore } from "../store/auth";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 import { GuidedFaceEnrollment } from "./GuidedFaceEnrollment";
+import { runInBackground } from "../lib/run-in-background";
 
 /** Per-user so a shared machine doesn't snooze the prompt for the next person to sign in. */
 const snoozeKey = (userId: string) => `face.retrain-snooze.${userId}`;
@@ -74,7 +75,7 @@ export function FaceModelUpgradePrompt() {
       toast.success("Face model retrained", {
         description: `${result.templatesStored} angles stored — identity checks should stop failing now.`
       });
-      queryClient.invalidateQueries({ queryKey: ["face", "status"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["face", "status"] }));
       setStarted(false);
       setOpen(false);
     },

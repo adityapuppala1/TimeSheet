@@ -54,6 +54,7 @@ import {
   shortDateTime,
   Toolbar
 } from "./console-ui";
+import { runInBackground } from "../../lib/run-in-background";
 
 const STATUS_VARIANT: Record<PlatformEmailLogRow["status"], "success" | "destructive" | "warning"> = { SENT: "success", FAILED: "destructive", SKIPPED: "warning" };
 
@@ -200,7 +201,7 @@ function TemplateEditor({ template }: { template: PlatformEmailTemplateRow }) {
     mutationFn: () => platformAdminConsoleApi.saveEmailTemplate(template.key, { subject, bodyHtml: body, enabled }),
     onSuccess: () => {
       toast.success("Template saved");
-      invalidate();
+      void invalidate();
     },
     onError: (e) => toast.error("Could not save", { description: errorMessageOf(e) })
   });
@@ -208,7 +209,7 @@ function TemplateEditor({ template }: { template: PlatformEmailTemplateRow }) {
     mutationFn: () => platformAdminConsoleApi.revertEmailTemplate(template.key),
     onSuccess: () => {
       toast.success("Reverted to the shipped version");
-      invalidate();
+      void invalidate();
     }
   });
   const test = useMutation({
@@ -216,7 +217,7 @@ function TemplateEditor({ template }: { template: PlatformEmailTemplateRow }) {
     onSuccess: (r) => {
       toast.success(`Test sent to ${r.to}`, { description: r.subject });
       setTestOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["platform-admin", "email-template-log", template.key] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "email-template-log", template.key] }));
     },
     onError: (e) => toast.error("Test NOT delivered", { description: errorMessageOf(e) })
   });
@@ -351,7 +352,7 @@ function LogTable({ rows, compact = false }: { rows: PlatformEmailLogRow[]; comp
     mutationFn: (id: string) => platformAdminConsoleApi.resendEmail(id),
     onSuccess: () => {
       toast.success("Resent");
-      queryClient.invalidateQueries({ queryKey: ["platform-admin"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin"] }));
     },
     onError: (e) => toast.error("Resend NOT delivered", { description: errorMessageOf(e) })
   });

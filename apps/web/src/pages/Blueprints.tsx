@@ -48,6 +48,7 @@ import { toast } from "../components/ui/toaster";
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 import { blueprintApi, copilotApi, projectApi, type BlueprintRow } from "../services/api";
+import { runInBackground } from "../lib/run-in-background";
 
 /** Today as `YYYY-MM-DD` in the viewer's own clock — a start date is a wall-clock choice, and
  *  toISOString() would hand somebody east of Greenwich yesterday. */
@@ -129,7 +130,7 @@ function BlueprintCard({ blueprint, canUse, onUse }: { blueprint: BlueprintRow; 
     mutationFn: () => blueprintApi.remove(blueprint.id),
     onSuccess: () => {
       toast.success("Blueprint deleted", { description: "Work already created from it is untouched." });
-      queryClient.invalidateQueries({ queryKey: ["blueprints"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["blueprints"] }));
     },
     onError: (err: any) => toast.error("Could not delete", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -224,15 +225,15 @@ function UseBlueprintDialog({ blueprintId, onClose }: { blueprintId: string | nu
   });
 
   const done = () => {
-    queryClient.invalidateQueries({ queryKey: ["plan"] });
-    queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["plan"] }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["tickets"] }));
     onClose();
   };
 
   const propose = useMutation({
     mutationFn: () => copilotApi.blueprintInstantiate({ blueprintId: blueprintId!, projectId, startDate }),
     onSuccess: (outcome) => {
-      queryClient.invalidateQueries({ queryKey: ["ai-proposals"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ai-proposals"] }));
       toast.success(`${outcome.items} item${outcome.items === 1 ? "" : "s"} proposed`, {
         description: "Nothing has been created yet — accept the rows you want.",
         action: { label: "Review", onClick: () => navigate("/app/proposals") }
@@ -374,7 +375,7 @@ function DeriveDialog({ open, onClose }: { open: boolean; onClose: () => void })
     mutationFn: () => blueprintApi.derive(projectId, name.trim()),
     onSuccess: (created) => {
       toast.success(`"${created.name}" saved`, { description: "Its dates were converted to relative offsets, so it travels." });
-      queryClient.invalidateQueries({ queryKey: ["blueprints"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["blueprints"] }));
       setName("");
       setProjectId("");
       onClose();

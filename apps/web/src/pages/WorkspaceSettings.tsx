@@ -110,6 +110,7 @@ import { AISettingsTab } from "./settings/AISettingsTab";
 import { PageHeader } from "../components/PageHeader";
 import { SectionBoard, SettingsSection, useOpenSections, type BoardEntry } from "../components/settings/settings-sections";
 import { countOf, liveOrError, liveOrOff } from "../lib/settings-state";
+import { runInBackground } from "../lib/run-in-background";
 
 interface ToggleRow {
   key: keyof NotificationPreferences;
@@ -405,7 +406,7 @@ function useUpdate() {
       toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["settings", "notifications"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "notifications"] }));
     }
   });
 }
@@ -954,7 +955,7 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
     mutationFn: (payload: Partial<GlobalTicketSettings>) => settingsApi.updateTicketing(payload),
     onSuccess: () => {
       toast.success("Saved");
-      queryClient.invalidateQueries({ queryKey: ["settings", "ticketing"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "ticketing"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -966,7 +967,7 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
     onSuccess: () => {
       toast.success("Type added");
       setNewType({ name: "", color: "#3B82F6" });
-      queryClient.invalidateQueries({ queryKey: ["ticket-types"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ticket-types"] }));
     },
     onError: (err: any) => toast.error("Could not add type", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -983,7 +984,7 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
     onSuccess: () => {
       toast.success("Label added");
       setNewLabel({ name: "", color: "#8B5CF6" });
-      queryClient.invalidateQueries({ queryKey: ["labels"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["labels"] }));
     },
     onError: (err: any) => toast.error("Could not add label", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -1305,7 +1306,7 @@ function TicketRulesCard({ readOnly }: { readOnly: boolean }) {
     onSuccess: () => {
       toast.success("Rule added");
       setDraft(emptyDraft);
-      invalidate();
+      void invalidate();
     },
     onError: (err: any) => toast.error("Could not add rule", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -1318,7 +1319,7 @@ function TicketRulesCard({ readOnly }: { readOnly: boolean }) {
     mutationFn: (id: string) => settingsApi.deleteTicketRule(id),
     onSuccess: () => {
       toast.success("Rule deleted");
-      invalidate();
+      void invalidate();
     },
     onError: () => toast.error("Could not delete rule", { description: "Try again." })
   });
@@ -1556,7 +1557,7 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
     onSuccess: () => {
       toast.success("Saved");
       setDraft((d) => (d ? { ...d, imapPassword: "" } : d));
-      queryClient.invalidateQueries({ queryKey: ["settings", "email-intake"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "email-intake"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -1593,7 +1594,7 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
     onSuccess: () => {
       toast.success("Routing rule added");
       setNewRule({ matchType: "TO_ADDRESS", matchValue: "", projectId: "", defaultModuleId: "" });
-      queryClient.invalidateQueries({ queryKey: ["email-intake", "routing-rules"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["email-intake", "routing-rules"] }));
     },
     onError: (err: any) => toast.error("Could not add rule", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -1625,7 +1626,7 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
     onSuccess: () => {
       toast.success("Routing rule updated");
       setEditingRuleId(null);
-      queryClient.invalidateQueries({ queryKey: ["email-intake", "routing-rules"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["email-intake", "routing-rules"] }));
     },
     onError: (err: any) => toast.error("Could not update rule", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -1637,7 +1638,7 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
     onSuccess: () => {
       toast.success("Assignee rule saved");
       setNewAssignee({ projectId: "", moduleId: "", defaultAssigneeId: "" });
-      queryClient.invalidateQueries({ queryKey: ["email-intake", "assignee-rules"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["email-intake", "assignee-rules"] }));
     },
     onError: (err: any) => toast.error("Could not save rule", { description: err?.response?.data?.message ?? "Try again." })
   });

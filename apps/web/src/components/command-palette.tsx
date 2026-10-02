@@ -192,7 +192,7 @@ export function CommandPalette({ open, onOpenChange, onOpenShortcuts }: Props) {
 
   function jump(to: string) {
     onOpenChange(false);
-    navigate(to);
+    void navigate(to);
   }
 
   /* No origin passed, and that is on purpose: this path is reached from a keyboard-driven palette,
@@ -216,7 +216,7 @@ export function CommandPalette({ open, onOpenChange, onOpenShortcuts }: Props) {
     logoutStore();
     queryClient.clear();
     toast.success("Signed out. See you again soon.");
-    navigate("/login");
+    void navigate("/login");
   }
 
   return (

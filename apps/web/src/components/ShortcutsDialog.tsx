@@ -45,7 +45,7 @@ export function useGlobalShortcuts(handlers: { onPalette: () => void; onHelp: ()
     const run = (def: ShortcutDef) => {
       if (def.id === "palette") handlersRef.current.onPalette();
       else if (def.id === "help") handlersRef.current.onHelp();
-      else if (def.to) navigate(def.to);
+      else if (def.to) void navigate(def.to);
     };
     const handler = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return;

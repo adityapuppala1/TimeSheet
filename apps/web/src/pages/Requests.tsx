@@ -59,6 +59,7 @@ import {
   type RequestFormRow
 } from "../services/api";
 import { copyText } from "../lib/clipboard";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -105,7 +106,7 @@ export function RequestsPage() {
     mutationFn: (id: string) => requestFormApi.accept(id),
     onSuccess: () => {
       toast.success("Accepted");
-      queryClient.invalidateQueries({ queryKey: ["request-forms", "submissions"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["request-forms", "submissions"] }));
     },
     onError: (err: any) => toast.error("Could not accept", { description: serverMessage(err, "Try again.") })
   });
@@ -113,7 +114,7 @@ export function RequestsPage() {
     mutationFn: (id: string) => requestFormApi.reject(id),
     onSuccess: () => {
       toast.success("Rejected", { description: "The ticket it created has been removed." });
-      queryClient.invalidateQueries({ queryKey: ["request-forms", "submissions"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["request-forms", "submissions"] }));
     },
     onError: (err: any) => toast.error("Could not reject", { description: serverMessage(err, "Try again.") })
   });
@@ -131,7 +132,7 @@ export function RequestsPage() {
           ? "Copy the URL now — it is shown once and can't be recovered later."
           : "The old URL is dead — republishing mints a new one."
       });
-      queryClient.invalidateQueries({ queryKey: ["request-forms"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["request-forms"] }));
     },
     onError: (err: any) => toast.error("Could not change publishing", { description: serverMessage(err, "Try again.") })
   });
@@ -141,7 +142,7 @@ export function RequestsPage() {
       toast.success(result.deleted ? "Form deleted" : "Form deactivated", {
         description: result.deleted ? undefined : `It has ${result.submissions} submission(s), so it was hidden rather than deleted.`
       });
-      queryClient.invalidateQueries({ queryKey: ["request-forms"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["request-forms"] }));
     },
     onError: (err: any) => toast.error("Could not remove", { description: serverMessage(err, "Try again.") })
   });
@@ -457,7 +458,7 @@ function FormBuilderDialog({
     },
     onSuccess: () => {
       toast.success(editing ? "Form saved" : "Form created");
-      queryClient.invalidateQueries({ queryKey: ["request-forms"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["request-forms"] }));
       onOpenChange(false);
     },
     onError: (err: any) => toast.error("Could not save", { description: serverMessage(err, "Check the questions and try again.") })

@@ -315,7 +315,7 @@ export function PlatformAdminLayout() {
   const handleLogout = async () => {
     await platformAdminAuthApi.logout().catch(() => undefined);
     logout();
-    navigate("/platform-admin/login");
+    void navigate("/platform-admin/login");
   };
 
   // `useCallback`, because the hotkey hook subscribes to `window` in an effect keyed on this

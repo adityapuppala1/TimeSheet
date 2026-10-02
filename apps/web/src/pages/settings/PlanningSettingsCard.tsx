@@ -48,6 +48,7 @@ import {
   type WorkflowRow,
   type WorkStatusCategoryValue
 } from "../../services/api";
+import { runInBackground } from "../../lib/run-in-background";
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -144,7 +145,7 @@ function PlanningTogglesCard({ readOnly, config }: { readOnly: boolean; config: 
     mutationFn: (patch: Partial<PlanningSettings>) => planningApi.updateSettings(patch),
     onSuccess: () => {
       toast.success("Saved");
-      queryClient.invalidateQueries({ queryKey: ["planning"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["planning"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: serverMessage(err, "Try again.") })
   });
@@ -254,7 +255,7 @@ function WorkingWeekCard({ readOnly, config }: { readOnly: boolean; config: Plan
       planningApi.updateSettings({ workingDays: days, defaultWeeklyCapacityHours: Number(capacity) }),
     onSuccess: () => {
       toast.success("Saved");
-      queryClient.invalidateQueries({ queryKey: ["planning"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["planning"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: serverMessage(err, "Try again.") })
   });
@@ -370,7 +371,7 @@ function CustomFieldsCard({ readOnly, config }: { readOnly: boolean; config: Pla
     onSuccess: () => {
       toast.success("Field added");
       setDraft(blank);
-      queryClient.invalidateQueries({ queryKey: ["planning", "custom-fields"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["planning", "custom-fields"] }));
     },
     onError: (err: any) => toast.error("Could not add field", { description: serverMessage(err, "Try again.") })
   });
@@ -383,7 +384,7 @@ function CustomFieldsCard({ readOnly, config }: { readOnly: boolean; config: Pla
       toast.success(result.deleted ? "Field removed" : "Field deactivated", {
         description: result.deleted ? undefined : "It had saved values, so it was hidden instead of deleted."
       });
-      queryClient.invalidateQueries({ queryKey: ["planning", "custom-fields"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["planning", "custom-fields"] }));
     },
     onError: (err: any) => toast.error("Could not remove field", { description: serverMessage(err, "Try again.") })
   });
@@ -584,7 +585,7 @@ function WorkflowsCard({ readOnly, config }: { readOnly: boolean; config: Planni
     mutationFn: (id: string) => planningApi.deleteWorkflow(id),
     onSuccess: () => {
       toast.success("Workflow deleted");
-      queryClient.invalidateQueries({ queryKey: ["planning", "workflows"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["planning", "workflows"] }));
     },
     onError: (err: any) => toast.error("Could not delete", { description: serverMessage(err, "Try again.") })
   });
@@ -619,7 +620,7 @@ function WorkflowsCard({ readOnly, config }: { readOnly: boolean; config: Planni
     },
     onSuccess: () => {
       toast.success("Workflow duplicated", { description: "Rename it and edit its statuses." });
-      queryClient.invalidateQueries({ queryKey: ["planning", "workflows"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["planning", "workflows"] }));
     },
     onError: (err: any) => toast.error("Could not duplicate", { description: serverMessage(err, "Try again.") })
   });

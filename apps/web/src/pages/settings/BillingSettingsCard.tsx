@@ -23,6 +23,7 @@ import { StripeMark } from "../../components/ui/connector-marks";
 import { Skeleton } from "../../components/ui/skeleton";
 import { toast } from "../../components/ui/toaster";
 import { billingApi, type BillingInvoice } from "../../services/api";
+import { runInBackground } from "../../lib/run-in-background";
 
 const TIER_LABEL: Record<string, string> = { STARTER: "Starter", TEAM: "Team", ENTERPRISE: "Enterprise" };
 
@@ -101,8 +102,8 @@ export function BillingSettingsCard({ readOnly }: { readOnly: boolean }) {
   });
 
   const refreshBilling = () => {
-    queryClient.invalidateQueries({ queryKey: ["billing", "status"] });
-    queryClient.invalidateQueries({ queryKey: ["billing", "invoices"] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["billing", "status"] }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["billing", "invoices"] }));
   };
 
   const [searchParams, setSearchParams] = useSearchParams();

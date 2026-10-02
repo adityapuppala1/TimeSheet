@@ -47,6 +47,7 @@ import { toast } from "../../components/ui/toaster";
 import { GoogleMark, LdapMark, MicrosoftMark, SamlMark, ScimMark } from "../../components/ui/provider-marks";
 import { copyText } from "../../lib/clipboard";
 import { apiUrl, SERVER_ORIGIN, settingsApi, type SsoProviderConfig, type SsoTestResult } from "../../services/api";
+import { runInBackground } from "../../lib/run-in-background";
 
 const SSO_PROVIDER_LABEL: Record<"GOOGLE" | "MICROSOFT", string> = { GOOGLE: "Google", MICROSOFT: "Microsoft / Azure AD" };
 
@@ -127,7 +128,7 @@ function SsoVerification({
     mutationFn: () => settingsApi.testSso(provider, provider === "ldap" && probeEmail ? { probeEmail } : {}),
     onSuccess: (data) => {
       setResult(data);
-      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "sso"] }));
     },
     onError: (err: any) => {
       // A 422 here is "there is nothing saved to test yet", which is guidance rather than a fault.
@@ -244,7 +245,7 @@ function OidcProviderCard({ provider, config, readOnly, isLoading, open, onToggl
     onSuccess: () => {
       toast.success("Saved");
       setClientSecret("");
-      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "sso"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -382,7 +383,7 @@ function SamlProviderCard({ config, readOnly, isLoading, open, onToggle }: CardP
     onSuccess: () => {
       toast.success("Saved");
       setIdpCertificate("");
-      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "sso"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -491,7 +492,7 @@ function LdapProviderCard({ config, readOnly, isLoading, open, onToggle }: CardP
     onSuccess: () => {
       toast.success("Saved");
       setLdapBindCredential("");
-      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "sso"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -600,10 +601,10 @@ function CopyableUrl({ label, url }: { label: string; url: string }) {
           size="sm"
           variant="ghost"
           onClick={() => {
-            copyText(url).then(() => {
+            runInBackground(copyText(url).then(() => {
               setCopied(true);
               setTimeout(() => setCopied(false), 1500);
-            });
+            }));
           }}
         >
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
@@ -640,7 +641,7 @@ function ScimProvisioningCard({
     mutationFn: settingsApi.rotateScimToken,
     onSuccess: (res) => {
       setRevealedToken(res.token);
-      queryClient.invalidateQueries({ queryKey: ["settings", "scim"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "scim"] }));
       toast.success("SCIM token generated", { description: "Copy it now — it won't be shown again." });
     },
     onError: () => toast.error("Could not generate a token", { description: "Try again." })
@@ -650,7 +651,7 @@ function ScimProvisioningCard({
     mutationFn: settingsApi.disableScim,
     onSuccess: () => {
       setRevealedToken(null);
-      queryClient.invalidateQueries({ queryKey: ["settings", "scim"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "scim"] }));
       toast.success("SCIM disabled");
     },
     onError: () => toast.error("Could not disable SCIM", { description: "Try again." })
@@ -760,7 +761,7 @@ export function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
     mutationFn: (payload: { passwordLoginEnabled?: boolean; requireSsoOnly?: boolean }) => settingsApi.updateAuthMethod(payload),
     onSuccess: () => {
       toast.success("Saved");
-      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "sso"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });

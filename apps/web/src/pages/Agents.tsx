@@ -55,6 +55,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/toolti
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 import { agentRosterApi, type AgentCapabilityRow, type AgentRosterEntry, type AgentTemplateRow } from "../services/api";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -112,7 +113,7 @@ export function AgentsPage() {
           ? "It will run at the autonomy each capability resolves to — nothing higher."
           : "It will not run again until switched back on."
       });
-      invalidate();
+      void invalidate();
     },
     onError: (err) => toast.error("Could not change that", { description: serverMessage(err, "Try again.") })
   });
@@ -121,8 +122,8 @@ export function AgentsPage() {
     mutationFn: (templateKey: string) => agentRosterApi.install(templateKey),
     onSuccess: (entry) => {
       toast.success(`${entry.name} added`, { description: "It arrives switched off. Review what it can do, then turn it on." });
-      invalidate();
-      queryClient.invalidateQueries({ queryKey: ["agents", "catalogue"] });
+      void invalidate();
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["agents", "catalogue"] }));
     },
     onError: (err) => toast.error("Could not add that", { description: serverMessage(err, "Try again.") })
   });
@@ -131,8 +132,8 @@ export function AgentsPage() {
     mutationFn: (id: string) => agentRosterApi.retire(id),
     onSuccess: () => {
       toast.success("Agent retired", { description: "Its past runs and audit trail are kept — the identity is deactivated, not deleted." });
-      invalidate();
-      queryClient.invalidateQueries({ queryKey: ["agents", "catalogue"] });
+      void invalidate();
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["agents", "catalogue"] }));
     },
     onError: (err) => toast.error("Could not retire", { description: serverMessage(err, "Try again.") })
   });
@@ -314,8 +315,8 @@ export function AgentsPage() {
           capabilities={catalogue.data?.capabilities ?? []}
           onClose={() => setBuilding(false)}
           onSaved={() => {
-            invalidate();
-            queryClient.invalidateQueries({ queryKey: ["agents", "catalogue"] });
+            void invalidate();
+            runInBackground(queryClient.invalidateQueries({ queryKey: ["agents", "catalogue"] }));
           }}
         />
       )}

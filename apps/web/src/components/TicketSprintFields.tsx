@@ -19,6 +19,7 @@ import { sprintApi, ticketApi } from "../services/api";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { runInBackground } from "../lib/run-in-background";
 
 const NONE = "__none__";
 
@@ -43,9 +44,9 @@ export function TicketSprintFields({
     mutationFn: (patch: { sprintId?: string | null; storyPoints?: number | null }) => ticketApi.update(ticketId, patch),
     onSuccess: () => {
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
-      queryClient.invalidateQueries({ queryKey: ["tickets"] });
-      queryClient.invalidateQueries({ queryKey: ["sprints"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["tickets"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["sprints"] }));
     },
     onError: (err: any) => setError(err?.response?.data?.message ?? "Could not save.")
   });

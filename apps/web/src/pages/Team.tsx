@@ -37,6 +37,7 @@ import { fileUrl, teamApi, timesheetApi, type TeamReport } from "../services/api
 import { permissions } from "@timesheet/shared";
 import { useAuthStore } from "../store/auth";
 import { useCardLayout } from "../lib/use-media-query";
+import { runInBackground } from "../lib/run-in-background";
 
 function initialsFor(name?: string) {
   if (!name) return "?";
@@ -88,8 +89,8 @@ export function Team() {
     mutationFn: (id: string) => timesheetApi.approve(id),
     onSuccess: () => {
       toast.success("Approved");
-      queryClient.invalidateQueries({ queryKey: ["team"] });
-      queryClient.invalidateQueries({ queryKey: ["timesheets"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["team"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["timesheets"] }));
     },
     onError: (err: any) => toast.error("Approval failed", { description: err?.response?.data?.message ?? "Try again." })
   });

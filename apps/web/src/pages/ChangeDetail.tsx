@@ -62,6 +62,7 @@ import { ChangeRunbook, ChangeSlaLadder } from "../components/change/ChangeRunbo
 import { ChangeContextTab } from "../components/change/ChangeContextTab";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -235,8 +236,8 @@ export function ChangeDetailPage() {
   const change = detail.data;
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["change", id] });
-    queryClient.invalidateQueries({ queryKey: ["changes"] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["change", id] }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["changes"] }));
   };
 
   const save = useMutation({

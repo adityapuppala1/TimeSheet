@@ -56,7 +56,7 @@ export function PlatformAdminApprovals() {
   const approve = useMutation({
     mutationFn: (id: string) => platformAdminConsoleApi.approveRequest(id),
     onSuccess: (result) => {
-      invalidate();
+      void invalidate();
       toast.success("Approved and done", { description: `${result.action} ran against the platform as it is now, not as it was when it was asked.` });
     },
     onError: (e) => toast.error("Not approved", { description: errorMessageOf(e) })
@@ -67,7 +67,7 @@ export function PlatformAdminApprovals() {
     onSuccess: () => {
       setRejecting(null);
       setNote("");
-      invalidate();
+      void invalidate();
       toast.success("Refused");
     },
     onError: (e) => toast.error("Not refused", { description: errorMessageOf(e) })

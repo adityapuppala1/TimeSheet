@@ -27,6 +27,7 @@ import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { runInBackground } from "../lib/run-in-background";
 
 const NONE = "__none__";
 
@@ -55,7 +56,7 @@ export function TicketCustomFields({ ticketId, ticketType, canEdit }: Readonly<{
             canEdit={canEdit}
             onSaved={(next) => {
               queryClient.setQueryData(["ticket", ticketId, "custom-fields"], next);
-              queryClient.invalidateQueries({ queryKey: ["tickets"] });
+              runInBackground(queryClient.invalidateQueries({ queryKey: ["tickets"] }));
             }}
           />
         ))}

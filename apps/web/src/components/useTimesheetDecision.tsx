@@ -39,6 +39,7 @@ import { FaceVerificationDialog } from "./FaceVerificationDialog";
 import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
 import { toast } from "./ui/toaster";
+import { runInBackground } from "../lib/run-in-background";
 
 function serverMessage(err: any, fallback: string): string {
   return err?.response?.data?.message ?? fallback;
@@ -63,9 +64,9 @@ export function useTimesheetDecision({ onSettled }: UseTimesheetDecisionOptions 
 
   /** Every surface that lists entries reads one of these three. */
   const invalidate = (id?: string) => {
-    if (id) queryClient.invalidateQueries({ queryKey: ["timesheet", id] });
-    queryClient.invalidateQueries({ queryKey: ["timesheets"] });
-    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    if (id) runInBackground(queryClient.invalidateQueries({ queryKey: ["timesheet", id] }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["timesheets"] }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["dashboard"] }));
   };
 
   const approve = useMutation({

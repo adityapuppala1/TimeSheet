@@ -87,6 +87,7 @@ import {
   type FlowStepKind,
   type FlowTriggerKind
 } from "../services/api";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -164,7 +165,7 @@ export function StudioPage() {
             : "It will apply its own changes, within the guardrails, and every one is undoable."
           : "It will not fire again until switched back on."
       });
-      invalidate();
+      void invalidate();
     },
     onError: (err) => toast.error("Could not change that", { description: serverMessage(err, "Try again.") })
   });
@@ -177,7 +178,7 @@ export function StudioPage() {
           ? "Watch it below — a run stopped by a condition is the flow working, not a failure."
           : "That same run was already started a moment ago."
       });
-      invalidate();
+      void invalidate();
     },
     onError: (err) => toast.error("Could not run that", { description: serverMessage(err, "Try again.") })
   });
@@ -186,7 +187,7 @@ export function StudioPage() {
     mutationFn: (id: string) => flowApi.retire(id),
     onSuccess: () => {
       toast.success("Flow retired", { description: "Its steps stay readable for anyone asking what it used to do." });
-      invalidate();
+      void invalidate();
     },
     onError: (err) => toast.error("Could not retire", { description: serverMessage(err, "Try again.") })
   });
@@ -355,7 +356,7 @@ function RunFeed({ currentUserId, flows }: Readonly<{ currentUserId: string | nu
       toast.success(variables.approved ? "Approved" : "Declined", {
         description: variables.approved ? "The rest of the flow is running now." : "Nothing after the approval happened."
       });
-      queryClient.invalidateQueries({ queryKey: ["flows"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["flows"] }));
     },
     onError: (err) => toast.error("Could not record that", { description: serverMessage(err, "Try again.") })
   });

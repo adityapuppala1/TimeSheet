@@ -33,6 +33,7 @@ import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
 import { toast } from "./ui/toaster";
 import { copyText } from "../lib/clipboard";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -74,7 +75,7 @@ export function TicketApprovalsPanel({ ticketId }: { ticketId: string }) {
       approvalApi.decide(stepId, decision, comment[stepId]),
     onSuccess: (_r, vars) => {
       toast.success(vars.decision === "APPROVED" ? "Approved" : "Changes requested");
-      queryClient.invalidateQueries({ queryKey: ["approvals", ticketId] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["approvals", ticketId] }));
     },
     onError: (err: any) => toast.error("Could not record that", { description: serverMessage(err, "Try again.") })
   });
@@ -83,7 +84,7 @@ export function TicketApprovalsPanel({ ticketId }: { ticketId: string }) {
     mutationFn: (id: string) => approvalApi.cancel(id),
     onSuccess: () => {
       toast.success("Approval cancelled");
-      queryClient.invalidateQueries({ queryKey: ["approvals", ticketId] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["approvals", ticketId] }));
     },
     onError: (err: any) => toast.error("Could not cancel", { description: serverMessage(err, "Try again.") })
   });
@@ -93,7 +94,7 @@ export function TicketApprovalsPanel({ ticketId }: { ticketId: string }) {
     onSuccess: (result) => {
       void copyText(result.url);
       toast.success("New link copied", { description: "The previous link stopped working just now." });
-      queryClient.invalidateQueries({ queryKey: ["approvals", ticketId] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["approvals", ticketId] }));
     },
     onError: (err: any) => toast.error("Could not create a link", { description: serverMessage(err, "Try again.") })
   });
@@ -280,7 +281,7 @@ function NewApprovalForm({ ticketId, onDone }: { ticketId: string; onDone: () =>
       }),
     onSuccess: () => {
       toast.success("Approval requested");
-      queryClient.invalidateQueries({ queryKey: ["approvals", ticketId] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["approvals", ticketId] }));
       onDone();
     },
     onError: (err: any) => toast.error("Could not request approval", { description: serverMessage(err, "Try again.") })

@@ -44,6 +44,7 @@ import { toast } from "../../components/ui/toaster";
 import { cn } from "../../lib/utils";
 import { agentRunApi, projectApi, type AgentRunRow, type AgentRunStepRow } from "../../services/api";
 import { groupRunsByDay, RUN_PERIODS, RUN_STATUS_LABELS } from "../../lib/agent-runs";
+import { runInBackground } from "../../lib/run-in-background";
 
 const IN_FLIGHT = new Set(["QUEUED", "RUNNING"]);
 
@@ -131,7 +132,7 @@ export function AgentRunsCard() {
         projectId: projectId || undefined
       }),
     onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ["agent-runs"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["agent-runs"] }));
       // "Already queued" is success, not an error — the triggerKey collapsing a double-click is
       // the constraint doing its job, and saying so is friendlier than a silent no-op.
       toast.success(result.created ? "Run queued" : "That run was already queued", {
@@ -146,7 +147,7 @@ export function AgentRunsCard() {
   const abort = useMutation({
     mutationFn: (id: string) => agentRunApi.abort(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["agent-runs"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["agent-runs"] }));
       toast.success("Stop requested", { description: "The current step finishes; the next one never starts." });
     },
     onError: (err: any) => toast.error("Could not stop that run", { description: err?.response?.data?.message ?? "Try again." })

@@ -32,6 +32,7 @@ import { toast } from "../../components/ui/toaster";
 import { platformAdminConsoleApi } from "../../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../../store/platform-admin-auth";
 import { ConsolePage, ConsoleSection, ConsoleTable, Field, FieldGrid, Num, PRIMARY_BTN, Toolbar, shortDateTime } from "./console-ui";
+import { runInBackground } from "../../lib/run-in-background";
 
 function errorMessageOf(error: unknown): string {
   return (error as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (error as Error)?.message ?? "Try again.";
@@ -56,8 +57,8 @@ export function PlatformAdminAccess() {
   const [form, setForm] = useState<{ email: string; name: string; role: PlatformRole }>({ email: "", name: "", role: "READ_ONLY" });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["platform-admin", "admins"] });
-    queryClient.invalidateQueries({ queryKey: ["platform-admin", "approvals"] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "admins"] }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "approvals"] }));
   };
 
   const create = useMutation({

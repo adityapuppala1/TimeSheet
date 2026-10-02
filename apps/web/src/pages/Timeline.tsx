@@ -25,6 +25,7 @@ import { Switch } from "../components/ui/switch";
 import { toast } from "../components/ui/toaster";
 import { useAuthStore } from "../store/auth";
 import { copilotApi, planApi, planningApi, projectApi } from "../services/api";
+import { runInBackground } from "../lib/run-in-background";
 
 export function TimelinePage() {
   const user = useAuthStore((s) => s.user);
@@ -62,7 +63,7 @@ export function TimelinePage() {
         toast.info("Nothing to fix", { description: outcome.reason ?? undefined });
         return;
       }
-      queryClient.invalidateQueries({ queryKey: ["ai-proposals"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ai-proposals"] }));
       toast.success(`${outcome.corrections} correction${outcome.corrections === 1 ? "" : "s"} suggested`, {
         description: "Nothing has moved yet — review and apply the ones you want.",
         action: { label: "Review", onClick: () => navigate("/app/proposals") }

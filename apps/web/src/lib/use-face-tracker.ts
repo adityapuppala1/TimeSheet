@@ -222,7 +222,7 @@ export function useFaceTracker(video: HTMLVideoElement | null, enabled: boolean)
         if (cancelled) return;
         human = h;
         setStatus("tracking");
-        loop();
+        void loop();
       })
       .catch(() => {
         if (!cancelled) setStatus("unavailable");

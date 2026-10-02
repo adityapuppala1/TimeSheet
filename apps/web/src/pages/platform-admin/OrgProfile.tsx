@@ -75,6 +75,7 @@ import {
   shortDateTime
 } from "./console-ui";
 import { HealthBandPill, HealthSignals } from "./health-ui";
+import { runInBackground } from "../../lib/run-in-background";
 
 const money = (minor: number | null, currency: string) =>
   minor === null ? "Not set" : new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(minor / 100);
@@ -562,8 +563,8 @@ function FeatureOverridesCard({ orgId }: { orgId: string }) {
       toast.success("Overrides saved");
       setDraft(null);
       setAcknowledged(false);
-      queryClient.invalidateQueries({ queryKey: ["platform-admin", "org-overrides", orgId] });
-      queryClient.invalidateQueries({ queryKey: ["platform-admin", "org-timeline", orgId] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "org-overrides", orgId] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "org-timeline", orgId] }));
     },
     onError: (error) => toast.error("Could not save overrides", { description: errorMessageOf(error) })
   });

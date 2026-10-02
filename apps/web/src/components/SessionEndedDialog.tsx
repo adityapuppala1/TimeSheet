@@ -78,7 +78,7 @@ export function SessionEndedDialog() {
             onClick={() => {
               setReason(null);
               logout();
-              navigate("/login", { replace: true });
+              void navigate("/login", { replace: true });
             }}
           >
             Go to sign in

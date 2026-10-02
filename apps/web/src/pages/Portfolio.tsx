@@ -46,6 +46,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/toolti
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 import { copilotApi, goalApi, planningApi, portfolioApi, projectApi, type PortfolioProjectRollup } from "../services/api";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -133,7 +134,7 @@ export function PortfolioPage() {
     onSuccess: () => {
       toast.success("Portfolio created");
       setDraft({ name: "", code: "" });
-      queryClient.invalidateQueries({ queryKey: ["portfolios"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["portfolios"] }));
     },
     onError: (err: any) => toast.error("Could not create", { description: serverMessage(err, "Try again.") })
   });
@@ -141,8 +142,8 @@ export function PortfolioPage() {
     mutationFn: (id: string) => portfolioApi.remove(id),
     onSuccess: () => {
       toast.success("Portfolio removed", { description: "Its projects are still here — they are just ungrouped now." });
-      queryClient.invalidateQueries({ queryKey: ["portfolios"] });
-      queryClient.invalidateQueries({ queryKey: ["portfolios", "rollup"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["portfolios"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["portfolios", "rollup"] }));
     },
     onError: (err: any) => toast.error("Could not remove", { description: serverMessage(err, "Try again.") })
   });
@@ -151,8 +152,8 @@ export function PortfolioPage() {
       portfolioApi.setProjects(portfolioId, projectIds),
     onSuccess: () => {
       toast.success("Projects updated");
-      queryClient.invalidateQueries({ queryKey: ["portfolios"] });
-      queryClient.invalidateQueries({ queryKey: ["portfolios", "rollup"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["portfolios"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["portfolios", "rollup"] }));
     },
     onError: (err: any) => toast.error("Could not update", { description: serverMessage(err, "Try again.") })
   });

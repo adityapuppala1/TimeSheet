@@ -33,6 +33,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Switch } from "./ui/switch";
 import { toast } from "./ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -67,9 +68,9 @@ export function TicketPlanningPanel({ ticket }: { ticket: TicketDetail }) {
   }, [ticket.id, ticket.startDate, ticket.endDate, ticket.estimatedHours, ticket.progressPct]);
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
-    queryClient.invalidateQueries({ queryKey: ["tickets"] });
-    queryClient.invalidateQueries({ queryKey: ["plan"] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["tickets"] }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["plan"] }));
   };
 
   const update = useMutation({
@@ -131,7 +132,7 @@ export function TicketPlanningPanel({ ticket }: { ticket: TicketDetail }) {
       toast.success("Dependency added");
       setNewDep({ otherId: "", type: "FINISH_TO_START", lag: "0" });
       invalidate();
-      queryClient.invalidateQueries({ queryKey: ["plan", "dependencies"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["plan", "dependencies"] }));
     },
     onError: (err: any) =>
       toast.error("Could not add dependency", { description: serverMessage(err, "Try again.") })
@@ -142,7 +143,7 @@ export function TicketPlanningPanel({ ticket }: { ticket: TicketDetail }) {
     onSuccess: () => {
       toast.success("Dependency removed");
       invalidate();
-      queryClient.invalidateQueries({ queryKey: ["plan", "dependencies"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["plan", "dependencies"] }));
     },
     onError: (err: any) => toast.error("Could not remove", { description: serverMessage(err, "Try again.") })
   });

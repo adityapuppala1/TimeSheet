@@ -82,6 +82,7 @@ import {
   shortDateTime
 } from "./console-ui";
 import { AiAdvisorCard } from "./AiAdvisorCard";
+import { runInBackground } from "../../lib/run-in-background";
 
 const errorMessageOf = (error: unknown) => (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
 
@@ -114,7 +115,7 @@ function MailServerCard({ settings }: { settings: PlatformMailSettings }) {
     onSuccess: () => {
       toast.success("Mail settings saved");
       setForm((f) => ({ ...f, password: "" }));
-      queryClient.invalidateQueries({ queryKey: ["platform-admin"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin"] }));
     },
     onError: (e) => toast.error("Could not save", { description: errorMessageOf(e) })
   });
@@ -245,7 +246,7 @@ function SignupSettingsCard({ view }: { view: PlatformSignupSettingsView }) {
     onSuccess: (next) => {
       toast.success(next.availability.open ? "Signup is open" : "Signup settings saved");
       setDomains(next.settings.blockedDomains.join("\n"));
-      queryClient.invalidateQueries({ queryKey: ["platform-admin", "signup-settings"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "signup-settings"] }));
     },
     onError: (e) => toast.error("Could not save", { description: errorMessageOf(e) })
   });
@@ -383,7 +384,7 @@ function SecondFactorCard() {
   const [disableOpen, setDisableOpen] = useState(false);
 
   const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ["platform-admin", "mfa"] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "mfa"] }));
     platformAdminAuthApi.me().then(setAdmin).catch(() => undefined);
   };
 
@@ -605,7 +606,7 @@ function SessionsCard() {
       toast.success(r.revoked === 0 ? "There were no other sessions" : `${r.revoked} session${r.revoked === 1 ? "" : "s"} ended`);
       setConfirmOpen(false);
       setPage(1);
-      invalidate();
+      void invalidate();
     },
     onError: (e) => toast.error("Could not end them", { description: errorMessageOf(e) })
   });

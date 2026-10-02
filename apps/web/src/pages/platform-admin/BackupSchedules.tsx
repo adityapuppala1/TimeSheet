@@ -129,7 +129,7 @@ function DestinationDialog({ overview, editing, onClose }: { overview: BackupOve
     },
     onSuccess: () => {
       toast.success(isNew ? "Destination added" : "Destination saved");
-      invalidate();
+      void invalidate();
       onClose();
     },
     onError: (e) => toast.error("Could not save", { description: errorMessageOf(e) })
@@ -248,7 +248,7 @@ function DestinationsTab({ overview }: { overview: BackupOverview }) {
     onSuccess: (r) => {
       if (r.ok) toast.success("Destination reachable", { description: r.message });
       else toast.error("Could not reach it", { description: r.message });
-      invalidate();
+      void invalidate();
     },
     onError: (e) => toast.error("Test failed", { description: errorMessageOf(e) })
   });
@@ -256,7 +256,7 @@ function DestinationsTab({ overview }: { overview: BackupOverview }) {
     mutationFn: (id: string) => platformBackupApi.deleteDestination(id),
     onSuccess: () => {
       toast.success("Destination removed");
-      invalidate();
+      void invalidate();
     },
     onError: (e) => toast.error("Not removed", { description: errorMessageOf(e) })
   });

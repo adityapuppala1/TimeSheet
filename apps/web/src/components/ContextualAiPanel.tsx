@@ -9,6 +9,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Textarea } from "./ui/textarea";
 import { toast } from "./ui/toaster";
 import { AiStrands } from "./ui/ai-strands";
+import { runInBackground } from "../lib/run-in-background";
 
 type PageContext = { label: string; prompts: string[] };
 
@@ -47,7 +48,7 @@ export function ContextualAiPanel() {
     onSuccess: (row, submitted) => {
       setTurns((current) => [...current, row]);
       setQuestion((current) => current === submitted ? "" : current);
-      queryClient.invalidateQueries({ queryKey: ["ask-ai", "history"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ask-ai", "history"] }));
     },
     onError: (error: any) => toast.error("AI could not answer", { description: error?.response?.data?.message ?? "Check the workspace AI configuration and try again." })
   });

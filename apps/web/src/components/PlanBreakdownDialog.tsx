@@ -27,6 +27,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
 import { toast } from "./ui/toaster";
+import { runInBackground } from "../lib/run-in-background";
 
 export function PlanBreakdownDialog({
   projectId,
@@ -50,7 +51,7 @@ export function PlanBreakdownDialog({
       setOpen(false);
       setGoal("");
       setContext("");
-      queryClient.invalidateQueries({ queryKey: ["ai-proposals"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ai-proposals"] }));
       // The count is in the message on purpose: "14 changes" is the number somebody should see
       // before they open the review, not after.
       toast.success(`${proposal.changes.length} change${proposal.changes.length === 1 ? "" : "s"} suggested`, {

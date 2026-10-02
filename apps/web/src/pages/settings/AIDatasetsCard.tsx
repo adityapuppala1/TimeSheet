@@ -25,6 +25,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
 import { aiDatasetApi, aiEvalApi, type AIPromotableInteraction } from "../../services/api";
+import { runInBackground } from "../../lib/run-in-background";
 
 /** The capabilities worth building a golden set for. Structured ones first — they're scorable
  *  deterministically, so evals on them cost nothing beyond the replay itself. */
@@ -61,7 +62,7 @@ export function AIDatasetsCard({ readOnly, contentCaptureOn }: { readOnly: boole
       toast.success("Dataset created");
       setCreating(false);
       setDraft({ name: "", feature: "triage", description: "" });
-      queryClient.invalidateQueries({ queryKey: ["ai", "datasets"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ai", "datasets"] }));
     },
     onError: (err: any) => toast.error("Could not create", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -212,7 +213,7 @@ function DatasetDetailDialog({
           run.estimatedCostUsd == null ? "cost unknown" : `$${run.estimatedCostUsd.toFixed(3)}`
         }. Results appear in the Evaluations card.`
       });
-      queryClient.invalidateQueries({ queryKey: ["ai", "evals"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ai", "evals"] }));
     },
     // The refusals here are informative — budget exceeded, one already running, no examples —
     // so the server's message is shown rather than a generic failure.
@@ -223,8 +224,8 @@ function DatasetDetailDialog({
     mutationFn: (itemId: string) => aiDatasetApi.removeItem(datasetId!, itemId),
     onSuccess: () => {
       toast.success("Example removed");
-      queryClient.invalidateQueries({ queryKey: ["ai", "datasets", datasetId] });
-      queryClient.invalidateQueries({ queryKey: ["ai", "datasets"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ai", "datasets", datasetId] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ai", "datasets"] }));
     },
     onError: (err: any) => toast.error("Could not remove", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -384,8 +385,8 @@ function DatasetDetailDialog({
         onClose={() => setPromoting(null)}
         onSaved={() => {
           setPromoting(null);
-          queryClient.invalidateQueries({ queryKey: ["ai", "datasets", datasetId] });
-          queryClient.invalidateQueries({ queryKey: ["ai", "datasets"] });
+          runInBackground(queryClient.invalidateQueries({ queryKey: ["ai", "datasets", datasetId] }));
+          runInBackground(queryClient.invalidateQueries({ queryKey: ["ai", "datasets"] }));
         }}
       />
     </>

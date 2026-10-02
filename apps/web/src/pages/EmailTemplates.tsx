@@ -90,6 +90,7 @@ import { copyText } from "../lib/clipboard";
 import { PageHeader } from "../components/PageHeader";
 import { EmptyState } from "../components/ui/empty-state";
 import { useCardLayout } from "../lib/use-media-query";
+import { runInBackground } from "../lib/run-in-background";
 
 const FALLBACK_DEFAULT = `<h2>Title</h2>
 <p>Hi {{name}}, your action is required.</p>
@@ -1287,7 +1288,7 @@ function BulkTestButton() {
         const firstError = data.results.find((r) => !r.ok)?.errorMessage ?? "See Recent sends for each template.";
         toast.warning("Bulk send completed with failures", { description: `${intro}. First error: ${firstError}`, duration: 12_000 });
       }
-      queryClient.invalidateQueries({ queryKey: ["email-templates"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["email-templates"] }));
       setOpen(false);
     },
     onError: (err: any) =>
@@ -1463,7 +1464,7 @@ function EditorDialog({ template, onClose }: { template: EmailTemplateRow | null
     mutationFn: () => emailTemplateApi.save(template!.key, { subject, bodyHtml: body, enabled }),
     onSuccess: () => {
       toast.success("Template saved");
-      queryClient.invalidateQueries({ queryKey: ["email-templates"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["email-templates"] }));
       onClose();
     },
     onError: (err: any) =>
@@ -1474,7 +1475,7 @@ function EditorDialog({ template, onClose }: { template: EmailTemplateRow | null
     mutationFn: () => emailTemplateApi.revert(template!.key),
     onSuccess: () => {
       toast.success("Reverted to defaults");
-      queryClient.invalidateQueries({ queryKey: ["email-templates"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["email-templates"] }));
       onClose();
     },
     onError: (err: any) =>
@@ -1489,9 +1490,9 @@ function EditorDialog({ template, onClose }: { template: EmailTemplateRow | null
         description: "Test sends bypass the workspace BCC list — only this address received it.",
         duration: 6_000
       });
-      queryClient.invalidateQueries({ queryKey: ["email-templates", template?.key, "log"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["email-templates", template?.key, "log"] }));
       // A test send is a logged send — the volume badge and the analytics tab must move with it.
-      queryClient.invalidateQueries({ queryKey: ["email-templates", "analytics"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["email-templates", "analytics"] }));
     },
     onError: (err: any) => {
       const status = err?.response?.status;

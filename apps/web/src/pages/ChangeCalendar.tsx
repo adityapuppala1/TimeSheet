@@ -169,7 +169,7 @@ export function ChangeCalendarPage() {
                           ? (e) => {
                               if (e.key === "Enter" || e.key === " ") {
                                 e.preventDefault();
-                                raiseFor(day);
+                                void raiseFor(day);
                               }
                             }
                           : undefined
@@ -211,7 +211,7 @@ export function ChangeCalendarPage() {
                                 // never be opened from the calendar. Opening the record must win.
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  navigate(`/app/changes/${c.id}`);
+                                  void navigate(`/app/changes/${c.id}`);
                                 }}
                                 className={cn(
                                   "absolute inset-y-1 overflow-hidden rounded px-1.5 text-left text-[10px] font-medium text-white transition hover:brightness-110",

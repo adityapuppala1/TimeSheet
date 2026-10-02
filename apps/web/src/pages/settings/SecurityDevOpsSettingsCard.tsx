@@ -37,6 +37,7 @@ import { countOf, devopsGitVerdict, liveOrOff, onOff } from "../../lib/settings-
 import { findingRoutingApi, projectApi, SERVER_ORIGIN, settingsApi } from "../../services/api";
 import { copyText } from "../../lib/clipboard";
 import { FindingRoutingCard } from "./FindingRoutingCard";
+import { runInBackground } from "../../lib/run-in-background";
 
 const PREFIX = "devops";
 const OPEN_KEY = "ts.settings.devops.open";
@@ -67,10 +68,10 @@ function CopyableUrl({ label, url }: { label: string; url: string }) {
           size="sm"
           variant="ghost"
           onClick={() => {
-            copyText(url).then(() => {
+            runInBackground(copyText(url).then(() => {
               setCopied(true);
               setTimeout(() => setCopied(false), 1500);
-            });
+            }));
           }}
         >
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
@@ -91,7 +92,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
     onSuccess: () => {
       toast.success("Saved — click Connect to authorize");
       setGitClientSecret("");
-      queryClient.invalidateQueries({ queryKey: ["settings", "git"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "git"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -106,7 +107,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
     mutationFn: () => settingsApi.disconnectGit(),
     onSuccess: () => {
       toast.success("Disconnected");
-      queryClient.invalidateQueries({ queryKey: ["settings", "git"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "git"] }));
     },
     onError: () => toast.error("Could not disconnect", { description: "Try again." })
   });
@@ -115,7 +116,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
     mutationFn: () => settingsApi.rotateGitWebhookSecret(),
     onSuccess: (data) => {
       setRevealedWebhookSecret(data.secret);
-      queryClient.invalidateQueries({ queryKey: ["settings", "git"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "git"] }));
     },
     onError: () => toast.error("Could not generate secret", { description: "Try again." })
   });
@@ -129,7 +130,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
     mutationFn: (fallbackProjectId: string | null) => settingsApi.updateSecurityIngestionFallbackProject(fallbackProjectId),
     onSuccess: () => {
       toast.success("Saved");
-      queryClient.invalidateQueries({ queryKey: ["settings", "security-ingestion"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "security-ingestion"] }));
     },
     onError: () => toast.error("Could not save", { description: "Try again." })
   });
@@ -150,7 +151,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
     mutationFn: (days: number) => settingsApi.updateSecurityIngestionVerificationWindow(days),
     onSuccess: () => {
       toast.success("Saved");
-      queryClient.invalidateQueries({ queryKey: ["settings", "security-ingestion"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "security-ingestion"] }));
     },
     onError: () => toast.error("Could not update the verification window", { description: "Try again." })
   });
@@ -206,7 +207,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
     mutationFn: settingsApi.rotateSecurityIngestionToken,
     onSuccess: (res) => {
       setRevealedToken(res.token);
-      queryClient.invalidateQueries({ queryKey: ["settings", "security-ingestion"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "security-ingestion"] }));
       toast.success("Ingestion token generated", { description: "Copy it now — it won't be shown again." });
     },
     onError: () => toast.error("Could not generate a token", { description: "Try again." })
@@ -216,7 +217,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
     mutationFn: settingsApi.disableSecurityIngestion,
     onSuccess: () => {
       setRevealedToken(null);
-      queryClient.invalidateQueries({ queryKey: ["settings", "security-ingestion"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "security-ingestion"] }));
       toast.success("Ingestion disabled");
     },
     onError: () => toast.error("Could not disable ingestion", { description: "Try again." })

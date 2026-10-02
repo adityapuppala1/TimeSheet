@@ -65,6 +65,7 @@ import { RichTextEditor } from "./ui/rich-text-editor";
 import { SearchableSelect } from "./ui/searchable-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { toast } from "./ui/toaster";
+import { runInBackground } from "../lib/run-in-background";
 
 const STATUS_VARIANT: Record<string, "success" | "warning" | "destructive" | "muted"> = {
   APPROVED: "success",
@@ -167,11 +168,11 @@ export function TimesheetEntryDialog({
   );
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["timesheet", entryId] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["timesheet", entryId] }));
     // Every surface that lists entries reads one of these two: the tables (approvals, history)
     // and the dashboard's timeline + weekly rollups.
-    queryClient.invalidateQueries({ queryKey: ["timesheets"] });
-    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["timesheets"] }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["dashboard"] }));
   };
 
   /**

@@ -47,6 +47,7 @@ import { usePlanningFeatures } from "../lib/use-planning";
 import { useAuthStore } from "../store/auth";
 import { copilotApi, type AiProposalChangeRow, type AiProposalRow } from "../services/api";
 import { destinationFor } from "../utils/proposal-links";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -138,9 +139,9 @@ export function ProposalsPage() {
           description: result.skipped > 0 ? `${result.skipped} left unapplied.` : undefined
         });
       }
-      queryClient.invalidateQueries({ queryKey: ["ai-proposals"] });
-      queryClient.invalidateQueries({ queryKey: ["plan"] });
-      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ai-proposals"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["plan"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["tickets"] }));
     },
     onError: (err: any) => toast.error("Could not apply", { description: serverMessage(err, "Try again.") })
   });
@@ -158,9 +159,9 @@ export function ProposalsPage() {
       } else {
         toast.success(`Put back ${result.undone} change${result.undone === 1 ? "" : "s"}`);
       }
-      queryClient.invalidateQueries({ queryKey: ["ai-proposals"] });
-      queryClient.invalidateQueries({ queryKey: ["plan"] });
-      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ai-proposals"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["plan"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["tickets"] }));
     },
     onError: (err: any) => toast.error("Could not undo", { description: serverMessage(err, "Try again.") })
   });
@@ -169,7 +170,7 @@ export function ProposalsPage() {
     mutationFn: (id: string) => copilotApi.reject(id),
     onSuccess: () => {
       toast.success("Proposal dismissed");
-      queryClient.invalidateQueries({ queryKey: ["ai-proposals"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["ai-proposals"] }));
     },
     onError: (err: any) => toast.error("Could not dismiss", { description: serverMessage(err, "Try again.") })
   });

@@ -60,7 +60,7 @@ export function SsoHandoff() {
       .ssoHandoff(code)
       .then((data) => {
         setSession(data.user, data.accessToken);
-        navigate("/app", { replace: true });
+        void navigate("/app", { replace: true });
       })
       .catch(() => setFailed(true));
   }, [params, navigate, setSession]);

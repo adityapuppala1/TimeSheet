@@ -187,7 +187,7 @@ export function PlatformAdminLogin() {
   const finish = (admin: PlatformAdminUser, accessToken: string) => {
     setSealState("success");
     setSession(admin, accessToken);
-    navigate("/platform-admin");
+    void navigate("/platform-admin");
   };
 
   const mutation = useMutation({

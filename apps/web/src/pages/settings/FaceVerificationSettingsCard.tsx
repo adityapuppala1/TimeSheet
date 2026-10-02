@@ -91,6 +91,7 @@ import { Badge } from "../../components/ui/badge";
 import { useDebouncedValue } from "../../hooks/use-debounced-value";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useCardLayout } from "../../lib/use-media-query";
+import { runInBackground } from "../../lib/run-in-background";
 
 /** Typed against FaceOutcome (not `string`) so a value added to the union fails the build here
  *  instead of silently rendering an untinted badge — LOW_QUALITY was missing for exactly that
@@ -141,7 +142,7 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
     mutationFn: settingsApi.updateFaceVerification,
     onSuccess: (updated, variables) => {
       toast.success("Saved");
-      queryClient.invalidateQueries({ queryKey: ["settings", "face-verification"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "face-verification"] }));
 
       // Re-seed the text inputs from the SERVER's answer, but only for the section that was
       // actually saved. The server clamps values (a threshold typed as 5 comes back as 0.99), so
@@ -1041,7 +1042,7 @@ function EnrollmentGapList({ readOnly }: { readOnly: boolean }) {
             ? `${result.skipped} already had an enrollment reminder in the last 72 hours and were skipped.`
             : undefined
       });
-      queryClient.invalidateQueries({ queryKey: ["face", "enrollment-gaps"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["face", "enrollment-gaps"] }));
     },
     onError: () => toast.error("Could not send the reminder")
   });
@@ -1233,10 +1234,10 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
     mutationFn: ({ id, note }: { id: string; note?: string }) => faceApi.reviewAttempt(id, note),
     onSuccess: () => {
       toast.success("Marked reviewed");
-      queryClient.invalidateQueries({ queryKey: ["face", "attempts"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["face", "attempts"] }));
       // The funnel counts move the moment a flag is cleared, so the charts must not keep showing
       // the pre-review split.
-      queryClient.invalidateQueries({ queryKey: ["face", "analytics"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["face", "analytics"] }));
     },
     onError: () => toast.error("Could not update")
   });
@@ -1246,7 +1247,7 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
   const [refreshing, setRefreshing] = useState(false);
   const refreshLog = () => {
     setRefreshing(true);
-    queryClient.invalidateQueries({ queryKey: ["face", "attempts"] }).finally(() => setRefreshing(false));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["face", "attempts"] }).finally(() => setRefreshing(false)));
   };
 
   const bulkReview = useMutation({
@@ -1255,8 +1256,8 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
       toast.success(reviewed > 0 ? `Marked ${reviewed} attempt${reviewed === 1 ? "" : "s"} reviewed` : "Nothing was flagged in that set");
       setSelected(new Set());
       setBulkNote("");
-      queryClient.invalidateQueries({ queryKey: ["face", "attempts"] });
-      queryClient.invalidateQueries({ queryKey: ["face", "analytics"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["face", "attempts"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["face", "analytics"] }));
     },
     onError: () => toast.error("Could not mark those reviewed")
   });
@@ -1284,10 +1285,10 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
     mutationFn: faceApi.autoTriage,
     onSuccess: ({ resolved }) => {
       toast.success(resolved > 0 ? `Cleared ${resolved} honest failure${resolved === 1 ? "" : "s"}` : "Nothing to clear right now");
-      queryClient.invalidateQueries({ queryKey: ["face", "attempts"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["face", "attempts"] }));
       // Moves rows out of "awaiting review" and into "auto-triaged" — the funnel would otherwise
       // keep showing a backlog that no longer exists.
-      queryClient.invalidateQueries({ queryKey: ["face", "analytics"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["face", "analytics"] }));
     },
     onError: () => toast.error("Could not run auto-triage")
   });

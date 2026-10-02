@@ -27,6 +27,7 @@ import { useTourController } from "./ProductTour";
 import { authApi, fileUrl, systemApi } from "../services/api";
 import { hasUnseenRelease } from "../lib/whats-new-seen";
 import { useAuthStore } from "../store/auth";
+import { runInBackground } from "../lib/run-in-background";
 
 export function initialsFor(name?: string) {
   if (!name) return "?";
@@ -62,7 +63,7 @@ export function AccountMenuContent() {
       setUser(updated);
       // Every permission check in the app re-derives from this cached response, so cached pages
       // built under the old role (e.g. an admin-only list) must not be shown stale.
-      queryClient.invalidateQueries();
+      runInBackground(queryClient.invalidateQueries());
       toast.success(`Switched to ${updated.role.replace("_", " ")}`);
     },
     onError: (err: any) => toast.error("Could not switch role", { description: err?.response?.data?.message ?? "Try again." })
@@ -79,7 +80,7 @@ export function AccountMenuContent() {
     // we don't briefly flash the previous user's data.
     queryClient.clear();
     toast.success("Signed out");
-    navigate("/login");
+    void navigate("/login");
   }
 
   const avatarSrc = fileUrl(user?.avatarUrl);

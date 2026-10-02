@@ -25,6 +25,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { inboxApi, planApi, copilotApi, settingsApi, askAiApi, type AiAskExchangeRow, type SuggestedProviderOrderEntry } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { cn } from "../lib/utils";
+import { runInBackground } from "../lib/run-in-background";
 
 const askHref = (prompt: string) => `/app/ask-ai?prompt=${encodeURIComponent(prompt)}`;
 
@@ -213,13 +214,13 @@ export function IntelligenceCenterPage() {
           <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
             <div>
               <div className="grid gap-1 text-sm"><span>Configuration status</span><strong>{configurationStatus}</strong>
-                <RetryHint error={aiSettings.isError || providers.isError} label="Retry AI settings" onRetry={() => { aiSettings.refetch(); providers.refetch(); }} />
+                <RetryHint error={aiSettings.isError || providers.isError} label="Retry AI settings" onRetry={() => { runInBackground(aiSettings.refetch()); runInBackground(providers.refetch()); }} />
               </div>
             </div>
             <div className="grid gap-1 text-sm text-muted-foreground">
               {configurationKnown && <><p>{readiness.switchAdvice}</p><p>{readiness.providerStatus}</p></>}
               {readiness.providerAdvice && <p>Routing advisor: {readiness.providerAdvice}</p>}
-              {suggestedOrder.isError && <p role="status">Provider routing recommendation unavailable. <button type="button" className="focus-ring rounded-sm text-primary underline" onClick={() => { suggestedOrder.refetch(); }}>Retry</button></p>}
+              {suggestedOrder.isError && <p role="status">Provider routing recommendation unavailable. <button type="button" className="focus-ring rounded-sm text-primary underline" onClick={() => { runInBackground(suggestedOrder.refetch()); }}>Retry</button></p>}
             </div>
           </div>
         </section>

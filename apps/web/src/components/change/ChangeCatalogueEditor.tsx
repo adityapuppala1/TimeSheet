@@ -157,7 +157,7 @@ export function ChangeCatalogueEditor({
     mutationFn: (id: string) => changeApi.configRemove(kind, id),
     onSuccess: () => {
       toast.success("Removed");
-      refresh();
+      void refresh();
     },
     // The 409 is guidance, not a failure: it means live records point at this row, and disabling is
     // what was meant. The server's message already names the count.
@@ -179,7 +179,7 @@ export function ChangeCatalogueEditor({
     try {
       await changeApi.configCreate(kind, body);
       setDraft({});
-      refresh();
+      void refresh();
       toast.success(`${title} added`);
     } catch (err: any) {
       fail(err);

@@ -41,6 +41,7 @@ import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { authApi, fileUrl, type SessionRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
+import { runInBackground } from "../lib/run-in-background";
 
 /** `unknown` gets the laptop too: the parser refuses to guess, and a question-mark glyph would
  *  read as an error rather than as "we could not tell". */
@@ -139,7 +140,7 @@ export function Profile() {
       setUser(updated);
       // A gated new joiner may have just satisfied the profile step — tell the gate NOW rather
       // than letting it poll its way there.
-      queryClient.invalidateQueries({ queryKey: ["auth", "onboarding-status"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["auth", "onboarding-status"] }));
       toast.success("Profile updated", { description: "Visible across audit logs, approvals, and your team page." });
     },
     onError: (err: any) =>
@@ -150,7 +151,7 @@ export function Profile() {
     mutationFn: (file: File) => authApi.uploadAvatar(file),
     onSuccess: (updated) => {
       setUser(updated);
-      queryClient.invalidateQueries({ queryKey: ["users"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["users"] }));
       toast.success("Photo updated", { description: "Your new picture shows up across the workspace." });
     },
     onError: (err: any) =>
@@ -163,7 +164,7 @@ export function Profile() {
     mutationFn: () => authApi.removeAvatar(),
     onSuccess: (updated) => {
       setUser(updated);
-      queryClient.invalidateQueries({ queryKey: ["users"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["users"] }));
       toast.success("Avatar removed");
     },
     onError: (err: any) => toast.error("Could not remove avatar", { description: err?.response?.data?.message ?? "Try again." }),
@@ -177,7 +178,7 @@ export function Profile() {
       setNextPassword("");
       setConfirmPassword("");
       toast.success("Password updated", { description: "Every other device was signed out for safety." });
-      queryClient.invalidateQueries({ queryKey: ["auth", "sessions"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["auth", "sessions"] }));
       // The server just cleared mustChangePassword — refresh the stored profile so the
       // "choose your own password" banner disappears without a reload.
       try {
@@ -198,7 +199,7 @@ export function Profile() {
     mutationFn: (id: string) => authApi.revokeSession(id),
     onSuccess: () => {
       toast.success("Session signed out");
-      queryClient.invalidateQueries({ queryKey: ["auth", "sessions"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["auth", "sessions"] }));
     },
     onError: (err: any) => toast.error("Could not sign out that session", { description: err?.response?.data?.message ?? "Try again." })
   });

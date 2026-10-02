@@ -161,6 +161,7 @@ export function iconForType(type: string) {
  *  and they live in their own component, so the maps moved to lib/ticket-visuals.ts to avoid a
  *  circular import. TicketKanban.tsx still imports both from this module. */
 import { PRIORITY_VARIANT, STATUS_VARIANT, TONE_ACCENT_CLASS, TONE_BORDER_CLASS } from "../lib/ticket-visuals";
+import { runInBackground } from "../lib/run-in-background";
 export { PRIORITY_VARIANT, STATUS_VARIANT };
 
 export function serverMessage(err: any, fallback: string) {
@@ -570,8 +571,8 @@ function useCalendarView(canEditPlan: boolean, setCalendarMonth: (m: { year: num
   const reschedule = useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: { startDate: string; endDate: string } }) => planApi.updateItem(id, patch),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["plan"] });
-      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["plan"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["tickets"] }));
       toast.success("Rescheduled");
     },
     onError: (error) => toast.error(serverMessage(error, "Could not reschedule"))
@@ -1181,7 +1182,7 @@ export function Tickets() {
         initial={createInitial}
         projects={projects.data ?? []}
         onCreated={(ticket) => {
-          queryClient.invalidateQueries({ queryKey: ["tickets"] });
+          runInBackground(queryClient.invalidateQueries({ queryKey: ["tickets"] }));
           openTicket(ticket.id);
         }}
       />
@@ -1744,8 +1745,8 @@ function TicketDetailSheet({
   });
 
   function invalidate() {
-    queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
-    queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["tickets"] }));
   }
 
   const statusMutation = useMutation({
@@ -2318,7 +2319,7 @@ function CommentsPanel({
       ]),
     onSuccess: () => {
       onPosted();
-      queryClientForComments.invalidateQueries({ queryKey: ["plan", "my-work"] });
+      runInBackground(queryClientForComments.invalidateQueries({ queryKey: ["plan", "my-work"] }));
     },
     onSettled: () => settleOptimistic(queryClientForComments, [["ticket", ticketId]]),
     onError: (err: any, _vars, context) => {

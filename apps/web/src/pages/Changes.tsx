@@ -63,6 +63,7 @@ import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { useCardLayout } from "../lib/use-media-query";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -144,7 +145,7 @@ export function Changes() {
     if (!requested?.createChange) return;
     setCreatePlannedDate(requested.plannedDate ?? null);
     setCreateOpen(true);
-    navigate(location.pathname, { replace: true, state: null });
+    void navigate(location.pathname, { replace: true, state: null });
   }, [location.state, location.pathname, navigate]);
 
   const canWrite = Boolean(user?.permissions.includes(permissions.CHANGES_WRITE));
@@ -169,7 +170,7 @@ export function Changes() {
   // fields; at this size it is a full page, and being a real route means a change can be linked to
   // from an approval email.
   function openChange(id: string) {
-    navigate(`/app/changes/${id}`);
+    void navigate(`/app/changes/${id}`);
   }
 
   // The module is off — say which half is missing, because "ask your admin" and "upgrade your plan"
@@ -394,7 +395,7 @@ export function Changes() {
           plannedDate={createPlannedDate}
           onClose={() => setCreateOpen(false)}
           onCreated={(id) => {
-            queryClient.invalidateQueries({ queryKey: ["changes"] });
+            runInBackground(queryClient.invalidateQueries({ queryKey: ["changes"] }));
             setCreateOpen(false);
             openChange(id);
           }}

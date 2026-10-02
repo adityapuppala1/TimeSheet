@@ -38,6 +38,7 @@ import { usePlanningFeatures } from "../lib/use-planning";
 import { cn } from "../lib/utils";
 import { projectApi, sprintApi, type SprintRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 // Same values Insights uses — copied rather than imported because that page keeps them private.
@@ -85,8 +86,8 @@ export function SprintsPage() {
   });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["sprints"] });
-    queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["sprints"] }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["tickets"] }));
   };
   const transition = useMutation({
     mutationFn: ({ id, to }: { id: string; to: SprintRow["status"] }) => sprintApi.update(id, { status: to }),

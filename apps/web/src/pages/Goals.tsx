@@ -327,7 +327,7 @@ export function GoalsPage() {
     mutationFn: (id: string) => goalApi.remove(id),
     onSuccess: () => {
       toast.success("Goal deleted", { description: "Its history is kept — the goal is hidden, not erased." });
-      invalidate();
+      void invalidate();
     },
     onError: (err) => toast.error("Could not delete", { description: serverMessage(err, "Try again.") })
   });

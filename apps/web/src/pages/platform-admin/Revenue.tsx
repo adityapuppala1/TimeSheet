@@ -41,6 +41,7 @@ import { platformCapabilities, platformRoleHas } from "@timesheet/shared";
 import { platformRevenueApi, type CohortCell, type RevenueOverview } from "../../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../../store/platform-admin-auth";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, KpiCard, KpiGrid, Num, PRIMARY_BTN, SegmentedControl, TierPill, Toolbar, shortDate } from "./console-ui";
+import { runInBackground } from "../../lib/run-in-background";
 
 /* ------------------------------------------------------------------------------------------- */
 /* Formatting — every one of these has an explicit "we do not know" branch                       */
@@ -438,7 +439,7 @@ function BilledRevenue({ stripe }: { stripe: NonNullable<RevenueOverview["stripe
       if (!result.configured) toast.error("Stripe is not configured on this deployment.");
       else if (result.failed.length) toast.warning(`${result.reconciled} of ${result.attempted} reconciled — ${result.failed.map((f) => f.slug).join(", ")} failed.`);
       else toast.success(`Reconciled ${result.reconciled} workspace${result.reconciled === 1 ? "" : "s"} against Stripe.`);
-      queryClient.invalidateQueries({ queryKey: ["platform-admin", "revenue"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "revenue"] }));
     },
     onError: () => toast.error("The reconciliation could not be run.")
   });

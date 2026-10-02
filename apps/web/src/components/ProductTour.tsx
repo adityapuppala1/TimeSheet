@@ -130,9 +130,9 @@ export function ProductTour({ running, onClose }: { running: boolean; onClose: (
     if (!running || !step) return;
     let cancelled = false;
 
-    (async () => {
+    void (async () => {
       if (location.pathname !== step.route) {
-        navigate(step.route);
+        void navigate(step.route);
         return; // The location change re-runs this effect with the right pathname.
       }
 

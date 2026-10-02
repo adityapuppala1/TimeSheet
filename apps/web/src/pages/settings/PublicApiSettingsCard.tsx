@@ -23,6 +23,7 @@ import { toast } from "../../components/ui/toaster";
 import { SERVER_ORIGIN, settingsApi, type WebhookDeliveryRow } from "../../services/api";
 import { copyText } from "../../lib/clipboard";
 import { EmptyState } from "../../components/ui/empty-state";
+import { runInBackground } from "../../lib/run-in-background";
 
 const EVENT_LABEL: Record<OutboundWebhookEvent, string> = {
   "ticket.created": "Ticket created",
@@ -41,10 +42,10 @@ function CopyableSecret({ value }: { value: string }) {
         size="sm"
         variant="ghost"
         onClick={() => {
-          copyText(value).then(() => {
+          runInBackground(copyText(value).then(() => {
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
-          });
+          }));
         }}
       >
         {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
@@ -77,7 +78,7 @@ function WebhookDeliveries({ webhookId, readOnly }: { webhookId: string; readOnl
       toast[result.status === "delivered" ? "success" : "error"](
         result.status === "delivered" ? "Delivered" : "Still failing — scheduled for another automatic retry"
       );
-      queryClient.invalidateQueries({ queryKey: ["settings", "webhooks", webhookId, "deliveries"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "webhooks", webhookId, "deliveries"] }));
     },
     onError: () => toast.error("Could not retry delivery", { description: "Try again." })
   });
@@ -208,7 +209,7 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
     onSuccess: (created) => {
       setRevealedKey(created.key);
       setNewKeyName("");
-      queryClient.invalidateQueries({ queryKey: ["settings", "api-keys"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "api-keys"] }));
     },
     onError: (err: any) => toast.error("Could not create key", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -216,7 +217,7 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
     mutationFn: (id: string) => settingsApi.revokeApiKey(id),
     onSuccess: () => {
       toast.success("Key revoked");
-      queryClient.invalidateQueries({ queryKey: ["settings", "api-keys"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "api-keys"] }));
     },
     onError: () => toast.error("Could not revoke key", { description: "Try again." })
   });
@@ -233,7 +234,7 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
       setNewHookName("");
       setNewHookUrl("");
       setNewHookEvents([]);
-      queryClient.invalidateQueries({ queryKey: ["settings", "webhooks"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "webhooks"] }));
     },
     onError: (err: any) => toast.error("Could not create webhook", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -246,7 +247,7 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
     mutationFn: (id: string) => settingsApi.deleteWebhook(id),
     onSuccess: () => {
       toast.success("Webhook removed");
-      queryClient.invalidateQueries({ queryKey: ["settings", "webhooks"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "webhooks"] }));
     },
     onError: () => toast.error("Could not remove webhook", { description: "Try again." })
   });

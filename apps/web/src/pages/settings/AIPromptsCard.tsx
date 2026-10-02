@@ -25,6 +25,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
 import { aiPromptApi } from "../../services/api";
+import { runInBackground } from "../../lib/run-in-background";
 
 export function AIPromptsCard({ readOnly }: { readOnly: boolean }) {
   const prompts = useQuery({ queryKey: ["ai", "prompts"], queryFn: aiPromptApi.list });
@@ -120,8 +121,8 @@ function PromptEditorDialog({ feature, readOnly, onClose }: { feature: string | 
   }, [detail.data, feature]);
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["ai", "prompts"] });
-    queryClient.invalidateQueries({ queryKey: ["ai", "prompts", feature] });
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["ai", "prompts"] }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: ["ai", "prompts", feature] }));
   };
 
   const check = useMutation({

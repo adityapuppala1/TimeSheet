@@ -32,6 +32,7 @@ import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toaster";
 import { agoLabel, CHAT_PLATFORM_LABEL as PLATFORM_LABEL, chatFormLead, chatPlatformConfigured, chatPlatformState, chatSwitchTitle, countOf, liveOrOff } from "../../lib/settings-state";
 import { apiUrl, chatIntegrationsApi, projectApi } from "../../services/api";
+import { runInBackground } from "../../lib/run-in-background";
 
 const PREFIX = "chat";
 const OPEN_KEY = "ts.settings.chat.open";
@@ -68,7 +69,7 @@ export function ChatIntegrationsSettingsCard({ readOnly }: { readOnly: boolean }
     mutationFn: ({ platform, isEnabled }: { platform: ChatPlatform; isEnabled: boolean }) => chatIntegrationsApi.updateSettings(platform, { isEnabled }),
     onSuccess: (_data, vars) => {
       toast.success(vars.isEnabled ? `${PLATFORM_LABEL[vars.platform]} is on` : `${PLATFORM_LABEL[vars.platform]} is paused`);
-      queryClient.invalidateQueries({ queryKey: ["settings", "chat-integrations"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "chat-integrations"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -203,7 +204,7 @@ function PlatformCard({
       setBotToken("");
       setSigningSecret("");
       setTeamsAppPassword("");
-      queryClient.invalidateQueries({ queryKey: ["settings", "chat-integrations"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "chat-integrations"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -358,7 +359,7 @@ function NewRoutingRuleRow({ projects }: { projects: Array<{ id: string; name: s
     onSuccess: () => {
       toast.success("Routing rule added");
       setRule({ platform: "SLACK", matchType: "CHANNEL_ID", matchValue: "", projectId: "", defaultModuleId: "" });
-      queryClient.invalidateQueries({ queryKey: ["chat-integrations", "routing-rules"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["chat-integrations", "routing-rules"] }));
     },
     onError: (err: any) => toast.error("Could not add rule", { description: err?.response?.data?.message ?? "Try again." })
   });

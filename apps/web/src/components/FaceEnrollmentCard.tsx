@@ -34,6 +34,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger
 } from "./ui/alert-dialog";
+import { runInBackground } from "../lib/run-in-background";
 
 type TrainingReport = {
   templatesStored: number;
@@ -77,10 +78,10 @@ export function FaceEnrollmentCard() {
       setError(null);
       setCapturing(false);
       setConsented(false);
-      queryClient.invalidateQueries({ queryKey: ["face", "status"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["face", "status"] }));
       // Enrollment may be the last onboarding requirement — lift the first-run gate immediately
       // instead of leaving a completed user staring at a popup that says they aren't done.
-      queryClient.invalidateQueries({ queryKey: ["auth", "onboarding-status"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["auth", "onboarding-status"] }));
     },
     onError: (err: { response?: { data?: { message?: string } } }) => {
       const message = err?.response?.data?.message ?? "Enrollment failed. Please try again.";
@@ -93,7 +94,7 @@ export function FaceEnrollmentCard() {
     mutationFn: faceApi.deleteMyEnrollment,
     onSuccess: () => {
       toast.success("Your face data has been deleted");
-      queryClient.invalidateQueries({ queryKey: ["face", "status"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["face", "status"] }));
     },
     onError: () => toast.error("Could not delete your face data")
   });

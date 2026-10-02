@@ -38,6 +38,7 @@ import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
+import { runInBackground } from "../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -445,7 +446,7 @@ function ClearHistoryButton() {
     mutationFn: () => askAiApi.clear(),
     onSuccess: (r) => {
       toast.success(`Cleared ${r.deleted} exchange${r.deleted === 1 ? "" : "s"}`);
-      qc.invalidateQueries({ queryKey: ["ask-ai", "history"] });
+      runInBackground(qc.invalidateQueries({ queryKey: ["ask-ai", "history"] }));
     },
     onError: (err: any) => toast.error("Could not clear", { description: serverMessage(err, "Try again.") })
   });

@@ -106,6 +106,17 @@ table (`JoinRequest`) — all additive.
 signup emails** once: it claims each domain exactly one workspace could own, and lists every domain two
 workspaces share as a conflict for you to assign by hand — nothing picks one automatically.
 
+### 🔧 No more floating promises in the web app — and a gate so none come back
+
+SonarQube for IDE flagged promises left floating (S9383) in the web app. A type-aware scan found 280
+across 84 files. None was a bug — cache refreshes and navigations that cannot usefully reject — but
+the local lint could not see any of them, so nothing would have caught one that was. Every one is
+now explicit without changing when anything happens: `void` on a plain call (`void navigate(…)`),
+and `runInBackground(…)` on a method call such as `queryClient.invalidateQueries(…)`, which also
+catches and reports a rejection instead of leaving it unhandled. `npm run lint` gains
+`lint:promises`, a separate type-aware pass with that one rule, which fails on any new floating
+promise. The main lint's warning count is unchanged (696).
+
 ### 🐛 The notifications bell: links that close, counts that are true
 
 - **Opening a notification closes the bell** and goes there. It used to navigate underneath and leave

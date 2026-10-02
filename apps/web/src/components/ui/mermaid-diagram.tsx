@@ -10,6 +10,7 @@
 import mermaid from "mermaid";
 import { useEffect, useId, useState } from "react";
 import { Skeleton } from "./skeleton";
+import { runInBackground } from "../../lib/run-in-background";
 
 // suppressErrorRendering: without it, a parse failure makes mermaid append its own "bomb" error
 // graphic straight to document.body — outside the React tree — IN ADDITION to rejecting the
@@ -48,11 +49,11 @@ export function MermaidDiagram({ source }: { source: string }) {
     if (!source.trim()) return;
     setSvg(null);
     setFailed(false);
-    renderMermaidSvg(source, `mermaid-${id}`).then((rendered) => {
+    runInBackground(renderMermaidSvg(source, `mermaid-${id}`).then((rendered) => {
       if (cancelled) return;
       if (rendered) setSvg(rendered);
       else setFailed(true);
-    });
+    }));
     return () => {
       cancelled = true;
     };

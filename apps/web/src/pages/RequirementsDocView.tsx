@@ -40,6 +40,7 @@ import {
   type RequirementsImportProposedTurnRow,
   type RequirementsInterviewTurnResult
 } from "../services/api";
+import { runInBackground } from "../lib/run-in-background";
 
 const IMPORT_ACCEPT = {
   "application/pdf": [".pdf"],
@@ -129,7 +130,7 @@ export function RequirementsDocViewPage() {
     onSuccess: (result) => {
       setLastTurn(result);
       setAnswer("");
-      invalidate();
+      void invalidate();
     },
     onError: (err: any) => toast.error("The assistant didn't respond", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -138,7 +139,7 @@ export function RequirementsDocViewPage() {
     mutationFn: () => requirementsDocApi.generate(docId),
     onSuccess: () => {
       toast.success("Document generated");
-      invalidate();
+      void invalidate();
     },
     onError: (err: any) => toast.error("Could not generate the document", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -147,7 +148,7 @@ export function RequirementsDocViewPage() {
     mutationFn: () => requirementsDocApi.archive(docId),
     onSuccess: () => {
       toast.success("Archived");
-      navigate("/app/requirements");
+      void navigate("/app/requirements");
     },
     onError: (err: any) => toast.error("Could not archive", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -1148,7 +1149,7 @@ function RelatedTicketsCard({ docId, canWrite }: { docId: string; canWrite: bool
     mutationFn: () => requirementsDocApi.tickets.add(docId, key.trim()),
     onSuccess: () => {
       setKey("");
-      refresh();
+      void refresh();
     },
     onError: (err: any) => toast.error("Could not relate the ticket", { description: serverMessage(err, "Check the ticket key and try again.") })
   });
@@ -1246,7 +1247,7 @@ function MaterializeTicketsDialog({ docId, onClose }: { docId: string; onClose: 
     onSuccess: (proposal) => {
       toast.success("Tickets proposed", { description: "Review and accept them in Proposals." });
       onClose();
-      navigate(`/app/proposals?id=${proposal.id}`);
+      void navigate(`/app/proposals?id=${proposal.id}`);
     },
     onError: (err: any) => toast.error("Could not propose tickets", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -1301,7 +1302,7 @@ function MaterializeGoalsDialog({ docId, metrics, onClose }: { docId: string; me
       }),
     onSuccess: (result) => {
       toast.success(`${result.created.length} goal${result.created.length === 1 ? "" : "s"} created`);
-      queryClient.invalidateQueries({ queryKey: ["goals"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["goals"] }));
       onClose();
     },
     onError: (err: any) => toast.error("Could not create goals", { description: err?.response?.data?.message ?? "Try again." })

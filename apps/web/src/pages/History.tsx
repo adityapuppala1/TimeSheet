@@ -50,6 +50,7 @@ import { toast } from "../components/ui/toaster";
 import { DateRangePicker } from "../components/ui/date-range-picker";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
 import { useAuthStore } from "../store/auth";
+import { runInBackground } from "../lib/run-in-background";
 
 function startOfWeek(date: Date) {
   const d = new Date(date);
@@ -126,8 +127,8 @@ export function History() {
       setPendingDelete(null);
       // Both lists move: History is this page, and the dashboard's day timeline and weekly
       // rollups read the same rows.
-      queryClient.invalidateQueries({ queryKey: ["timesheets"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["timesheets"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["dashboard"] }));
     },
     onError: (err: any) =>
       toast.error("Could not delete", { description: err?.response?.data?.message ?? "Try again." })

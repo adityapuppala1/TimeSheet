@@ -36,6 +36,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
+import { runInBackground } from "../../lib/run-in-background";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -62,7 +63,7 @@ export function ChangeManagementSettingsCard({ readOnly }: { readOnly: boolean }
     mutationFn: (payload: Record<string, unknown>) => changeApi.settings.update(payload),
     onSuccess: () => {
       toast.success("Saved");
-      queryClient.invalidateQueries({ queryKey: ["changes"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["changes"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: serverMessage(err, "Try again.") })
   });

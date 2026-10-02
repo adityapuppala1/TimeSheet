@@ -36,7 +36,7 @@ the seeded three as fixtures.
 ## Before you open a PR
 
 ```bash
-npm run lint                         # typecheck api + web, then the SonarQube rules and the ratchet
+npm run lint                         # typecheck api + web, the SonarQube rules, floating promises, the ratchet
 npm run build
 npm test                             # BOTH unit suites (api, then web) — mocked, no DB
 npm run test -w apps/api             # just the api tier
@@ -79,6 +79,22 @@ ceiling (`node scripts/lint-ratchet.mjs --update`, committed with the change). P
 a total, so removing a nested ternary cannot pay for adding a slow regex — those are not the same
 kind of warning. A rule vanishing from the report entirely also fails, so switching one off is a
 visible edit to the baseline rather than a silent drop.
+
+**Floating promises — a second, type-aware pass (`npm run lint:promises`).** SonarQube's S9383
+("promises must be awaited, end with `.catch`, or be marked with `void`") needs type information to
+know what a promise is, and the main pass has none, so it never saw one — 280 had accumulated in
+`apps/web` before SonarQube for IDE showed them. None was a bug (cache refreshes and navigations that
+cannot usefully reject), but nothing would have flagged one that was. `eslint.promises.config.mjs`
+runs exactly one rule, `@typescript-eslint/no-floating-promises`, with types, in about twenty
+seconds, and **fails on any hit** — there is no ceiling to hide under. It is a separate file because
+giving the main pass types would change what dozens of sonarjs rules report and invalidate the
+ratchet. Fixing a hit without changing behaviour:
+
+- a plain function call or an async IIFE → `void navigate("/x")`, `void (async () => …)()`;
+- a method call or a `.then` chain → `runInBackground(queryClient.invalidateQueries(…))`
+  (`apps/web/src/lib/run-in-background.ts`) — `void` on a *method* call trips the local
+  `sonarjs/void-use`, which cannot see types and only exempts plain calls;
+- or, where the caller should wait, `await` it or `return` it from the handler.
 
 When the ratchet fails you, in order of preference: fix the warning; or suppress it *at the line*
 with a comment saying why (an `eslint-disable-next-line` with a reason is a decision someone can

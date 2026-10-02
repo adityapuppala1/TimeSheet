@@ -59,6 +59,7 @@ import { cn } from "../../lib/utils";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, FieldGrid, Num, PRIMARY_BTN, Toolbar } from "./console-ui";
 import { usePlatformAdminAuthStore } from "../../store/platform-admin-auth";
 import { PLAN_CAPABILITIES, PLAN_QUOTAS, platformAdminBillingApi, platformAdminPlanTierApi, type ChatPlatform, type PlanCapabilityKey, type PlanQuotaKey, type PlanTierLimitRow, type SsoProvider } from "../../services/platform-admin-api";
+import { runInBackground } from "../../lib/run-in-background";
 
 type PlanTier = PlanTierLimitRow["tier"];
 
@@ -355,7 +356,7 @@ export function PlatformAdminPlanTiers() {
     mutationFn: (row: PlanTierLimitRow) => platformAdminPlanTierApi.update(row.tier, payloadFromDraft(drafts[row.tier] ?? draftFromRow(row))),
     onSuccess: () => {
       toast.success("Saved");
-      queryClient.invalidateQueries({ queryKey: ["platform-admin", "plan-tier-limits"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "plan-tier-limits"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -717,7 +718,7 @@ function StripeBillingCard() {
     onSuccess: () => {
       setSecretKey("");
       setWebhookSigningSecret("");
-      queryClient.invalidateQueries({ queryKey: ["platform-admin", "billing-settings"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "billing-settings"] }));
       toast.success("Billing settings saved");
     },
     onError: () => toast.error("Could not save", { description: "Try again." })

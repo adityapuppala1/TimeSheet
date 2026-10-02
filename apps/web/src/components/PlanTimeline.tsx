@@ -31,6 +31,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { toast } from "./ui/toaster";
+import { runInBackground } from "../lib/run-in-background";
 
 export type TimelineZoom = "day" | "week" | "month" | "quarter" | "year";
 
@@ -227,8 +228,8 @@ export function PlanTimeline({
   const update = useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) => planApi.updateItem(id, patch),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["plan"] });
-      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["plan"] }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["tickets"] }));
     },
     onError: (err: any) => toast.error("Could not move that item", { description: serverMessage(err, "Try again.") })
   });
