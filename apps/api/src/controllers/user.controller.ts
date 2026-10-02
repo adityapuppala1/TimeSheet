@@ -21,6 +21,7 @@ import { csvCell, CSV_EOL, UTF8_BOM } from "../utils/csv.js";
 import { findCoveredUnenrolledUserIds, notifyEnrollmentRequired } from "../services/face.service.js";
 import { getOnlineSeenByUser } from "../services/maintenance.service.js";
 import { assertSeatAvailable, syncSeatsAfterChange, takesASeat } from "../services/seats.service.js";
+import { assertValidManager, loadReportingRows, managerRefusal } from "../services/reporting-line.service.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
 import { tenantBaseUrl } from "../services/workspace-directory.service.js";
 import {
@@ -571,10 +572,8 @@ userRouter.post(
     }
 
     const role = await prisma.role.findUniqueOrThrow({ where: { name: req.body.role } });
-    if (req.body.managerId) {
-      const manager = await prisma.user.findUnique({ where: { id: req.body.managerId } });
-      if (!manager) throw new AppError(422, "Manager not found");
-    }
+    // Exists, not deleted, and ACTIVE — the same rule PATCH and the CSV import apply.
+    if (req.body.managerId) await assertValidManager(null, req.body.managerId);
     // Returned ONCE in the response below and stored nowhere in plaintext, exactly as
     // /:id/reset-password does it. Null when the admin supplied their own — they already know it.
     const generatedPassword = req.body.password ? null : generateTempPassword();
@@ -716,14 +715,23 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
   // Pass 2 — resolve managerEmail for every successfully-created row, against both this batch
   // and pre-existing users, then link and (best-effort, never blocks the response) send the
   // welcome email — same sendWelcomeEmail() the single-create route uses.
+  //
+  // Every link goes through the same rule PATCH applies (services/reporting-line.service.ts): an
+  // active manager, and no loop. One read of the reporting lines, kept current as this pass links
+  // people, so a file where Ann reports to Bob and Bob to Ann links the first and refuses the second.
+  const reporting = await loadReportingRows();
+  const idByEmail = new Map([...reporting.values()].map((person) => [person.email.toLowerCase(), person.id]));
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const result = results[i];
     if (!result.success || !row.managerEmail) continue;
     try {
-      const managerId = emailToId.get(row.managerEmail.toLowerCase()) ?? (await prisma.user.findUnique({ where: { email: row.managerEmail } }))?.id;
+      const managerId = emailToId.get(row.managerEmail.toLowerCase()) ?? idByEmail.get(row.managerEmail.toLowerCase());
       if (!managerId) throw new Error(`Manager "${row.managerEmail}" not found (create them first, or fix the email)`);
+      const refusal = managerRefusal(reporting, result.userId!, managerId);
+      if (refusal) throw new Error(refusal);
       await prisma.user.update({ where: { id: result.userId! }, data: { managerId } });
+      reporting.get(result.userId!)!.managerId = managerId;
     } catch (error) {
       result.error = `User created, but manager link failed: ${(error as Error).message}`;
     }
@@ -818,7 +826,7 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
 
   const row = await prisma.user.findUnique({
     where: { id: targetId },
-    select: { ...AUTHORITY_TARGET_SELECT, faceVerificationRequired: true, isAgent: true }
+    select: { ...AUTHORITY_TARGET_SELECT, faceVerificationRequired: true, isAgent: true, managerId: true }
   });
   if (!row) throw new AppError(404, "User not found");
   const target = toAuthorityTarget(row);
@@ -854,9 +862,9 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
     data.roleId = role.id;
   }
   if ("managerId" in req.body) {
-    if (req.body.managerId && req.body.managerId === targetId) {
-      throw new AppError(422, "A user cannot be their own manager");
-    }
+    // Only a CHANGE is checked: the edit dialog sends the current manager back on every save, and
+    // refusing that because the manager was deactivated since would block fixing a typo in a name.
+    if (req.body.managerId && req.body.managerId !== row.managerId) await assertValidManager(targetId, req.body.managerId);
     data.managerId = req.body.managerId ?? null;
   }
 

@@ -333,6 +333,55 @@ export function orgChartRoots<T extends { id: string; managerId: string | null }
   return [manager ?? self];
 }
 
+export interface OrgChartNode {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  designation: string | null;
+  role: string;
+  reports: OrgChartNode[];
+}
+
+/**
+ * The tree under `roots`, each person drawn ONCE.
+ *
+ * WHY THE VISITED SET. Reporting lines are now refused when they would loop (see
+ * services/reporting-line.service.ts), but data written before that may still hold A → B → A, and
+ * this recursion used to follow it until the stack ran out — a 500 for everyone in or under the
+ * loop. A person already drawn is not drawn again, so a loop renders as the chain it is.
+ *
+ * Pure, and exported, so the shape is testable without standing up a request.
+ */
+export function buildOrgChart(users: OrgChartUser[], roots: OrgChartUser[]): OrgChartNode[] {
+  const byManager = new Map<string | null, OrgChartUser[]>();
+  for (const user of users) {
+    const bucket = byManager.get(user.managerId);
+    if (bucket) bucket.push(user);
+    else byManager.set(user.managerId, [user]);
+  }
+
+  const drawn = new Set<string>();
+  function buildNode(user: OrgChartUser): OrgChartNode {
+    drawn.add(user.id);
+    const reports: OrgChartNode[] = [];
+    for (const report of byManager.get(user.id) ?? []) {
+      if (!drawn.has(report.id)) reports.push(buildNode(report));
+    }
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      avatarUrl: user.avatarUrl,
+      designation: user.designation,
+      role: user.role.name,
+      reports
+    };
+  }
+
+  return roots.filter((root) => !drawn.has(root.id)).map(buildNode);
+}
+
 teamRouter.get("/org-chart", async (req, res) => {
   const allUsers: OrgChartUser[] = await prisma.user.findMany({
     where: { deletedAt: null, status: "ACTIVE" },
@@ -349,29 +398,8 @@ teamRouter.get("/org-chart", async (req, res) => {
   });
   const users = allUsers.filter((u) => !SYSTEM_ACCOUNT_EMAILS.has(u.email));
 
-  const byManager = new Map<string | null, OrgChartUser[]>();
-  for (const user of users) {
-    const key = user.managerId;
-    const bucket = byManager.get(key);
-    if (bucket) bucket.push(user);
-    else byManager.set(key, [user]);
-  }
-
-  function buildNode(user: OrgChartUser): unknown {
-    const reports = (byManager.get(user.id) ?? []).map(buildNode);
-    return {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      avatarUrl: user.avatarUrl,
-      designation: user.designation,
-      role: user.role.name,
-      reports
-    };
-  }
-
   const privileged = ["SUPER_ADMIN", "ADMIN"].includes(req.user!.role);
-  res.json(orgChartRoots(users, req.user!.id, privileged).map(buildNode));
+  res.json(buildOrgChart(users, orgChartRoots(users, req.user!.id, privileged)));
 });
 
 /**
