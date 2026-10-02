@@ -65,7 +65,7 @@ import {
   shortDateTime
 } from "./console-ui";
 import { runInBackground } from "../../lib/run-in-background";
-import { isQueuedForApproval } from "../../lib/platform-console";
+import { countInRetention, isQueuedForApproval } from "../../lib/platform-console";
 
 const errorMessageOf = (error: unknown) => (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
 
@@ -461,7 +461,7 @@ export function PlatformAdminRetention() {
       {d && (
         <>
           <KpiGrid>
-            <KpiCard label="In the programme" value={queue.filter((r) => r.plan.inProgramme).length} icon={HeartHandshake} tone="accent" />
+            <KpiCard label="In the programme" value={countInRetention(queue)} icon={HeartHandshake} tone="accent" />
             <KpiCard label="Lapsed, unconverted" value={lapsed} icon={Users} tone={lapsed > 0 ? "warning" : "default"} delay={0.05} />
             <KpiCard label="Within 14 days of deletion" value={dueSoon} icon={AlertTriangle} tone={dueSoon > 0 ? "destructive" : "default"} delay={0.1} />
             <KpiCard label="On hold" value={held} icon={Pause} delay={0.15} />

@@ -67,6 +67,16 @@ export function issuedCredentialOf(approval: { action: string; result: unknown }
 }
 
 /**
+ * How many workspaces are really in the retention programme: ones that had a trial and have NOT
+ * converted. `plan.converted` is the server's isConverted (retention.service.ts); counting
+ * `inProgramme` alone included paying customers who merely started as trials. Same rule as the
+ * Overview's "In retention" figure, which the server computes.
+ */
+export function countInRetention(queue: ReadonlyArray<{ plan: { inProgramme: boolean; converted: boolean } }>): number {
+  return queue.filter((row) => row.plan.inProgramme && !row.plan.converted).length;
+}
+
+/**
  * Whether the console-wide "set up two-factor" banner applies: an operator with no factor whom the
  * deployment does NOT force to enrol (a role it does not cover, or PLATFORM_ADMIN_REQUIRE_MFA off).
  * Quiet behind a gate, because the gate's own screen is already saying it.

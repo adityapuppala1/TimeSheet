@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { accountGateFromError, consoleAccountGate, isQueuedForApproval, issuedCredentialOf, shouldNagForMfa } from "../../src/lib/platform-console";
+import { accountGateFromError, consoleAccountGate, countInRetention, isQueuedForApproval, issuedCredentialOf, shouldNagForMfa } from "../../src/lib/platform-console";
 
 describe("issuedCredentialOf — the one time an approver sees a new operator's password", () => {
   it("finds the temporary password an approved admin.create or admin.reactivate returns", () => {
@@ -43,6 +43,13 @@ describe("every page that calls a two-person route says when it was only queued 
       }
     });
   }
+});
+
+describe("countInRetention — the Retention page's \"In the programme\" figure (G13)", () => {
+  it("counts lapsed and in-trial workspaces but not ones that converted to a paid plan", () => {
+    const row = (inProgramme: boolean, converted: boolean) => ({ plan: { inProgramme, converted } });
+    expect(countInRetention([row(true, false), row(true, true), row(false, false), row(true, false)])).toBe(2);
+  });
 });
 
 describe("isQueuedForApproval — a 202 is not a success", () => {

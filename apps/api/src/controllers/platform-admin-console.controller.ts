@@ -179,7 +179,9 @@ platformAdminConsoleRouter.get("/overview", async (_req, res) => {
     retention: {
       enabled: settings.enabled,
       autoDeleteEnabled: settings.autoDeleteEnabled,
-      inProgramme: queue.filter((q) => q.plan.inProgramme).length,
+      // A trial that converted is still `inProgramme` (it had a trial) but is a paying customer the
+      // programme never writes to or deletes — `plan.converted` is retention.service's isConverted.
+      inProgramme: queue.filter((q) => q.plan.inProgramme && !q.plan.converted).length,
       dueSoon: queue.filter((q) => q.plan.inProgramme && q.plan.daysUntilDeletion !== null && q.plan.daysUntilDeletion <= 14 && !q.plan.converted).length,
       held: queue.filter((q) => q.retentionHold).length
     },

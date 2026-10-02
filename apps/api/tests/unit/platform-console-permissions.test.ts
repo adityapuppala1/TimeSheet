@@ -624,6 +624,17 @@ describe("backup RETENTION is an operator decision, the schedule a billing one (
   });
 });
 
+describe("the Overview's \"In retention\" figure (G13)", () => {
+  it("does not count a workspace that started as a trial and now pays", async () => {
+    const retention = await import("../../src/services/retention.service.js");
+    const row = (converted: boolean) => ({ retentionHold: false, plan: { inProgramme: true, converted, daysUntilDeletion: 40 } });
+    vi.mocked(retention.getRetentionQueue).mockResolvedValueOnce([row(false), row(true), row(true)] as never);
+    const res = await request(app).get("/api/platform-admin/overview").set("Authorization", `Bearer ${tokenFor.OWNER}`);
+    expect(res.status).toBe(200);
+    expect(res.body.retention.inProgramme).toBe(1);
+  });
+});
+
 describe("the role comes from the database row, not from the token", () => {
   it("honours a demotion on the very next request, with the same token", async () => {
     const before = await call({ method: "post", path: "/monitoring/sample", cap: OPERATE }, "OPERATOR");
