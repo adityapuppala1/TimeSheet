@@ -33,6 +33,7 @@ import {
   resolveDayComparison,
   resolveTimestampWindow
 } from "../utils/date-window.js";
+import { countApprovalSlaBreaches } from "./approval-sla-breaches.service.js";
 import { isChangeManagementOn } from "./change.service.js";
 import { COUNTED_PEOPLE } from "./people-visibility.service.js";
 import { workingDaysBetween } from "./plan-schedule.service.js";
@@ -142,20 +143,6 @@ async function approvedWeekToDate(now: Date) {
   return { thisWeek, lastWeek };
 }
 
-/**
- * Approval SLA breaches whose deadline fell in the window: the approval deadline passed before a
- * decision — `(reviewedAt ?? now) > approvalDeadline`. Read from the deadline, not from
- * `slaBreachAt`, which only the escalation sweep writes and only while SLA_ENABLED is on.
- */
-async function approvalSlaBreaches(window: InstantRange, now: Date): Promise<number> {
-  const upper = window.lt && window.lt < now ? window.lt : now;
-  const rows = await prisma.timesheet.findMany({
-    where: { deletedAt: null, approvalDeadline: { gte: window.gte, lt: upper } },
-    select: { approvalDeadline: true, reviewedAt: true }
-  });
-  return rows.filter((r) => (r.reviewedAt ?? now).getTime() > r.approvalDeadline!.getTime()).length;
-}
-
 /** Tickets that reached done inside a window: resolved in it, or closed in it without having been
  *  resolved first. `updatedAt` moves on every edit, so it cannot say when a ticket was closed. */
 function closedInWindow(window: InstantRange): Prisma.TicketWhereInput {
@@ -232,8 +219,9 @@ export async function buildAdminSummary(
     prisma.notification.count({ where: { category: "reminder.escalation", createdAt: inPrevWindow } }),
     workforceSnapshot(inDays, prevDays, now, workingDays),
     approvedWeekToDate(now),
-    approvalSlaBreaches(inWindow, now),
-    approvalSlaBreaches(inPrevWindow, now)
+    // Counted in the database (approval-sla-breaches.service.ts): this endpoint is polled.
+    countApprovalSlaBreaches(inWindow, now),
+    countApprovalSlaBreaches(inPrevWindow, now)
   ]);
 
   const projectNames = await prisma.project.findMany({

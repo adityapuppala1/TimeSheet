@@ -29,6 +29,7 @@
 import type { TicketStatus } from "@prisma/client";
 import { securityDisciplineFindingTypes } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
+import { countApprovalSlaBreaches, countApprovalSlaBreachesBy } from "./approval-sla-breaches.service.js";
 import { isChangeManagementOn } from "./change.service.js";
 import { buildPracticeAnalytics, type PracticeAnalytics } from "./practice-analytics.service.js";
 import { LOGGED_HOURS_WHERE } from "./workspace-metrics.js";
@@ -259,25 +260,15 @@ function countMap(rows: Array<{ projectId: string | null; _count: unknown }>): M
 }
 
 /** Approval deadlines in the period that passed before a decision — `(reviewedAt ?? now) > deadline`
- *  — read from the deadline, not from `slaBreachAt`, which only the SLA_ENABLED sweep writes. */
-async function approvalDeadlinesIn(window: { start: Date; endExclusive: Date }, projectIds?: string[]) {
-  const now = new Date();
-  const upper = window.endExclusive < now ? window.endExclusive : now;
-  const rows = await prisma.timesheet.findMany({
-    where: { deletedAt: null, approvalDeadline: { gte: window.start, lt: upper }, ...(projectIds ? { projectId: { in: projectIds } } : {}) },
-    select: { projectId: true, approvalDeadline: true, reviewedAt: true }
-  });
-  return rows.filter((r) => r.approvalDeadline !== null && (r.reviewedAt ?? now).getTime() > r.approvalDeadline.getTime());
-}
-
+ *  — read from the deadline, not from `slaBreachAt`, which only the SLA_ENABLED sweep writes.
+ *  Counted in the database (approval-sla-breaches.service.ts). */
 async function approvalSlaBreaches(window: { start: Date; endExclusive: Date }): Promise<number> {
-  return (await approvalDeadlinesIn(window)).length;
+  return countApprovalSlaBreaches({ gte: window.start, lt: window.endExclusive }, new Date());
 }
 
 /** Shaped like the `groupBy` it replaces, so `countMap` reads it unchanged. */
 async function approvalSlaBreachesByProject(ids: string[], window: { start: Date; endExclusive: Date }) {
-  const counts = new Map<string, number>();
-  for (const row of await approvalDeadlinesIn(window, ids)) counts.set(row.projectId, (counts.get(row.projectId) ?? 0) + 1);
+  const counts = await countApprovalSlaBreachesBy("projectId", { gte: window.start, lt: window.endExclusive }, new Date(), { projectIds: ids });
   return [...counts.entries()].map(([projectId, n]) => ({ projectId, _count: { _all: n } }));
 }
 

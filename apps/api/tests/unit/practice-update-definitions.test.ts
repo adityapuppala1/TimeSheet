@@ -32,7 +32,12 @@ vi.mock("../../src/config/prisma.js", () => {
         }
       }
     );
-  return { prisma: new Proxy({}, { get: (_t, name: string) => model(name) }) };
+  // `$queryRaw` is a function, not a model: recorded, and answered with no rows.
+  const raw = (name: string) => (query: any) => {
+    calls.push({ model: name, op: "raw", args: query });
+    return Promise.resolve([]);
+  };
+  return { prisma: new Proxy({}, { get: (_t, name: string) => (name.startsWith("$") ? raw(name) : model(name)) }) };
 });
 vi.mock("../../src/services/change.service.js", () => ({ isChangeManagementOn: vi.fn(async () => false) }));
 vi.mock("../../src/services/planning.service.js", () => ({
@@ -66,6 +71,15 @@ describe("practice update SLA figures", () => {
     await buildPracticeUpdateData(from, to, "21–27 Sep");
     const stamped = calls.filter((c) => c.args?.where?.slaBreachAt);
     expect(stamped).toEqual([]);
+  });
+
+  it("counts approval-SLA breaches in the database instead of loading the period's deadlines", async () => {
+    await buildPracticeUpdateData(from, to, "21–27 Sep");
+    expect(calls.filter((c) => c.model === "timesheet" && c.args?.where?.approvalDeadline)).toEqual([]);
+    const counts = calls.filter((c) => c.model === "$queryRaw" && /approvalDeadline/.test(c.args?.sql ?? ""));
+    // The period, the period before it, and the per-project breakdown.
+    expect(counts.length).toBeGreaterThanOrEqual(2);
+    for (const c of counts) expect(c.args.sql).toMatch(/t\.reviewedAt IS NULL OR t\.reviewedAt > t\.approvalDeadline/);
   });
 
   it("counts a ticket breached when it is open and past its due date", async () => {

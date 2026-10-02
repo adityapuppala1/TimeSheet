@@ -10,6 +10,7 @@
  *   - M11: the org chart drew AI agent identities as people.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { evaluateApprovalSlaQuery } from "../helpers/approval-sla-sql.js";
 
 const MANAGER = "mgr";
 const state = vi.hoisted(() => ({ calls: [] as Array<{ op: string; args: any }>, deadlines: [] as any[] }));
@@ -33,7 +34,10 @@ vi.mock("../../src/config/prisma.js", () => ({
       count: log("timesheet.count", () => 0),
       aggregate: log("timesheet.aggregate", () => ({ _sum: { totalHours: 7.5 } }))
     },
-    escalation: { count: log("escalation.count", () => 2) }
+    escalation: { count: log("escalation.count", () => 2) },
+    // The approval-SLA breach count is a raw COUNT(*) (approval-sla-breaches.service.ts), evaluated
+    // over the same fixture rows.
+    $queryRaw: log("$queryRaw", (query) => evaluateApprovalSlaQuery(query, state.deadlines))
   }
 }));
 vi.mock("../../src/middleware/auth.js", () => ({
@@ -100,12 +104,21 @@ describe("GET /team/sla-summary", () => {
 
   it("counts today's approval-SLA breaches from the deadline, not from the sweep's stamp", async () => {
     state.deadlines = [
-      { approvalDeadline: new Date("2026-09-30T19:00:00.000Z"), reviewedAt: null },
-      { approvalDeadline: new Date("2026-09-30T19:00:00.000Z"), reviewedAt: new Date("2026-09-30T18:00:00.000Z") }
+      { userId: "asha", approvalDeadline: new Date("2026-09-30T19:00:00.000Z"), reviewedAt: null },
+      { userId: "asha", approvalDeadline: new Date("2026-09-30T19:00:00.000Z"), reviewedAt: new Date("2026-09-30T18:00:00.000Z") }
     ];
     const res = await request(app).get("/team/sla-summary").expect(200);
     expect(res.body.breached).toBe(1);
     expect(calls("timesheet.count").some((c) => c.args.where.slaBreachAt)).toBe(false);
+  });
+
+  it("counts approval-SLA breaches in the database rather than loading every deadline", async () => {
+    state.deadlines = [{ userId: "asha", approvalDeadline: new Date("2026-09-30T19:00:00.000Z"), reviewedAt: null }];
+    const summary = await request(app).get("/team/sla-summary").expect(200);
+    const roster = await request(app).get("/team/reports").expect(200);
+    expect(summary.body.breached).toBe(1);
+    expect(roster.body[0].stats.slaBreached).toBe(1);
+    expect(calls("timesheet.findMany").filter((c) => c.args?.where?.approvalDeadline)).toEqual([]);
   });
 });
 

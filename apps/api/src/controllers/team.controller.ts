@@ -10,6 +10,7 @@ import { Router } from "express";
 import { prisma } from "../config/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
+import { countApprovalSlaBreaches, countApprovalSlaBreachesBy } from "../services/approval-sla-breaches.service.js";
 import { COUNTED_PEOPLE } from "../services/people-visibility.service.js";
 import { LOGGED_HOURS_WHERE } from "../services/workspace-metrics.js";
 import { platformDayStart, platformMonth, platformToday, platformWeekStart } from "../utils/date-window.js";
@@ -64,7 +65,7 @@ teamRouter.get("/reports", async (req, res) => {
 
   // Aggregated in the database, over a stated window. This used to load every timesheet each
   // report had ever logged and count them in Node — the page got slower every week anybody worked.
-  const [byStatus, pendingNow, deadlines] = ids.length
+  const [byStatus, pendingNow, breachesByPerson] = ids.length
     ? await Promise.all([
         prisma.timesheet.groupBy({
           by: ["userId", "status"],
@@ -74,21 +75,16 @@ teamRouter.get("/reports", async (req, res) => {
         }),
         prisma.timesheet.groupBy({ by: ["userId"], where: { userId: { in: ids }, deletedAt: null, status: "SUBMITTED" }, _count: { _all: true } }),
         // Approval-SLA breaches from the deadline (workspace-metrics.ts), not from `slaBreachAt`,
-        // which only the SLA_ENABLED sweep writes.
-        prisma.timesheet.findMany({
-          where: { userId: { in: ids }, deletedAt: null, approvalDeadline: { gte: platformDayStart(windowStart), lt: now } },
-          select: { userId: true, approvalDeadline: true, reviewedAt: true }
-        })
+        // which only the SLA_ENABLED sweep writes — counted per person in the database.
+        countApprovalSlaBreachesBy("userId", { gte: platformDayStart(windowStart), lt: now }, now, { userIds: ids })
       ])
-    : [[], [], []];
+    : [[], [], new Map<string, number>()];
 
   const enriched = reports.map((person) => {
     const mine = byStatus.filter((g) => g.userId === person.id);
     const countOf = (status: string) => mine.find((g) => g.status === status)?._count._all ?? 0;
     const approvedHours = Number(mine.find((g) => g.status === "APPROVED")?._sum.totalHours ?? 0);
-    const slaBreached = deadlines.filter(
-      (d) => d.userId === person.id && d.approvalDeadline !== null && (d.reviewedAt ?? now).getTime() > d.approvalDeadline.getTime()
-    ).length;
+    const slaBreached = breachesByPerson.get(person.id) ?? 0;
     return {
       ...person,
       role: person.role.name,
@@ -274,14 +270,9 @@ teamRouter.get("/sla-summary", async (req, res) => {
     prisma.timesheet
       .aggregate({ where: { userId: { in: myReportIds }, status: "APPROVED", deletedAt: null, workDate: { gte, lte } }, _sum: { totalHours: true } })
       .then((r) => Number(Number(r._sum.totalHours ?? 0).toFixed(2)));
-  /** Approval deadlines in [from, to) that passed before a decision — `(reviewedAt ?? now) > deadline`. */
-  const breachesBetween = async (from: Date, to: Date) => {
-    const rows = await prisma.timesheet.findMany({
-      where: { userId: { in: myReportIds }, deletedAt: null, approvalDeadline: { gte: from, lt: to } },
-      select: { approvalDeadline: true, reviewedAt: true }
-    });
-    return rows.filter((r) => r.approvalDeadline !== null && (r.reviewedAt ?? now).getTime() > r.approvalDeadline.getTime()).length;
-  };
+  /** Approval deadlines in [from, to) that passed before a decision — `(reviewedAt ?? now) > deadline`,
+   *  counted in the database. */
+  const breachesBetween = (from: Date, to: Date) => countApprovalSlaBreaches({ gte: from, lt: to }, now, { userIds: myReportIds });
 
   const [submitted, breached, breachedLastWeek, approvedThisWeek, approvedLastWeek, openEscalations] = await Promise.all([
     prisma.timesheet.count({ where: { userId: { in: myReportIds }, status: "SUBMITTED", deletedAt: null } }),

@@ -18,6 +18,7 @@
  * numbers, so a wrong filter shows up as a wrong count.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { evaluateApprovalSlaQuery, isApprovalSlaQuery } from "../helpers/approval-sla-sql.js";
 
 type Person = { id: string; status: string; deletedAt: Date | null; isAgent: boolean; role: string; createdAt: Date };
 
@@ -35,7 +36,8 @@ const state = vi.hoisted(() => ({
   tickets: [] as Array<Record<string, any>>,
   personDays: { current: 0, ytd: 0 },
   noWorkforce: false,
-  rawCalls: [] as Array<{ sql: string; values: unknown[] }>
+  rawCalls: [] as Array<{ sql: string; values: unknown[] }>,
+  slaRawCalls: [] as Array<{ sql: string; values: unknown[] }>
 }));
 
 function inRange(value: Date | null | undefined, cond: any): boolean {
@@ -131,6 +133,11 @@ vi.mock("../../src/config/prisma.js", () => ({
     ticket: { count: vi.fn(async (args: any) => state.tickets.filter((t) => rowMatches(t, args.where)).length) },
     changeRequest: { count: vi.fn(async () => 0) },
     $queryRaw: vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      // The approval-SLA breach count is a raw COUNT(*) too; it is evaluated over the table.
+      if (isApprovalSlaQuery(strings)) {
+        state.slaRawCalls.push({ sql: strings.sql, values: strings.values });
+        return evaluateApprovalSlaQuery(strings, state.timesheets as any);
+      }
       const sql = strings.join("?");
       state.rawCalls.push({ sql, values });
       // The year-to-date call ends yesterday; the period call ends inside the period.
@@ -193,6 +200,7 @@ beforeEach(() => {
   state.personDays = { current: 0, ytd: 0 };
   state.noWorkforce = false;
   state.rawCalls = [];
+  state.slaRawCalls = [];
 });
 
 const week = "from=2026-08-24&to=2026-08-27";
@@ -268,6 +276,25 @@ describe("the stat tiles (M4)", () => {
     ];
     const res = await request(app).get("/reports/admin-summary").expect(200);
     expect(res.body.slaBreached).toBe(1);
+  });
+
+  it("counts approval-SLA breaches in the database, never loading the window's rows on the poll", async () => {
+    state.timesheets = [
+      // Reviewed two hours after a deadline that fell this morning: breached.
+      entry("asha", "2026-08-26", 8, { reviewedAt: new Date("2026-08-27T06:30:00.000Z"), approvalDeadline: new Date("2026-08-27T04:30:00.000Z") }),
+      // Deleted: not counted.
+      entry("ben", "2026-08-26", 8, { status: "SUBMITTED", reviewedAt: null, approvalDeadline: new Date("2026-08-27T04:30:00.000Z"), deletedAt: new Date() })
+    ];
+    const findMany = (await import("../../src/config/prisma.js")).prisma.timesheet.findMany as unknown as ReturnType<typeof vi.fn>;
+    findMany.mockClear();
+    const res = await request(app).get("/reports/admin-summary").expect(200);
+    expect(res.body.slaBreached).toBe(1);
+    // The home page polls this every 120 s; with "This year" selected the old read was every
+    // deadline of the year, twice. It is a COUNT now.
+    const rowReads = findMany.mock.calls.filter(([args]) => (args as any)?.where?.approvalDeadline);
+    expect(rowReads).toEqual([]);
+    // One COUNT for the window, one for its comparison window.
+    expect(state.slaRawCalls.map((c) => c.sql)).toEqual([expect.stringMatching(/COUNT\(\*\)/), expect.stringMatching(/COUNT\(\*\)/)]);
   });
 });
 
