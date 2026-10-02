@@ -30,9 +30,20 @@ import { emailBlocks } from "./mail-templates.js";
 
 const { dataTable, periodStrip, share, escape } = emailBlocks;
 
+/**
+ * One reporting window, in BOTH forms it is compared in.
+ *
+ * `from`/`to` are UTC-midnight DAYS, for `workDate` — a date column stored at UTC midnight of the
+ * intended day. `fromInstant`/`toInstant` are the same window as INSTANTS (local midnight on the
+ * worker's clock), for timestamps: `createdAt`, `resolvedAt`, `updatedAt`. Using the day form for a
+ * timestamp put the week's edges at 05:30 India time — a ticket resolved at 01:00 on Monday was
+ * counted in the week it was not resolved in.
+ */
 export interface Period {
   from: Date;
   to: Date;
+  fromInstant: Date;
+  toInstant: Date;
   label: string;
 }
 
@@ -46,11 +57,23 @@ export interface DigestPeriods {
  *  converted the same way or a Monday-morning run drops or double-counts a day at each edge. */
 const toUtcDay = (d: Date) => new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
 
+/** Local midnight of `date`'s day, on the worker's clock. */
+const startOfLocalDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+const period = (fromInstant: Date, toInstant: Date, label: string): Period => ({
+  from: toUtcDay(fromInstant),
+  to: toUtcDay(toInstant),
+  fromInstant,
+  toInstant,
+  label
+});
+
 export function buildPeriods(now: Date, weekFrom: Date, weekTo: Date, weekLabel: string): DigestPeriods {
+  const today = startOfLocalDay(now);
   return {
-    week: { from: toUtcDay(weekFrom), to: toUtcDay(weekTo), label: weekLabel },
-    month: { from: toUtcDay(new Date(now.getFullYear(), now.getMonth(), 1)), to: toUtcDay(now), label: "Month to date" },
-    year: { from: toUtcDay(new Date(now.getFullYear(), 0, 1)), to: toUtcDay(now), label: "Year to date" }
+    week: period(weekFrom, weekTo, weekLabel),
+    month: period(new Date(now.getFullYear(), now.getMonth(), 1), today, "Month to date"),
+    year: period(new Date(now.getFullYear(), 0, 1), today, "Year to date")
   };
 }
 
@@ -79,18 +102,19 @@ async function totalsFor(period: Period, userId?: string): Promise<Totals> {
       workDate: { gte: period.from, lt: period.to },
       ...(userId ? { userId } : {})
     }),
+    // Timestamps take the INSTANT bounds — see `Period`.
     prisma.ticket.count({
-      where: { deletedAt: null, createdAt: { gte: period.from, lt: period.to }, ...(userId ? { reporterId: userId } : {}) }
+      where: { deletedAt: null, createdAt: { gte: period.fromInstant, lt: period.toInstant }, ...(userId ? { reporterId: userId } : {}) }
     }),
     prisma.ticket.count({
-      where: { deletedAt: null, resolvedAt: { gte: period.from, lt: period.to }, ...(userId ? { assigneeId: userId } : {}) }
+      where: { deletedAt: null, resolvedAt: { gte: period.fromInstant, lt: period.toInstant }, ...(userId ? { assigneeId: userId } : {}) }
     }),
     // Raised: the change's ticket was created in the window, by this person when scoped.
     prisma.changeRequest.count({
       where: {
         ticket: {
           deletedAt: null,
-          createdAt: { gte: period.from, lt: period.to },
+          createdAt: { gte: period.fromInstant, lt: period.toInstant },
           ...(userId ? { reporterId: userId } : {})
         }
       }
@@ -101,7 +125,7 @@ async function totalsFor(period: Period, userId?: string): Promise<Totals> {
     prisma.changeRequest.count({
       where: {
         state: "CLOSED",
-        updatedAt: { gte: period.from, lt: period.to },
+        updatedAt: { gte: period.fromInstant, lt: period.toInstant },
         ticket: { deletedAt: null, ...(userId ? { assigneeId: userId } : {}) }
       }
     })
@@ -214,7 +238,7 @@ async function teamTables(managerId: string, periods: DigestPeriods): Promise<st
     }),
     prisma.ticket.groupBy({
       by: ["assigneeId"],
-      where: { assigneeId: { in: ids }, deletedAt: null, resolvedAt: { gte: periods.week.from, lt: periods.week.to } },
+      where: { assigneeId: { in: ids }, deletedAt: null, resolvedAt: { gte: periods.week.fromInstant, lt: periods.week.toInstant } },
       _count: { _all: true }
     }),
     prisma.ticket.groupBy({

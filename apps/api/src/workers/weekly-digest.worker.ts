@@ -74,9 +74,9 @@ function digestScopeFor(perms: string[], reportCount: number): DigestScope {
  * quoting "0.0h approved, 0 resolved" at them would read as their report rather than as the
  * preamble to the team and workspace tables underneath.
  */
-function digestBodyFor(scope: DigestScope, own: { hoursLogged: number; resolved: number; openAssigned: number }): string {
+function digestBodyFor(scope: DigestScope, own: { approvedHours: number; resolved: number; openAssigned: number }): string {
   if (scope === "SELF") {
-    return `${own.hoursLogged.toFixed(1)}h approved, ${own.resolved} resolved, ${own.openAssigned} still assigned to you.`;
+    return `${own.approvedHours.toFixed(1)}h approved, ${own.resolved} resolved, ${own.openAssigned} still assigned to you.`;
   }
   const subject = scope === "WORKSPACE" ? "the workspace" : "your team";
   return `Last week's figures for ${subject}, with your own week alongside.`;
@@ -124,7 +124,7 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
   for (const user of users) {
     if (await alreadySentThisRun(user.id, currentWeekStart)) continue;
 
-    const [ticketsCreated, resolvedTickets, openAssignedTickets, hoursAgg] = await Promise.all([
+    const [ticketsCreated, resolvedTickets, openAssignedTickets, hoursByStatus] = await Promise.all([
       prisma.ticket.count({ where: { reporterId: user.id, deletedAt: null, createdAt: { gte: weekStart, lt: weekEnd } } }),
       prisma.ticket.findMany({
         where: { assigneeId: user.id, deletedAt: null, resolvedAt: { gte: weekStart, lt: weekEnd } },
@@ -135,13 +135,21 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
         where: { assigneeId: user.id, deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] } },
         select: { key: true, title: true, status: true }
       }),
-      prisma.timesheet.aggregate({
+      // By status, because two different figures come out of it: hours LOGGED (anything that still
+      // stands — what the activity gate and the AI summary describe) and hours APPROVED (what the
+      // in-app line says, on the same basis as the email's tables). One unfiltered sum used to serve
+      // as both, so "Xh approved" counted drafts, pending and even rejected hours.
+      prisma.timesheet.groupBy({
+        by: ["status"],
         where: { userId: user.id, deletedAt: null, workDate: { gte: weekStartUtcDate, lt: weekEndUtcDate } },
         _sum: { totalHours: true }
       })
     ]);
 
-    const hoursLogged = Number(hoursAgg._sum.totalHours ?? 0);
+    const hoursOf = (statuses: string[]) =>
+      hoursByStatus.filter((row) => statuses.includes(row.status)).reduce((sum, row) => sum + Number(row._sum.totalHours ?? 0), 0);
+    const hoursLogged = hoursOf(["DRAFT", "SUBMITTED", "APPROVED"]);
+    const approvedHours = hoursOf(["APPROVED"]);
     const openAssigned = openAssignedTickets.length;
 
     // Who may see what. Resolved per recipient rather than by role NAME, so a custom role carrying
@@ -203,7 +211,7 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
       // there is not — a notification reading "Your week in review" and nothing else is not a summary.
       // A manager whose own week is empty must not be told "0.0h approved, 0 resolved" as though
       // that were their report — theirs is the team and workspace tables underneath.
-      body: summary || digestBodyFor(scope, { hoursLogged, resolved: resolvedTickets.length, openAssigned }),
+      body: summary || digestBodyFor(scope, { approvedHours, resolved: resolvedTickets.length, openAssigned }),
       link: "/app",
       email: {
         templateKey: "digest.weekly",
