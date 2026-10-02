@@ -10,7 +10,7 @@ import { Router } from "express";
 import { prisma } from "../config/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
-import { NOT_DEACTIVATED } from "../services/people-visibility.service.js";
+import { COUNTED_PEOPLE } from "../services/people-visibility.service.js";
 import { LOGGED_HOURS_WHERE } from "../services/workspace-metrics.js";
 import { platformDayStart, platformMonth, platformToday, platformWeekStart } from "../utils/date-window.js";
 import { CHAT_INTAKE_SYSTEM_EMAIL } from "../services/chat-intake.service.js";
@@ -53,7 +53,7 @@ const ROSTER_WINDOW_DAYS = 90;
 
 teamRouter.get("/reports", async (req, res) => {
   const reports = await prisma.user.findMany({
-    where: { managerId: req.user!.id, ...NOT_DEACTIVATED },
+    where: { managerId: req.user!.id, ...COUNTED_PEOPLE },
     select: { id: true, name: true, email: true, status: true, avatarUrl: true, bio: true, role: { select: { name: true } } },
     orderBy: { name: "asc" }
   });
@@ -151,7 +151,7 @@ teamRouter.get("/reports/:userId/hours-trend", async (req, res) => {
   // page — but a bookmarked or shared URL would still have reached the endpoint, and a trend
   // that is hidden everywhere except to whoever kept the link is not hidden.
   const report = await prisma.user.findFirst({
-    where: { id: String(req.params.userId), managerId: req.user!.id, ...NOT_DEACTIVATED },
+    where: { id: String(req.params.userId), managerId: req.user!.id, ...COUNTED_PEOPLE },
     select: { id: true, name: true }
   });
   if (!report) throw new AppError(404, "No such direct report.");
@@ -253,7 +253,7 @@ teamRouter.get("/sla-summary", async (req, res) => {
     await prisma.user.findMany({
       // Same roster as `/reports` renders, so the card and the list beside it cannot disagree
       // about who is on this team.
-      where: { managerId: req.user!.id, ...NOT_DEACTIVATED },
+      where: { managerId: req.user!.id, ...COUNTED_PEOPLE },
       select: { id: true }
     })
   ).map((u) => u.id);
@@ -450,7 +450,7 @@ teamRouter.get("/timesheet-anomalies", async (req, res) => {
     await prisma.user.findMany({
       // Same roster as `/reports` renders, so the card and the list beside it cannot disagree
       // about who is on this team.
-      where: { managerId: req.user!.id, ...NOT_DEACTIVATED },
+      where: { managerId: req.user!.id, ...COUNTED_PEOPLE },
       select: { id: true }
     })
   ).map((u) => u.id);

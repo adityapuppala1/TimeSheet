@@ -124,3 +124,13 @@ describe("GET /team/org-chart", () => {
     expect(calls("user.findMany")[0].args.where.isAgent).toBe(false);
   });
 });
+
+describe("who is on the team (M11)", () => {
+  it("lists people only — an AI agent owned by the manager is not a direct report", async () => {
+    await request(app).get("/team/reports").expect(200);
+    expect(calls("user.findMany")[0].args.where).toMatchObject({ managerId: MANAGER, isAgent: false });
+    state.calls = [];
+    await request(app).get("/team/sla-summary").expect(200);
+    expect(calls("user.findMany")[0].args.where).toMatchObject({ managerId: MANAGER, isAgent: false });
+  });
+});
