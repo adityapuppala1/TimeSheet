@@ -48,6 +48,7 @@ import { useAuthStore } from "../store/auth";
 import { copilotApi, goalApi, planningApi, portfolioApi, projectApi, type PortfolioProjectRollup } from "../services/api";
 import { runInBackground } from "../lib/run-in-background";
 import { formatMoney, formatPercent, NO_VALUE } from "../lib/format";
+import { otherCurrencyBurnText } from "../lib/other-currency-burn";
 import { QueryError } from "../components/QueryState";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
@@ -347,6 +348,8 @@ export function PortfolioPage() {
                 <TableBody>
                   {rows.map((p) => {
                     const health = healthOf(p);
+                    // Billed in another currency: beside the burn, never in it or its %.
+                    const elsewhere = otherCurrencyBurnText(p.otherCurrencyBurn);
                     return (
                       <TableRow key={p.id} className="cursor-pointer" onClick={() => navigate(`/app/timeline?project=${p.id}`)}>
                         <TableCell>
@@ -392,6 +395,7 @@ export function PortfolioPage() {
                         <TableCell className="text-right text-xs tabular-nums">
                           {money(p.burn, p.currency)}
                           {p.burnPct !== null && <span className="block text-[10px] opacity-70">{formatPercent(p.burnPct)}</span>}
+                          {elsewhere && <span className="block text-[10px] opacity-70">+ {elsewhere} not counted</span>}
                         </TableCell>
                         <TableCell className="text-right text-xs tabular-nums">
                           {p.forecastAtCompletion === null ? (

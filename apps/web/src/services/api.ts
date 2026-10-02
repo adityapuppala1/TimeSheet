@@ -4797,8 +4797,12 @@ export interface PortfolioProjectRollup {
   worstSlipDays: number;
   violationCount: number;
   budget: number | null;
+  /** The budget's currency — the only one `burn`, `burnPct` and the forecast are in. */
   currency: string;
   burn: number;
+  /** Burn billed in other currencies: shown beside `burn`, never added to it. Optional so an older
+   *  server reads as "none". */
+  otherCurrencyBurn?: Array<{ currency: string; amount: number }>;
   burnPct: number | null;
   /** Null when there is not enough progress or spend for a forecast to mean anything — a blank
    *  is honest, a confident zero is not. */
@@ -4836,7 +4840,8 @@ export interface CurrencyBurnTotal {
   burn: number;
   burnPct: number | null;
   budgetedProjects: number;
-  /** Burn on projects in this currency that have no budget — reported, not in the ratio. */
+  /** Burn in this currency that no budget in this currency covers (projects with no budget, and
+   *  burn billed in this currency on a project budgeted in another) — reported, not in the ratio. */
   unbudgetedBurn: number;
 }
 
@@ -4988,9 +4993,13 @@ export interface BookingConflict {
 export interface ProjectBudgetRow {
   projectId: string;
   budget: number | null;
+  /** The budget's currency — the only one `burn`, `burnPct`, the forecast and the flags are in. */
   currency: string;
   budgetAlertPct: number | null;
   burn: number;
+  /** Approved, billable burn billed in other currencies: beside `burn`, never in it. Optional so an
+   *  older server reads as "none". */
+  otherCurrencyBurn?: Array<{ currency: string; amount: number }>;
   burnPct: number | null;
   billableHours: number;
   nonBillableHours: number;

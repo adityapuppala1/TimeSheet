@@ -268,6 +268,9 @@ portfolioRouter.get("/rollup", requirePermission(permissions.REPORTS_VIEW), asyn
       budget: money?.budget ?? null,
       currency: money?.currency ?? "USD",
       burn: money?.burn ?? 0,
+      // Burn billed in a currency other than the budget's — beside `burn`, never in it, and counted
+      // in that currency's own totals below (budget.service.ts#burnTotalsByCurrency).
+      otherCurrencyBurn: money?.otherCurrencyBurn ?? [],
       burnPct: money?.burnPct ?? null,
       forecastAtCompletion: money?.forecastAtCompletion ?? null,
       overBudgetRisk: money?.overBudgetRisk ?? false,

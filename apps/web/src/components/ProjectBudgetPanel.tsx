@@ -23,6 +23,7 @@ import { Skeleton } from "./ui/skeleton";
 import { StatCard } from "./ui/stat-card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { otherCurrencyBurnText } from "../lib/other-currency-burn";
 import { cn } from "../lib/utils";
 import { resourceApi } from "../services/api";
 import { EmptyState } from "./ui/empty-state";
@@ -44,6 +45,9 @@ export function ProjectBudgetPanel({ projectId }: { projectId: string }) {
 
   const { budget, variance, progressPct, schedule } = panel.data;
   const currency = budget?.currency ?? "USD";
+  // Burn billed in another currency: said beside "Spent", never added to it — the API keeps it out of
+  // the burn, burn %, the forecast and the alerts, because there is no exchange rate to add it with.
+  const elsewhere = otherCurrencyBurnText(budget?.otherCurrencyBurn);
 
   return (
     <div className="grid gap-4">
@@ -56,6 +60,7 @@ export function ProjectBudgetPanel({ projectId }: { projectId: string }) {
         <StatCard
           label="Spent"
           value={money(budget?.burn ?? 0, currency)}
+          hint={elsewhere ? `Also billed in other currencies, not in this figure: ${elsewhere}.` : undefined}
           tone={budget?.alerting ? "warning" : "default"}
           icon={<TrendingUp className="h-4 w-4" />}
         />

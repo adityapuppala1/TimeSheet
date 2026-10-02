@@ -204,12 +204,20 @@ export async function resolveWidget(params: {
         };
       }
       const [only] = totals;
+      // Burn these budgeted projects billed in another currency: named beside the percentage, never
+      // in it — there is no exchange rate to add it with.
+      const elsewhere = new Map<string, number>();
+      for (const b of budgets.values()) {
+        if (b.budget === null || b.budget <= 0) continue;
+        for (const o of b.otherCurrencyBurn ?? []) elsewhere.set(o.currency, (elsewhere.get(o.currency) ?? 0) + o.amount);
+      }
+      const elsewhereNote = [...elsewhere.entries()].map(([c, amount]) => ` · ${money(amount, c)} billed in ${c}, not counted`).join("");
       return {
         type,
         shape,
         value: only.burnPct,
         unit: "%",
-        hint: `${money(only.burn, only.currency)} of ${money(only.budget, only.currency)} across ${only.budgetedProjects} budgeted project${only.budgetedProjects === 1 ? "" : "s"}`
+        hint: `${money(only.burn, only.currency)} of ${money(only.budget, only.currency)} across ${only.budgetedProjects} budgeted project${only.budgetedProjects === 1 ? "" : "s"}${elsewhereNote}`
       };
     }
 

@@ -27,13 +27,25 @@ import { prisma } from "../config/prisma.js";
 /** Below this, "percent complete" is too small a denominator for a forecast to mean anything. */
 export const MIN_PROGRESS_FOR_FORECAST_PCT = 5;
 
+/** An amount in one currency. Never added to an amount in another. */
+export interface CurrencyAmount {
+  currency: string;
+  amount: number;
+}
+
 export interface ProjectBudget {
   projectId: string;
   budget: number | null;
+  /** The budget's currency (budget currency, else billing currency, else the workspace default) —
+   *  and the ONLY currency `burn`, `burnPct`, the forecast and the risk flags are in. */
   currency: string;
   budgetAlertPct: number | null;
-  /** Approved + billable only. */
+  /** Approved + billable only, and only what was billed in `currency`. */
   burn: number;
+  /** Approved, billable burn billed in any OTHER currency, largest first. Reported beside `burn` and
+   *  never added to it: there is no exchange rate here, and a sum across currencies is a number in
+   *  no unit at all. Empty when everything was billed in the budget's currency. */
+  otherCurrencyBurn: CurrencyAmount[];
   burnPct: number | null;
   billableHours: number;
   /** Approved hours explicitly marked non-billable — surfaced so "where did the time go" has an
@@ -75,8 +87,10 @@ export async function computeProjectBudgets(
       where: { id: { in: projectIds } },
       select: { id: true, budgetAmount: true, budgetCurrency: true, billingCurrency: true, budgetAlertPct: true }
     }),
+    // By billed currency too: each amount is frozen in the currency it was billed in, which need not
+    // be the budget's (a free field in the project dialog) or even today's billing currency.
     prisma.timesheet.groupBy({
-      by: ["projectId"],
+      by: ["projectId", "billedCurrency"],
       where: { projectId: { in: projectIds }, status: "APPROVED", billable: true, deletedAt: null },
       _sum: { billedAmount: true, totalHours: true }
     }),
@@ -110,14 +124,31 @@ export async function computeProjectBudgets(
     })
   ]);
 
-  const billableBy = new Map(billable.map((r) => [r.projectId, r]));
+  const billableBy = new Map<string, typeof billable>();
+  for (const r of billable) billableBy.set(r.projectId, [...(billableBy.get(r.projectId) ?? []), r]);
   const nonBillableBy = new Map(nonBillable.map((r) => [r.projectId, Number(r._sum.totalHours ?? 0)]));
   const unratedBy = new Map(unrated.map((r) => [r.projectId, Number(r._sum.totalHours ?? 0)]));
   const agentBy = new Map(agentSpend.map((r) => [r.projectId ?? "", { costUsd: Number(r._sum.costUsd ?? 0), runs: r._count }]));
+  const workspaceCurrency = defaults?.defaultCurrency ?? "USD";
 
   for (const project of projects) {
-    const b = billableBy.get(project.id);
-    const burn = Number(b?._sum.billedAmount ?? 0);
+    const currency = project.budgetCurrency ?? project.billingCurrency ?? workspaceCurrency;
+    // Burn in the budget's currency, and every other billed currency apart. An amount with no
+    // frozen currency (approved before the snapshot carried one) is in the project's billing
+    // currency — the workspace metric rule for money.
+    let burn = 0;
+    let billableHours = 0;
+    const other = new Map<string, number>();
+    for (const g of billableBy.get(project.id) ?? []) {
+      billableHours += Number(g._sum.totalHours ?? 0);
+      const amount = Number(g._sum.billedAmount ?? 0);
+      const billedIn = (g.billedCurrency ?? project.billingCurrency ?? workspaceCurrency).toUpperCase();
+      if (billedIn === currency.toUpperCase()) burn += amount;
+      else if (amount !== 0) other.set(billedIn, (other.get(billedIn) ?? 0) + amount);
+    }
+    const otherCurrencyBurn = [...other.entries()]
+      .map(([c, amount]) => ({ currency: c, amount: Number(amount.toFixed(2)) }))
+      .sort((a, b) => b.amount - a.amount || a.currency.localeCompare(b.currency));
     const budget = project.budgetAmount ? Number(project.budgetAmount) : null;
     const progressPct = progressByProject.get(project.id) ?? 0;
 
@@ -130,11 +161,12 @@ export async function computeProjectBudgets(
     out.set(project.id, {
       projectId: project.id,
       budget,
-      currency: project.budgetCurrency ?? project.billingCurrency ?? defaults?.defaultCurrency ?? "USD",
+      currency,
       budgetAlertPct: project.budgetAlertPct,
       burn: Number(burn.toFixed(2)),
+      otherCurrencyBurn,
       burnPct,
-      billableHours: Number(Number(b?._sum.totalHours ?? 0).toFixed(2)),
+      billableHours: Number(billableHours.toFixed(2)),
       nonBillableHours: Number((nonBillableBy.get(project.id) ?? 0).toFixed(2)),
       unratedHours: Number((unratedBy.get(project.id) ?? 0).toFixed(2)),
       forecastAtCompletion: forecast,
@@ -289,7 +321,8 @@ export interface CurrencyBurnTotal {
   /** burn ÷ budget, or null when the budget is zero. */
   burnPct: number | null;
   budgetedProjects: number;
-  /** Burn on projects in this currency that have no budget: reported, never put in the ratio. */
+  /** Burn in this currency that no budget in this currency covers: projects with no budget, and
+   *  burn billed in this currency on a project budgeted in another. Reported, never in the ratio. */
   unbudgetedBurn: number;
 }
 
@@ -300,11 +333,18 @@ export interface CurrencyBurnTotal {
  * and labelled with whichever currency the first row had — the same refusal to mix currencies that
  * attestations already make is made here — and burn from projects with no budget went into the
  * numerator while only budgeted projects made the denominator, overstating burn %.
+ *
+ * A project's `otherCurrencyBurn` (billed in a currency that is not its budget's) lands in THAT
+ * currency's `unbudgetedBurn`: it is real burn in that currency, and no budget in it covers it.
  */
-export function burnTotalsByCurrency(rows: Iterable<Pick<ProjectBudget, "budget" | "burn" | "currency">>): CurrencyBurnTotal[] {
+export function burnTotalsByCurrency(
+  rows: Iterable<Pick<ProjectBudget, "budget" | "burn" | "currency"> & { otherCurrencyBurn?: CurrencyAmount[] }>
+): CurrencyBurnTotal[] {
   const totals = new Map<string, CurrencyBurnTotal>();
+  const totalFor = (currency: string) =>
+    totals.get(currency) ?? { currency, budget: 0, burn: 0, burnPct: null, budgetedProjects: 0, unbudgetedBurn: 0 };
   for (const row of rows) {
-    const t = totals.get(row.currency) ?? { currency: row.currency, budget: 0, burn: 0, burnPct: null, budgetedProjects: 0, unbudgetedBurn: 0 };
+    const t = totalFor(row.currency);
     if (row.budget !== null && row.budget > 0) {
       t.budget += row.budget;
       t.burn += row.burn;
@@ -313,6 +353,11 @@ export function burnTotalsByCurrency(rows: Iterable<Pick<ProjectBudget, "budget"
       t.unbudgetedBurn += row.burn;
     }
     totals.set(row.currency, t);
+    for (const other of row.otherCurrencyBurn ?? []) {
+      const o = totalFor(other.currency);
+      o.unbudgetedBurn += other.amount;
+      totals.set(other.currency, o);
+    }
   }
   return [...totals.values()]
     .map((t) => ({

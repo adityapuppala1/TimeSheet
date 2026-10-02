@@ -69,6 +69,16 @@ describe("BUDGET_BURN", () => {
     expect(w.hint).toMatch(/USD 80%/);
   });
 
+  it("keeps burn billed in another currency out of the percentage and names it beside it", async () => {
+    state.budgets = new Map([
+      ["p1", { ...budget("p1", 1000, 500, "INR"), otherCurrencyBurn: [{ currency: "USD", amount: 40 }] }]
+    ]);
+    const w: any = await burnWidget(["p1"]);
+    expect(w.value).toBe(50);
+    expect(w.hint).toContain("₹500 of ₹1,000");
+    expect(w.hint).toMatch(/\$40 billed in USD.*not counted/);
+  });
+
   it("is unavailable, not 0%, when no project has a budget", async () => {
     state.budgets = new Map([["p2", budget("p2", null, 300, "INR")]]);
     const w: any = await burnWidget(["p2"]);

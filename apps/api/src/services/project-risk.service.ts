@@ -342,6 +342,10 @@ export async function assessProject(projectId: string): Promise<RiskAssessment &
     projectCode: project.code,
     facts: {
       ...assessment.facts,
+      // Budget, burn and forecast are all in this currency (budget.service.ts). What was billed in
+      // any other currency is stated beside them, so the narrator never reads it as part of the burn.
+      budgetCurrency: money?.currency ?? null,
+      otherCurrencyBurn: money?.otherCurrencyBurn.length ? money.otherCurrencyBurn.map((c) => `${c.currency} ${c.amount}`).join(", ") : null,
       scheduleEnd: planEnd ? dayKey(planEnd) : null,
       plannedEnd: project.plannedEndDate ? dayKey(project.plannedEndDate) : null
     }

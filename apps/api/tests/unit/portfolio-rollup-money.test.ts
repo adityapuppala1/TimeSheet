@@ -112,6 +112,20 @@ describe("GET /portfolios/rollup", () => {
     expect(res.body.projects.find((p: { id: string }) => p.id === "p1").progressPct).toBe(50);
   });
 
+  it("reports a project's burn billed in another currency beside its burn, and in that currency's totals outside the ratio", async () => {
+    state.budgets.set("p3", { ...money("p3", 100, 80, "USD"), otherCurrencyBurn: [{ currency: "INR", amount: 4000 }] });
+    const res = await request(app).get("/portfolios/rollup").expect(200);
+    const gamma = res.body.projects.find((p: { id: string }) => p.id === "p3");
+    expect(gamma).toMatchObject({ burn: 80, burnPct: 80, otherCurrencyBurn: [{ currency: "INR", amount: 4000 }] });
+    // INR burn % is still Apollo's ₹500 of ₹1,000; Gamma's rupees are INR burn no INR budget covers.
+    expect(res.body.totals.money.find((m: { currency: string }) => m.currency === "INR")).toMatchObject({
+      budget: 1000,
+      burn: 500,
+      burnPct: 50,
+      unbudgetedBurn: 4300
+    });
+  });
+
   it("reports logged hours as submitted + approved", async () => {
     await request(app).get("/portfolios/rollup").expect(200);
     expect(state.loggedWhere.status).toEqual({ in: ["SUBMITTED", "APPROVED"] });
