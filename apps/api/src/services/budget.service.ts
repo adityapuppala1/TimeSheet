@@ -75,6 +75,33 @@ export interface ProjectBudget {
   agentRuns: number;
 }
 
+/**
+ * One project's approved, billable burn split by the currency it was billed in: what is in the
+ * budget's currency (`burn`), and every other currency apart (`otherCurrencyBurn`), never added.
+ * An amount with no frozen currency (approved before the snapshot carried one) is in the project's
+ * billing currency — the workspace metric rule for money.
+ */
+function splitBurn(
+  groups: Array<{ billedCurrency: string | null; _sum: { billedAmount: unknown; totalHours: unknown } }>,
+  budgetCurrency: string,
+  unfrozenCurrency: string
+): { burn: number; otherCurrencyBurn: CurrencyAmount[]; billableHours: number } {
+  let burn = 0;
+  let billableHours = 0;
+  const other = new Map<string, number>();
+  for (const g of groups) {
+    billableHours += Number(g._sum.totalHours ?? 0);
+    const amount = Number(g._sum.billedAmount ?? 0);
+    const billedIn = (g.billedCurrency ?? unfrozenCurrency).toUpperCase();
+    if (billedIn === budgetCurrency.toUpperCase()) burn += amount;
+    else if (amount !== 0) other.set(billedIn, (other.get(billedIn) ?? 0) + amount);
+  }
+  const otherCurrencyBurn = [...other.entries()]
+    .map(([currency, amount]) => ({ currency, amount: Number(amount.toFixed(2)) }))
+    .sort((a, b) => b.amount - a.amount || a.currency.localeCompare(b.currency));
+  return { burn, otherCurrencyBurn, billableHours };
+}
+
 export async function computeProjectBudgets(
   projectIds: string[],
   progressByProject: Map<string, number>
@@ -133,22 +160,11 @@ export async function computeProjectBudgets(
 
   for (const project of projects) {
     const currency = project.budgetCurrency ?? project.billingCurrency ?? workspaceCurrency;
-    // Burn in the budget's currency, and every other billed currency apart. An amount with no
-    // frozen currency (approved before the snapshot carried one) is in the project's billing
-    // currency — the workspace metric rule for money.
-    let burn = 0;
-    let billableHours = 0;
-    const other = new Map<string, number>();
-    for (const g of billableBy.get(project.id) ?? []) {
-      billableHours += Number(g._sum.totalHours ?? 0);
-      const amount = Number(g._sum.billedAmount ?? 0);
-      const billedIn = (g.billedCurrency ?? project.billingCurrency ?? workspaceCurrency).toUpperCase();
-      if (billedIn === currency.toUpperCase()) burn += amount;
-      else if (amount !== 0) other.set(billedIn, (other.get(billedIn) ?? 0) + amount);
-    }
-    const otherCurrencyBurn = [...other.entries()]
-      .map(([c, amount]) => ({ currency: c, amount: Number(amount.toFixed(2)) }))
-      .sort((a, b) => b.amount - a.amount || a.currency.localeCompare(b.currency));
+    const { burn, otherCurrencyBurn, billableHours } = splitBurn(
+      billableBy.get(project.id) ?? [],
+      currency,
+      project.billingCurrency ?? workspaceCurrency
+    );
     const budget = project.budgetAmount ? Number(project.budgetAmount) : null;
     const progressPct = progressByProject.get(project.id) ?? 0;
 
