@@ -23,6 +23,7 @@ import { prisma } from "../config/prisma.js";
 import { computeMyWork } from "./my-work.service.js";
 import { awaitingReviewWhere, loadApprovalAuthority } from "./timesheet-approval-scope.service.js";
 import { userClock } from "./user-clock.service.js";
+import { activeSteps } from "./approval.service.js";
 
 export interface BriefSection {
   /** Stable machine key, so the UI can route a click without string-matching a label. */
@@ -51,7 +52,7 @@ export interface DailyBrief {
  *
  *  - overdue / blocked  → `my-work.service.ts` (the same buckets `/plan/my-work` renders)
  *  - timesheet approvals → `awaitingReviewWhere`, the approvals queue's own scope
- *  - deliverable approvals → `ApprovalStep` rows awaiting this person's decision
+ *  - deliverable approvals → `ApprovalStep` rows awaiting this person's decision NOW (`activeSteps`)
  *  - unlogged time      → the `Timesheet.workDate = today` check `/daily-status` performs
  *  - at-risk projects   → the latest `ProjectRiskSnapshot` per project, RED band
  *  - unread             → `Notification.readAt IS NULL`
@@ -74,7 +75,7 @@ export async function buildDailyBrief(
     canApprove
       ? loadApprovalAuthority(user.id).then((authority) => prisma.timesheet.count({ where: awaitingReviewWhere(authority) }))
       : Promise.resolve(0),
-    prisma.approvalStep.count({ where: { approverId: user.id, decision: "PENDING" } }),
+    signOffsWaitingOn(user.id),
     prisma.timesheet.count({ where: { userId: user.id, workDate: today, deletedAt: null } }),
     canSeeRisk ? latestRedProjectCount() : Promise.resolve(0),
     prisma.notification.count({ where: { userId: user.id, readAt: null } })
@@ -134,10 +135,12 @@ export async function buildDailyBrief(
   sections.push({
     key: "deliverableApprovals",
     label: "Sign-offs waiting on you",
-    count: pendingApprovals,
-    link: pendingApprovals > 0 ? "/app/approvals" : null,
-    detail: null,
-    tone: pendingApprovals > 0 ? "attention" : "ok"
+    count: pendingApprovals.count,
+    // The ticket the oldest waiting step belongs to. This used to be /app/approvals, which lists
+    // TIMESHEETS only (and redirects anyone without timesheets:approve to the home page).
+    link: pendingApprovals.oldest ? `/app/tickets?open=${pendingApprovals.oldest.ticketId}` : null,
+    detail: pendingApprovals.oldest ? `Oldest: ${pendingApprovals.oldest.key} — ${pendingApprovals.oldest.title}` : null,
+    tone: pendingApprovals.count > 0 ? "attention" : "ok"
   });
 
   if (canSeeRisk) {
@@ -165,6 +168,38 @@ export async function buildDailyBrief(
   const allClear = sections.every((s) => s.tone === "ok");
 
   return { generatedAt: now.toISOString(), allClear, sections };
+}
+
+/**
+ * Approval-chain steps that are waiting on this person RIGHT NOW: the request is still PENDING, and
+ * the step is one `activeSteps` says is being asked (in a sequential chain, only the lowest undecided
+ * order). It used to count every PENDING step naming them — but a rejected chain deliberately leaves
+ * its later steps PENDING forever, and a sequential chain's later steps are PENDING long before their
+ * turn — so people saw "Sign-offs waiting on you: 1" for a decision nobody could make, and the brief
+ * never read all-clear. Oldest request first, for the link.
+ */
+async function signOffsWaitingOn(userId: string): Promise<{ count: number; oldest: { ticketId: string; key: string; title: string } | null }> {
+  const steps = await prisma.approvalStep.findMany({
+    where: { approverId: userId, decision: "PENDING", request: { status: "PENDING" } },
+    select: {
+      id: true,
+      request: {
+        select: {
+          ticketId: true,
+          isSequential: true,
+          ticket: { select: { key: true, title: true } },
+          steps: { select: { id: true, order: true, approverId: true, guestEmail: true, decision: true } }
+        }
+      }
+    },
+    orderBy: { request: { createdAt: "asc" } }
+  });
+  const waiting = steps.filter((step) => activeSteps(step.request.steps, step.request.isSequential).some((s) => s.id === step.id));
+  const first = waiting[0];
+  return {
+    count: waiting.length,
+    oldest: first ? { ticketId: first.request.ticketId, key: first.request.ticket.key, title: first.request.ticket.title } : null
+  };
 }
 
 /**

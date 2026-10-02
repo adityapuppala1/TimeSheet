@@ -17,6 +17,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const computeMyWork = vi.fn();
 const timesheetCount = vi.fn();
 const approvalStepCount = vi.fn();
+const approvalStepFindMany = vi.fn();
 const notificationCount = vi.fn();
 const riskFindMany = vi.fn();
 const userFindMany = vi.fn();
@@ -26,7 +27,10 @@ vi.mock("../../src/services/my-work.service.js", () => ({ computeMyWork: (...a: 
 vi.mock("../../src/config/prisma.js", () => ({
   prisma: {
     timesheet: { count: (...a: unknown[]) => timesheetCount(...a) },
-    approvalStep: { count: (...a: unknown[]) => approvalStepCount(...a) },
+    approvalStep: {
+      count: (...a: unknown[]) => approvalStepCount(...a),
+      findMany: (...a: unknown[]) => approvalStepFindMany(...a)
+    },
     notification: { count: (...a: unknown[]) => notificationCount(...a) },
     projectRiskSnapshot: { findMany: (...a: unknown[]) => riskFindMany(...a) },
     user: { findMany: (...a: unknown[]) => userFindMany(...a), findUnique: (...a: unknown[]) => userFindUnique(...a) }
@@ -83,6 +87,7 @@ beforeEach(() => {
   computeMyWork.mockResolvedValue(emptyWork);
   timesheets();
   approvalStepCount.mockResolvedValue(0);
+  approvalStepFindMany.mockResolvedValue([]);
   notificationCount.mockResolvedValue(0);
   riskFindMany.mockResolvedValue([]);
   userFindMany.mockResolvedValue([]);
@@ -218,5 +223,55 @@ describe("tone, and what 'all clear' is allowed to mean", () => {
     for (const key of ["overdue", "blocked", "timesheetApprovals", "deliverableApprovals", "atRisk", "unread"]) {
       expect(section(brief, key)?.link, key).toBeNull();
     }
+  });
+});
+
+/**
+ * "Sign-offs waiting on you" — approval-chain steps (audit 2026-10, notifications #5).
+ *
+ * It counted every PENDING step naming this person, but superseded steps are deliberately left
+ * PENDING forever once a chain is rejected, and in a sequential chain a later step is PENDING long
+ * before its turn. So after A rejected an A→B→C chain, B and C saw "1" forever and the brief never
+ * read all-clear. And it linked to /app/approvals, which lists timesheets only.
+ */
+describe("sign-offs waiting on you", () => {
+  const step = (id: string, order: number, decision: string, approverId: string | null) => ({ id, order, decision, approverId, guestEmail: null });
+  const pendingStep = (stepId: string, ticketId: string, isSequential: boolean, steps: ReturnType<typeof step>[]) => ({
+    id: stepId,
+    request: { ticketId, isSequential, ticket: { key: `OPS-${ticketId}`, title: "Ship it" }, steps }
+  });
+
+  it("asks only for steps whose request is still PENDING", async () => {
+    await buildDailyBrief({ id: "u-b", permissions: [] }, NOW);
+    const where = (approvalStepFindMany.mock.calls[0][0] as any).where;
+    expect(where).toMatchObject({ approverId: "u-b", decision: "PENDING", request: { status: "PENDING" } });
+  });
+
+  it("counts a sequential step only when it is that step's turn", async () => {
+    // u-b is step 2 of A→B: not their turn while A has not decided.
+    approvalStepFindMany.mockResolvedValue([
+      pendingStep("s-b", "1", true, [step("s-a", 0, "PENDING", "u-a"), step("s-b", 1, "PENDING", "u-b")])
+    ]);
+    const brief = await buildDailyBrief({ id: "u-b", permissions: [] }, NOW);
+    expect(section(brief, "deliverableApprovals")?.count).toBe(0);
+    expect(section(brief, "deliverableApprovals")?.tone).toBe("ok");
+  });
+
+  it("counts it once it is their turn, and links to the ticket that carries it", async () => {
+    approvalStepFindMany.mockResolvedValue([
+      pendingStep("s-b", "t-9", true, [step("s-a", 0, "APPROVED", "u-a"), step("s-b", 1, "PENDING", "u-b")])
+    ]);
+    const brief = await buildDailyBrief({ id: "u-b", permissions: [] }, NOW);
+    expect(section(brief, "deliverableApprovals")?.count).toBe(1);
+    expect(section(brief, "deliverableApprovals")?.link).toBe("/app/tickets?open=t-9");
+    expect(section(brief, "deliverableApprovals")?.detail).toContain("OPS-t-9");
+  });
+
+  it("counts every undecided step of a parallel request", async () => {
+    approvalStepFindMany.mockResolvedValue([
+      pendingStep("s-b", "t-1", false, [step("s-a", 0, "PENDING", "u-a"), step("s-b", 1, "PENDING", "u-b")])
+    ]);
+    const brief = await buildDailyBrief({ id: "u-b", permissions: [] }, NOW);
+    expect(section(brief, "deliverableApprovals")?.count).toBe(1);
   });
 });
