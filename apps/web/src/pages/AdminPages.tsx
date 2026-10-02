@@ -48,7 +48,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "react-router";
+import { useLocation, useSearchParams } from "react-router";
 import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import {
   AlertDialog,
@@ -138,6 +138,7 @@ import { IDENTITY_COLORS } from "../lib/identity-colors";
 import { cn } from "../lib/utils";
 import { exportStamp, saveBlob } from "../lib/download";
 import { runInBackground } from "../lib/run-in-background";
+import { assignableRoles, eligibleManagers as activeManagers, rowActionLocks, usersTabFrom } from "../utils/user-admin";
 
 const roles = ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEAM_LEAD", "EMPLOYEE"];
 
@@ -215,6 +216,33 @@ function initialsFor(name?: string) {
 }
 
 /* ============================== USERS ============================== */
+/**
+ * A row-menu item the viewer may be refused — disabled, with the reason as its tooltip. The title
+ * sits on a wrapper because a disabled Radix item ignores the pointer, so a title on the item
+ * itself would never show. The menu also states the reason in words (see the actions column).
+ */
+function GuardedMenuItem({
+  locked,
+  reason,
+  onSelect,
+  className,
+  children
+}: {
+  locked: boolean;
+  reason: string | null;
+  onSelect: () => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span className="block" title={locked && reason ? reason : undefined}>
+      <DropdownMenuItem disabled={locked} onClick={onSelect} className={className}>
+        {children}
+      </DropdownMenuItem>
+    </span>
+  );
+}
+
 /** "just now" / "4 min ago" for presence; falls back to a compact date for anything older. */
 function formatRelativeSeen(iso: string | null): string {
   if (!iso) return "—";
@@ -242,9 +270,13 @@ function formatLoginTime(iso: string | null): string {
 function UsersPeopleTab() {
   const queryClient = useQueryClient();
   const currentUserId = useAuthStore((s) => s.user?.id);
+  const viewerRole = useAuthStore((s) => s.user?.role);
   // Granting more than one held role is super-admin-only — an ADMIN sees exactly today's
   // single-role controls, unchanged.
-  const viewerIsSuperAdmin = useAuthStore((s) => s.user?.role) === "SUPER_ADMIN";
+  const viewerIsSuperAdmin = viewerRole === "SUPER_ADMIN";
+  // SUPER_ADMIN is a super admin's to grant; the server refuses it from anyone else, so it is not
+  // offered to them either (utils/user-admin.ts).
+  const pickableRoles = assignableRoles(viewerRole);
   // 30s refetch keeps the presence dots honest — the server's picture itself moves in 5-minute
   // lastSeenAt increments, so polling faster would only pretend to more precision.
   // Server-side filtering, sorting and pagination. The old call fetched the first 50 users and
@@ -390,10 +422,8 @@ function UsersPeopleTab() {
   // picker question, and answering it from page 3 of a filtered table would silently omit most of
   // the eligible people — the exact bug the separate list endpoint exists to avoid.
   const allUsers = useQuery({ queryKey: ["users"], queryFn: userApi.list });
-  const eligibleManagers = useMemo(
-    () => (allUsers.data ?? []).filter((u: any) => ["MANAGER", "TEAM_LEAD", "ADMIN", "SUPER_ADMIN"].includes(u.role?.name)),
-    [allUsers.data]
-  );
+  // ACTIVE managing roles only: the server refuses an inactive manager (they approve nothing).
+  const eligibleManagers = useMemo(() => activeManagers((allUsers.data ?? []) as any[]), [allUsers.data]);
 
   const create = useMutation({
     mutationFn: userApi.create,
@@ -623,6 +653,9 @@ function UsersPeopleTab() {
         // and puts Delete behind an extra deliberate step.
         cell: ({ row }) => {
           const user = row.original;
+          // What this viewer may not do to this account, and why — the server's rules
+          // (utils/user-admin.ts), so a click is never offered only to fail.
+          const locks = rowActionLocks({ id: currentUserId, role: viewerRole }, user);
           return (
             <div className="flex justify-end">
               <DropdownMenu modal={false}>
@@ -632,17 +665,26 @@ function UsersPeopleTab() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuItem onClick={() => setEditing(user)}>
+                  {/* Said once, in words, rather than only as greyed-out items: a tooltip on a
+                      disabled item never reaches a keyboard or touch user. */}
+                  {locks.reason && (
+                    <p role="note" className="px-2 py-1.5 text-xs text-muted-foreground">
+                      {locks.reason}
+                    </p>
+                  )}
+                  <GuardedMenuItem locked={locks.edit} reason={locks.reason} onSelect={() => setEditing(user)}>
                     <Pencil /> Edit details
-                  </DropdownMenuItem>
+                  </GuardedMenuItem>
                   <DropdownMenuItem
                     disabled={resendWelcome.isPending && resendWelcome.variables === user.id}
                     onClick={() => resendWelcome.mutate(user.id)}
                   >
                     <Mail /> Resend welcome email
                   </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => update.mutate({ id: user.id, payload: { status: user.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" } })}
+                  <GuardedMenuItem
+                    locked={locks.toggleStatus}
+                    reason={locks.reason}
+                    onSelect={() => update.mutate({ id: user.id, payload: { status: user.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" } })}
                   >
                     {user.status === "ACTIVE" ? (
                       <>
@@ -653,20 +695,22 @@ function UsersPeopleTab() {
                         <Check /> Activate
                       </>
                     )}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setPendingReset({ id: user.id, name: user.name })}>
+                  </GuardedMenuItem>
+                  <GuardedMenuItem locked={locks.resetPassword} reason={locks.reason} onSelect={() => setPendingReset({ id: user.id, name: user.name })}>
                     <RotateCcw /> Reset password
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setPendingLogout({ id: user.id, name: user.name })}>
+                  </GuardedMenuItem>
+                  <GuardedMenuItem locked={locks.signOut} reason={locks.reason} onSelect={() => setPendingLogout({ id: user.id, name: user.name })}>
                     <LogOut /> Sign out everywhere
-                  </DropdownMenuItem>
+                  </GuardedMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem
+                  <GuardedMenuItem
+                    locked={locks.remove}
+                    reason={locks.reason}
                     className="text-destructive focus:bg-destructive/10 focus:text-destructive"
-                    onClick={() => setPendingDelete({ id: user.id, name: user.name })}
+                    onSelect={() => setPendingDelete({ id: user.id, name: user.name })}
                   >
                     <Trash2 /> Delete user
-                  </DropdownMenuItem>
+                  </GuardedMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
@@ -674,7 +718,7 @@ function UsersPeopleTab() {
         }
       }
     ],
-    [resendWelcome, update]
+    [resendWelcome, update, currentUserId, viewerRole]
   );
 
   return (
@@ -722,7 +766,7 @@ function UsersPeopleTab() {
               <Select value={draft.role} onValueChange={(value) => setDraft({ ...draft, role: value })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {roles.map((role) => <SelectItem key={role} value={role}>{role.replace("_", " ")}</SelectItem>)}
+                  {pickableRoles.map((role) => <SelectItem key={role} value={role}>{role.replace("_", " ")}</SelectItem>)}
                 </SelectContent>
               </Select>
             </FieldShell>
@@ -875,7 +919,14 @@ function UsersPeopleTab() {
         columns={BULK_USER_COLUMNS}
         sampleCsv={BULK_USER_SAMPLE_CSV}
         sampleFileName="timesphere-users-sample.csv"
-        validateRow={(row) => (roles.includes(row.role?.trim()) ? null : `Invalid role "${row.role}" — must be one of ${roles.join(", ")}`)}
+        validateRow={(row) => {
+          // Same rule the server applies per row: a role this viewer may not grant is refused by
+          // name, so an ADMIN's file says "only a super admin…" rather than "invalid role".
+          const role = row.role?.trim();
+          if ((pickableRoles as string[]).includes(role)) return null;
+          if (roles.includes(role)) return `Only a super admin can grant ${role}`;
+          return `Invalid role "${row.role}" — must be one of ${pickableRoles.join(", ")}`;
+        }}
         onUpload={(rows) =>
           userApi.bulkCreate(
             rows.map((r) => ({
@@ -1021,10 +1072,26 @@ function UsersPeopleTab() {
 /**
  * User Management: the people already here, and — since signup Phase 1 — the people from the
  * company's email domain asking to be let in. `?tab=requests` is where the "asked to join" bell entry
- * and email link land, so it is honoured on load.
+ * and email link land.
+ *
+ * THE TAB IS THE URL, read on every render. It used to be read once, at mount — and the bell's
+ * `<Link>` to `?tab=requests` keeps this page mounted when you are already on it, so clicking "asked
+ * to join" from the People tab changed the address bar and nothing else. Clicking a tab writes the
+ * URL back (replace, not push: a tab switch is not a page the Back button should step through).
  */
 export function UsersPage() {
-  const [tab, setTab] = useState(() => (new URLSearchParams(globalThis.location?.search ?? "").get("tab") === "requests" ? "requests" : "people"));
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = usersTabFrom(searchParams);
+  const setTab = (next: string) =>
+    setSearchParams(
+      (current) => {
+        const params = new URLSearchParams(current);
+        if (next === "requests") params.set("tab", "requests");
+        else params.delete("tab");
+        return params;
+      },
+      { replace: true }
+    );
   const pendingRequests = useQuery({ queryKey: PENDING_JOIN_REQUESTS_KEY, queryFn: () => joinRequestApi.list("pending"), refetchInterval: 60_000 });
   const waiting = pendingRequests.data?.length ?? 0;
   return (
@@ -1063,7 +1130,8 @@ function UserEditDialog({
   eligibleManagers: any[];
   onSubmit: (payload: any) => void;
 }) {
-  const viewerIsSuperAdmin = useAuthStore((s) => s.user?.role) === "SUPER_ADMIN";
+  const viewerRole = useAuthStore((s) => s.user?.role);
+  const viewerIsSuperAdmin = viewerRole === "SUPER_ADMIN";
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -1126,7 +1194,7 @@ function UserEditDialog({
                   <Select value={form.role} onValueChange={(value) => setForm({ ...form, role: value })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {roles.map((role) => <SelectItem key={role} value={role}>{role.replace("_", " ")}</SelectItem>)}
+                      {assignableRoles(viewerRole).map((role) => <SelectItem key={role} value={role}>{role.replace("_", " ")}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
