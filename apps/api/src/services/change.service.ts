@@ -648,7 +648,8 @@ export interface ScheduleConflict {
  * REPORTED, NEVER REFUSED. A conflict is information for the person scheduling — sometimes two
  * changes genuinely do share a window — and a tool that simply says no is one people schedule around
  * by lying to it. Overriding costs a written reason and an audit row, which is the difference
- * between a control and an obstacle.
+ * between a control and an obstacle: `assertScheduleOverrideRecorded` asks for the reason at the
+ * moment the change commits to its window, and the PATCH that records it is audited.
  */
 export async function findScheduleConflicts(params: {
   changeId: string;
@@ -700,6 +701,38 @@ export async function findScheduleConflicts(params: {
   }
 
   return conflicts;
+}
+
+/** The moves that commit a change to its window: putting it on the calendar, or starting it. */
+const COMMITS_TO_WINDOW: readonly ChangeState[] = ["SCHEDULED", "IMPLEMENTING"];
+
+/**
+ * A change may go ahead in a window that collides — but not silently. Moving it to SCHEDULED or
+ * IMPLEMENTING while its window overlaps a blackout or another approved change needs the override
+ * reason recorded first, and the refusal names what it collides with, so the person knows what they
+ * are overriding before they write why.
+ *
+ * Asked at the move, not on save: saving the window is how somebody finds out it collides at all,
+ * and refusing that save would hide the conflict list behind the very error it explains.
+ */
+export async function assertScheduleOverrideRecorded(
+  change: { id: string; environment: string; plannedStart: Date | null; plannedEnd: Date | null; conflictOverrideReason?: string | null },
+  to: ChangeState
+): Promise<void> {
+  if (!COMMITS_TO_WINDOW.includes(to) || !change.plannedStart || !change.plannedEnd) return;
+  if (filled(change.conflictOverrideReason)) return;
+  const conflicts = await findScheduleConflicts({
+    changeId: change.id,
+    environment: change.environment,
+    plannedStart: change.plannedStart,
+    plannedEnd: change.plannedEnd
+  });
+  if (conflicts.length === 0) return;
+  throw new AppError(
+    422,
+    `This change's window collides with: ${conflicts.map((c) => c.message).join(" ")} ` +
+      "Record an override reason on the Schedule tab — why it is going ahead anyway — or move the window."
+  );
 }
 
 /** The risk parameters a submission must answer. Read once per transition rather than baked into the

@@ -535,7 +535,9 @@ changeRouter.get("/:id", async (req, res) => {
  * older, wider freeze after approval — outcomes only.
  *
  * The OUTCOME fields stay writable throughout, because recording what happened is not the same act
- * as amending what was agreed.
+ * as amending what was agreed. The conflict OVERRIDE REASON joins them: it is the record of why a
+ * window went ahead despite a collision, and it is asked for when the change is scheduled or started
+ * — after approval, by whoever is doing that (see `assertScheduleOverrideRecorded`).
  */
 const OUTCOME_FIELDS = [
   "outcome", "pirNotes", "closureNotes", "actualResult", "issuesEncountered", "lessonsLearned",
@@ -544,7 +546,7 @@ const OUTCOME_FIELDS = [
   "implementationNotes", "implementationIssues", "validationResult", "validationIssues",
   "businessConfirmation", "technicalConfirmation", "validationOwnerId", "validationDate",
   "documentationUpdated", "monitoringCompleted", "closureStatus", "rollbackStatus",
-  "rollbackStartedAt", "rollbackEndedAt", "rollbackReason", "rollbackResult"
+  "rollbackStartedAt", "rollbackEndedAt", "rollbackReason", "rollbackResult", "conflictOverrideReason"
 ];
 const FROZEN_AFTER: ChangeState[] = ["APPROVED", "SCHEDULED", "IMPLEMENTING", "VALIDATION", "PIR", "CLOSED"];
 

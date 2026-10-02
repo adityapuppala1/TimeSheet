@@ -27,6 +27,7 @@ import {
   assertDependenciesClear,
   assertLegalChangeTransition,
   assertReadyFor,
+  assertScheduleOverrideRecorded,
   getChangeSettings,
   isNoOpTransition,
   resolveChangeApprovers,
@@ -123,8 +124,9 @@ export async function openApprovalRound(
 
 /**
  * Every gate a move has to pass, in the order the person should hear about them: is the move on
- * the table at all, does the change owe anything before it may enter the state, and is anything it
- * waits on still open. Exported on its own because the automation dispatcher asks BEFORE deciding
+ * the table at all, does the change owe anything before it may enter the state, is anything it
+ * waits on still open, and — when it commits to its window — is a collision accounted for with a
+ * written reason. Exported on its own because the automation dispatcher asks BEFORE deciding
  * whether to move or to propose — a proposal for a move that cannot happen is noise in somebody's
  * review queue.
  */
@@ -132,6 +134,7 @@ export async function assertChangeTransitionAllowed(change: MovableChange, to: C
   assertLegalChangeTransition(change.state as ChangeState, to);
   assertReadyFor(change, to, await activeRiskParameterKeys());
   await assertDependenciesClear(change.id, to);
+  await assertScheduleOverrideRecorded(change, to);
 }
 
 /**

@@ -272,6 +272,7 @@ export function ChangeDetailPage() {
   // fields, so the form disables exactly what a save would be refused for.
   const locked = new Set(change.lockedFields ?? []);
   const roPlan = (field: string) => ro || locked.has(field);
+  const isParty = Boolean(user && (change.ticket.reporter?.id === user.id || change.ticket.assignee?.id === user.id));
   const set = (patch: Record<string, unknown>) => save.mutate(patch);
   const legalMoves = (change.allowedTransitions ?? changeStateTransitions[change.state] ?? []) as ChangeState[];
   const md = master.data;
@@ -628,8 +629,14 @@ export function ChangeDetailPage() {
 
             <TabsContent value="schedule">
               {/* The window is part of what is approved; the override reason is not — it is the
-                  record of why a window went ahead despite a conflict, and stays writable. */}
-              <ScheduleSection change={change} disabled={roPlan("plannedStart")} reasonDisabled={ro} onSave={set} />
+                  record of why a window went ahead despite a conflict, asked for when the change is
+                  scheduled or started, so the requester and implementer can write it after approval. */}
+              <ScheduleSection
+                change={change}
+                disabled={roPlan("plannedStart")}
+                reasonDisabled={change.state === "CLOSED" || !(change.canEdit || isParty)}
+                onSave={set}
+              />
             </TabsContent>
 
             <TabsContent value="comms">
@@ -1139,7 +1146,8 @@ function RiskSection({
   );
 }
 
-/** The window, plus whatever it collides with. Conflicts are reported, never refused. */
+/** The window, plus whatever it collides with. Conflicts are reported, not refused — but going ahead
+ *  in a colliding window needs the override reason recorded (the API asks at Schedule/Implement). */
 /** Drafts the post-implementation review, as a proposal. See the route for why it is not a write. */
 function PirAssistButton({ changeId }: { changeId: string }) {
   const [busy, setBusy] = useState(false);
@@ -1243,7 +1251,8 @@ function ScheduleSection({
             ))}
           </ul>
           <p className="mt-2 text-xs text-muted-foreground">
-            Reported, not blocked — sometimes two changes genuinely do share a window. Overriding records a reason against the change.
+            Not blocked outright — sometimes two changes genuinely do share a window — but scheduling or starting it here needs a
+            reason, recorded below.
           </p>
           {/* The overlaps above are arithmetic; this reads which of them matters. It moves nothing,
               so the scheduler still decides. */}

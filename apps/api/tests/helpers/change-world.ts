@@ -149,6 +149,8 @@ export function createChangeWorld(seed: { change?: Record<string, unknown>; appr
   const client: Record<string, any> = {
     $transaction: vi.fn(async (arg: unknown) => (typeof arg === "function" ? (arg as (tx: unknown) => unknown)(client) : Promise.all(arg as unknown[]))),
     changeRequest: {
+      // Other changes, for the overlap check. None unless a test says otherwise.
+      findMany: vi.fn(async () => []),
       findFirst: vi.fn(async (args: any = {}) => (args.include?.category ? hydrate() : withTicket())),
       findUnique: vi.fn(async (args: any = {}) => (args.include?.category ? hydrate() : withTicket())),
       update: vi.fn(async (args: any) => {
