@@ -21,6 +21,7 @@
  */
 import { permissions, securityFindingStatuses, type SecurityFindingStatus } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
+import { openBreachedWhere } from "./workspace-metrics.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import type { AiChatToolContext } from "./ai-chat-tools.js";
@@ -430,7 +431,9 @@ export const AI_CHAT_ADMIN_TOOLS: ReadonlyArray<AdminTool> = [
       const [escalations, unresolved, breached] = await Promise.all([
         prisma.escalation.count({ where: { createdAt: { gte: from } } }),
         prisma.escalation.count({ where: { createdAt: { gte: from }, resolvedAt: null } }),
-        prisma.ticket.count({ where: { deletedAt: null, dueAt: { lt: new Date() }, status: { notIn: ["RESOLVED", "CLOSED"] } } })
+        // The one SLA rule (workspace-metrics.ts) — the Reports tile, the widgets, My Work and Ask AI's
+        // snapshot all count the same thing.
+        prisma.ticket.count({ where: { deletedAt: null, ...openBreachedWhere(new Date()) } })
       ]);
       return (
         `Since ${from.toISOString().slice(0, 10)}: ${escalations} timesheet escalations (${unresolved} still unresolved).${NL}` +

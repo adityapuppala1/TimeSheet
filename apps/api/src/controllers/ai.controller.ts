@@ -16,6 +16,7 @@ import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { resolveVisiblePeopleNames } from "../services/people-visibility.service.js";
+import { OPEN_TICKET_STATUS, openBreachedWhere } from "../services/workspace-metrics.js";
 import {
   answerWorkspaceQuestion,
   classifyTicket,
@@ -284,7 +285,7 @@ const askSchema = z.object({ body: z.object({ question: z.string().min(3).max(50
  * synchronously on every question, so it stays a handful of cheap counts, not the full dashboard
  * computation.
  */
-async function buildInsightsSnapshotText(scope: Awaited<ReturnType<typeof ticketProjectScope>>): Promise<string> {
+export async function buildInsightsSnapshotText(scope: Awaited<ReturnType<typeof ticketProjectScope>>): Promise<string> {
   const projectFilter = scope.unrestricted ? {} : { projectId: { in: scope.projectIds } };
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
@@ -293,17 +294,18 @@ async function buildInsightsSnapshotText(scope: Awaited<ReturnType<typeof ticket
     prisma.ticket.count({ where: { deletedAt: null, ...projectFilter, status: { notIn: ["RESOLVED", "CLOSED"] } } }),
     prisma.ticket.count({ where: { deletedAt: null, ...projectFilter, resolvedAt: { gte: weekAgo } } }),
     prisma.ticket.count({ where: { deletedAt: null, ...projectFilter, resolvedAt: { gte: twoWeeksAgo, lt: weekAgo } } }),
-    prisma.ticket.count({
-      where: { deletedAt: null, ...projectFilter, status: { notIn: ["RESOLVED", "CLOSED"] }, slaBreachAt: { not: null } }
-    }),
+    // Open and past `dueAt` — the one SLA rule (workspace-metrics.ts). `slaBreachAt` is only written
+    // while the TICKET_SLA_ENABLED sweep runs, so Ask AI said 0 wherever it was off.
+    prisma.ticket.count({ where: { deletedAt: null, ...projectFilter, ...openBreachedWhere(new Date()) } }),
     prisma.ticket.groupBy({
       by: ["assigneeId"],
-      where: { deletedAt: null, ...projectFilter, assigneeId: { not: null }, status: { notIn: ["RESOLVED", "CLOSED"] } },
+      // People only: an AI agent's queue is not a colleague's workload.
+      where: { deletedAt: null, ...projectFilter, assigneeId: { not: null }, assignee: { isAgent: false }, status: OPEN_TICKET_STATUS },
       _count: true,
       orderBy: { _count: { assigneeId: "desc" } },
       take: 5
     }),
-    prisma.globalTicketSettings.findUnique({ where: { id: "global" }, select: { enableCostAnalytics: true } })
+    prisma.globalTicketSettings.findUnique({ where: { id: "global" }, select: { enableCostAnalytics: true, defaultCurrency: true } })
   ]);
 
   // Deactivated people are dropped, matching the Insights page this snapshot paraphrases. Ask AI reading out a
@@ -335,20 +337,40 @@ async function buildInsightsSnapshotText(scope: Awaited<ReturnType<typeof ticket
         billable: true,
         ...(scope.unrestricted ? {} : { ticket: { projectId: { in: scope.projectIds } } })
       },
-      select: { totalHours: true, billable: true, billedAmount: true, billedRate: true, user: { select: { hourlyRate: true } } }
+      select: {
+        totalHours: true,
+        billable: true,
+        billedAmount: true,
+        billedRate: true,
+        billedCurrency: true,
+        user: { select: { hourlyRate: true } },
+        ticket: { select: { project: { select: { billingCurrency: true } } } }
+      }
     });
-    const { amount, unratedHours } = computeTimesheetCost(
-      timesheets.map((t) => ({
-        totalHours: t.totalHours,
-        billable: t.billable,
-        billedAmount: t.billedAmount,
-        billedRate: t.billedRate,
-        liveFallbackRate: t.user.hourlyRate
-      }))
-    );
+    // PER CURRENCY, like /reports/cost-insights: each entry is priced in its project's billing
+    // currency, and adding rupees to dollars under a "$" is a number with no meaning.
+    const byCurrency = new Map<string, typeof timesheets>();
+    for (const t of timesheets) {
+      const currency = t.billedCurrency || t.ticket?.project.billingCurrency || costSettings.defaultCurrency || "USD";
+      byCurrency.set(currency, [...(byCurrency.get(currency) ?? []), t]);
+    }
+    let unratedTotal = 0;
+    const parts = [...byCurrency.entries()].map(([currency, rows]) => {
+      const { amount, unratedHours } = computeTimesheetCost(
+        rows.map((t) => ({
+          totalHours: t.totalHours,
+          billable: t.billable,
+          billedAmount: t.billedAmount,
+          billedRate: t.billedRate,
+          liveFallbackRate: t.user.hourlyRate
+        }))
+      );
+      unratedTotal += unratedHours;
+      return `${currency} ${new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount)}`;
+    });
     lines.push(
-      `Total approved billable cost across tickets: $${amount.toFixed(2)}` +
-        (unratedHours > 0 ? ` (excludes ${unratedHours.toFixed(2)}h with no rate on record)` : "")
+      `Total approved billable cost across tickets, per currency: ${parts.join("; ") || "none"}` +
+        (unratedTotal > 0 ? ` (excludes ${unratedTotal.toFixed(2)}h with no rate on record)` : "")
     );
   }
 
