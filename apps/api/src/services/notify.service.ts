@@ -26,6 +26,10 @@ import { tenantBaseUrl } from "./workspace-directory.service.js";
 
 export type NotificationCategory =
   | "timesheet.submitted"
+  /** The APPROVER's side of a submission: an entry waiting on their decision. Its own category (and
+   *  template) since audit 2026-10 R3 — it used to be `timesheet.submitted` with the names swapped.
+   *  See SETTINGS_FIELD for which toggle gates it and why. */
+  | "timesheet.awaiting_review"
   | "timesheet.approved"
   | "timesheet.rejected"
   | "sla.breach"
@@ -152,6 +156,12 @@ interface DispatchArgs {
  */
 const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "timesheet.submitted": "emailTimesheetSubmitted",
+  // The approval REQUEST rides the approval-SLA toggle, not the receipt's. Same recipient (the
+  // submitter's manager), same subject (an entry waiting on their decision), and the first rung of
+  // the ladder that toggle already governs: request → SLA breached → escalation. Sharing the
+  // receipt's toggle meant muting receipts for managers who also log time silenced the one email
+  // asking them to decide. There is no column of its own; adding one is a schema change.
+  "timesheet.awaiting_review": "emailSlaBreach",
   "timesheet.approved": "emailTimesheetApproved",
   "timesheet.rejected": "emailTimesheetRejected",
   "sla.breach": "emailSlaBreach",

@@ -24,7 +24,7 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { buildRateSnapshotPatch, clearRateSnapshotPatch } from "../services/billing-rate.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
-import { templates } from "../services/mail-templates.js";
+import { emailShell, templates } from "../services/mail-templates.js";
 import { computeApprovalDeadline, resolveEscalationsFor } from "../services/sla.service.js";
 import { emitDomainEvent } from "../services/domain-events.js";
 import { processUpload } from "../services/attachment-storage.service.js";
@@ -482,18 +482,37 @@ async function announceSubmission(
     // The approver gets the same detail, and by email as well — this is the message that asks
     // somebody to make a decision, and it was previously in-app only while the person who needed
     // no action at all got the email.
+    //
+    // ITS OWN TEMPLATE (audit 2026-10 R3, finding 3). It used to send the receipt above with the
+    // names swapped — "Your timesheet was submitted … with <the author>", a button to the approver's
+    // own history — and to share the receipt's toggle and role mutes. `timesheet.awaiting_review`
+    // has its own wording, a button to Approvals and no seeded row; notify.service.ts says which
+    // toggle gates it. The vars are escaped because an administrator's override substitutes them
+    // verbatim (template-store.service.ts#applyVars); the compiled fallback escapes for itself.
+    const { escape } = emailShell;
     await dispatchNotification({
       userId: manager.id,
-      category: "timesheet.submitted",
+      category: "timesheet.awaiting_review",
       title: `${author.name} submitted a timesheet`,
       body: `${hours.toFixed(2)}h on ${project} for ${dateLabel} is awaiting your review.`,
       link: "/app/approvals",
       email: {
-        templateKey: "timesheet.submitted",
-        vars: { name: manager.name, hours: hours.toFixed(2), date: dateLabel, project, managerName: author.name, ...detailVars },
+        templateKey: "timesheet.awaiting_review",
+        vars: {
+          name: escape(manager.name),
+          authorName: escape(author.name),
+          hours: hours.toFixed(2),
+          date: dateLabel,
+          project: escape(project),
+          module: escape(detailVars.module),
+          submodule: escape(detailVars.submodule),
+          activity: escape(detailVars.activity),
+          description: escape(detailVars.description).replaceAll(/\r?\n/g, "<br />"),
+          ticketRef: escape(detailVars.ticketRef)
+        },
         fallback: {
           subject: `${author.name} submitted a timesheet — ${dateLabel}`,
-          html: templates.timesheetSubmitted({ name: manager.name, hours, date: dateLabel, project, managerName: author.name, ...entryDetail })
+          html: templates.timesheetAwaitingReview({ name: manager.name, authorName: author.name, hours, date: dateLabel, project, ...entryDetail })
         }
       }
     });

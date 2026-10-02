@@ -19,6 +19,7 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "billing.payment_failed": ["workspace", "billingUrl", "appUrl"],
   "billing.plan_changed": ["workspace", "plan", "billingUrl", "appUrl"],
   "timesheet.submitted": ["name", "hours", "date", "project", "managerName", "module", "submodule", "activity", "description", "ticketRef", "appUrl"],
+  "timesheet.awaiting_review": ["name", "authorName", "hours", "date", "project", "module", "submodule", "activity", "description", "ticketRef", "appUrl"],
   "timesheet.approved": ["name", "hours", "date", "reviewer", "project", "module", "submodule", "activity", "description", "appUrl"],
   "timesheet.rejected": ["name", "date", "project", "reviewer", "reason", "module", "submodule", "activity", "description", "appUrl"],
   "sla.breach": ["managerName", "employeeName", "date", "project", "deadline", "hoursOverdue", "appUrl"],
@@ -78,6 +79,8 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "billing.plan_changed": "The receipt for a plan change — sent to the workspace's super admins when a tier actually changes, not when a seat count syncs.",
   "workspace.find": "Verification code for \"find my workspaces\" — sent only when the address matches one, and expires in 10 minutes.",
   "timesheet.submitted": "Confirmation to the employee when a timesheet enters the approval queue.",
+  "timesheet.awaiting_review":
+    "To the submitter's manager when a timesheet enters the approval queue — who submitted what, linked to Approvals. Follows the \"Approval SLA breached\" email setting.",
   "timesheet.approved": "Sent when a manager approves a timesheet.",
   "timesheet.rejected": "Sent when a manager rejects a timesheet — includes the reason.",
   "sla.breach": "Sent to the manager who missed an approval window before we escalate.",
@@ -174,6 +177,14 @@ export function sampleVariables(key: string): Record<string, string> {
       ticketRef: "HICS-OPS-88 — Invoice PDF renders blank",
       name: "Aanya Sharma", hours: "7.50", date: "2026-05-27",
       project: "HICS Operations Platform", managerName: "Mira Kapoor",
+      appUrl: "https://timesphere.local"
+    },
+    "timesheet.awaiting_review": {
+      module: "Payments", submodule: "Checkout", activity: "Development",
+      description: "Reworked the retry path so a declined card no longer double-charges.\n\nBlocked for an hour on the sandbox being down.",
+      ticketRef: "HICS-OPS-88 — Invoice PDF renders blank",
+      name: "Mira Kapoor", authorName: "Aanya Sharma", hours: "7.50", date: "2026-05-27",
+      project: "HICS Operations Platform",
       appUrl: "https://timesphere.local"
     },
     "timesheet.approved": {
@@ -452,6 +463,13 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
     subject: "Timesheet submitted - {{date}}",
     html: compiledTemplates.timesheetSubmitted({
       name: V("name"), hours: V("hours"), date: V("date"), project: V("project"), managerName: V("managerName"),
+      module: V("module"), submodule: V("submodule"), activity: V("activity"), description: V("description"), ticketRef: V("ticketRef")
+    })
+  },
+  "timesheet.awaiting_review": {
+    subject: "{{authorName}} submitted a timesheet - {{date}}",
+    html: compiledTemplates.timesheetAwaitingReview({
+      name: V("name"), authorName: V("authorName"), hours: V("hours"), date: V("date"), project: V("project"),
       module: V("module"), submodule: V("submodule"), activity: V("activity"), description: V("description"), ticketRef: V("ticketRef")
     })
   },

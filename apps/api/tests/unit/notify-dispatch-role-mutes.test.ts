@@ -127,3 +127,51 @@ describe("dispatchNotification — per-role email suppression", () => {
     expect(sendMail).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * The approver's "awaiting your review" email follows the APPROVAL toggle, not the receipt's
+ * (audit 2026-10 R3, finding 3). It used to share "Submission confirmation" — the employee's
+ * receipt — so muting receipts for managers who also log time silenced the one email asking them to
+ * decide. It now shares "Approval SLA breached": the same recipient, about the same entry, the next
+ * rung of the same ladder (request → SLA breach → escalation).
+ */
+describe("dispatchNotification — which toggle gates the approval request", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const AWAITING_REVIEW = {
+    userId: RECIPIENT_ID,
+    category: "timesheet.awaiting_review" as const,
+    title: "Ava submitted a timesheet",
+    body: "3.00h on Apollo for 2026-09-28 is awaiting your review.",
+    email: { templateKey: "timesheet.awaiting_review", vars: {}, fallback: { subject: "s", html: "<p>h</p>" } }
+  };
+
+  async function send(settings: Record<string, unknown>) {
+    const client = createFakeTenantClient();
+    vi.mocked(client.user.findUnique).mockResolvedValue(recipient("MANAGER") as never);
+    vi.mocked(client.globalNotificationSettings.upsert).mockResolvedValue({ id: "global", emailRoleMutes: null, ...settings } as never);
+    await runInTenant(client, () => dispatchNotification(AWAITING_REVIEW));
+    await flush();
+  }
+
+  it("still reaches the approver when submission receipts are switched off", async () => {
+    await send({ emailTimesheetSubmitted: false, emailSlaBreach: true });
+    expect(sendMail).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendMail).mock.calls[0][0]).toMatchObject({ preferenceKey: "emailSlaBreach" });
+  });
+
+  it("is switched off with the approval SLA emails", async () => {
+    await send({ emailTimesheetSubmitted: true, emailSlaBreach: false });
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  it("honours a MANAGER mute on the approval SLA row, not on the receipt row", async () => {
+    await send({ emailTimesheetSubmitted: true, emailSlaBreach: true, emailRoleMutes: { emailTimesheetSubmitted: ["MANAGER"] } });
+    expect(sendMail).toHaveBeenCalledTimes(1);
+    vi.mocked(sendMail).mockClear();
+    await send({ emailTimesheetSubmitted: true, emailSlaBreach: true, emailRoleMutes: { emailSlaBreach: ["MANAGER"] } });
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+});

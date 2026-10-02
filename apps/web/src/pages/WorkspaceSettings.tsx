@@ -129,10 +129,10 @@ interface ToggleRow {
  * The `emailChannelCoverage` assertion under this list keeps that from recurring.
  */
 const emailRows = [
-  { group: "Timesheets", key: "emailTimesheetSubmitted", label: "Submission confirmation", description: "Email the submitter when a timesheet enters the approval queue.", icon: <Check className="h-4 w-4 text-info" /> },
+  { group: "Timesheets", key: "emailTimesheetSubmitted", label: "Submission confirmation", description: "Email the submitter a receipt when a timesheet enters the approval queue. The approver's request to review it is the \"Approval SLA breached\" row.", icon: <Check className="h-4 w-4 text-info" /> },
   { group: "Timesheets", key: "emailTimesheetApproved", label: "Timesheet approved", description: "Email the employee when their entry is approved.", icon: <Check className="h-4 w-4 text-success" /> },
   { group: "Timesheets", key: "emailTimesheetRejected", label: "Timesheet rejected", description: "Email the employee with the reviewer's reason and a fix link.", icon: <X className="h-4 w-4 text-destructive" /> },
-  { group: "Timesheets", key: "emailSlaBreach", label: "Approval SLA breached", description: "Email the manager who missed the window before we escalate.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
+  { group: "Timesheets", key: "emailSlaBreach", label: "Approval SLA breached", description: "Email the submitter's manager when a timesheet is waiting for their review, and again if they miss its approval window before we escalate.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
   { group: "Timesheets", key: "emailEscalation", label: "Approval escalations", description: "Email the manager-of-manager (or admin) when an SLA is missed.", icon: <ShieldX className="h-4 w-4 text-destructive" /> },
   { group: "Timesheets", key: "emailDailyReminder", label: "Daily reminder (4 PM)", description: "Nudge employees who haven't logged today's time.", icon: <Clock className="h-4 w-4 text-primary" /> },
   { group: "Timesheets", key: "emailDailyEscalation", label: "Next-morning escalation (9 AM)", description: "Email both the employee and their manager when yesterday's log was missed.", icon: <Timer className="h-4 w-4 text-destructive" /> },

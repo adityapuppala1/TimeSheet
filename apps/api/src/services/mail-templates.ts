@@ -346,6 +346,47 @@ export const templates = {
         paragraph(button("View status", appUrl("/app/history")))
     ),
 
+  /**
+   * The APPROVER's email when a timesheet enters their queue — somebody else's entry, waiting on
+   * their decision. It used to be `timesheetSubmitted` with the names swapped, so the approver read
+   * "Your timesheet was submitted … in the approval queue with <the author>" beside a "View status"
+   * button to their OWN history: the one mail asking for a decision read like a receipt for
+   * something they had not done. Same entry detail as the receipt, so it can be decided from a phone.
+   */
+  timesheetAwaitingReview: (params: {
+    name: string;
+    authorName: string;
+    hours: number | string;
+    date: string;
+    project: string;
+    module?: string | null;
+    submodule?: string | null;
+    activity?: string | null;
+    description?: string | null;
+    ticketRef?: string | null;
+  }) =>
+    shell(
+      { title: "Timesheet awaiting your review", preheader: `${params.authorName}: ${params.hours}h on ${params.project} for ${params.date}.` },
+      heading(`${params.authorName} submitted a timesheet`) +
+        paragraph(
+          `Hi ${escape(params.name.split(" ")[0])}, ${escape(params.authorName)} submitted ${num(params.hours)}h on <strong>${escape(params.project)}</strong> for ${escape(params.date)}. It is awaiting your review.`
+        ) +
+        infoCard(
+          rows([
+            ["Submitted by", escape(params.authorName)],
+            ["Date", escape(params.date)],
+            ["Hours", `${num(params.hours)}h`],
+            ["Project", escape(params.project)],
+            ["Module", escape(params.module)],
+            ["Submodule", escape(params.submodule)],
+            ["Activity", escape(params.activity)],
+            ["Ticket", escape(params.ticketRef)]
+          ])
+        ) +
+        (params.description ? quoted(params.description) : "") +
+        paragraph(button("Review in Approvals", appUrl("/app/approvals")))
+    ),
+
   timesheetApproved: (params: {
     name: string;
     hours: number | string;
