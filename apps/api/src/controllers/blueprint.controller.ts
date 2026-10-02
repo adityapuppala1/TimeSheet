@@ -198,6 +198,12 @@ blueprintRouter.post(
     const project = await prisma.project.findFirst({ where: { id: req.body.projectId, deletedAt: null }, select: { id: true } });
     if (!project) throw new AppError(404, "Project not found");
 
+    // A blueprint saved before "Save as blueprint" learned to skip changes can still list one.
+    const changeItem = (blueprint.payload as unknown as BlueprintPayload).items?.find((item) => item.type === "CHANGE");
+    if (changeItem) {
+      throw new AppError(422, `"${changeItem.title}" in this blueprint has the CHANGE type, and a blueprint can't create changes. Edit the blueprint to remove it or give it another type.`);
+    }
+
     const workingDays = await readWorkingDays();
     const expanded = expandBlueprint(blueprint.payload as unknown as BlueprintPayload, req.body.startDate, workingDays);
     const settings = await getGlobalTicketSettings();
@@ -289,7 +295,8 @@ blueprintRouter.post(
   async (req, res) => {
     await assertPlanningEnabled();
     const tickets = await prisma.ticket.findMany({
-      where: { projectId: req.body.projectId, deletedAt: null },
+      // Not a change's own ticket: a change is a one-off record, not a reusable step of a plan.
+      where: { projectId: req.body.projectId, deletedAt: null, changeRequest: { is: null } },
       select: {
         id: true, title: true, type: true, priority: true, parentId: true,
         startDate: true, endDate: true, isMilestone: true, estimatedHours: true,

@@ -65,6 +65,9 @@ export function validateBlueprint(payload: BlueprintPayload): void {
 
   payload.items.forEach((item, index) => {
     if (!item.title?.trim()) throw new AppError(400, `Item ${index + 1} needs a title.`);
+    // A change is a one-off record of shipping something, created only by the change module; a
+    // blueprint that stamped CHANGE-typed tickets would create changes nobody raised.
+    if (item.type === "CHANGE") throw new AppError(400, `"${item.title}" has the CHANGE type — a blueprint can't create changes.`);
     if (item.offsetStartDays !== undefined && (!Number.isInteger(item.offsetStartDays) || item.offsetStartDays < 0 || item.offsetStartDays > 3650)) {
       throw new AppError(400, `"${item.title}" has an implausible start offset.`);
     }
