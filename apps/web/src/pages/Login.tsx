@@ -60,6 +60,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "../components/ui/toaster";
 import { apiUrl, authApi, brandingApi, brandingLogoUrl, isMaintenanceLockoutError, type LoginResponse } from "../services/api";
 import { useAuthStore } from "../store/auth";
+import { ssoErrorMessage } from "../lib/sso-error";
 import { safeReturnTo } from "../utils/return-to";
 import { radioIndexForKey } from "../lib/radio-group-keys";
 import { AuthBrandPanel } from "../components/marketing/AuthBrandPanel";
@@ -103,6 +104,22 @@ function SignInError({ message }: { message: string }) {
       </span>
     </p>
   );
+}
+
+/**
+ * Why the last SSO attempt came back here, when it did. The API redirects every SSO failure to this
+ * page with `?sso_error=<code>` rather than leaving the person on a raw JSON error on its own host;
+ * lib/sso-error.ts holds the words. Its own component, reading the URL itself, so `Login` — already
+ * at the cognitive-complexity ceiling — gains no branch.
+ */
+function SsoFailureNotice() {
+  const [params] = useSearchParams();
+  const message = ssoErrorMessage(params.get("sso_error"));
+  return message ? (
+    <div className="mt-6">
+      <SignInError message={message} />
+    </div>
+  ) : null;
 }
 
 /** Caps Lock is the single most common cause of a "wrong password" that isn't one. */
@@ -404,6 +421,8 @@ export function Login() {
                 <span className="sr-only">, at </span>
                 <span className="break-all">{window.location.host}</span>
               </p>
+
+              <SsoFailureNotice />
 
               {ssoMethods.isLoading && <Skeleton className="mt-7 h-10 w-full" />}
 

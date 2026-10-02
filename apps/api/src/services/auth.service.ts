@@ -612,7 +612,9 @@ export async function completeSsoLogin(
       countActiveSeats()
     ]);
     if (activeSeats >= seatLimit) {
-      throw new AppError(402, `This workspace has reached its seat limit (${seatLimit} seats). Contact your workspace admin to request more seats.`);
+      throw new AppError(402, `This workspace has reached its seat limit (${seatLimit} seats). Contact your workspace admin to request more seats.`, {
+        code: "SSO_SEAT_LIMIT"
+      });
     }
 
     const employeeRole = await prisma.role.findUniqueOrThrow({ where: { name: "EMPLOYEE" } });
@@ -630,7 +632,8 @@ export async function completeSsoLogin(
     user = created;
   }
 
-  if (user.deletedAt || user.status !== "ACTIVE") throw new AppError(403, "Account is not active");
+  // The code is what sso.controller.ts turns into `?sso_error=inactive` on the login page.
+  if (user.deletedAt || user.status !== "ACTIVE") throw new AppError(403, "Account is not active", { code: "SSO_INACTIVE" });
 
   const session = await establishSession(user, orgId, { userAgent, ipAddress, deviceId });
 

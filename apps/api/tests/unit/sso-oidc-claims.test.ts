@@ -48,7 +48,7 @@ vi.mock("../../src/config/control-prisma.js", () => ({
   }
 }));
 
-const { completeAuthorizationCodeGrant, signSsoState } = await import("../../src/services/sso.service.js");
+const { completeAuthorizationCodeGrant, signSsoState, verifySsoState } = await import("../../src/services/sso.service.js");
 const { encryptSecret } = await import("../../src/utils/encryption.js");
 
 const CLIENT_ID = "11111111-2222-3333-4444-555555555555";
@@ -182,7 +182,12 @@ afterEach(() => vi.unstubAllGlobals());
 describe("Google sign-in requires a verified email address", () => {
   it("refuses an ID token that says the address is NOT verified", async () => {
     stubGoogle(googleClaims({ email_verified: false }));
-    await expect(callback("GOOGLE")).rejects.toMatchObject({ statusCode: 403, message: expect.stringMatching(/hasn't verified the email address/i) });
+    await expect(callback("GOOGLE")).rejects.toMatchObject({
+      statusCode: 403,
+      // The code is what the callback route turns into `?sso_error=email_unverified` on the login page.
+      code: "SSO_EMAIL_UNVERIFIED",
+      message: expect.stringMatching(/hasn't verified the email address/i)
+    });
   });
 
   it("refuses an ID token that does not say either way", async () => {
@@ -273,5 +278,11 @@ describe('Microsoft "common" — what the library actually does with a blank ten
     stubMicrosoft("organizations", microsoftClaims(OTHER_TENANT));
     await callback("MICROSOFT");
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a state that does not verify", () => {
+  it("is reported as expired, so the login page can say \"start again\" rather than \"something broke\"", () => {
+    expect(() => verifySsoState("not-a-signed-state")).toThrow(expect.objectContaining({ statusCode: 400, code: "SSO_EXPIRED" }));
   });
 });

@@ -74,7 +74,7 @@ export function verifySsoState(state: string): SsoStatePayload {
       issuer: "timesphere-sso"
     }) as unknown as SsoStatePayload;
   } catch {
-    throw new AppError(400, "This sign-in link has expired or is invalid — please try signing in again.");
+    throw new AppError(400, "This sign-in link has expired or is invalid — please try signing in again.", { code: "SSO_EXPIRED" });
   }
 }
 
@@ -204,7 +204,7 @@ export async function completeAuthorizationCodeGrant(currentUrl: URL, expectedSt
 
   const claims = tokens.claims();
   if (!claims?.email || typeof claims.email !== "string") {
-    throw new AppError(400, "The identity provider didn't return an email address — sign-in can't continue.");
+    throw new AppError(400, "The identity provider didn't return an email address — sign-in can't continue.", { code: "SSO_CONFIG" });
   }
 
   /**
@@ -226,7 +226,8 @@ export async function completeAuthorizationCodeGrant(currentUrl: URL, expectedSt
   if (provider === "GOOGLE" && claims.email_verified !== true) {
     throw new AppError(
       403,
-      "Google hasn't verified the email address on this account, so it can't be used to sign in here. Contact your workspace admin."
+      "Google hasn't verified the email address on this account, so it can't be used to sign in here. Contact your workspace admin.",
+      { code: "SSO_EMAIL_UNVERIFIED" }
     );
   }
 
@@ -580,7 +581,7 @@ export async function completeSamlLogin(
   received: { hosts: string[] } = { hosts: [] }
 ): Promise<{ orgId: string; identity: SsoIdentity }> {
   const relayState = body.RelayState;
-  if (!relayState) throw new AppError(400, "Missing RelayState parameter.");
+  if (!relayState) throw new AppError(400, "Missing RelayState parameter.", { code: "SSO_EXPIRED" });
   const { orgId, provider } = verifySsoState(relayState);
   if (provider !== "SAML") throw new AppError(400, "State/provider mismatch.");
 

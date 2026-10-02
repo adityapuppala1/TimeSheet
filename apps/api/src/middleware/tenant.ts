@@ -222,16 +222,30 @@ export async function resolveActiveOrgBySlug(slug: string, req?: Request) {
   throw new AppError(503, "This workspace isn't ready yet — try again shortly.");
 }
 
+/**
+ * The org slug a request's Host names, custom domains included — THE resolution rule, in one place.
+ *
+ * A verified custom domain wins over the subdomain rule — see resolveCustomDomainSlug. One extra
+ * indexed lookup per request only when ROOT_DOMAIN says this is a multi-org deployment AND the
+ * hostname is not already a subdomain of it, so a single-org install pays nothing.
+ *
+ * EXPORTED BECAUSE THE SSO START ROUTES NEED EXACTLY THIS, and called `resolveOrgSlug` alone, which
+ * maps every hostname outside ROOT_DOMAIN to DEFAULT_ORG_SLUG. So `time.acme.com` showed Acme's SSO
+ * buttons (the login page reads `/sso-methods` through resolveTenant) and clicking one started the
+ * DEFAULT workspace's flow — another customer's (audit H4). `customDomain` is returned so a caller
+ * can send the browser back to the hostname it came from.
+ */
+export async function resolveRequestOrgSlug(req: Request): Promise<{ slug: string; customDomain: string | null }> {
+  const hostname = requestHostname(req);
+  const custom =
+    env.ROOT_DOMAIN && !hostname.endsWith(`.${env.ROOT_DOMAIN.toLowerCase()}`) ? await resolveCustomDomainSlug(hostname) : null;
+  return custom ? { slug: custom, customDomain: hostname } : { slug: resolveOrgSlug(req), customDomain: null };
+}
+
 export async function resolveTenant(req: Request, _res: Response, next: NextFunction): Promise<void> {
   try {
-    // A verified custom domain wins over the subdomain rule — see resolveCustomDomainSlug. One
-    // extra indexed lookup per request only when ROOT_DOMAIN says this is a multi-org deployment
-    // AND the hostname is not already a subdomain of it, so a single-org install pays nothing.
-    const hostname = requestHostname(req);
-    const custom =
-      env.ROOT_DOMAIN && !hostname.endsWith(`.${env.ROOT_DOMAIN.toLowerCase()}`) ? await resolveCustomDomainSlug(hostname) : null;
-
-    const org = await resolveActiveOrgBySlug(custom ?? resolveOrgSlug(req), req);
+    const { slug } = await resolveRequestOrgSlug(req);
+    const org = await resolveActiveOrgBySlug(slug, req);
     // Non-null assertion is genuinely needed here, not just IDE-lint noise: TS's control-flow
     // narrowing of `org.database` inside resolveActiveOrgBySlug doesn't propagate through that
     // function's inferred return type across this call boundary, even though the guard there
