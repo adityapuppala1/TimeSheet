@@ -13,6 +13,7 @@
  */
 import cron from "node-cron";
 import { sampleAllTenantDatabases } from "../services/tenant-db-metrics.service.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -28,10 +29,12 @@ export function startTenantDbSampleWorker(): void {
     if (running) return;
     running = true;
     try {
-      const result = await sampleAllTenantDatabases();
-      if (result.failed.length) {
-        console.warn(`[db-sample] ${result.sampled} sampled, ${result.failed.length} unreachable: ${result.failed.map((f) => f.slug).join(", ")}`);
-      }
+      await runOncePerTick("db-sample", "hour", async () => {
+        const result = await sampleAllTenantDatabases();
+        if (result.failed.length) {
+          console.warn(`[db-sample] ${result.sampled} sampled, ${result.failed.length} unreachable: ${result.failed.map((f) => f.slug).join(", ")}`);
+        }
+      });
     } catch (error) {
       console.warn(`[db-sample] pass failed: ${(error as Error).message}`);
     } finally {

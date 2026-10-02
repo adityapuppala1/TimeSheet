@@ -12,6 +12,7 @@ import { prisma } from "../config/prisma.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 const REMINDER_OFFSET_DAYS = [3, 1] as const;
 
@@ -100,10 +101,12 @@ export function startDeadlineReminderWorker() {
   cron.schedule(schedule, () => {
     if (running) return;
     running = true;
-    runForEveryOrg("deadline", async () => {
-      const result = await processDeadlineReminders();
-      if (result.sent > 0) console.info(`[deadline] reminders: ${result.sent} sent.`);
-    })
+    runOncePerTick("deadline", "day", () =>
+      runForEveryOrg("deadline", async () => {
+        const result = await processDeadlineReminders();
+        if (result.sent > 0) console.info(`[deadline] reminders: ${result.sent} sent.`);
+      })
+    )
       .catch((error) => console.error("[deadline] worker failed:", (error as Error).message))
       .finally(() => {
         running = false;

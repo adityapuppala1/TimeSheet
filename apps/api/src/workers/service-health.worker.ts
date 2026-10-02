@@ -19,13 +19,18 @@
 import cron from "node-cron";
 import { runForEveryOrg } from "./run-for-every-org.js";
 import { runHealthChecks } from "../services/service-health.service.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 export function startServiceHealthWorker() {
   // Offset from the top of the minute so this does not contend with the other cron jobs that
   // (understandably) all chose :00.
   cron.schedule("2,7,12,17,22,27,32,37,42,47,52,57 * * * *", () => {
-    void runForEveryOrg("service-health", async () => {
-      await runHealthChecks();
-    });
+    // No in-process `running` flag here, so the lease inside runOncePerTick is also what stops a
+    // slow round of checks from overlapping the next one.
+    runOncePerTick("service-health", "minute", () =>
+      runForEveryOrg("service-health", async () => {
+        await runHealthChecks();
+      })
+    ).catch((error) => console.error("[service-health] tick failed:", (error as Error).message));
   });
 }

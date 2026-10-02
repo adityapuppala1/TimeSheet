@@ -13,6 +13,7 @@
  */
 import cron from "node-cron";
 import { runBackupTick } from "../services/backup.service.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -28,10 +29,12 @@ export function startBackupWorker(): void {
     if (running) return;
     running = true;
     try {
-      const result = await runBackupTick(new Date(), { dryRun: false, actorLabel: "scheduler" });
-      if (result.ran.length || result.clamped.length) {
-        console.log(`[backup] ${result.due} due, ${result.ran.filter((r) => r.status === "SUCCEEDED").length} succeeded, ${result.ran.filter((r) => r.status !== "SUCCEEDED").length} not, ${result.clamped.length} clamped to their tier`);
-      }
+      await runOncePerTick("backup", "hour", async () => {
+        const result = await runBackupTick(new Date(), { dryRun: false, actorLabel: "scheduler" });
+        if (result.ran.length || result.clamped.length) {
+          console.log(`[backup] ${result.due} due, ${result.ran.filter((r) => r.status === "SUCCEEDED").length} succeeded, ${result.ran.filter((r) => r.status !== "SUCCEEDED").length} not, ${result.clamped.length} clamped to their tier`);
+        }
+      });
     } catch (error) {
       console.warn(`[backup] tick failed: ${(error as Error).message}`);
     } finally {

@@ -23,6 +23,7 @@
 import cron from "node-cron";
 import { sweepUnverifiedFindings } from "../services/security-report.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -38,10 +39,12 @@ export function startVerificationSweepWorker(): void {
     if (running) return;
     running = true;
     try {
-      await runForEveryOrg("verification-sweep", async () => {
-        const marked = await sweepUnverifiedFindings();
-        if (marked > 0) console.log(`[verification-sweep] ${marked} claimed fix(es) marked unverified`);
-      });
+      await runOncePerTick("verification-sweep", "day", () =>
+        runForEveryOrg("verification-sweep", async () => {
+          const marked = await sweepUnverifiedFindings();
+          if (marked > 0) console.log(`[verification-sweep] ${marked} claimed fix(es) marked unverified`);
+        })
+      );
     } catch (error) {
       console.warn(`[verification-sweep] tick failed: ${(error as Error).message}`);
     } finally {

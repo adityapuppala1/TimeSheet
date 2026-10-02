@@ -9,6 +9,7 @@ import cron from "node-cron";
 import { env } from "../config/env.js";
 import { processTicketSlaSweep } from "../services/ticket-sla.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 // See workers/escalation.worker.ts's comment on the equivalent flag — same overlap hazard,
@@ -29,10 +30,13 @@ export function startTicketEscalationWorker() {
   cron.schedule(env.TICKET_SLA_CRON_SCHEDULE, () => {
     if (running) return;
     running = true;
-    runForEveryOrg("ticket-sla", async () => {
-      const result = await processTicketSlaSweep();
-      if (result.breaches > 0) console.info(`[ticket-sla] sweep: ${result.breaches} breach(es), ${result.escalations} escalation(s).`);
-    })
+    // "minute", whatever TICKET_SLA_CRON_SCHEDULE says — right for every schedule it can hold.
+    runOncePerTick("ticket-sla", "minute", () =>
+      runForEveryOrg("ticket-sla", async () => {
+        const result = await processTicketSlaSweep();
+        if (result.breaches > 0) console.info(`[ticket-sla] sweep: ${result.breaches} breach(es), ${result.escalations} escalation(s).`);
+      })
+    )
       .catch((error) => console.error("[ticket-sla] sweep failed:", (error as Error).message))
       .finally(() => {
         running = false;

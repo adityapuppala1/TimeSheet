@@ -19,6 +19,7 @@ import cron from "node-cron";
 import { prisma } from "../config/prisma.js";
 import { startFlowRun } from "../services/automation-dispatch.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -101,9 +102,11 @@ export function startFlowScheduleWorker(): void {
     if (running) return;
     running = true;
     try {
-      await runForEveryOrg("flow-schedule", async () => {
-        await dispatchScheduledFlows();
-      });
+      await runOncePerTick("flow-schedule", "minute", () =>
+        runForEveryOrg("flow-schedule", async () => {
+          await dispatchScheduledFlows();
+        })
+      );
     } catch (error) {
       console.warn(`[flow-schedule] tick failed: ${(error as Error).message}`);
     } finally {

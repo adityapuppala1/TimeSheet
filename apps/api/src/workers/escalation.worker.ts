@@ -10,6 +10,7 @@ import cron from "node-cron";
 import { env } from "../config/env.js";
 import { processSlaSweep } from "../services/sla.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 // Guards against a slow sweep still running when the next cron tick fires — without this,
@@ -31,10 +32,14 @@ export function startEscalationWorker() {
   cron.schedule(env.SLA_CRON_SCHEDULE, () => {
     if (running) return;
     running = true;
-    runForEveryOrg("sla", async () => {
-      const result = await processSlaSweep();
-      if (result.breaches > 0) console.info(`[sla] sweep: ${result.breaches} breach(es), ${result.escalations} escalation(s).`);
-    })
+    // "minute", whatever SLA_CRON_SCHEDULE says: the finest period any cron can fire at, so the claim
+    // is right for every schedule an operator can configure.
+    runOncePerTick("sla", "minute", () =>
+      runForEveryOrg("sla", async () => {
+        const result = await processSlaSweep();
+        if (result.breaches > 0) console.info(`[sla] sweep: ${result.breaches} breach(es), ${result.escalations} escalation(s).`);
+      })
+    )
       .catch((error) => console.error("[sla] sweep failed:", (error as Error).message))
       .finally(() => {
         running = false;

@@ -12,6 +12,7 @@ import {
   type ZonedParts
 } from "../utils/recipient-time.js";
 import { serverTimezone } from "../config/env.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 /**
  * Daily reminder + next-day escalation worker.
@@ -316,7 +317,7 @@ export function startDailyReminderWorker() {
   cron.schedule("0,30 * * * *", () => {
     if (running) return;
     running = true;
-    runForEveryOrg("reminder", () => tick())
+    runOncePerTick("reminder", "minute", () => runForEveryOrg("reminder", () => tick()))
       .catch((error) => console.error("[reminder] tick failed:", (error as Error).message))
       .finally(() => {
         running = false;

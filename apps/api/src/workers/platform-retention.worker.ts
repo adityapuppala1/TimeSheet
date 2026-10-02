@@ -11,6 +11,7 @@
  */
 import cron from "node-cron";
 import { runRetentionTick } from "../services/retention.service.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -23,10 +24,12 @@ export function startPlatformRetentionWorker(): void {
     if (running) return;
     running = true;
     try {
-      const result = await runRetentionTick(new Date(), { dryRun: false, actorLabel: "scheduler" });
-      if (result.sent.length || result.deleted.length || result.failed.length) {
-        console.log(`[platform-retention] ${result.sent.length} sent, ${result.failed.length} failed, ${result.deleted.length} deleted, ${result.held.length} held`);
-      }
+      await runOncePerTick("platform-retention", "day", async () => {
+        const result = await runRetentionTick(new Date(), { dryRun: false, actorLabel: "scheduler" });
+        if (result.sent.length || result.deleted.length || result.failed.length) {
+          console.log(`[platform-retention] ${result.sent.length} sent, ${result.failed.length} failed, ${result.deleted.length} deleted, ${result.held.length} held`);
+        }
+      });
     } catch (error) {
       console.warn(`[platform-retention] tick failed: ${(error as Error).message}`);
     } finally {

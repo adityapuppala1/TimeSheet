@@ -20,6 +20,16 @@ image:
 existingSecretName: timesphere-secrets
 
 api:
+  # Ignored while autoscaling.enabled is true: the HPA owns the replica count then, and the
+  # Deployment omits `replicas` (templates/api-deployment.yaml).
+  #
+  # MORE THAN ONE REPLICA IS SAFE FOR THE SCHEDULED JOBS. Every api pod starts every cron worker
+  # (reminders, digests, scheduled reports, trial and retention emails, the inbound-mail poller,
+  # backups), and each tick still runs ONCE for the whole deployment: the first pod to claim the
+  # tick's period in the control-plane table PlatformJobClaim runs it, the others stand down, and a
+  # lease stops a long tick being overlapped by another pod's next one (services/job-claim.service.ts).
+  # Do not drop to one replica to avoid duplicate emails: that was the documented workaround, it is
+  # no longer needed, and with autoscaling on it never took effect anyway.
   replicaCount: 2
   # The memory limit is sized for FACE VERIFICATION, not for an idle API, and that is why it looks
   # generous. face.service.ts loads the Human/TensorFlow models into the Node process on first use

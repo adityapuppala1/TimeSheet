@@ -28,6 +28,7 @@ import { templates } from "../services/mail-templates.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { forgetOrgStatus } from "../services/org-status.service.js";
 import { isRetentionProgrammeEnabled } from "../services/retention.service.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -202,10 +203,12 @@ export function startTrialLifecycleWorker(): void {
     if (running) return;
     running = true;
     try {
-      const result = await runTrialLifecycleTick();
-      if (result.warned || result.lapsed || result.suspended) {
-        console.log(`[trial-lifecycle] ${result.warned} warned, ${result.lapsed} lapsed, ${result.suspended} suspended`);
-      }
+      await runOncePerTick("trial-lifecycle", "day", async () => {
+        const result = await runTrialLifecycleTick();
+        if (result.warned || result.lapsed || result.suspended) {
+          console.log(`[trial-lifecycle] ${result.warned} warned, ${result.lapsed} lapsed, ${result.suspended} suspended`);
+        }
+      });
     } catch (error) {
       console.warn(`[trial-lifecycle] tick failed: ${(error as Error).message}`);
     } finally {

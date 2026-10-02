@@ -34,6 +34,7 @@
 import cron from "node-cron";
 import { reconcileSubscriptionSeats } from "../services/billing-sync.service.js";
 import { reconcileBilledRevenue } from "../services/platform-billing-reconcile.service.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -80,7 +81,10 @@ export function startBilledRevenueReconcileWorker(): void {
     if (running) return;
     running = true;
     try {
-      await runNightlyBillingReconcile();
+      // Once per deployment (services/job-claim.service.ts); each half of the pass catches its own.
+      await runOncePerTick("billed-revenue", "day", runNightlyBillingReconcile);
+    } catch (error) {
+      console.warn(`[billed-revenue] pass failed: ${(error as Error).message}`);
     } finally {
       running = false;
     }

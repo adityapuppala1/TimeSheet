@@ -18,6 +18,7 @@ import cron from "node-cron";
 import { prisma } from "../config/prisma.js";
 import { executeAgentRun, reapOrphanedRuns } from "../services/agent-run.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 /** Overlap guard — the same one every worker in this directory uses. A tick that arrives while the
@@ -52,9 +53,11 @@ export function startAgentRunWorker(): void {
     if (running) return;
     running = true;
     try {
-      await runForEveryOrg("agent-run", async () => {
-        await processNextAgentRun();
-      });
+      await runOncePerTick("agent-run", "minute", () =>
+        runForEveryOrg("agent-run", async () => {
+          await processNextAgentRun();
+        })
+      );
     } catch (error) {
       // Never rethrow out of a tick: an unhandled rejection here would take the process down and
       // stop every other worker with it.

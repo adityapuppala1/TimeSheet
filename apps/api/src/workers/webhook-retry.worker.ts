@@ -11,6 +11,7 @@ import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { attemptWebhookDelivery, MAX_DELIVERY_ATTEMPTS, nextRetryAt } from "../services/webhook-dispatch.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -80,14 +81,16 @@ export function startWebhookRetryWorker(): void {
   cron.schedule("*/5 * * * *", () => {
     if (running) return;
     running = true;
-    runForEveryOrg("webhook-retry", async () => {
-      const result = await retryPendingWebhookDeliveries();
-      if (result.retried > 0) {
-        console.info(
-          `[webhook-retry] ${requireTenantContext().orgSlug}: retried ${result.retried}, delivered ${result.delivered}, exhausted ${result.exhausted}.`
-        );
-      }
-    })
+    runOncePerTick("webhook-retry", "minute", () =>
+      runForEveryOrg("webhook-retry", async () => {
+        const result = await retryPendingWebhookDeliveries();
+        if (result.retried > 0) {
+          console.info(
+            `[webhook-retry] ${requireTenantContext().orgSlug}: retried ${result.retried}, delivered ${result.delivered}, exhausted ${result.exhausted}.`
+          );
+        }
+      })
+    )
       .catch((error) => console.error("[webhook-retry] sweep failed:", (error as Error).message))
       .finally(() => {
         running = false;

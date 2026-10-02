@@ -18,6 +18,7 @@ import { getFaceSettings, isFaceFeatureAllowedForOrg } from "../services/face.se
 import { templates } from "../services/mail-templates.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -114,9 +115,11 @@ export function startIdentityWeeklyDigestWorker(): void {
     if (running) return;
     running = true;
     try {
-      await runForEveryOrg("identity-weekly-digest", async () => {
-        await runIdentityWeeklyDigest();
-      });
+      await runOncePerTick("identity-weekly-digest", "day", () =>
+        runForEveryOrg("identity-weekly-digest", async () => {
+          await runIdentityWeeklyDigest();
+        })
+      );
     } catch (error) {
       console.error("[identity-weekly-digest] failed:", (error as Error).message);
     } finally {

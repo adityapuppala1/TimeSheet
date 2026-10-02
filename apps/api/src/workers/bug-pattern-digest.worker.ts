@@ -16,6 +16,7 @@ import { generateBugPatternDigest, getGlobalAISettings } from "../services/ai.se
 import { templates } from "../services/mail-templates.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -135,10 +136,12 @@ export function startBugPatternDigestWorker() {
   cron.schedule("0 9 1 * *", () => {
     if (running) return;
     running = true;
-    runForEveryOrg("bug-pattern-digest", async () => {
-      const result = await runBugPatternDigest();
-      if (result.sent) console.info("[bug-pattern-digest] sent.");
-    })
+    runOncePerTick("bug-pattern-digest", "day", () =>
+      runForEveryOrg("bug-pattern-digest", async () => {
+        const result = await runBugPatternDigest();
+        if (result.sent) console.info("[bug-pattern-digest] sent.");
+      })
+    )
       .catch((error) => console.error("[bug-pattern-digest] run failed:", (error as Error).message))
       .finally(() => {
         running = false;

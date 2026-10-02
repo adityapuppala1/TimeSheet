@@ -60,6 +60,7 @@ import { startProjectRiskWorker } from "./workers/project-risk.worker.js";
 import { startReportSubscriptionWorker } from "./workers/report-subscription.worker.js";
 import { startServiceHealthWorker } from "./workers/service-health.worker.js";
 import { startApiTelemetryRetentionWorker } from "./workers/api-telemetry-retention.worker.js";
+import { startJobClaimPruneWorker } from "./workers/job-claim-prune.worker.js";
 import { flushApiTelemetry, startApiTelemetry } from "./services/api-telemetry.service.js";
 import { refreshCustomDomainOrigins } from "./config/custom-domain-origins.js";
 
@@ -221,6 +222,10 @@ server.on("listening", async () => {
     console.warn(`[db.time] timezone alignment failed: ${(error as Error).message}`);
   }
 
+  // EVERY REPLICA STARTS EVERY WORKER BELOW, and each tick still runs once for the deployment: the
+  // workers claim their period through services/job-claim.service.ts#runOncePerTick, and hold a lease
+  // while they run so a long tick is not overlapped by another pod's next one. A new worker must do
+  // the same — tests/unit/scheduled-workers-once.test.ts fails the build if it does not.
   startEscalationWorker();
   startDeadlineReminderWorker();
   startDailyReminderWorker();
@@ -265,6 +270,8 @@ server.on("listening", async () => {
   // Every replica schedules it; a PlatformJobClaim row makes it one email.
   startSignupDigestWorker();
   startApiTelemetryRetentionWorker();
+  // 04:30 daily — drops claim rows older than a week; the minute jobs above write ~10k a day.
+  startJobClaimPruneWorker();
 
   // The Studio's event triggers. Registered once, for the whole internal event vocabulary — which
   // flows actually fire is decided by the flows, not by what this file was compiled knowing about.

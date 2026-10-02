@@ -26,6 +26,7 @@
  */
 import cron from "node-cron";
 import { runAlertDigest } from "../services/platform-alerts.service.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -43,14 +44,16 @@ export function startPlatformAlertDigestWorker(): void {
     if (running) return;
     running = true;
     try {
-      const result = await runAlertDigest();
-      // Logged either way, because "nothing was sent" and "the worker did not run" have to be
-      // distinguishable from a log file as well as from the console.
-      if (result.sent) {
-        console.info(`[alert-digest] sent: ${result.appeared} new, ${result.escalated} escalated, ${result.cleared} cleared to ${result.recipients} recipient(s); webhook ${result.webhook?.status ?? "n/a"}`);
-      } else {
-        console.info(`[alert-digest] quiet: ${result.reason}`);
-      }
+      await runOncePerTick("alert-digest", "hour", async () => {
+        const result = await runAlertDigest();
+        // Logged either way, because "nothing was sent" and "the worker did not run" have to be
+        // distinguishable from a log file as well as from the console.
+        if (result.sent) {
+          console.info(`[alert-digest] sent: ${result.appeared} new, ${result.escalated} escalated, ${result.cleared} cleared to ${result.recipients} recipient(s); webhook ${result.webhook?.status ?? "n/a"}`);
+        } else {
+          console.info(`[alert-digest] quiet: ${result.reason}`);
+        }
+      });
     } catch (error) {
       console.warn(`[alert-digest] pass failed: ${(error as Error).message}`);
     } finally {

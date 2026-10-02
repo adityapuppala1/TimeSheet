@@ -22,6 +22,7 @@
  */
 import cron from "node-cron";
 import { captureOrgUsageSnapshots } from "../services/platform-admin-analytics.service.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -39,10 +40,12 @@ export function startOrgUsageSnapshotWorker(): void {
     if (running) return;
     running = true;
     try {
-      const result = await captureOrgUsageSnapshots();
-      if (result.failed.length) {
-        console.warn(`[usage-snapshot] ${result.captured} captured, ${result.failed.length} unreachable: ${result.failed.map((f) => f.slug).join(", ")}`);
-      }
+      await runOncePerTick("usage-snapshot", "day", async () => {
+        const result = await captureOrgUsageSnapshots();
+        if (result.failed.length) {
+          console.warn(`[usage-snapshot] ${result.captured} captured, ${result.failed.length} unreachable: ${result.failed.map((f) => f.slug).join(", ")}`);
+        }
+      });
     } catch (error) {
       console.warn(`[usage-snapshot] pass failed: ${(error as Error).message}`);
     } finally {

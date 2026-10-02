@@ -17,6 +17,7 @@ import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { getGlobalAISettings } from "../services/ai.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -53,10 +54,12 @@ export function startAIRetentionWorker(): void {
   cron.schedule("40 3 * * *", () => {
     if (running) return;
     running = true;
-    runForEveryOrg("ai-retention", async () => {
-      const { deleted } = await sweepExpiredAIInteractions();
-      if (deleted > 0) console.info(`[ai-retention] ${requireTenantContext().orgSlug}: deleted ${deleted} expired AI interaction(s).`);
-    })
+    runOncePerTick("ai-retention", "day", () =>
+      runForEveryOrg("ai-retention", async () => {
+        const { deleted } = await sweepExpiredAIInteractions();
+        if (deleted > 0) console.info(`[ai-retention] ${requireTenantContext().orgSlug}: deleted ${deleted} expired AI interaction(s).`);
+      })
+    )
       .catch((error) => console.error("[ai-retention] sweep failed:", (error as Error).message))
       .finally(() => {
         running = false;

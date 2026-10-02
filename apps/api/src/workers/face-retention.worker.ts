@@ -57,6 +57,7 @@ import {
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -266,7 +267,7 @@ export function startFaceRetentionWorker(): void {
     if (running) return;
     running = true;
     try {
-      await runForEveryOrg("face-retention", runFaceLifecycleSweep);
+      await runOncePerTick("face-retention", "day", () => runForEveryOrg("face-retention", runFaceLifecycleSweep));
     } catch (error) {
       console.error("[face-retention] sweep failed:", (error as Error).message);
     } finally {

@@ -33,6 +33,7 @@ import { buildDigestTables, buildPeriods, type DigestScope } from "../services/w
 import { loadRequestUser } from "../services/principal.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 // See workers/escalation.worker.ts's comment on the equivalent flag — same overlap hazard,
@@ -231,10 +232,12 @@ export function startWeeklyDigestWorker() {
   cron.schedule("0 10 * * 1", () => {
     if (running) return;
     running = true;
-    runForEveryOrg("weekly-digest", async () => {
-      const result = await runWeeklyDigest();
-      if (result.sent > 0) console.info(`[weekly-digest] sent ${result.sent} (${result.skipped} skipped — no activity).`);
-    })
+    runOncePerTick("weekly-digest", "day", () =>
+      runForEveryOrg("weekly-digest", async () => {
+        const result = await runWeeklyDigest();
+        if (result.sent > 0) console.info(`[weekly-digest] sent ${result.sent} (${result.skipped} skipped — no activity).`);
+      })
+    )
       .catch((error) => console.error("[weekly-digest] run failed:", (error as Error).message))
       .finally(() => {
         running = false;

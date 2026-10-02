@@ -27,6 +27,7 @@ import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { attemptEmailDelivery } from "../services/mail.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -102,16 +103,18 @@ export function startMailQueueWorker(): void {
   cron.schedule("* * * * *", () => {
     if (running) return;
     running = true;
-    runForEveryOrg("mail-queue", async () => {
-      const result = await drainMailQueue();
-      // Silent when there is nothing to do — this runs every minute for every tenant, and a log
-      // line per idle tick would bury the ones that matter.
-      if (result.attempted > 0) {
-        console.info(
-          `[mail-queue] ${requireTenantContext().orgSlug}: attempted ${result.attempted}, sent ${result.sent}, deferred ${result.deferred}, failed ${result.failed}.`
-        );
-      }
-    })
+    runOncePerTick("mail-queue", "minute", () =>
+      runForEveryOrg("mail-queue", async () => {
+        const result = await drainMailQueue();
+        // Silent when there is nothing to do — this runs every minute for every tenant, and a log
+        // line per idle tick would bury the ones that matter.
+        if (result.attempted > 0) {
+          console.info(
+            `[mail-queue] ${requireTenantContext().orgSlug}: attempted ${result.attempted}, sent ${result.sent}, deferred ${result.deferred}, failed ${result.failed}.`
+          );
+        }
+      })
+    )
       .catch((error) => console.error("[mail-queue] tick failed:", (error as Error).message))
       .finally(() => {
         running = false;

@@ -36,14 +36,18 @@ const control = {
     )
   },
   platformJobClaim: {
-    create: vi.fn(async ({ data }: { data: { job: string; periodKey: string } }) => {
-      // A real unique key: a microtask yield first, so two concurrent callers interleave the way two
-      // replicas do, then exactly one insert wins.
+    // INSERT IGNORE (job-claim.service.ts): a real unique key, a microtask yield first so two
+    // concurrent callers interleave the way two replicas do, then exactly one insert counts.
+    createMany: vi.fn(async ({ data }: { data: Array<{ job: string; periodKey: string }> }) => {
       await Promise.resolve();
-      const key = `${data.job}|${data.periodKey}`;
-      if (claims.has(key)) throw Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
-      claims.add(key);
-      return data;
+      let count = 0;
+      for (const entry of data) {
+        const key = `${entry.job}|${entry.periodKey}`;
+        if (claims.has(key)) continue;
+        claims.add(key);
+        count += 1;
+      }
+      return { count };
     })
   }
 };
@@ -241,7 +245,7 @@ describe("provisioning is failing", () => {
 
   it("never throws — it runs inside a failure path that is already answering a person", async () => {
     attempts = [attempt("FAILED", 20), attempt("FAILED", 10)];
-    control.platformJobClaim.create.mockRejectedValueOnce(new Error("control plane down"));
+    control.platformJobClaim.createMany.mockRejectedValueOnce(new Error("control plane down"));
     await expect(alertIfProvisioningFailing(now)).resolves.toBe(false);
   });
 });

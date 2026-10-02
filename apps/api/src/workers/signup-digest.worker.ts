@@ -14,6 +14,7 @@
 import cron from "node-cron";
 import { env } from "../config/env.js";
 import { runSignupDigest } from "../services/signup-digest.service.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -26,11 +27,13 @@ export function startSignupDigestWorker(): void {
     if (running) return;
     running = true;
     try {
-      const result = await runSignupDigest(new Date());
-      // Logged either way: "nothing was sent" and "the worker did not run" must be told apart.
-      console.info(
-        `[signup-digest] ${result.sent ? "sent" : "quiet"}: ${result.reason} (created ${result.counts.created}, failed ${result.counts.failed}, join ${result.counts.joinRequested}, refused ${result.counts.refused})`
-      );
+      await runOncePerTick("signup-digest", "day", async () => {
+        const result = await runSignupDigest(new Date());
+        // Logged either way: "nothing was sent" and "the worker did not run" must be told apart.
+        console.info(
+          `[signup-digest] ${result.sent ? "sent" : "quiet"}: ${result.reason} (created ${result.counts.created}, failed ${result.counts.failed}, join ${result.counts.joinRequested}, refused ${result.counts.refused})`
+        );
+      });
     } catch (error) {
       console.warn(`[signup-digest] pass failed: ${(error as Error).message}`);
     } finally {

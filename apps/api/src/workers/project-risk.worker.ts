@@ -23,6 +23,7 @@ import { getGlobalAISettings, narrateProjectRisk } from "../services/ai.service.
 import { getPlanningSettings } from "../services/planning.service.js";
 import { assessProject, saveSnapshot } from "../services/project-risk.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -95,7 +96,7 @@ export function startProjectRiskWorker() {
     }
     running = true;
     try {
-      await runForEveryOrg("project-risk", tickForOneOrg);
+      await runOncePerTick("project-risk", "day", () => runForEveryOrg("project-risk", tickForOneOrg));
     } finally {
       running = false;
     }

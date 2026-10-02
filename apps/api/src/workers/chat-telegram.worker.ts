@@ -12,6 +12,7 @@ import { getGlobalAISettings } from "../services/ai.service.js";
 import { processInboundChatMessage, type ParsedInboundChatMessage } from "../services/chat-intake.service.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let polling = false;
@@ -33,7 +34,9 @@ export function startChatTelegramWorker() {
     if (polling) return;
     polling = true;
     try {
-      await runForEveryOrg("chat-telegram", pollOnce);
+      // The lease inside runOncePerTick is what keeps two pods from calling getUpdates with the same
+      // offset at once and opening every message's ticket twice.
+      await runOncePerTick("chat-telegram", "minute", () => runForEveryOrg("chat-telegram", pollOnce));
     } catch (error) {
       console.error("[chat-telegram] poll failed:", (error as Error).message);
     } finally {

@@ -26,6 +26,7 @@ import { generateSecurityWeeklyDigest, getGlobalAISettings } from "../services/a
 import { emailBlocks, templates } from "../services/mail-templates.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -288,10 +289,12 @@ export function startSecurityWeeklyDigestWorker() {
   cron.schedule("30 10 * * 1", () => {
     if (running) return;
     running = true;
-    runForEveryOrg("security-weekly-digest", async () => {
-      const result = await runSecurityWeeklyDigest();
-      if (result.sent) console.info("[security-weekly-digest] sent.");
-    })
+    runOncePerTick("security-weekly-digest", "day", () =>
+      runForEveryOrg("security-weekly-digest", async () => {
+        const result = await runSecurityWeeklyDigest();
+        if (result.sent) console.info("[security-weekly-digest] sent.");
+      })
+    )
       .catch((error) => console.error("[security-weekly-digest] run failed:", (error as Error).message))
       .finally(() => {
         running = false;

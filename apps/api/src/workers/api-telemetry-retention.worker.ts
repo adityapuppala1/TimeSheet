@@ -17,6 +17,7 @@ import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -58,12 +59,14 @@ export function startApiTelemetryRetentionWorker(): void {
   cron.schedule("10 4 * * *", () => {
     if (running) return;
     running = true;
-    runForEveryOrg("api-telemetry-retention", async () => {
-      const { deleted } = await sweepExpiredApiRequestSamples();
-      if (deleted > 0) {
-        console.info(`[api-telemetry-retention] ${requireTenantContext().orgSlug}: deleted ${deleted} expired request sample(s).`);
-      }
-    })
+    runOncePerTick("api-telemetry-retention", "day", () =>
+      runForEveryOrg("api-telemetry-retention", async () => {
+        const { deleted } = await sweepExpiredApiRequestSamples();
+        if (deleted > 0) {
+          console.info(`[api-telemetry-retention] ${requireTenantContext().orgSlug}: deleted ${deleted} expired request sample(s).`);
+        }
+      })
+    )
       .catch((error) => console.error("[api-telemetry-retention] sweep failed:", (error as Error).message))
       .finally(() => {
         running = false;

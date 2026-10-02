@@ -15,6 +15,7 @@ import { getGlobalAISettings } from "../services/ai.service.js";
 import { getGlobalEmailIntakeSettings, processInboundEmail, type ParsedInboundEmail } from "../services/email-intake.service.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let polling = false;
@@ -32,7 +33,10 @@ export function startInboundEmailWorker() {
     if (polling) return;
     polling = true;
     try {
-      await runForEveryOrg("email-intake", pollOnce);
+      // Once per minute for the deployment, and never while another pod's poll is still running:
+      // two pollers search the same unseen messages and each opens a ticket for every one of them
+      // before either has flagged it as seen. The lease in runOncePerTick is what prevents that.
+      await runOncePerTick("email-intake", "minute", () => runForEveryOrg("email-intake", pollOnce));
     } catch (error) {
       console.error("[email-intake] poll failed:", (error as Error).message);
     } finally {

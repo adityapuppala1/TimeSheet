@@ -22,6 +22,7 @@ import { sendMail } from "../services/mail.service.js";
 import { getPlanningSettings } from "../services/planning.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
 import { tenantBaseUrl } from "../services/workspace-directory.service.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -169,7 +170,9 @@ export function startReportSubscriptionWorker() {
     }
     running = true;
     try {
-      await runForEveryOrg("report-subscriptions", tickForOneOrg);
+      // Once for the deployment: `lastSentAt` is read before the send and written after it, so two
+      // pods ticking at :05 both read "not sent yet" and every recipient got the report twice.
+      await runOncePerTick("report-subscriptions", "hour", () => runForEveryOrg("report-subscriptions", tickForOneOrg));
     } finally {
       running = false;
     }

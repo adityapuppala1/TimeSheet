@@ -18,6 +18,7 @@ import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { executeEvalRun } from "../services/ai-eval.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -48,10 +49,12 @@ export function startAIEvalWorker(): void {
     // A run can easily outlast a one-minute tick; overlapping ticks would double-spend.
     if (running) return;
     running = true;
-    runForEveryOrg("ai-eval", async () => {
-      const { ranId } = await processNextEvalRun();
-      if (ranId) console.info(`[ai-eval] ${requireTenantContext().orgSlug}: finished run ${ranId}.`);
-    })
+    runOncePerTick("ai-eval", "minute", () =>
+      runForEveryOrg("ai-eval", async () => {
+        const { ranId } = await processNextEvalRun();
+        if (ranId) console.info(`[ai-eval] ${requireTenantContext().orgSlug}: finished run ${ranId}.`);
+      })
+    )
       .catch((error) => console.error("[ai-eval] tick failed:", (error as Error).message))
       .finally(() => {
         running = false;

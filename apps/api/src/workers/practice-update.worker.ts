@@ -28,6 +28,7 @@ import { sendMail } from "../services/mail.service.js";
 import { buildPracticeUpdateData, lastCompleteWeek } from "../services/practice-update.service.js";
 import { buildPracticeUpdateEmail, narrativeInputs } from "../services/practice-update-mail.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -116,10 +117,12 @@ export function startPracticeUpdateWorker() {
   cron.schedule("30 7 * * 1", () => {
     if (running) return;
     running = true;
-    runForEveryOrg("practice-update", async () => {
-      const result = await runPracticeUpdate();
-      if (result.sent) console.log(`[practice-update] sent to ${result.recipients} recipient(s).`);
-    })
+    runOncePerTick("practice-update", "day", () =>
+      runForEveryOrg("practice-update", async () => {
+        const result = await runPracticeUpdate();
+        if (result.sent) console.log(`[practice-update] sent to ${result.recipients} recipient(s).`);
+      })
+    )
       .catch((error) => console.error(`[practice-update] run failed: ${(error as Error).message}`))
       .finally(() => {
         running = false;

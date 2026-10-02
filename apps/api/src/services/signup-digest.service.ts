@@ -23,6 +23,7 @@ import { controlPrisma } from "../config/control-prisma.js";
 import { env } from "../config/env.js";
 import { companyDomainOf } from "../utils/company-domain.js";
 import { platformDayKey, platformHourKey } from "../utils/platform-time.js";
+import { claimJobPeriod } from "./job-claim.service.js";
 import { getAlertSettings, resolveAlertRecipients } from "./platform-alerts.service.js";
 import { platformAudit } from "./platform-audit.service.js";
 import { sendPlatformTemplate } from "./platform-mail.service.js";
@@ -48,20 +49,9 @@ export interface SignupDigestResult {
   counts: SignupDigestCounts;
 }
 
-/**
- * Claims `periodKey` of `job` for this process. True for exactly one caller per (job, period) across
- * every replica; false for the rest. Any other database error propagates — "I could not tell" must
- * not read as "somebody else has it".
- */
-export async function claimJobPeriod(job: string, periodKey: string): Promise<boolean> {
-  try {
-    await controlPrisma.platformJobClaim.create({ data: { job, periodKey } });
-    return true;
-  } catch (error) {
-    if ((error as { code?: string }).code === "P2002") return false;
-    throw error;
-  }
-}
+/* `claimJobPeriod` started here and now lives in job-claim.service.ts, beside `runOncePerTick`, which
+   every scheduled worker uses. Re-exported so this file's callers and tests keep their import. */
+export { claimJobPeriod };
 
 /** A day as the platform's zone names it (Asia/Kolkata by default) — never UTC's; see platform-time.ts. */
 const day = (value: Date | null | undefined) => (value ? platformDayKey(value) : "—");

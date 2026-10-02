@@ -25,6 +25,7 @@ import { dispatchNotification } from "../services/notify.service.js";
 import { isPlanningCapabilityAllowed } from "../services/plan-limits.service.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
@@ -138,10 +139,12 @@ export function startGoalDigestWorker(): void {
     if (running) return;
     running = true;
     try {
-      await runForEveryOrg("goal-digest", async () => {
-        const sent = await sendGoalDigests();
-        if (sent > 0) console.log(`[goal-digest] ${sent} digest(s) sent`);
-      });
+      await runOncePerTick("goal-digest", "day", () =>
+        runForEveryOrg("goal-digest", async () => {
+          const sent = await sendGoalDigests();
+          if (sent > 0) console.log(`[goal-digest] ${sent} digest(s) sent`);
+        })
+      );
     } catch (error) {
       console.warn(`[goal-digest] tick failed: ${(error as Error).message}`);
     } finally {
