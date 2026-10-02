@@ -46,6 +46,16 @@ export function accountGateFromError(error: unknown): ConsoleAccountGate {
 }
 
 /**
+ * Whether a console write came back QUEUED (HTTP 202, the two-person rule) rather than done. The
+ * queue's answer carries `pending: true` and a request id; a completed result never does. Pages
+ * that used to read every 2xx as "done" told an operator a restore or a deletion had happened when
+ * it was only waiting for a second owner.
+ */
+export function isQueuedForApproval(result: unknown): result is { pending: true; requestId: string; message: string } {
+  return typeof result === "object" && result !== null && (result as { pending?: unknown }).pending === true && typeof (result as { requestId?: unknown }).requestId === "string";
+}
+
+/**
  * Whether the console-wide "set up two-factor" banner applies: an operator with no factor whom the
  * deployment does NOT force to enrol (a role it does not cover, or PLATFORM_ADMIN_REQUIRE_MFA off).
  * Quiet behind a gate, because the gate's own screen is already saying it.

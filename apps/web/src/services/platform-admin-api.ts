@@ -861,7 +861,10 @@ export const platformAdminConsoleApi = {
     (await platformAdminApi.get<PlatformEmailAnalytics>("/email-analytics", { params: range })).data,
 
   retention: async () => (await platformAdminApi.get<{ settings: RetentionSettings; markers: string[]; queue: RetentionQueueRow[] }>("/retention")).data,
-  updateRetentionSettings: async (patch: Partial<Omit<RetentionSettings, "updatedAt">>) => (await platformAdminApi.put<RetentionSettings>("/retention/settings", patch)).data,
+  /** A change that loosens the policy (shorter window, less notice, auto-delete on, no snapshot) is
+   *  QUEUED for a second owner and comes back as a 202 `PlatformActionQueued`; anything else applies. */
+  updateRetentionSettings: async (patch: Partial<Omit<RetentionSettings, "updatedAt">>) =>
+    (await platformAdminApi.put<RetentionSettings | PlatformActionQueued>("/retention/settings", patch)).data,
   runRetention: async (body: { dryRun?: boolean; simulateNow?: string }) => (await platformAdminApi.post<RetentionTickResult>("/retention/run", body)).data,
   setRetentionHold: async (orgId: string, hold: boolean) => (await platformAdminApi.post<{ id: string; slug: string; retentionHold: boolean }>(`/retention/${orgId}/hold`, { hold })).data,
   sendRetentionMarker: async (orgId: string, marker: string) =>

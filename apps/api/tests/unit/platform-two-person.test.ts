@@ -126,15 +126,19 @@ vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: control })
 const deleteWorkspaceUnderPolicy = vi.fn().mockResolvedValue({ deleted: true, databaseName: "acme_db" });
 const restoreSnapshot = vi.fn().mockResolvedValue({ restored: true });
 const deleteSnapshot = vi.fn().mockResolvedValue({ deleted: true });
+/** The live policy the retention-settings route compares a change against — the shipped defaults. */
+const RETENTION_DEFAULTS = { enabled: true, feedbackDay: 10, reminderDays: [30, 60, 80, 90], retentionDays: 90, autoDeleteEnabled: false, snapshotDir: "/var/backups/timesphere-retention/retention", updatedAt: null };
+const getRetentionSettings = vi.fn(async () => RETENTION_DEFAULTS);
+const updateRetentionSettings = vi.fn(async (patch: Record<string, unknown>) => ({ ...RETENTION_DEFAULTS, ...patch }));
 
 vi.mock("../../src/services/retention.service.js", () => ({
   deleteWorkspaceUnderPolicy,
   getRetentionQueue: vi.fn().mockResolvedValue([]),
-  getRetentionSettings: vi.fn().mockResolvedValue({}),
+  getRetentionSettings,
   runRetentionTick: vi.fn().mockResolvedValue({ sent: [], deleted: [] }),
   sendRetentionMarker: vi.fn().mockResolvedValue({ ok: true }),
   setRetentionHold: vi.fn().mockResolvedValue({}),
-  updateRetentionSettings: vi.fn().mockResolvedValue({})
+  updateRetentionSettings
 }));
 vi.mock("../../src/services/platform-backup.service.js", () => ({
   deleteSnapshot,
@@ -470,5 +474,47 @@ describe("the queue is visible to everyone, and answers honestly", () => {
 
     const res = await request(app).get("/api/platform-admin/governance/requests").set("Authorization", `Bearer ${tokens[OWNER_B]}`);
     expect(res.body.rows[0]).toMatchObject({ status: "PENDING", expired: true });
+  });
+});
+
+describe("loosening the retention policy is two-person (H2)", () => {
+  /*
+   * WHY. Deleting a workspace by hand needs a second owner, but one OPERATOR could get the same
+   * result alone: shorten the window to 7 days, move the reminders up, switch auto-delete on, clear
+   * the snapshot directory so no copy is kept — then run the daily pass twice. Each of those is now
+   * queued. Changes that only make the policy kinder stay single-person.
+   */
+  const put = (who: string, body: object) =>
+    request(app).put("/api/platform-admin/retention/settings").set("Authorization", `Bearer ${tokens[who]}`).set("X-Platform-Reason", REASON).send(body);
+
+  it.each([
+    ["shortening the retention window", { retentionDays: 30, reminderDays: [10, 30] }],
+    ["moving the first reminder closer to the deletion", { reminderDays: [85, 90] }],
+    ["switching auto-delete on", { autoDeleteEnabled: true }],
+    ["clearing the snapshot directory", { snapshotDir: null }]
+  ])("queues %s instead of applying it", async (_label, body) => {
+    const res = await put(OWNER_A, body);
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ pending: true, action: "retention.settings" });
+    expect(updateRetentionSettings).not.toHaveBeenCalled();
+  });
+
+  it("applies the queued change when a second owner approves, against the policy as it is then", async () => {
+    const queued = await put(OWNER_A, { autoDeleteEnabled: true });
+    const approved = await as(OWNER_B, "post", `/governance/requests/${queued.body.requestId}/approve`);
+    expect(approved.status).toBe(200);
+    expect(updateRetentionSettings).toHaveBeenCalledWith({ autoDeleteEnabled: true }, "b@timesphere.app");
+  });
+
+  it.each([
+    ["a later check-in day", { feedbackDay: 14 }],
+    ["a longer window", { retentionDays: 120, reminderDays: [30, 60, 90, 120] }],
+    ["switching auto-delete off", { autoDeleteEnabled: false }],
+    ["pausing the programme", { enabled: false }]
+  ])("applies %s at once — it makes nothing less safe", async (_label, body) => {
+    const res = await put(OWNER_A, body);
+    expect(res.status).toBe(200);
+    expect(updateRetentionSettings).toHaveBeenCalledTimes(1);
+    expect(pending.size).toBe(0);
   });
 });

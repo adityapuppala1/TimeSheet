@@ -9,7 +9,7 @@
  * a plan tier can be moved back; a dropped database cannot, and an account quietly promoted to
  * OWNER can grant itself everything before anybody reads the audit log. A two-person rule applied
  * to everything is a rule operators learn to route around, so it is applied to the irreversible
- * five and nothing else.
+ * five — plus the two ways round them that `consoleTwoPersonActions` below adds — and nothing else.
  *
  * HOW THE DEFERRAL WORKS, AND WHY IT IS A REPLAY.
  *
@@ -29,10 +29,37 @@
  * The executor is looked up by `action`, never by the stored `route`. A path recorded in a database
  * row must never be able to choose which code runs.
  */
-import { PLATFORM_APPROVAL_TTL_HOURS, PLATFORM_TWO_PERSON_LABEL, type PlatformTwoPersonAction } from "@timesheet/shared";
+import { PLATFORM_APPROVAL_TTL_HOURS, PLATFORM_TWO_PERSON_LABEL, platformTwoPersonActions, type PlatformTwoPersonAction } from "@timesheet/shared";
 import { controlPrisma } from "../config/control-prisma.js";
 import { AppError } from "../middleware/error.js";
 import { platformAudit } from "./platform-audit.service.js";
+
+/**
+ * The shared list, plus the two actions this release added (H2, M7): loosening the retention
+ * policy's deletion safeguards, and reactivating a deactivated operator. They are NOT irreversible —
+ * a policy can be tightened back, an account deactivated again — but each is a way one person could
+ * get around a two-person action already on the list (a policy that deletes workspaces for you; a
+ * dormant OWNER account brought back without anybody else knowing), so they need the same second
+ * signature.
+ *
+ * DEFINED HERE, NOT IN `@timesheet/shared`, only because this lane could not change that package.
+ * The console reads every label from the server (`label` on the queue rows), so nothing on the client
+ * needs the list. They belong in `platformTwoPersonActions` and `PLATFORM_TWO_PERSON_LABEL`; when they
+ * move there, this becomes the shared constant again.
+ */
+export const consoleTwoPersonActions = {
+  ...platformTwoPersonActions,
+  RETENTION_SETTINGS: "retention.settings",
+  ADMIN_REACTIVATE: "admin.reactivate"
+} as const;
+
+export type ConsoleTwoPersonAction = (typeof consoleTwoPersonActions)[keyof typeof consoleTwoPersonActions];
+
+export const CONSOLE_TWO_PERSON_LABEL: Record<ConsoleTwoPersonAction, string> = {
+  ...(PLATFORM_TWO_PERSON_LABEL as Record<PlatformTwoPersonAction, string>),
+  "retention.settings": "Loosen the retention policy's deletion safeguards",
+  "admin.reactivate": "Reactivate a deactivated platform admin"
+};
 
 export interface TwoPersonContext {
   params: Record<string, string>;
@@ -49,7 +76,7 @@ export interface TwoPersonContext {
 
 export type TwoPersonExecutor = (ctx: TwoPersonContext) => Promise<unknown>;
 
-const executors = new Map<PlatformTwoPersonAction, TwoPersonExecutor>();
+const executors = new Map<ConsoleTwoPersonAction, TwoPersonExecutor>();
 
 /**
  * Registered at module load by the controller that owns the route, so the queued path and the
@@ -57,7 +84,7 @@ const executors = new Map<PlatformTwoPersonAction, TwoPersonExecutor>();
  * throwing: a test file that imports the controller twice is not a bug worth crashing over, and
  * the second registration is the same function.
  */
-export function registerTwoPersonAction(action: PlatformTwoPersonAction, executor: TwoPersonExecutor) {
+export function registerTwoPersonAction(action: ConsoleTwoPersonAction, executor: TwoPersonExecutor) {
   executors.set(action, executor);
 }
 
@@ -67,7 +94,7 @@ export function __registeredTwoPersonActionsForTests() {
 }
 
 export interface QueueInput {
-  action: PlatformTwoPersonAction;
+  action: ConsoleTwoPersonAction;
   route: string;
   method: string;
   params: Record<string, string>;
@@ -123,12 +150,12 @@ export async function queuePlatformAction(input: QueueInput) {
     pending: true as const,
     requestId: row.id,
     action: input.action,
-    label: PLATFORM_TWO_PERSON_LABEL[input.action],
+    label: CONSOLE_TWO_PERSON_LABEL[input.action],
     expiresAt,
     approvers: approvers.map((a) => ({ id: a.id, name: a.name, email: a.email, liveSessions: a._count.sessions })),
     message:
       approvers.length > 0
-        ? `Queued for approval. ${PLATFORM_TWO_PERSON_LABEL[input.action]} cannot be undone, so another owner has to countersign it before it runs. It expires in ${PLATFORM_APPROVAL_TTL_HOURS} hours.`
+        ? `Queued for approval. ${CONSOLE_TWO_PERSON_LABEL[input.action]} needs another owner to countersign it before it runs. It expires in ${PLATFORM_APPROVAL_TTL_HOURS} hours.`
         : `Queued, but there is no other owner who can approve it. Create a second owner account first — a two-person rule one person can satisfy alone is not one.`
   };
 }
@@ -161,7 +188,7 @@ export async function approvePlatformAction(requestId: string, approver: { id: s
     throw new AppError(409, `That request expired after ${PLATFORM_APPROVAL_TTL_HOURS} hours. Raise it again if it still needs doing.`);
   }
 
-  const executor = executors.get(row.action as PlatformTwoPersonAction);
+  const executor = executors.get(row.action as ConsoleTwoPersonAction);
   if (!executor) throw new AppError(500, `No handler is registered for "${row.action}" in this build.`);
 
   let result: unknown;
@@ -236,7 +263,7 @@ export async function listPendingPlatformActions(viewerId: string, limit = 50) {
   return rows.map((row) => ({
     id: row.id,
     action: row.action,
-    label: PLATFORM_TWO_PERSON_LABEL[row.action as PlatformTwoPersonAction] ?? row.action,
+    label: CONSOLE_TWO_PERSON_LABEL[row.action as ConsoleTwoPersonAction] ?? row.action,
     route: row.route,
     method: row.method,
     params: row.params,

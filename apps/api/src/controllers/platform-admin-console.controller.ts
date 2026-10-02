@@ -28,12 +28,15 @@ import { sanitizeEmailHtml } from "../utils/sanitize.js";
 import { platformAudit, platformAuditFor } from "../services/platform-audit.service.js";
 import {
   approvePlatformAction,
+  consoleTwoPersonActions,
   listPendingPlatformActions,
   queuePlatformAction,
   registerTwoPersonAction,
   rejectPlatformAction,
+  type ConsoleTwoPersonAction,
   type TwoPersonContext
 } from "../services/platform-governance.service.js";
+import { retentionSettingsRisks } from "../services/retention-settings-guard.js";
 import { PLATFORM_TEMPLATES, PLATFORM_TEMPLATE_KEYS, platformTemplateDef, RETENTION_MARKER_TEMPLATE } from "../services/platform-mail-templates.js";
 import {
   applyPlatformVars,
@@ -81,8 +84,7 @@ import {
   platformRoles,
   platformTwoPersonActions,
   type BackupFrequency,
-  type PlatformRole,
-  type PlatformTwoPersonAction
+  type PlatformRole
 } from "@timesheet/shared";
 
 export const platformAdminConsoleRouter = Router();
@@ -123,7 +125,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * whether the slug matches, whether the tier allows it — all of that happens inside `execute`, at
  * approval, against the database as it is then. See the service header for why.
  */
-function twoPerson(action: PlatformTwoPersonAction, execute: (ctx: TwoPersonContext) => Promise<unknown>): RequestHandler {
+function twoPerson(action: ConsoleTwoPersonAction, execute: (ctx: TwoPersonContext) => Promise<unknown>): RequestHandler {
   registerTwoPersonAction(action, execute);
   return async (req, res) => {
     const queued = await queuePlatformAction({
@@ -530,12 +532,28 @@ const retentionSettingsSchema = z.object({
     .strict()
 });
 
+/** The queued half of a loosening policy change — applied, on approval, to the policy as it is then. */
+const retentionSettingsTwoPersonRoute = twoPerson(consoleTwoPersonActions.RETENTION_SETTINGS, async (ctx) => {
+  const result = await updateRetentionSettings(ctx.body as Parameters<typeof updateRetentionSettings>[0], ctx.actorLabel);
+  await platformAudit("PLATFORM_ADMIN", ctx.actorLabel, "retention.settings_updated_with_approval", "PlatformRetentionSettings", "global", {
+    fields: Object.keys(ctx.body),
+    requestedBy: ctx.requester.label
+  }, { reason: ctx.reason, ipAddress: ctx.ipAddress, after: JSON.parse(JSON.stringify(ctx.body)) });
+  return result;
+});
+
 /**
  * The retention policy decides when customers' workspaces are deleted and where their last copy is
- * kept, so a change to it now carries a reason like every other action that reaches a customer —
- * in particular the snapshot directory (H1), which decides what the snapshot routes will read.
+ * kept, so a change to it carries a reason like every other action that reaches a customer — in
+ * particular the snapshot directory (H1), which decides what the snapshot routes will read.
+ *
+ * AND A CHANGE THAT LOOSENS IT IS TWO-PERSON (H2): a shorter window, less notice, auto-delete on, or
+ * no snapshot. Otherwise one operator could delete lapsed workspaces through the policy without the
+ * second signature a hand deletion needs. Everything else applies at once. See
+ * services/retention-settings-guard.ts for exactly what counts.
  */
-platformAdminConsoleRouter.put("/retention/settings", operate, requirePlatformReason, validate(retentionSettingsSchema), async (req, res) => {
+platformAdminConsoleRouter.put("/retention/settings", operate, requirePlatformReason, validate(retentionSettingsSchema), async (req, res, next) => {
+  if (retentionSettingsRisks(await getRetentionSettings(), req.body).length > 0) return retentionSettingsTwoPersonRoute(req, res, next);
   res.json(await updateRetentionSettings(req.body, actorLabel(req)));
 });
 

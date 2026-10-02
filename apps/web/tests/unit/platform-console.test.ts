@@ -3,7 +3,20 @@
  * is behind, and how a gated 403 is recognised so the console can route to the form that lifts it.
  */
 import { describe, expect, it } from "vitest";
-import { accountGateFromError, consoleAccountGate, shouldNagForMfa } from "../../src/lib/platform-console";
+import { accountGateFromError, consoleAccountGate, isQueuedForApproval, shouldNagForMfa } from "../../src/lib/platform-console";
+
+describe("isQueuedForApproval — a 202 is not a success", () => {
+  it("recognises the two-person queue's answer", () => {
+    expect(isQueuedForApproval({ pending: true, requestId: "r-1", message: "Queued for approval." })).toBe(true);
+  });
+
+  it("does not mistake a completed result for one", () => {
+    expect(isQueuedForApproval({ restored: true, slug: "acme" })).toBe(false);
+    expect(isQueuedForApproval({ deleted: true, id: "x.sql" })).toBe(false);
+    expect(isQueuedForApproval({ enabled: true, retentionDays: 90 })).toBe(false);
+    expect(isQueuedForApproval(null)).toBe(false);
+  });
+});
 
 describe("consoleAccountGate", () => {
   it("is the password form while the server says the password must change", () => {

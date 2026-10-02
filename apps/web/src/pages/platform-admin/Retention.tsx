@@ -65,6 +65,7 @@ import {
   shortDateTime
 } from "./console-ui";
 import { runInBackground } from "../../lib/run-in-background";
+import { isQueuedForApproval } from "../../lib/platform-console";
 
 const errorMessageOf = (error: unknown) => (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
 
@@ -97,8 +98,10 @@ function PolicyCard({ settings }: { settings: RetentionSettings }) {
         autoDeleteEnabled: form.autoDeleteEnabled,
         snapshotDir: form.snapshotDir.trim() || null
       }),
-    onSuccess: () => {
-      toast.success("Policy saved");
+    onSuccess: (result) => {
+      // A loosening change is queued for a second owner, not saved — say so, as Access.tsx does.
+      if (isQueuedForApproval(result)) toast.success("Queued for approval", { description: result.message });
+      else toast.success("Policy saved");
       runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin"] }));
     },
     onError: (e) => toast.error("Could not save", { description: errorMessageOf(e) })
