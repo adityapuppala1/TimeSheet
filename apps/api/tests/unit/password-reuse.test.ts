@@ -56,8 +56,8 @@ beforeEach(async () => {
   storedHash = await hashPassword(CURRENT);
   client = {
     user: {
-      findUniqueOrThrow: vi.fn().mockResolvedValue({ id: USER_ID, passwordHash: storedHash, status: "ACTIVE", deletedAt: null }),
-      findUnique: vi.fn().mockResolvedValue({ id: USER_ID, passwordHash: storedHash, status: "ACTIVE", deletedAt: null }),
+      findUniqueOrThrow: vi.fn().mockResolvedValue({ id: USER_ID, email: "ada@example.com", passwordHash: storedHash, status: "ACTIVE", deletedAt: null }),
+      findUnique: vi.fn().mockResolvedValue({ id: USER_ID, email: "ada@example.com", passwordHash: storedHash, status: "ACTIVE", deletedAt: null }),
       update: vi.fn().mockResolvedValue({ id: USER_ID })
     },
     session: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
