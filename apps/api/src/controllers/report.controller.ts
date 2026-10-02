@@ -20,10 +20,9 @@ import {
   securityDisciplineFindingTypes,
   unresolvedSecurityFindingStatuses
 } from "@timesheet/shared";
-import type { Prisma, TicketStatus } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
-import { DAY_MS, parseDayWindow, resolveTimestampWindow, windowDays } from "../utils/date-window.js";
-import { isChangeManagementOn } from "../services/change.service.js";
+import { parseDayWindow, windowDays } from "../utils/date-window.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { tenantContext } from "../config/tenant-context.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
@@ -32,6 +31,7 @@ import { generateStatusReport } from "../services/ai.service.js";
 import { resolveVisiblePeopleNames, withoutHiddenPeople } from "../services/people-visibility.service.js";
 import { computeTimesheetCost } from "../services/billing-rate.service.js";
 import { buildTimesheetAnalytics } from "../services/timesheet-analytics.service.js";
+import { buildAdminSummary } from "../services/admin-summary.service.js";
 import {
   GROUP_BY_KEYS,
   REPORT_INCLUDE,
@@ -50,16 +50,10 @@ import {
 } from "../services/timesheet-report.service.js";
 import { buildTimesheetReportWorkbook } from "../services/timesheet-report-xlsx.service.js";
 import { renderTimesheetReportPdf } from "../services/timesheet-report-pdf.service.js";
-import { awaitingReviewWhere, loadApprovalAuthority } from "../services/timesheet-approval-scope.service.js";
 import { userClock } from "../services/user-clock.service.js";
 
 export const reportRouter = Router();
 reportRouter.use(requireAuth);
-
-function todayUtcDate(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-}
 
 function startOfLocalDay(date = new Date()): Date {
   const d = new Date(date);
@@ -124,227 +118,12 @@ reportRouter.get("/daily-status", async (req, res) => {
 });
 
 /**
- * The workspace summary behind the home page's cards.
- *
- * IT USED TO IGNORE THE REQUEST ENTIRELY and hardcode today / yesterday / 7d / year-to-date. With a
- * date filter on the page that is no longer good enough, so it takes `from`/`to` — and with neither,
- * it computes exactly the windows it always did, so every other caller is unaffected.
- *
- * "vs YESTERDAY" BECOMES "vs THE PREVIOUS EQUAL-LENGTH PERIOD" once a range is given, because that
- * is the only thing a delta can honestly mean for an arbitrary span: comparing a fortnight against
- * one day would read as a collapse every time.
- *
- * The project/status/activity breakdowns gain the filter too. They were ALL-TIME, which was its own
- * quiet bug — "Project utilization" on a page showing one week silently answered for all history.
+ * The workspace summary behind the home page's admin cards and the Reports page's tiles. The
+ * figures and their definitions live in services/admin-summary.service.ts — see its header for what
+ * each one used to get wrong. With no `from`/`to` it answers for today.
  */
 reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
-  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const today = todayUtcDate();
-  const yesterday = new Date(today);
-  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-  const yearStart = new Date(Date.UTC(today.getUTCFullYear(), 0, 1));
-  const sinceLocal = startOfLocalDay();
-
-  const sinceYesterdayLocal = new Date(sinceLocal);
-  sinceYesterdayLocal.setDate(sinceYesterdayLocal.getDate() - 1);
-
-  const window = parseDayWindow(req.query);
-  const { from: rangeFrom, to: rangeTo, ranged } = window;
-
-  // Timestamp windows for the "raised / closed / reminded" counts, which filter on createdAt.
-  // See utils/date-window.ts for why `end` is exclusive and where the comparison period comes from.
-  const { start: winStart, end: winEnd, prevStart } = resolveTimestampWindow(window, sinceLocal, new Date());
-
-  const inWindow = { gte: winStart, ...(winEnd ? { lt: winEnd } : {}) };
-  const inPrevWindow = { gte: prevStart, lt: winStart };
-
-  // Day windows for the counts that filter on `workDate`, which is a date column, not a timestamp.
-  const dayFrom = rangeFrom ?? today;
-  const dayTo = rangeTo ?? today;
-  const dayLength = Math.max(DAY_MS, dayTo.getTime() - dayFrom.getTime() + DAY_MS);
-  const inDays = { gte: dayFrom, lte: dayTo };
-  const inPrevDays = { gte: new Date(dayFrom.getTime() - dayLength), lte: new Date(dayFrom.getTime() - DAY_MS) };
-
-  /** Hours/status/activity breakdowns are scoped to the range when there is one, and left
-   *  unfiltered when there is not — which is what they have always done. */
-  const breakdownWhere = ranged ? { deletedAt: null, workDate: inDays } : { deletedAt: null };
-
-  // "Pending approvals" is the approvals queue's own count — SUBMITTED, not the viewer's, not their
-  // managers'. It used to be every SUBMITTED row in the workspace, which matched neither the Inbox
-  // nor the queue the tile sends people to.
-  const awaitingReview = awaitingReviewWhere(await loadApprovalAuthority(req.user!.id));
-
-  const [
-    users,
-    usersYesterday,
-    activeWorkforce,
-    projects,
-    projectsYesterday,
-    approved,
-    approvedYesterday,
-    pending,
-    pendingYesterday,
-    slaBreached,
-    slaBreachedYesterday,
-    openEscalations,
-    openEscalationsYesterday,
-    approvedThisWeek,
-    approvedLastWeek,
-    loggedTodayDistinct,
-    loggedYesterdayDistinct,
-    todayDailyRemindersSent,
-    todayDailyRemindersSentYesterday,
-    todayEscalationsSent,
-    todayEscalationsSentYesterday,
-    ytdEntries,
-    byProject,
-    byStatus,
-    byActivity
-  ] = await Promise.all([
-    prisma.user.count({ where: { deletedAt: null } }),
-    prisma.user.count({ where: { deletedAt: null, createdAt: { lt: winStart } } }),
-    prisma.user.count({
-      where: { deletedAt: null, status: "ACTIVE", role: { name: { in: ["EMPLOYEE", "TEAM_LEAD"] } } }
-    }),
-    prisma.project.count({ where: { deletedAt: null } }),
-    prisma.project.count({ where: { deletedAt: null, createdAt: { lt: winStart } } }),
-    prisma.timesheet.aggregate({ where: { status: "APPROVED", deletedAt: null }, _sum: { totalHours: true } }),
-    prisma.timesheet.aggregate({
-      where: { status: "APPROVED", deletedAt: null, reviewedAt: { lt: winStart } },
-      _sum: { totalHours: true }
-    }),
-    prisma.timesheet.count({ where: awaitingReview }),
-    prisma.timesheet.count({ where: { ...awaitingReview, createdAt: { lt: winStart } } }),
-    prisma.timesheet.count({ where: { slaBreachAt: { not: null }, deletedAt: null } }),
-    prisma.timesheet.count({ where: { deletedAt: null, slaBreachAt: { not: null, lt: winStart } } }),
-    prisma.escalation.count({ where: { resolvedAt: null } }),
-    prisma.escalation.count({ where: { resolvedAt: null, createdAt: { lt: winStart } } }),
-    prisma.timesheet.count({ where: { status: "APPROVED", reviewedAt: { gte: weekAgo }, deletedAt: null } }),
-    prisma.timesheet.count({
-      where: { status: "APPROVED", reviewedAt: { gte: new Date(weekAgo.getTime() - WEEK_MS), lt: weekAgo }, deletedAt: null }
-    }),
-    prisma.timesheet.findMany({
-      where: { workDate: inDays, deletedAt: null },
-      select: { userId: true },
-      distinct: ["userId"]
-    }),
-    prisma.timesheet.findMany({
-      where: { workDate: inPrevDays, deletedAt: null },
-      select: { userId: true },
-      distinct: ["userId"]
-    }),
-    prisma.notification.count({
-      where: { category: "reminder.daily", createdAt: inWindow }
-    }),
-    prisma.notification.count({
-      where: { category: "reminder.daily", createdAt: inPrevWindow }
-    }),
-    prisma.notification.count({
-      where: { category: "reminder.escalation", createdAt: inWindow }
-    }),
-    prisma.notification.count({
-      where: { category: "reminder.escalation", createdAt: inPrevWindow }
-    }),
-    // Year-to-date average — the baseline "today vs typical day" is measured against, not just
-    // yesterday (a single prior day is noisy; e.g. a Monday after a weekend always looks like a
-    // spike vs Sunday). Counts distinct (user, workDate) pairs so a person logging 3 entries in
-    // one day still counts once toward "a day someone filled something," same definition as
-    // loggedToday/loggedYesterday above.
-    prisma.timesheet.findMany({
-      where: { workDate: { gte: yearStart, lt: today }, deletedAt: null },
-      select: { userId: true, workDate: true },
-      distinct: ["userId", "workDate"]
-    }),
-    prisma.timesheet.groupBy({ by: ["projectId"], where: breakdownWhere, _sum: { totalHours: true }, _count: true }),
-    prisma.timesheet.groupBy({ by: ["status"], where: breakdownWhere, _sum: { totalHours: true }, _count: true }),
-    prisma.timesheet.groupBy({ by: ["activityType"], where: breakdownWhere, _sum: { totalHours: true }, _count: true })
-  ]);
-
-  const projectNames = await prisma.project.findMany({
-    where: { id: { in: byProject.map((row) => row.projectId) } },
-    // code included for the chart x-axes: two full project names ate the whole axis while the
-    // bars between them went unlabeled — the code is the identifier people already use in
-    // ticket keys, and the full name stays in the tooltip.
-    select: { id: true, name: true, code: true }
-  });
-
-  // Ticket and change activity for the SAME day boundary the logging figures use, so the card's
-  // rows are comparable. Counted here rather than in a second request because the workforce card
-  // renders them together and a half-arrived card is the bug the project rollup was just fixed for.
-  // Typed through Prisma's own enum rather than string literals, so renaming a status is a
-  // compile error here instead of a silently-zero count.
-  const CLOSED_TICKET: TicketStatus[] = ["RESOLVED", "CLOSED"];
-  const changesOn = await isChangeManagementOn().catch(() => false);
-  const [
-    ticketsRaisedToday,
-    ticketsRaisedYesterday,
-    ticketsClosedToday,
-    ticketsClosedYesterday,
-    changesRaisedToday,
-    changesRaisedYesterday,
-    changesClosedToday,
-    changesClosedYesterday
-  ] = await Promise.all([
-    prisma.ticket.count({ where: { deletedAt: null, createdAt: inWindow } }),
-    prisma.ticket.count({ where: { deletedAt: null, createdAt: inPrevWindow } }),
-    prisma.ticket.count({ where: { deletedAt: null, status: { in: CLOSED_TICKET }, updatedAt: inWindow } }),
-    prisma.ticket.count({ where: { deletedAt: null, status: { in: CLOSED_TICKET }, updatedAt: inPrevWindow } }),
-    changesOn ? prisma.changeRequest.count({ where: { createdAt: inWindow } }) : Promise.resolve(0),
-    changesOn ? prisma.changeRequest.count({ where: { createdAt: inPrevWindow } }) : Promise.resolve(0),
-    changesOn ? prisma.changeRequest.count({ where: { closedAt: inWindow } }) : Promise.resolve(0),
-    changesOn ? prisma.changeRequest.count({ where: { closedAt: inPrevWindow } }) : Promise.resolve(0)
-  ]);
-
-  const loggedToday = loggedTodayDistinct.length;
-  const notLoggedToday = Math.max(0, activeWorkforce - loggedToday);
-  const loggedYesterday = loggedYesterdayDistinct.length;
-
-  // Days actually elapsed this year up to (not including) today, floored at 1 to avoid a
-  // divide-by-zero on Jan 1st when there's no prior YTD data yet.
-  const ytdDaysElapsed = Math.max(1, Math.round((today.getTime() - yearStart.getTime()) / 86_400_000));
-  const ytdAvgLoggedPerDay = ytdEntries.length / ytdDaysElapsed;
-
-  res.json({
-    users,
-    usersYesterday,
-    projects,
-    projectsYesterday,
-    approvedHours: approved._sum.totalHours ?? 0,
-    approvedHoursYesterday: approvedYesterday._sum.totalHours ?? 0,
-    pendingApprovals: pending,
-    pendingApprovalsYesterday: pendingYesterday,
-    slaBreached,
-    slaBreachedYesterday,
-    openEscalations,
-    openEscalationsYesterday,
-    approvedThisWeek,
-    approvedLastWeek,
-    activeWorkforce,
-    loggedToday,
-    notLoggedToday,
-    loggedYesterday,
-    ytdAvgLoggedPerDay,
-    todayDailyRemindersSent,
-    todayDailyRemindersSentYesterday,
-    todayEscalationsSent,
-    todayEscalationsSentYesterday,
-    ticketsRaisedToday,
-    ticketsRaisedYesterday,
-    ticketsClosedToday,
-    ticketsClosedYesterday,
-    /** Null, not zero, when change management is off — the card drops the tiles rather than
-     *  claiming a measurement of something this workspace does not do. */
-    changesRaisedToday: changesOn ? changesRaisedToday : null,
-    changesRaisedYesterday: changesOn ? changesRaisedYesterday : null,
-    changesClosedToday: changesOn ? changesClosedToday : null,
-    changesClosedYesterday: changesOn ? changesClosedYesterday : null,
-    byProject: byProject.map((row) => {
-      const project = projectNames.find((p) => p.id === row.projectId);
-      return { ...row, project: project?.name ?? "Unknown", projectCode: project?.code ?? null };
-    }),
-    byStatus,
-    byActivity
-  });
+  res.json(await buildAdminSummary(req.query, { viewerId: req.user!.id }));
 });
 
 /**

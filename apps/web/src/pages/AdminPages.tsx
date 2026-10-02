@@ -113,6 +113,8 @@ import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { safeHtml } from "../lib/safe-html";
 import { computeTrend } from "../lib/trend";
+import { reportsAdminTiles } from "../lib/admin-tiles";
+import { QueryError } from "../components/QueryState";
 import {
   activityTypeApi,
   attestationApi,
@@ -3202,19 +3204,21 @@ export function ApprovalsPage() {
 
 /* ============================== REPORTS ============================== */
 export function ReportsPage() {
-  const analytics = useQuery({ queryKey: ["admin-summary"], queryFn: () => reportApi.admin(), refetchInterval: 30_000 });
-  const ticketAnalytics = useQuery({ queryKey: ["ticket-summary"], queryFn: reportApi.tickets, refetchInterval: 30_000 });
+  // Two minutes, not thirty seconds: these are dozens of aggregate queries whose figures move on the
+  // scale of hours. React Query already pauses an interval while the tab is hidden.
+  const analytics = useQuery({ queryKey: ["admin-summary"], queryFn: () => reportApi.admin(), refetchInterval: 120_000, refetchIntervalInBackground: false });
+  const ticketAnalytics = useQuery({ queryKey: ["ticket-summary"], queryFn: reportApi.tickets, refetchInterval: 120_000, refetchIntervalInBackground: false });
   // Codes on the axis, full names in the tooltip — same convention as the Dashboard utilization
   // chart, for the same reason: long names starved the axis of labels.
-  const projectData = (analytics.data?.byProject ?? []).map((row: any) => ({
+  const projectData = (analytics.data?.byProject ?? []).map((row) => ({
     name: row.project,
     code: row.projectCode || String(row.project ?? "").slice(0, 10),
     hours: Number(row._sum?.totalHours ?? 0)
   }));
   const priorityData = (ticketAnalytics.data?.byPriority ?? []).map((row) => ({ name: row.priority, count: row._count }));
-  const slaBreached = analytics.data?.slaBreached ?? 0;
-  const openEscalations = analytics.data?.openEscalations ?? 0;
-  const approvedThisWeek = analytics.data?.approvedThisWeek ?? 0;
+  // "now" tiles carry no delta; period tiles carry a printed comparison; a failed load is a dash —
+  // see lib/admin-tiles.ts for why each of the old "vs yesterday" badges was wrong.
+  const summaryTiles = reportsAdminTiles(analytics.data);
   const openTickets = (ticketAnalytics.data?.byStatus ?? [])
     .filter((row) => row.status !== "RESOLVED" && row.status !== "CLOSED")
     .reduce((sum, row) => sum + row._count, 0);
@@ -3222,49 +3226,11 @@ export function ReportsPage() {
   return (
     <Workspace title="Reports & Exports" subtitle="Download operational reports and inspect utilization analytics." icon={<FileSpreadsheet className="h-5 w-5" />}>
       <div data-tour="reports-exports" className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <StatCard
-          label="Users"
-          value={analytics.data?.users ?? 0}
-          trend={computeTrend(analytics.data?.users ?? 0, analytics.data?.usersYesterday ?? 0, true)}
-          trendLabel="vs yesterday"
-        />
-        <StatCard
-          label="Projects"
-          value={analytics.data?.projects ?? 0}
-          trend={computeTrend(analytics.data?.projects ?? 0, analytics.data?.projectsYesterday ?? 0, true)}
-          trendLabel="vs yesterday"
-        />
-        <StatCard
-          label="Pending approvals"
-          value={analytics.data?.pendingApprovals ?? 0}
-          tone={(analytics.data?.pendingApprovals ?? 0) > 0 ? "warning" : "default"}
-          trend={computeTrend(analytics.data?.pendingApprovals ?? 0, analytics.data?.pendingApprovalsYesterday ?? 0, false)}
-          trendLabel="vs yesterday"
-        />
-        <StatCard
-          label="Approved this week"
-          value={approvedThisWeek}
-          tone="success"
-          trend={computeTrend(approvedThisWeek, analytics.data?.approvedLastWeek ?? 0, true)}
-          trendLabel="vs last week"
-        />
-        {/* "Approval" spelled out — this is Timesheet.slaBreachAt (approval deadlines missed),
-            and its sibling tile below already says "Ticket SLA breaches" for the other system. */}
-        <StatCard
-          label="Approval SLA breaches"
-          value={slaBreached}
-          tone={slaBreached > 0 ? "warning" : "default"}
-          trend={computeTrend(slaBreached, analytics.data?.slaBreachedYesterday ?? 0, false)}
-          trendLabel="vs yesterday"
-        />
-        <StatCard
-          label="Open escalations"
-          value={openEscalations}
-          tone={openEscalations > 0 ? "warning" : "default"}
-          trend={computeTrend(openEscalations, analytics.data?.openEscalationsYesterday ?? 0, false)}
-          trendLabel="vs yesterday"
-        />
+        {summaryTiles.map((tile) => (
+          <StatCard key={tile.label} label={tile.label} value={tile.value} tone={tile.tone} trend={tile.trend} trendLabel={tile.trendLabel} hint={tile.hint} />
+        ))}
       </div>
+      {analytics.isError && !analytics.data && <QueryError what="the workspace summary" onRetry={() => analytics.refetch()} compact />}
       {/* The report leads: the point is usually a question ("where did Apollo's hours go?"), and
           answering it on screen means most people never need the download at all. */}
       <TimesheetReportPanel />

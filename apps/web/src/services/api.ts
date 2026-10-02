@@ -1137,7 +1137,7 @@ export interface AttestationShareLinkRow {
 }
 
 export const reportApi = {
-  admin: async (params?: DateWindow) => (await api.get("/reports/admin-summary", { params })).data,
+  admin: async (params?: DateWindow) => (await api.get<AdminSummary>("/reports/admin-summary", { params })).data,
   employee: async () => (await api.get("/reports/employee-summary")).data,
   dailyStatus: async (params?: DateWindow) => (await api.get<DailyStatus>("/reports/daily-status", { params })).data,
   tickets: async () => (await api.get<TicketSummary>("/reports/ticket-summary")).data,
@@ -6805,3 +6805,59 @@ export interface PracticeHistoryDetail {
   sentByName: string | null;
   generatedByName: string | null;
 }
+
+/**
+ * `GET /reports/admin-summary` — apps/api/src/services/admin-summary.service.ts. Point-in-time figures
+ * ("now") carry no comparison; period figures carry a like-for-like `…Prev` and `period.comparisonLabel`.
+ */
+export interface AdminSummary {
+  period: { from: string; to: string; ranged: boolean; comparisonFrom: string; comparisonTo: string; comparisonLabel: string };
+  users: number;
+  usersJoined: number;
+  projects: number;
+  projectsCreated: number;
+  pendingApprovals: number;
+  openEscalations: number;
+  approvedHours: number;
+  approvedHoursPrev: number;
+  loggedHours: number;
+  loggedHoursPrev: number;
+  /** Approval deadlines in the window that passed before a decision. */
+  slaBreached: number;
+  slaBreachedPrev: number;
+  /** Approved HOURS, Monday to today (IST), and the same weekdays last week. */
+  approvedThisWeek: number;
+  approvedLastWeek: number;
+  workforce: {
+    /** Active employees and team leads who are people — both sides of every figure below. */
+    population: number;
+    logged: number;
+    notLogged: number;
+    loggedPrev: number;
+    /** Null, not 0%, when the population is empty. */
+    loggedPct: number | null;
+    avgPerWorkingDay: number | null;
+    ytdAvgPerWorkingDay: number | null;
+    workingDays: number;
+  };
+  remindersSent: number;
+  remindersSentPrev: number;
+  escalationsSent: number;
+  escalationsSentPrev: number;
+  ticketsRaised: number;
+  ticketsRaisedPrev: number;
+  ticketsClosed: number;
+  ticketsClosedPrev: number;
+  /** Null when change management is off. */
+  changesRaised: number | null;
+  changesRaisedPrev: number | null;
+  changesClosed: number | null;
+  changesClosedPrev: number | null;
+  /** LOGGED hours per project. */
+  byProject: Array<{ projectId: string; project: string; projectCode: string | null; _sum: HoursSum; _count: number }>;
+  byStatus: Array<{ status: string; _sum: HoursSum; _count: number }>;
+  byActivity: Array<{ activityType: string; _sum: HoursSum; _count: number }>;
+}
+
+/** A Prisma `_sum` of a Decimal column, as it arrives over JSON. */
+type HoursSum = { totalHours: number | string | null };

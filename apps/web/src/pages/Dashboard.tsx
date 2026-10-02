@@ -72,8 +72,10 @@ import { computeTrend, type Trend } from "../lib/trend";
 import { cn } from "../lib/utils";
 import { likeForLikeWindow, periodNote, summarisePersonalPeriod } from "../lib/personal-period";
 import { isoToLocalDate, localDateKey } from "../lib/local-day";
-import { formatHours } from "../lib/format";
-import { changeApi, dashboardApi, reportApi, ticketApi, timesheetApi, type MyMonthRollup, type TicketRow } from "../services/api";
+import { formatHours, formatNumber, formatPercent } from "../lib/format";
+import { dashboardAdminTiles } from "../lib/admin-tiles";
+import { QueryState } from "../components/QueryState";
+import { changeApi, dashboardApi, reportApi, ticketApi, timesheetApi, type AdminSummary, type MyMonthRollup, type TicketRow } from "../services/api";
 import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
 import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
 import { useAuthStore } from "../store/auth";
@@ -184,11 +186,18 @@ export function Dashboard() {
   const comparisonLabel = comparison?.label ?? "vs the previous period";
   const periodIn = periodPhrase(periodLabel);
 
+  /**
+   * Every two minutes, not every thirty seconds. The summary is a few dozen aggregate queries, the
+   * figures on it move on the scale of hours, and the page was paying for it twice a minute per open
+   * tab. React Query already pauses an interval while the tab is hidden (`refetchIntervalInBackground`
+   * is false by default), which is stated here so nobody turns it on to "keep it fresh".
+   */
   const admin = useQuery({
     queryKey: ["admin-summary", range.from, range.to],
     queryFn: () => reportApi.admin(rangeParams),
     enabled: isAdmin,
-    refetchInterval: 30_000
+    refetchInterval: 120_000,
+    refetchIntervalInBackground: false
   });
   const security = useQuery({
     queryKey: ["reports", "security-insights"],
@@ -380,35 +389,16 @@ export function Dashboard() {
     // The axis shows the project CODE (the identifier people already read in ticket keys) —
     // two full names used to eat the whole axis while every bar between them went unlabeled.
     // The full name stays one hover away in the tooltip.
-    return rows.map((row: any) => ({
+    return rows.map((row) => ({
       name: row.project,
       code: row.projectCode || String(row.project ?? "").slice(0, 10),
       value: Number(row._sum?.totalHours ?? 0)
     }));
   }, [admin.data]);
 
-  const adminStats: Array<{ label: string; value: string | number; tone?: "success" | "warning" | "destructive"; trend?: Trend | null }> = [
-    { label: "Users", value: admin.data?.users ?? 0, trend: computeTrend(admin.data?.users ?? 0, admin.data?.usersYesterday ?? 0, true) },
-    { label: "Projects", value: admin.data?.projects ?? 0, trend: computeTrend(admin.data?.projects ?? 0, admin.data?.projectsYesterday ?? 0, true) },
-    {
-      label: "Approved hours",
-      value: Number(admin.data?.approvedHours ?? 0),
-      tone: "success",
-      trend: computeTrend(Number(admin.data?.approvedHours ?? 0), Number(admin.data?.approvedHoursYesterday ?? 0), true)
-    },
-    {
-      label: "Pending approvals",
-      value: admin.data?.pendingApprovals ?? 0,
-      tone: "warning",
-      trend: computeTrend(admin.data?.pendingApprovals ?? 0, admin.data?.pendingApprovalsYesterday ?? 0, false)
-    },
-    {
-      label: "Security risk score",
-      value: security.data?.riskScore ?? 0,
-      tone: (security.data?.riskScore ?? 0) > 30 ? "destructive" : (security.data?.riskScore ?? 0) > 10 ? "warning" : "success",
-      trend: computeTrend(security.data?.riskScore ?? 0, security.data?.riskScoreYesterday ?? 0, false)
-    }
-  ];
+  // See lib/admin-tiles.ts: "now" tiles carry no delta, period tiles carry a visible comparison, and
+  // a figure that did not load is a dash. The risk score is null — not 0 — until it has loaded.
+  const adminStats = dashboardAdminTiles(admin.data, security.data?.riskScore ?? null, { periodIn, comparisonLabel });
 
   const todayLabel = new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
   const firstName = user?.name?.split(" ")[0] ?? "there";
@@ -519,7 +509,15 @@ export function Dashboard() {
       />
 
       {/* Admin / manager: workforce daily logging snapshot */}
-      {isAdmin && <WorkforceSnapshot data={admin.data} loading={admin.isLoading} periodLabel={periodLabel} periodIn={periodIn} comparisonLabel={comparisonLabel} />}
+      {/* Admin / manager: workforce snapshot and the stat tiles. A failed summary is a dash and a
+          Retry, never a row of zeroes (components/QueryState.tsx). */}
+      {isAdmin && (
+        <QueryState query={admin} what="the workforce summary" loading={<Skeleton className="h-40 w-full" />}>
+          {(data) => (
+            <WorkforceSnapshot data={data} periodLabel={periodLabel} periodIn={periodIn} comparisonLabel={comparisonLabel} />
+          )}
+        </QueryState>
+      )}
 
       {isAdmin && (
         <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-5">
@@ -530,7 +528,7 @@ export function Dashboard() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.25, delay: index * 0.05 }}
             >
-              <StatCard label={stat.label} value={String(stat.value)} tone={stat.tone} trend={stat.trend} trendLabel={comparisonLabel} />
+              <StatCard label={stat.label} value={stat.value} tone={stat.tone} trend={stat.trend} trendLabel={stat.trendLabel} hint={stat.hint} />
             </motion.div>
           ))}
         </div>
@@ -574,10 +572,12 @@ export function Dashboard() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Project utilization</CardTitle>
+            {/* "Project hours", not "utilization": there is no capacity in this figure, only logged hours
+                (submitted and approved) per project. */}
+            <CardTitle className="text-base">Project hours</CardTitle>
             <CardDescription>
               {isAdmin
-                ? `Hours logged per project across the workspace ${periodLabel}, largest first.`
+                ? `Logged hours (submitted and approved) per project across the workspace, ${periodLabel}, largest first.`
                 : "Sign in as an admin for the full breakdown."}
             </CardDescription>
           </CardHeader>
@@ -1873,45 +1873,35 @@ function MyTicketsBanner({ tickets, loading }: { tickets?: TicketRow[]; loading:
 
 function WorkforceSnapshot({
   data,
-  loading,
   periodLabel,
   periodIn,
   comparisonLabel
 }: {
-  data?: any;
-  loading: boolean;
+  data: AdminSummary;
   periodLabel: string;
   periodIn: string;
   comparisonLabel: string;
 }) {
-  if (loading || !data) return null;
-  const active = Number(data.activeWorkforce ?? 0);
-  const logged = Number(data.loggedToday ?? 0);
-  const notLogged = Number(data.notLoggedToday ?? 0);
-  const reminders = Number(data.todayDailyRemindersSent ?? 0);
-  const escalations = Number(data.todayEscalationsSent ?? 0);
-  const percent = active > 0 ? Math.round((logged / active) * 100) : 0;
+  const w = data.workforce;
+  // Null, not a red 0%, when nobody is in the workforce — a share of nobody is not a measurement.
+  const percent = w.loggedPct;
+  let badgeVariant: "success" | "warning" | "destructive" | "muted" = "muted";
+  if (percent !== null) badgeVariant = percent >= 80 ? "success" : "warning";
+  if (percent !== null && percent < 50) badgeVariant = "destructive";
 
-  const loggedYesterday = Number(data.loggedYesterday ?? 0);
-  const ytdAvgLoggedPerDay = Number(data.ytdAvgLoggedPerDay ?? 0);
-  const vsYesterday = computeTrend(logged, loggedYesterday, true);
-  const vsYtdAvg = computeTrend(logged, ytdAvgLoggedPerDay, true);
-  const notFilledTrend = computeTrend(notLogged, active - loggedYesterday, false);
-  const remindersTrend = computeTrend(reminders, Number(data.todayDailyRemindersSentYesterday ?? 0), false);
-  const escalationsTrend = computeTrend(escalations, Number(data.todayEscalationsSentYesterday ?? 0), false);
-
-  const ticketsRaised = Number(data.ticketsRaisedToday ?? 0);
-  const ticketsClosed = Number(data.ticketsClosedToday ?? 0);
-  // Null passes straight through, so "change management is off" stays distinguishable from "none
-  // raised today" — the same rule the rest of this page follows.
-  const changesRaised = data.changesRaisedToday ?? null;
-  const changesClosed = data.changesClosedToday ?? null;
+  const vsPrev = computeTrend(w.logged, w.loggedPrev, true);
+  const notFilledTrend = computeTrend(w.notLogged, Math.max(0, w.population - w.loggedPrev), false);
+  // People logging per working day, against the year-to-date figure in the same unit and over the
+  // same people. It compared distinct people across a whole range with a per-calendar-day average.
+  const vsYtd = w.avgPerWorkingDay !== null && w.ytdAvgPerWorkingDay !== null ? computeTrend(w.avgPerWorkingDay, w.ytdAvgPerWorkingDay, true) : null;
+  const remindersTrend = computeTrend(data.remindersSent, data.remindersSentPrev, false);
+  const escalationsTrend = computeTrend(data.escalationsSent, data.escalationsSentPrev, false);
   // More tickets raised is not good news and not bad news on its own, so it carries no colour;
   // closing more is good, and both change figures follow the same reading.
-  const ticketsRaisedTrend = computeTrend(ticketsRaised, Number(data.ticketsRaisedYesterday ?? 0), null);
-  const ticketsClosedTrend = computeTrend(ticketsClosed, Number(data.ticketsClosedYesterday ?? 0), true);
-  const changesRaisedTrend = computeTrend(Number(changesRaised ?? 0), Number(data.changesRaisedYesterday ?? 0), null);
-  const changesClosedTrend = computeTrend(Number(changesClosed ?? 0), Number(data.changesClosedYesterday ?? 0), true);
+  const ticketsRaisedTrend = computeTrend(data.ticketsRaised, data.ticketsRaisedPrev, null);
+  const ticketsClosedTrend = computeTrend(data.ticketsClosed, data.ticketsClosedPrev, true);
+  const changesRaisedTrend = data.changesRaised === null ? null : computeTrend(data.changesRaised, data.changesRaisedPrev ?? 0, null);
+  const changesClosedTrend = data.changesClosed === null ? null : computeTrend(data.changesClosed, data.changesClosedPrev ?? 0, true);
 
   return (
     <Card>
@@ -1922,33 +1912,39 @@ function WorkforceSnapshot({
             <span className="first-letter:uppercase">{periodLabel}</span> across the workforce
           </CardTitle>
           <CardDescription>
-            {logged} of {active} active employees &amp; team leads have logged something {periodIn}.
+            {w.logged} of {w.population} active employees &amp; team leads have logged something {periodIn}. AI agents and
+            deactivated people are not in either number. Changes are {comparisonLabel}.
           </CardDescription>
         </div>
-        <Badge variant={percent >= 80 ? "success" : percent >= 50 ? "warning" : "destructive"}>{percent}%</Badge>
+        <Badge variant={badgeVariant}>{formatPercent(percent)}</Badge>
       </CardHeader>
       <CardContent className="grid gap-4">
-        <Progress value={percent} className={percent < 50 ? "[&>div]:bg-destructive" : percent < 80 ? "[&>div]:bg-warning" : ""} />
+        <Progress value={percent ?? 0} className={percent !== null && percent < 50 ? "[&>div]:bg-destructive" : percent !== null && percent < 80 ? "[&>div]:bg-warning" : ""} />
         <div className="grid grid-cols-2 gap-2.5 text-sm sm:grid-cols-5">
-          <SnapshotStat label="Logged" value={logged} trend={vsYesterday} trendLabel="vs the previous period" />
-          <SnapshotStat label="Not yet filled" value={notLogged} trend={notFilledTrend} trendLabel={comparisonLabel} />
-          <SnapshotStat label="Reminders sent" value={reminders} trend={remindersTrend} trendLabel={comparisonLabel} />
-          <SnapshotStat label="Escalations" value={escalations} trend={escalationsTrend} trendLabel={comparisonLabel} />
-          <SnapshotStat label="vs YTD avg/day" value={`${ytdAvgLoggedPerDay.toFixed(1)}`} trend={vsYtdAvg} trendLabel="vs avg" />
+          <SnapshotStat label="Logged" value={formatNumber(w.logged)} trend={vsPrev} trendLabel={comparisonLabel} />
+          <SnapshotStat label="Not yet filled" value={formatNumber(w.notLogged)} trend={notFilledTrend} trendLabel={comparisonLabel} />
+          <SnapshotStat label="Reminders sent" value={formatNumber(data.remindersSent)} trend={remindersTrend} trendLabel={comparisonLabel} />
+          <SnapshotStat label="Escalations" value={formatNumber(data.escalationsSent)} trend={escalationsTrend} trendLabel={comparisonLabel} />
+          <SnapshotStat
+            label="Logging per working day"
+            value={formatNumber(w.avgPerWorkingDay, 1)}
+            trend={vsYtd}
+            trendLabel={`vs ${formatNumber(w.ytdAvgPerWorkingDay, 1)} year to date`}
+          />
         </div>
 
         {/* The other two kinds of work the workforce did in this period. Same boundary and same
-            previous-period comparison as the row above, so the three read as one picture rather
-            than three widgets that happen to share a card. */}
+            comparison as the row above, so the three read as one picture rather than three widgets
+            that happen to share a card. */}
         <div className="grid grid-cols-2 gap-2.5 text-sm sm:grid-cols-4">
-          <SnapshotStat label="Tickets raised" value={ticketsRaised} trend={ticketsRaisedTrend} trendLabel={comparisonLabel} />
-          <SnapshotStat label="Tickets closed" value={ticketsClosed} trend={ticketsClosedTrend} trendLabel={comparisonLabel} />
+          <SnapshotStat label="Tickets raised" value={formatNumber(data.ticketsRaised)} trend={ticketsRaisedTrend} trendLabel={comparisonLabel} />
+          <SnapshotStat label="Tickets closed" value={formatNumber(data.ticketsClosed)} trend={ticketsClosedTrend} trendLabel={comparisonLabel} />
           {/* Absent, not zeroed, when change management is off. */}
-          {changesRaised !== null && (
-            <SnapshotStat label="Changes raised" value={changesRaised} trend={changesRaisedTrend} trendLabel={comparisonLabel} />
+          {data.changesRaised !== null && (
+            <SnapshotStat label="Changes raised" value={formatNumber(data.changesRaised)} trend={changesRaisedTrend} trendLabel={comparisonLabel} />
           )}
-          {changesClosed !== null && (
-            <SnapshotStat label="Changes closed" value={changesClosed} trend={changesClosedTrend} trendLabel={comparisonLabel} />
+          {data.changesClosed !== null && (
+            <SnapshotStat label="Changes closed" value={formatNumber(data.changesClosed)} trend={changesClosedTrend} trendLabel={comparisonLabel} />
           )}
         </div>
       </CardContent>
@@ -1964,6 +1960,8 @@ function SnapshotStat({ label, value, trend, trendLabel }: { label: string; valu
         <p className="text-lg font-bold tabular-nums">{value}</p>
         {trend && <TrendBadge trend={trend} label={trendLabel} />}
       </div>
+      {/* The comparison is printed, not left in the badge's tooltip — there is no hover on a phone. */}
+      {trend && <p className="mt-0.5 text-[10px] leading-tight text-muted-foreground">{trendLabel}</p>}
     </div>
   );
 }

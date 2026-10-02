@@ -21,6 +21,7 @@ import {
   DAY_MS,
   parseDayWindow,
   parseIsoDay,
+  resolveDayComparison,
   resolveTimestampWindow,
   windowDays,
   workDateFilter
@@ -33,10 +34,10 @@ function timesheetQuery(query: Record<string, unknown>) {
 }
 
 /** Exactly what `/reports/admin-summary` resolves. */
-function summaryWindows(query: Record<string, unknown>, now: Date, startOfLocalDay: Date) {
+function summaryWindows(query: Record<string, unknown>, now: Date) {
   const window = parseDayWindow(query);
-  const { start: winStart, end: winEnd, prevStart } = resolveTimestampWindow(window, startOfLocalDay, now);
-  return { ranged: window.ranged, winStart, winEnd, prevStart };
+  const { start: winStart, end: winEnd, prevStart, prevEnd } = resolveTimestampWindow(window, now);
+  return { ranged: window.ranged, winStart, winEnd, prevStart, prevEnd, days: resolveDayComparison(window, now) };
 }
 
 /** Exactly what `/dashboards/my-month` resolves. */
@@ -87,36 +88,63 @@ describe("GET /timesheets — the range and the row cap", () => {
 });
 
 describe("GET /reports/admin-summary — window arithmetic", () => {
+  // Thursday 27 August 2026, 16:30 IST. The platform calendar is IST (env.TZ).
   const now = new Date("2026-08-27T11:00:00.000Z");
-  const startOfToday = new Date("2026-08-27T00:00:00.000Z");
+  /** IST midnight on the 27th — 18:30 UTC on the 26th. */
+  const startOfTodayIst = new Date("2026-08-26T18:30:00.000Z");
 
   it("falls back to today-onward with no upper bound when no range is given", () => {
-    const w = summaryWindows({}, now, startOfToday);
+    const w = summaryWindows({}, now);
     expect(w.ranged).toBe(false);
-    expect(w.winStart).toEqual(startOfToday);
+    expect(w.winStart).toEqual(startOfTodayIst);
     // `null`, not `now`: the pre-existing queries are `{ gte: startOfToday }` with no `lt`, and
     // adding one would quietly exclude anything written during the request.
     expect(w.winEnd).toBeNull();
   });
 
-  it("includes the range's own last day", () => {
-    const w = summaryWindows({ from: "2026-08-01", to: "2026-08-27" }, now, startOfToday);
-    // The 28th at midnight, exclusive — so everything ON the 27th counts. A `lt: 27th` here would
-    // drop a whole day of the period the user asked for.
-    expect(w.winEnd).toEqual(new Date("2026-08-28T00:00:00.000Z"));
+  it("starts and ends each day at IST midnight, not UTC midnight", () => {
+    // UTC midnight is 05:30 IST: a window built on it drops the first five and a half hours of the
+    // first day and borrows them from the day after the last.
+    const w = summaryWindows({ from: "2026-08-01", to: "2026-08-27" }, now);
+    expect(w.winStart).toEqual(new Date("2026-07-31T18:30:00.000Z"));
+    // The 28th at IST midnight, exclusive — so everything ON the 27th counts.
+    expect(w.winEnd).toEqual(new Date("2026-08-27T18:30:00.000Z"));
   });
 
-  it("compares against the equal-length window immediately before the range", () => {
-    const w = summaryWindows({ from: "2026-08-21", to: "2026-08-27" }, now, startOfToday);
-    // Seven days selected → the seven days before them. "vs yesterday" would read as a collapse
-    // every time a longer period was chosen, which is why the label changes with the range too.
-    expect(w.prevStart).toEqual(new Date("2026-08-14T00:00:00.000Z"));
+  it("compares week-to-date with the same weekdays last week, not the days just before", () => {
+    // Mon 24 – Thu 27 Aug. The equal-length window before it was Thu 20 – Sun 23, which carries a
+    // weekend, so every delta read as growth. Like-for-like is Mon 17 – Thu 20.
+    const w = summaryWindows({ from: "2026-08-24", to: "2026-08-27" }, now);
+    expect(w.prevStart).toEqual(new Date("2026-08-16T18:30:00.000Z"));
+    expect(w.days).toMatchObject({
+      prevFrom: new Date("2026-08-17T00:00:00.000Z"),
+      prevTo: new Date("2026-08-20T00:00:00.000Z"),
+      label: "vs the same days last week"
+    });
+  });
+
+  it("compares a range that runs past today only up to the same point last week", () => {
+    // Mon 24 – Sun 30 Aug, asked on Thursday afternoon: the comparison stops at last Thursday 16:30,
+    // not at last Sunday night — otherwise a week in progress is measured against a finished one.
+    const w = summaryWindows({ from: "2026-08-24", to: "2026-08-30" }, now);
+    expect(w.prevEnd).toEqual(new Date("2026-08-20T11:00:00.000Z"));
+    expect(w.days.prevTo).toEqual(new Date("2026-08-20T00:00:00.000Z"));
+  });
+
+  it("compares a single day with the same weekday a week earlier", () => {
+    const w = summaryWindows({ from: "2026-08-27", to: "2026-08-27" }, now);
     expect(w.winStart.getTime() - w.prevStart.getTime()).toBe(7 * DAY_MS);
+    expect(w.days.label).toBe("vs the same day last week");
   });
 
-  it("never produces a zero-length comparison window for a single day", () => {
-    const w = summaryWindows({ from: "2026-08-27", to: "2026-08-27" }, now, startOfToday);
-    expect(w.winStart.getTime() - w.prevStart.getTime()).toBe(DAY_MS);
+  it("shifts a longer range by whole weeks, so the weekday mix still matches", () => {
+    const w = summaryWindows({ from: "2026-07-01", to: "2026-07-31" }, now);
+    expect(w.days).toMatchObject({
+      prevFrom: new Date("2026-05-27T00:00:00.000Z"),
+      prevTo: new Date("2026-06-26T00:00:00.000Z"),
+      shiftDays: 35,
+      label: "vs the same days 5 weeks earlier"
+    });
   });
 });
 

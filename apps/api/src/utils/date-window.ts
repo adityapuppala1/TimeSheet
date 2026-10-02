@@ -82,38 +82,98 @@ export function workDateFilter(window: DayWindow): { gte?: Date; lte?: Date } | 
   return { ...(window.from ? { gte: window.from } : {}), ...(window.to ? { lte: window.to } : {}) };
 }
 
+/** Days in an inclusive window, counting both ends. One when there is no window. */
+export function windowDays(from: Date, to: Date): number {
+  return Math.max(1, Math.round((to.getTime() - from.getTime()) / DAY_MS) + 1);
+}
+
+/**
+ * How far back a comparison period sits: the window's length rounded UP to whole weeks.
+ *
+ * WHY WHOLE WEEKS: "vs the previous period" used to be the equal-length window immediately before
+ * this one. For the home page's default — Monday to today — that compared Mon–Thu with the Thu–Sun
+ * before it, a window holding a weekend, so every delta on the page read as growth. Shifting by whole
+ * weeks keeps the same weekdays on both sides (week-to-date against the same weekdays last week), and
+ * rounding up keeps the two windows from overlapping.
+ */
+export function comparisonShiftDays(days: number): number {
+  return Math.ceil(Math.max(1, days) / 7) * 7;
+}
+
+/** The visible label for a delta against `comparisonShiftDays(days)` — never tooltip-only. */
+export function comparisonLabel(days: number): string {
+  const weeks = comparisonShiftDays(days) / 7;
+  if (weeks === 1) return days === 1 ? "vs the same day last week" : "vs the same days last week";
+  return `vs the same days ${weeks} weeks earlier`;
+}
+
+export interface DayComparison {
+  /** First and last day of the window on a `@db.Date` column, both INCLUSIVE (compare with lte). */
+  from: Date;
+  to: Date;
+  /** The like-for-like comparison days, inclusive: the same weekdays `shiftDays` earlier, ending at
+   *  the same point — so a window that runs past today compares only its days to date. */
+  prevFrom: Date;
+  prevTo: Date;
+  days: number;
+  shiftDays: number;
+  label: string;
+}
+
+/**
+ * The day window for a `@db.Date` column (`workDate`), and its comparison. With no range it is today
+ * on the platform calendar — what every caller that sends nothing has always meant.
+ */
+export function resolveDayComparison(window: DayWindow, now: Date): DayComparison {
+  const today = platformToday(now);
+  const from = window.from ?? today;
+  const to = window.to ?? today;
+  const days = windowDays(from, to);
+  const shiftDays = comparisonShiftDays(days);
+  const shift = shiftDays * DAY_MS;
+  // To date: a week in progress is compared with the same days of last week, not all seven.
+  const comparableTo = to > today && from <= today ? today : to;
+  return {
+    from,
+    to,
+    prevFrom: new Date(from.getTime() - shift),
+    prevTo: new Date(comparableTo.getTime() - shift),
+    days,
+    shiftDays,
+    label: comparisonLabel(days)
+  };
+}
+
 export interface TimestampWindow {
-  /** Inclusive lower bound. */
+  /** Inclusive lower bound: the instant the window's first day began on the platform calendar. */
   start: Date;
   /**
-   * EXCLUSIVE upper bound, sitting at midnight on the day AFTER `to` — so the window's own last day
-   * is fully counted. This is the off-by-one that makes an inclusive-looking range quietly drop its
+   * EXCLUSIVE upper bound: the instant the day AFTER `to` began — so the window's own last day is
+   * fully counted. This is the off-by-one that makes an inclusive-looking range quietly drop its
    * final day, and the reason this lives in one place.
    *
    * Null when the request gave no window: the pre-existing queries are `{ gte: startOfToday }` with
    * no upper bound at all, and inventing one would exclude anything written during the request.
    */
   end: Date | null;
-  /** Inclusive lower bound of the equal-length window immediately before `start`. */
+  /** The like-for-like comparison window, [prevStart, prevEnd): the same span `shiftDays` earlier,
+   *  cut at the same moment — `now` minus the shift when the window runs on past now. */
   prevStart: Date;
+  prevEnd: Date;
 }
 
 /**
- * Resolves a window over TIMESTAMP columns (createdAt, reviewedAt), plus the period to compare it
- * against.
+ * Resolves a window over TIMESTAMP columns (createdAt, resolvedAt), plus the period to compare it
+ * against — see `comparisonShiftDays` for why that is the same weekdays whole weeks earlier.
  *
- * The comparison is the equal-length window immediately before this one, which is the only thing a
- * delta can honestly mean for an arbitrary span — "vs yesterday" against a fortnight would read as
- * a collapse every time. Floored at one day so a single-day window still has something before it.
+ * Every boundary is an IST midnight (platform calendar), not a UTC one: UTC midnight is 05:30 IST, so
+ * a ticket raised at 02:00 IST on the 1st used to count against the 31st.
  */
-export function resolveTimestampWindow(window: DayWindow, fallbackStart: Date, now: Date): TimestampWindow {
-  const start = window.from ?? fallbackStart;
-  const end = window.to ? new Date(window.to.getTime() + DAY_MS) : window.ranged ? now : null;
-  const length = Math.max(DAY_MS, (end?.getTime() ?? now.getTime()) - start.getTime());
-  return { start, end, prevStart: new Date(start.getTime() - length) };
-}
-
-/** Days in an inclusive window, counting both ends. One when there is no window. */
-export function windowDays(from: Date, to: Date): number {
-  return Math.max(1, Math.round((to.getTime() - from.getTime()) / DAY_MS) + 1);
+export function resolveTimestampWindow(window: DayWindow, now: Date): TimestampWindow {
+  const days = resolveDayComparison(window, now);
+  const start = platformDayStart(days.from);
+  const end = window.ranged ? platformDayStart(new Date(days.to.getTime() + DAY_MS)) : null;
+  const shift = days.shiftDays * DAY_MS;
+  const comparableEnd = end && end.getTime() < now.getTime() ? end : now;
+  return { start, end, prevStart: new Date(start.getTime() - shift), prevEnd: new Date(comparableEnd.getTime() - shift) };
 }
