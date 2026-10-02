@@ -40,7 +40,9 @@ vi.mock("../../src/utils/security.js", async (importActual) => {
   return { ...actual, verifyTokenHash: vi.fn(actual.verifyTokenHash) };
 });
 
-const { changePassword, requestPasswordReset, resetPassword } = await import("../../src/services/auth.service.js");
+const { changePassword, login, requestPasswordReset, resetPassword, __resetLoginLockoutsForTests } = await import(
+  "../../src/services/auth.service.js"
+);
 const { issueSetPasswordLink } = await import("../../src/services/set-password-link.service.js");
 const { hashPassword, hashToken, verifyTokenHash } = await import("../../src/utils/security.js");
 
@@ -213,6 +215,25 @@ describe("spending a link", () => {
     await inTenant(() => resetPassword(NEW_TOKEN, NEXT));
     const voided = client.passwordResetToken.updateMany.mock.calls.map((call: any[]) => call[0]);
     expect(voided).toContainEqual({ where: { userId: USER_ID, usedAt: null }, data: { usedAt: expect.any(Date) } });
+  });
+
+  it("a completed reset lifts a sign-in lockout on that account", async () => {
+    // Proving control of the inbox is the recovery a locked-out person is told to use; without
+    // this, a stranger's wrong guesses kept them out for the whole lock even after they reset.
+    __resetLoginLockoutsForTests();
+    const attempt = () =>
+      inTenant(() => login("ada@example.com", "a-wrong-guess")).then(
+        () => 200,
+        (error: { statusCode?: number }) => error.statusCode
+      );
+    for (let i = 0; i < 5; i += 1) expect(await attempt()).toBe(401);
+    expect(await attempt()).toBe(429);
+
+    client.passwordResetToken.findUnique.mockResolvedValue(newFormatRow(SELECTOR, VERIFIER));
+    await inTenant(() => resetPassword(NEW_TOKEN, NEXT));
+
+    expect(await attempt()).toBe(401);
+    __resetLoginLockoutsForTests();
   });
 
   it("redeeming re-checks that the account is still ACTIVE", async () => {

@@ -6,7 +6,8 @@
  * forever. And the LDAP sign-in route had no per-account lockout at all.
  *
  * NOW: the count survives the lock, so once an account has been locked, each further failure
- * re-locks it — for 5 minutes, then 15, then 60, then 4 hours, then a day. A success clears it, and
+ * re-locks it — for 5 minutes, then 15, then 60, and never longer than that. A success (or a
+ * completed password reset) clears it, and
  * a quiet spell longer than the decay window after the last lock forgives it. The LDAP route shares
  * the same counter: it is the same account.
  *
@@ -88,6 +89,21 @@ describe("password sign-in", () => {
     advance(59 * MINUTE);
     expect(await passwordAttempt()).toBe(429);
     advance(2 * MINUTE);
+    expect(await passwordAttempt()).toBe(401);
+  });
+
+  it("never locks an account for longer than an hour, however many failures follow", async () => {
+    // The ladder stops at 60 minutes on purpose: every step above it is time a STRANGER can take
+    // from the real owner with one wrong guess per lock (the lockout-abuse cost OWASP warns about),
+    // and an hour per guess already caps a determined attacker at ~24 guesses a day.
+    await failFiveTimes();
+    advance(5 * MINUTE + 1_000);
+    await passwordAttempt(); // 15
+    advance(16 * MINUTE);
+    await passwordAttempt(); // 60
+    advance(61 * MINUTE);
+    await passwordAttempt(); // would have been 4 hours
+    advance(61 * MINUTE);
     expect(await passwordAttempt()).toBe(401);
   });
 

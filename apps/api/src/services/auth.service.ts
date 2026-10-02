@@ -214,13 +214,19 @@ function mailPasswordChanged(user: { name: string; email: string }, how: string)
  * THE LOCK ESCALATES (security audit #12). Five failures arm a 5-minute lock, and the count is NOT
  * reset when it does — it used to be, so every five minutes bought five fresh guesses, about 1,440 a
  * day against one account, forever. Now, once an account has been locked, each further failure
- * re-locks it, for longer each time: 5 minutes, 15, 60, 4 hours, then a day. A successful sign-in
- * clears it; a quiet spell of FAILURE_WINDOW_MS after the last lock ends forgives it. The cost is
- * that a stranger can keep a known address locked for longer — the (account, IP) weighting that
- * blunts that is a proposal, alongside moving this map to a store every replica shares.
+ * re-locks it, for longer each time: 5 minutes, 15, then 60 — and 60 thereafter. A successful
+ * sign-in or a completed password reset clears it; a quiet spell of FAILURE_WINDOW_MS after the last
+ * lock ends forgives it.
+ *
+ * WHY THE LADDER STOPS AT AN HOUR. Every step is time a STRANGER can take from the real owner with a
+ * single wrong guess per lock — the lockout-abuse cost OWASP's Authentication Cheat Sheet warns
+ * about. An hour per guess already caps a determined attacker at about 24 guesses a day per account
+ * (NIST 800-63B-4 allows up to 100 consecutive failures); 4-hour and 24-hour steps would buy little
+ * more against them and cost a targeted person a working day. The (account, IP) weighting that
+ * blunts the abuse further is a proposal, alongside moving this map to a store every replica shares.
  */
 const FAILED_LOGIN_LIMIT = 5;
-const LOCK_STEPS_MS = [5, 15, 60, 240, 1440].map((minutes) => minutes * 60 * 1000);
+const LOCK_STEPS_MS = [5, 15, 60].map((minutes) => minutes * 60 * 1000);
 /** The decay window: how long after the last failure (or the end of the last lock) an entry lives. */
 const FAILURE_WINDOW_MS = 15 * 60 * 1000;
 const failedLogins = new Map<string, { count: number; locks: number; lockedUntil: number | null; expiresAt: number }>();
@@ -1001,6 +1007,10 @@ export async function resetPassword(rawToken: string, nextPassword: string, ipAd
     await tx.user.update({ where: { id: match.userId }, data: { passwordHash, mustChangePassword: false } });
     await tx.session.updateMany({ where: { userId: match.userId, revokedAt: null }, data: { revokedAt: new Date() } });
   });
+  // Proving control of the inbox is exactly the recovery a locked-out person is told to use, so it
+  // lifts the sign-in lockout too — otherwise a stranger's wrong guesses would keep them out with
+  // their brand-new password for the rest of the lock.
+  clearFailedLogins(requireTenantContext().orgId, resetting.email);
   // The link holder acted as the account, authenticated only by the link.
   await auditAuthEvent(match.userId, "auth.password_reset_completed", match.userId, {}, { actorType: "GUEST", actorLabel: "reset link", ipAddress });
   mailPasswordChanged(resetting, "with a reset link");
