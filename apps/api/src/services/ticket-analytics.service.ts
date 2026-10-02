@@ -24,7 +24,7 @@ import { DAY_MS, platformDayStart, platformToday, platformWeekStart } from "../u
 import { platformDayKey } from "../utils/platform-time.js";
 import { resolveVisiblePeopleNames, withoutHiddenPeople } from "./people-visibility.service.js";
 import { dateKeyToUtc } from "../utils/recipient-time.js";
-import { isOpenTicketStatus, isResponseComment, isSlaBreached, median, openBreachedWhere, percentOf } from "./workspace-metrics.js";
+import { isOpenTicketStatus, isResponseComment, isSlaBreached, LOGGED_HOURS_WHERE, median, openBreachedWhere, percentOf } from "./workspace-metrics.js";
 
 const HOUR_MS = 3_600_000;
 const WEEK_MS = 7 * DAY_MS;
@@ -168,7 +168,8 @@ async function workloadHeatmap(heatmapWeeks: Date[], now: Date) {
   const hoursRows = visibleIds.length
     ? await prisma.timesheet.findMany({
         // `workDate` is a calendar day: the heatmap's first IST Monday as that day's date value.
-        where: { deletedAt: null, userId: { in: visibleIds }, workDate: { gte: dateKeyToUtc(weekLabel(heatmapStart)) } },
+        // LOGGED hours (workspace-metrics.ts): not a draft still being typed, not hours turned down.
+        where: { deletedAt: null, ...LOGGED_HOURS_WHERE, userId: { in: visibleIds }, workDate: { gte: dateKeyToUtc(weekLabel(heatmapStart)) } },
         select: { userId: true, workDate: true, totalHours: true }
       })
     : [];
@@ -207,7 +208,8 @@ async function estimateVsActual() {
   });
   const actuals = await prisma.timesheet.groupBy({
     by: ["ticketId"],
-    where: { deletedAt: null, ticketId: { in: ticketsWithEstimate.map((t) => t.id) } },
+    // Actuals are LOGGED hours (workspace-metrics.ts), the same hours every other page calls logged.
+    where: { deletedAt: null, ...LOGGED_HOURS_WHERE, ticketId: { in: ticketsWithEstimate.map((t) => t.id) } },
     _sum: { totalHours: true }
   });
   const actualBy = new Map(actuals.map((a) => [a.ticketId, Number(a._sum.totalHours ?? 0)]));
