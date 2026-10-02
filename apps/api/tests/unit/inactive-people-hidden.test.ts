@@ -27,6 +27,7 @@
  *      no status predicate at all.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { evaluateApprovalSlaQuery } from "../helpers/approval-sla-sql.js";
 
 type Person = {
   id: string;
@@ -219,7 +220,9 @@ vi.mock("../../src/config/prisma.js", () => {
       projectModule: { findMany: noRows() },
       project: { findMany: noRows() },
       securityFinding: { findMany: noRows(), groupBy: noRows(), count: vi.fn().mockResolvedValue(0) },
-      resourceBooking: { findMany: noRows() }
+      resourceBooking: { findMany: noRows() },
+      // The Team roster's approval-SLA count is a raw COUNT(*) (approval-sla-breaches.service.ts).
+      $queryRaw: vi.fn(async (query: any) => evaluateApprovalSlaQuery(query, state.timesheets))
     }
   };
 });
