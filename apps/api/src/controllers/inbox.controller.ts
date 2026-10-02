@@ -63,6 +63,10 @@ inboxRouter.patch("/:id", validate(patchSchema), async (req, res) => {
   const data: Record<string, unknown> = {};
   if (body.handled !== undefined) data.handledAt = body.handled ? new Date() : null;
   if (body.read !== undefined) data.readAt = body.read ? new Date() : null;
+  // Done implies seen, exactly as "Clear all" (handle-all) and snoozing already treat it. Marking an
+  // unread row done used to leave it unread, so the brief kept counting a notification the bell had
+  // stopped showing. An explicit `read` in the same request still wins.
+  else if (body.handled === true) data.readAt = new Date();
   if (body.snoozeUntil !== undefined) {
     if (body.snoozeUntil === null) data.snoozedUntil = null;
     else {

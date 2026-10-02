@@ -275,3 +275,14 @@ describe("sign-offs waiting on you", () => {
     expect(section(brief, "deliverableApprovals")?.count).toBe(1);
   });
 });
+
+describe("unread notifications", () => {
+  it("counts what the bell counts — unread, not handled, not still snoozed", async () => {
+    // The brief counted every unread row, including ones marked done or snoozed, so it said
+    // "Unread notifications: 4" while the bell said 0.
+    await buildDailyBrief({ id: "u-1", permissions: [] }, NOW);
+    const where = (notificationCount.mock.calls[0][0] as any).where;
+    expect(where).toMatchObject({ userId: "u-1", readAt: null, handledAt: null });
+    expect(where.OR).toEqual([{ snoozedUntil: null }, { snoozedUntil: { lte: NOW } }]);
+  });
+});

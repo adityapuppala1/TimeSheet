@@ -73,11 +73,16 @@ vi.mock("../../src/services/audit.service.js", () => ({ audit: vi.fn().mockResol
 
 const dispatchNotification = vi.fn().mockResolvedValue(undefined);
 const dispatchTransactional = vi.fn().mockResolvedValue({ ok: true });
+/** Pass-through by default; a test that wants a role muted swaps in a filter. */
+const unmutedEmailAddresses = vi.fn(async (_category: string, addresses: string[]) => addresses);
 let notificationSettings: Row = { emailTicketReopenedDigest: true, emailTicketClosedDigest: true };
 vi.mock("../../src/services/notify.service.js", () => ({
   dispatchNotification: (...a: unknown[]) => dispatchNotification(...a),
   dispatchTransactional: (...a: unknown[]) => dispatchTransactional(...a),
   getGlobalNotificationSettings: vi.fn(async () => notificationSettings),
+  unmutedEmailAddresses: (...a: [string, string[]]) => unmutedEmailAddresses(...a),
+  emailPreferenceKey: (category: string) =>
+    ({ "ticket.reopened_digest": "emailTicketReopenedDigest", "ticket.closed_digest": "emailTicketClosedDigest" })[category] ?? null,
   templates: new Proxy({}, { get: () => () => "<html>body</html>" })
 }));
 vi.mock("../../src/services/ai.service.js", () => ({ classifyCiFailure: vi.fn(), classifySecurityFinding: vi.fn() }));
@@ -291,5 +296,54 @@ describe("what the email says", () => {
     // a finding title arrives from an ingest webhook. Same split `renderFindingsHtml` documents.
     expect(survived).not.toContain("<img");
     expect(survived).toContain("&lt;img");
+  });
+});
+
+/**
+ * The per-role email mutes (audit 2026-10, notifications #8). The digest went out through
+ * dispatchTransactional, which never consulted them, so unticking ADMIN and SUPER_ADMIN for this
+ * category in Settings still CC'd (and BCC'd) every admin on every reopen.
+ */
+describe("the per-role email mutes", () => {
+  it("leaves a muted recipient out of To and Cc alike", async () => {
+    const before = await (async () => {
+      dispatchTransactional.mockClear();
+      await send();
+      const call = dispatchTransactional.mock.calls[0][0];
+      return [...String(call.to).split(",").map((a: string) => a.trim()), ...(call.cc ?? [])];
+    })();
+    const muted = before[before.length - 1];
+    unmutedEmailAddresses.mockImplementation(async (_c, addresses) => addresses.filter((a) => a !== muted));
+    dispatchTransactional.mockClear();
+    await send();
+    const call = dispatchTransactional.mock.calls[0][0];
+    const after = [...String(call.to).split(",").map((a: string) => a.trim()), ...(call.cc ?? [])];
+    expect(after).not.toContain(muted);
+    expect(unmutedEmailAddresses).toHaveBeenCalledWith("ticket.reopened_digest", expect.any(Array));
+    unmutedEmailAddresses.mockImplementation(async (_c, addresses) => addresses);
+  });
+
+  it("passes the category's preference key, so the super-admin audit BCC honours the mute too", async () => {
+    dispatchTransactional.mockClear();
+    await send();
+    expect(dispatchTransactional.mock.calls[0][0].preferenceKey).toBe("emailTicketReopenedDigest");
+  });
+
+  it("promotes the Cc list to To when every primary recipient has muted it", async () => {
+    dispatchTransactional.mockClear();
+    await send();
+    const first = dispatchTransactional.mock.calls[0][0];
+    const primaries = String(first.to).split(",").map((a: string) => a.trim());
+    const copied: string[] = first.cc ?? [];
+    unmutedEmailAddresses.mockImplementation(async (_c, addresses) => addresses.filter((a) => !primaries.includes(a)));
+    dispatchTransactional.mockClear();
+    await send();
+    if (copied.length === 0) {
+      expect(dispatchTransactional).not.toHaveBeenCalled();
+    } else {
+      const call = dispatchTransactional.mock.calls[0][0];
+      expect(String(call.to).split(",").map((a: string) => a.trim()).sort()).toEqual([...copied].sort());
+    }
+    unmutedEmailAddresses.mockImplementation(async (_c, addresses) => addresses);
   });
 });

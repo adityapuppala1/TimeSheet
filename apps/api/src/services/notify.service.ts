@@ -342,6 +342,9 @@ export async function dispatchTransactional(args: {
   /** Extra headers and a fixed Message-ID — see mail.service.ts#SendArgs.headers. */
   headers?: Record<string, string>;
   messageId?: string;
+  /** The category's settings field (`emailPreferenceKey`), when the send belongs to one. Without
+   *  it the super-admin audit BCC cannot tell what kind of mail this is and ignores its own mute. */
+  preferenceKey?: string;
 }) {
   if (!args.to) {
     return { ok: false, status: "SKIPPED" as const, errorMessage: "Recipient missing" };
@@ -356,8 +359,51 @@ export async function dispatchTransactional(args: {
     template: args.templateKey,
     sensitive: args.sensitive,
     headers: args.headers,
-    messageId: args.messageId
+    messageId: args.messageId,
+    preferenceKey: args.preferenceKey
   });
+}
+
+/** The settings field — and so the preference key and the role-mute column — a category's email
+ *  is governed by, or null for a category with no email toggle. */
+export function emailPreferenceKey(category: NotificationCategory): string | null {
+  return SETTINGS_FIELD[category] ?? null;
+}
+
+/**
+ * The addresses a category's email may go to once per-role mutes are applied — for senders that
+ * build their own recipient lists and go through `dispatchTransactional` (one mail, a real To and
+ * Cc) rather than `dispatchNotification` (one person at a time, which applies the mutes itself).
+ *
+ * THE SAME RULE as `dispatchNotification`: a workspace member is left out only when EVERY role
+ * they hold is muted for the category. An address that is nobody in the workspace is kept — a
+ * role mute is a statement about roles, and an outside recipient has none.
+ *
+ * WHY IT EXISTS: the ticket-closed and "fix did not hold" security digests CC every admin and
+ * never consulted the mutes, so unticking ADMIN and SUPER_ADMIN for those categories on the
+ * Email channels screen changed nothing.
+ */
+export async function unmutedEmailAddresses(category: NotificationCategory, addresses: string[]): Promise<string[]> {
+  const field = SETTINGS_FIELD[category];
+  if (!field || addresses.length === 0) return addresses;
+  const settings = await getGlobalNotificationSettings();
+  const mutes = settings?.emailRoleMutes as EmailRoleMutes | null;
+  if (!mutes) return addresses;
+
+  const people = await prisma.user.findMany({
+    where: { email: { in: addresses } },
+    select: { email: true, role: { select: { name: true } }, userRoles: { select: { role: { select: { name: true } } } } }
+  });
+  const muted = new Set(
+    people
+      .filter((person) =>
+        resolveHeldRoles(person.role.name as RoleName, person.userRoles.map((ur) => ur.role.name as RoleName)).every((name) =>
+          isEmailRoleMuted(mutes, field as keyof NotificationPreferences, name)
+        )
+      )
+      .map((person) => person.email.toLowerCase())
+  );
+  return addresses.filter((address) => !muted.has(address.toLowerCase()));
 }
 
 export { templates };

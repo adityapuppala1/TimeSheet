@@ -55,7 +55,7 @@ export interface DailyBrief {
  *  - deliverable approvals → `ApprovalStep` rows awaiting this person's decision NOW (`activeSteps`)
  *  - unlogged time      → the `Timesheet.workDate = today` check `/daily-status` performs
  *  - at-risk projects   → the latest `ProjectRiskSnapshot` per project, RED band
- *  - unread             → `Notification.readAt IS NULL`
+ *  - unread             → unread rows the bell shows (`shownInBell`)
  */
 export async function buildDailyBrief(
   user: { id: string; permissions: string[] },
@@ -78,7 +78,9 @@ export async function buildDailyBrief(
     signOffsWaitingOn(user.id),
     prisma.timesheet.count({ where: { userId: user.id, workDate: today, deletedAt: null } }),
     canSeeRisk ? latestRedProjectCount() : Promise.resolve(0),
-    prisma.notification.count({ where: { userId: user.id, readAt: null } })
+    // The bell's own predicate: a row marked done or still snoozed is not "unread" anywhere else,
+    // so the brief must not say "Unread notifications: 4" beside a bell that says 0.
+    prisma.notification.count({ where: { ...shownInBell(user.id, now), readAt: null } })
   ]);
 
   const sections: BriefSection[] = [
@@ -216,6 +218,15 @@ async function latestRedProjectCount(): Promise<number> {
   });
   return latest.filter((s) => s.band === "RED").length;
 }
+
+/** What the bell shows a person: theirs, not handled, and not still snoozed. ONE definition, because
+ *  the bell's list, its badge, "Mark all read" and the brief's unread count must all mean the same
+ *  rows. */
+export const shownInBell = (userId: string, now: Date) => ({
+  userId,
+  handledAt: null,
+  OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }]
+});
 
 export type InboxFilter = "unhandled" | "snoozed" | "handled" | "all";
 

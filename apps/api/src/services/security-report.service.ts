@@ -50,8 +50,10 @@ import { fetchGitHubCodeowners, fetchGitHubLastCommitAuthor, parseCodeownersOwne
 import {
   dispatchNotification,
   dispatchTransactional,
+  emailPreferenceKey,
   getGlobalNotificationSettings,
   templates,
+  unmutedEmailAddresses,
   type NotificationCategory
 } from "./notify.service.js";
 import { computeTicketDueDate, getGlobalTicketSettings, issueTicketKey } from "./ticket.service.js";
@@ -318,12 +320,23 @@ async function deliverTicketSecurityDigest(args: {
     });
   }
 
+  // The per-role email mutes, applied to To and Cc alike (the bells above are in-app and stay). If
+  // every primary recipient muted the category, the Cc'd people become the To rather than the mail
+  // being dropped for everyone. The preference key lets the super-admin audit BCC apply its own mute.
+  const [toKept, ccKept] = await Promise.all([
+    unmutedEmailAddresses(args.bell.category, toAddresses),
+    unmutedEmailAddresses(args.bell.category, ccAddresses)
+  ]);
+  const primary = toKept.length > 0 ? toKept : ccKept;
+  if (primary.length === 0) return;
+
   await dispatchTransactional({
-    to: toAddresses.join(", "),
-    cc: ccAddresses,
+    to: primary.join(", "),
+    cc: toKept.length > 0 ? ccKept : [],
     templateKey: args.templateKey,
     vars: args.vars,
-    fallback: args.fallback
+    fallback: args.fallback,
+    preferenceKey: emailPreferenceKey(args.bell.category) ?? undefined
   });
 }
 

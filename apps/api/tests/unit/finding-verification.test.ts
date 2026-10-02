@@ -104,6 +104,9 @@ vi.mock("../../src/services/notify.service.js", () => ({
   dispatchNotification: (...a: unknown[]) => dispatchNotification(...a),
   dispatchTransactional: (...a: unknown[]) => dispatchTransactional(...a),
   getGlobalNotificationSettings: vi.fn().mockResolvedValue({ emailTicketClosedDigest: true, emailTicketReopenedDigest: true }),
+  // No role is muted in this file — the mutes have their own tests (transactional-role-mutes).
+  unmutedEmailAddresses: async (_category: string, addresses: string[]) => addresses,
+  emailPreferenceKey: () => null,
   templates: new Proxy({}, { get: () => () => "<html>body</html>" })
 }));
 vi.mock("../../src/services/ai.service.js", () => ({

@@ -12,6 +12,7 @@ import { z } from "zod";
 import { prisma } from "../config/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
+import { shownInBell } from "../services/inbox.service.js";
 
 export const notificationRouter = Router();
 notificationRouter.use(requireAuth);
@@ -29,13 +30,8 @@ notificationRouter.use(requireAuth);
  * "to do" filter uses. Anything hidden here is still reachable at /app/inbox under Snoozed or Done —
  * nothing is lost, it is just not shouting.
  */
-/** What the bell shows a person: theirs, not handled, and not still snoozed. ONE definition, because
- *  the list, the badge and "Mark all read" must all mean the same rows. */
-const shownInBell = (userId: string, now: Date) => ({
-  userId,
-  handledAt: null,
-  OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }]
-});
+// `shownInBell` lives in inbox.service.ts now, so the Inbox brief's "Unread notifications" counts
+// exactly the rows this badge counts.
 
 notificationRouter.get("/", async (req, res) => {
   const visible = shownInBell(req.user!.id, new Date());

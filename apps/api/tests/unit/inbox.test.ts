@@ -166,6 +166,15 @@ describe("handled and read are different statements", () => {
     expect(data).not.toHaveProperty("handledAt");
   });
 
+  it("marking an unread row done also marks it read, as Clear all does", async () => {
+    // Done on an unread row set handledAt and left readAt null, so the brief went on counting it as
+    // an unread notification after the bell (which hides handled rows) had stopped showing it.
+    await request(app()).patch("/inbox/n-1").send({ handled: true });
+    const data = updateMany.mock.calls[0][0].data;
+    expect(data.handledAt).toBeInstanceOf(Date);
+    expect(data.readAt).toBeInstanceOf(Date);
+  });
+
   it("reopening clears handledAt without marking it unread", async () => {
     await request(app()).patch("/inbox/n-1").send({ handled: false });
     const data = updateMany.mock.calls[0][0].data;
