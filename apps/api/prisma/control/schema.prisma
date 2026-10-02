@@ -688,6 +688,20 @@ model PlatformAdminUser {
   /// Refusing any step at or below the last one used costs one column and closes that window.
   mfaLastUsedStep BigInt?
 
+  /// A REAL GATE, unlike the tenant column of the same name was. While it is true,
+  /// middleware/platform-admin-auth.ts answers every console route except the caller's own
+  /// `/auth/*` routes with 403 PASSWORD_ROTATION_REQUIRED. Set for a password nobody chose for
+  /// themselves: a bootstrap password the seed generated, an operator created (or reactivated) by
+  /// a second owner, an owner minted by the break-glass CLI. Cleared by `/auth/change-password`.
+  mustChangePassword Boolean @default(false)
+
+  /// Per-ACCOUNT lockout, on top of the per-IP limiter in app.ts. The IP limiter cannot see a
+  /// password being guessed from many addresses; this can. Consecutive failures (password or second
+  /// factor), reset by a completed sign-in. From the fifth one `lockedUntil` is set, and doubles
+  /// with every further failure up to an hour — see platform-admin-auth.service.ts.
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+
   sessions      PlatformAdminSession[]
   recoveryCodes PlatformAdminRecoveryCode[]
 }
@@ -732,6 +746,10 @@ model PlatformAdminSession {
   expiresAt           DateTime
   revokedAt           DateTime?
   createdAt           DateTime          @default(now())
+  /// When this session last carried an authenticated request — what the console's idle timeout
+  /// (PLATFORM_ADMIN_IDLE_TIMEOUT_MINUTES) measures. Written at most once a minute per session.
+  /// Null on sessions from before the column existed; those count from `createdAt`.
+  lastUsedAt          DateTime?
 
   @@index([adminUserId, expiresAt])
 }

@@ -821,8 +821,10 @@ platformAdminConsoleRouter.post(
      */
     const asked = String(ctx.body.role ?? "READ_ONLY");
     const role: PlatformRole = (platformRoles as readonly string[]).includes(asked) ? (asked as PlatformRole) : "READ_ONLY";
+    // `mustChangePassword`: the approver has seen this password, so it is nobody's own until the new
+    // operator replaces it — the console admits the account to nothing else until they do.
     const row = await controlPrisma.platformAdminUser.create({
-      data: { email, name: String(ctx.body.name).trim(), role, passwordHash: await hashPassword(password), status: "ACTIVE" }
+      data: { email, name: String(ctx.body.name).trim(), role, passwordHash: await hashPassword(password), status: "ACTIVE", mustChangePassword: true }
     });
     await platformAudit("PLATFORM_ADMIN", ctx.actorLabel, "platform_admin.created", "PlatformAdminUser", row.id, { email, role, requestedBy: ctx.requester.label }, {
       reason: ctx.reason,

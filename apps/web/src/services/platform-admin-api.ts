@@ -5,6 +5,7 @@ import axios, { type AxiosRequestConfig } from "axios";
 import type { PlatformRole } from "@timesheet/shared";
 import type { ApiPerformanceOverview, StatusPage, SystemHealthSnapshot } from "./api";
 import { askPlatformReason, PLATFORM_REASON_HEADER, PLATFORM_REASON_MIN, reasonRequirementFor } from "./platform-reason";
+import { accountGateFromError, type ConsoleAccountGate } from "../lib/platform-console";
 
 /**
  * A completely separate axios instance from services/api.ts's tenant `api` — different base
@@ -62,9 +63,21 @@ async function refreshPlatformAdminAccessToken(): Promise<string> {
   return response.data.accessToken;
 }
 
+/**
+ * Called when the API refuses a request because of an ACCOUNT gate (see lib/platform-console.ts) —
+ * registered by the console layout, which re-reads the account so the gate's form replaces the page.
+ * A registration rather than an import because the store imports this module.
+ */
+let accountGateHandler: ((gate: Exclude<ConsoleAccountGate, null>) => void) | null = null;
+export function registerPlatformAccountGateHandler(fn: typeof accountGateHandler) {
+  accountGateHandler = fn;
+}
+
 platformAdminApi.interceptors.response.use(
   (response) => response,
   async (error) => {
+    const gate = accountGateFromError(error);
+    if (gate) accountGateHandler?.(gate);
     const original = error.config as (AxiosRequestConfig & { _retry?: boolean }) | undefined;
     const url = original?.url ?? "";
     if (error.response?.status !== 401 || !original || original._retry || url.includes("/auth/login") || url.includes("/auth/refresh")) {
@@ -149,6 +162,9 @@ export interface PlatformAdminUser {
   mfaEnabled?: boolean;
   /** True while the account still verifies against the password the control seed ships with. Drives the console banner. */
   usingSeededPassword?: boolean;
+  /** A server-side gate, not a nag: while true the API refuses every console route except this
+   *  account's own `/auth/*`, and the console shows only the password form. */
+  mustChangePassword?: boolean;
 }
 
 export interface OrgListRow {

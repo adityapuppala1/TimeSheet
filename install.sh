@@ -585,12 +585,23 @@ else
 fi
 
 log "Running the one-time seed (roles, permissions, control-plane plan tiers, platform-admin account)..."
+# The bootstrap platform admin's password is generated HERE, per install, and handed to the seed —
+# it used to be the public PlatformAdmin@12345 on every deployment. The seed only uses it when it
+# CREATES the account (a re-run never touches an existing one) and says which happened on a marker
+# line, which is how the summary below knows whether to print it. Alphanumeric so it survives being
+# pasted into a JSON body or a shell without quoting.
+rand_password() {
+  if command -v openssl >/dev/null 2>&1; then openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | cut -c1-24
+  else head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | cut -c1-24; fi
+}
+PA_BOOTSTRAP_PASSWORD="$(rand_password)"
+SEED_LOG="$(mktemp)"
 # Auto-heal: on a fresh install the mysql container can still be finishing init-file replay for a
 # few seconds after the API's /health reports ready (health checks TCP connectivity, not "schema
 # fully migrated") — retry a few times with backoff instead of failing on the very first race.
 SEED_OK=false
 for attempt in 1 2 3; do
-  if docker compose -f "$COMPOSE_FILE" exec -T api npm run control:seed -w apps/api && docker compose -f "$COMPOSE_FILE" exec -T api npm run seed -w apps/api; then
+  if docker compose -f "$COMPOSE_FILE" exec -T -e "PLATFORM_ADMIN_BOOTSTRAP_PASSWORD=$PA_BOOTSTRAP_PASSWORD" api npm run control:seed -w apps/api | tee -a "$SEED_LOG" && docker compose -f "$COMPOSE_FILE" exec -T api npm run seed -w apps/api; then
     SEED_OK=true
     break
   fi
@@ -604,6 +615,9 @@ else
   warn "  docker compose -f $COMPOSE_FILE exec api npm run control:seed -w apps/api && docker compose -f $COMPOSE_FILE exec api npm run seed -w apps/api"
   warn "If it's an already-seeded re-run, this is expected and safe to ignore."
 fi
+PA_BOOTSTRAP_CREATED=false
+grep -q "platform-admin-bootstrap: created" "$SEED_LOG" && PA_BOOTSTRAP_CREATED=true
+rm -f "$SEED_LOG"
 
 # ── VERIFICATION SUITE ────────────────────────────────────────────────────────────────────────
 # "Installed" below means PROVEN, not presumed: each check exercises a different layer, so a pass
@@ -638,11 +652,20 @@ verify "tenant schema at latest migration"   docker compose -f "$COMPOSE_FILE" e
 verify "control-plane schema at latest migration"   docker compose -f "$COMPOSE_FILE" exec -T api npx prisma migrate status --schema=apps/api/prisma/control/schema.prisma
 
 # Layer 4: authentication round-trips — the seeded platform-admin can actually log in, which
-# proves seeding, password hashing, JWT signing and the DB read path in one request.
+# proves seeding, password hashing, JWT signing and the DB read path in one request. On a re-run the
+# account already existed and its password is the operator's own, so the check proves the same path
+# with an address that does not exist instead: a clean 401 needs the DB read and the bcrypt compare
+# too, and it adds no failure to a real account's lockout counter.
 check_admin_login() {
-  curl -fsS -X POST http://localhost:4000/api/platform-admin/auth/login     -H 'Content-Type: application/json'     --data '{"email":"platform-admin@timesphere.local","password":"PlatformAdmin@12345"}'     | grep -q accessToken
+  if [ "$PA_BOOTSTRAP_CREATED" = true ]; then
+    curl -fsS -X POST http://localhost:4000/api/platform-admin/auth/login -H 'Content-Type: application/json' \
+      --data "{\"email\":\"platform-admin@timesphere.local\",\"password\":\"${PA_BOOTSTRAP_PASSWORD}\"}" | grep -q accessToken
+  else
+    [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:4000/api/platform-admin/auth/login -H 'Content-Type: application/json' \
+      --data '{"email":"install-check@timesphere.invalid","password":"not-a-real-password"}')" = "401" ]
+  fi
 }
-verify "platform-admin login returns a token" check_admin_login
+verify "platform-admin login path works" check_admin_login
 
 # Layer 5: the web container serves the SPA shell.
 check_spa() { curl -fsS http://localhost:5173 | grep -qi "id=.root."; }
@@ -673,13 +696,21 @@ fi
 log "All verification checks passed."
 
 
+if [ "$PA_BOOTSTRAP_CREATED" = true ]; then
+  PA_LOGIN_LINE="platform-admin@timesphere.local / ${PA_BOOTSTRAP_PASSWORD}
+                        (generated for this install and shown ONCE — store it in a password manager now.
+                         Production consoles ask you to set up two-factor authentication at first sign-in.)"
+else
+  PA_LOGIN_LINE="platform-admin@timesphere.local — already existed; its password was left unchanged"
+fi
+
 cat <<EOF
 
 $(printf '\033[1;32m✓ TimeSphere is up.\033[0m')
 
   Web app:            ${WEB_ORIGIN_VALUE:-http://localhost:5173}
   Platform admin:     ${WEB_ORIGIN_VALUE:-http://localhost:5173}/platform-admin/login
-  Platform admin login: platform-admin@timesphere.local / PlatformAdmin@12345 (change this)
+  Platform admin login: ${PA_LOGIN_LINE}
 
 Included out of the box — no extra setup required:
   - Timesheets, Jira-style ticketing (Kanban board incl. "Group by manager" swimlanes)

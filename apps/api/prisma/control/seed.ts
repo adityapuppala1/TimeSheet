@@ -10,6 +10,7 @@ import { PLAN_TIER_LIMITS, PLAN_TIER_LIST_PRICES, planTiers } from "@timesheet/s
 import { PrismaClient } from "../../src/generated/control-client/index.js";
 import { encryptSecret } from "../../src/utils/encryption.js";
 import { hashPassword } from "../../src/utils/security.js";
+import { resolveBootstrapPassword } from "../../src/services/platform-bootstrap.js";
 
 const controlPrisma = new PrismaClient();
 
@@ -91,29 +92,65 @@ async function main() {
 
   console.log(`Seeded Organization "${DEFAULT_ORG_SLUG}" (${org.id}) pointing at the existing tenant database.`);
 
-  // Dev bootstrap credentials — same convention as prisma/seed.ts's tenant superadmin
-  // ("Admin@12345"). Rotate this in any real deployment; it exists purely so there's a way to
-  // log into /platform-admin at all on a fresh environment.
+  /*
+   * THE BOOTSTRAP OWNER, AND WHERE ITS PASSWORD COMES FROM (C1).
+   *
+   * This used to be `PlatformAdmin@12345` on every install, production included — a password in the
+   * repository is in every fork and every CI log. services/platform-bootstrap.ts decides now:
+   * PLATFORM_ADMIN_BOOTSTRAP_PASSWORD when it is set (the installers generate one; .env.example and
+   * CI pass the known dev value so the dev scripts and e2e can sign in), otherwise a strong random
+   * one, printed ONCE below and flagged so the console admits the account to nothing but "choose
+   * your own password" until it has.
+   *
+   * CREATE-ONLY, as the upsert it replaces was: an existing account's password is never touched by
+   * a re-seed. The two marker lines are read by install.sh/install.ps1 to know whether the password
+   * they passed in is the one that now works.
+   */
   const platformAdminEmail = "platform-admin@timesphere.local";
-  await controlPrisma.platformAdminUser.upsert({
-    where: { email: platformAdminEmail },
-    /*
-     * `role: "OWNER"` ON THE CREATE BRANCH IS LOAD-BEARING, AND ITS ABSENCE WAS A REAL BUG.
-     *
-     * `PlatformAdminUser.role` defaults to READ_ONLY — the right default for a column added by
-     * migration, so a row that misses its initialisation is under-privileged rather than over.
-     * The migration that adds it promotes every PRE-EXISTING admin to OWNER, which covers every
-     * upgrade. A FRESH install has no pre-existing admin: the migration's UPDATE matches nothing
-     * because the table is empty, and then THIS create runs. Without the role named here the
-     * bootstrap admin lands READ_ONLY, the deployment has no owner at all, and nobody can grant
-     * one — because granting a role is the single thing only an owner can do.
-     *
-     * This is the same seed-versus-migration seam the PlanTierLimit entitlements were bitten by
-     * twice, in the same direction, and only ever visible on a fresh database.
-     */
-    update: {},
-    create: { email: platformAdminEmail, name: "Platform Admin", role: "OWNER", passwordHash: await hashPassword("PlatformAdmin@12345"), status: "ACTIVE" }
-  });
+  const existingAdmin = await controlPrisma.platformAdminUser.findUnique({ where: { email: platformAdminEmail }, select: { id: true } });
+  if (existingAdmin) {
+    console.log(`PlatformAdminUser "${platformAdminEmail}" already exists — its password was left unchanged.`);
+    console.log("platform-admin-bootstrap: unchanged");
+  } else {
+    const bootstrap = resolveBootstrapPassword(process.env);
+    await controlPrisma.platformAdminUser.create({
+      /*
+       * `role: "OWNER"` IS LOAD-BEARING, AND ITS ABSENCE WAS A REAL BUG.
+       *
+       * `PlatformAdminUser.role` defaults to READ_ONLY — the right default for a column added by
+       * migration, so a row that misses its initialisation is under-privileged rather than over.
+       * The migration that adds it promotes every PRE-EXISTING admin to OWNER, which covers every
+       * upgrade. A FRESH install has no pre-existing admin: the migration's UPDATE matches nothing
+       * because the table is empty, and then THIS create runs. Without the role named here the
+       * bootstrap admin lands READ_ONLY, the deployment has no owner at all, and nobody can grant
+       * one — because granting a role is the single thing only an owner can do.
+       *
+       * This is the same seed-versus-migration seam the PlanTierLimit entitlements were bitten by
+       * twice, in the same direction, and only ever visible on a fresh database.
+       */
+      data: {
+        email: platformAdminEmail,
+        name: "Platform Admin",
+        role: "OWNER",
+        passwordHash: await hashPassword(bootstrap.password),
+        status: "ACTIVE",
+        mustChangePassword: bootstrap.mustChangePassword
+      }
+    });
+    if (bootstrap.warning) console.warn(`WARNING: ${bootstrap.warning}`);
+    if (bootstrap.source === "generated") {
+      const rule = "=".repeat(72);
+      console.log(`\n${rule}`);
+      console.log(`  Platform admin:   ${platformAdminEmail}`);
+      console.log(`  One-time password: ${bootstrap.password}`);
+      console.log("  Shown ONCE and stored only as a hash. Sign in at /platform-admin/login —");
+      console.log("  the console will make you choose your own password before anything else.");
+      console.log(`${rule}\n`);
+    } else {
+      console.log(`Seeded PlatformAdminUser "${platformAdminEmail}" with the password from PLATFORM_ADMIN_BOOTSTRAP_PASSWORD.`);
+    }
+    console.log("platform-admin-bootstrap: created");
+  }
 
   /*
    * The one repair the update branch above deliberately does not do, done here instead.
@@ -128,8 +165,6 @@ async function main() {
     const repaired = await controlPrisma.platformAdminUser.updateMany({ where: { status: "ACTIVE" }, data: { role: "OWNER" } });
     if (repaired.count > 0) console.log(`No active platform OWNER existed — promoted ${repaired.count} active admin(s), since nobody could have granted the role from the console.`);
   }
-
-  console.log(`Seeded PlatformAdminUser "${platformAdminEmail}" (password: PlatformAdmin@12345 — change in production).`);
 }
 
 main()

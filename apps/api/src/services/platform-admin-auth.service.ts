@@ -64,9 +64,12 @@ export interface PlatformAdminIdentity {
   role: PlatformRole;
   mfaEnabled: boolean;
   usingSeededPassword: boolean;
+  /** The server-side gate (C1): while true, the console admits this account to nothing but its own
+   *  `/auth/*` routes. Sent so the console opens the password form instead of a wall of 403s. */
+  mustChangePassword: boolean;
 }
 
-type AdminRow = { id: string; name: string; email: string; role: string; mfaEnabled: boolean; passwordHash: string };
+type AdminRow = { id: string; name: string; email: string; role: string; mfaEnabled: boolean; passwordHash: string; mustChangePassword?: boolean };
 
 async function identityOf(admin: AdminRow): Promise<PlatformAdminIdentity> {
   return {
@@ -75,7 +78,8 @@ async function identityOf(admin: AdminRow): Promise<PlatformAdminIdentity> {
     email: admin.email,
     role: admin.role as PlatformRole,
     mfaEnabled: admin.mfaEnabled,
-    usingSeededPassword: await usesSeededPassword(admin.passwordHash)
+    usingSeededPassword: await usesSeededPassword(admin.passwordHash),
+    mustChangePassword: admin.mustChangePassword === true
   };
 }
 
@@ -278,7 +282,9 @@ export async function changePlatformAdminPassword(adminId: string, currentSessio
   if (nextPassword === SEEDED_PLATFORM_ADMIN_PASSWORD) throw new AppError(400, "That is the seeded bootstrap password — choose your own");
   if (currentPassword === nextPassword) throw new AppError(400, "Choose a password you have not used here before");
 
-  await controlPrisma.platformAdminUser.update({ where: { id: adminId }, data: { passwordHash: await hashPassword(nextPassword) } });
+  // Clearing `mustChangePassword` here is what lifts the console's rotation gate — this is the one
+  // console route that gate leaves open for exactly this purpose.
+  await controlPrisma.platformAdminUser.update({ where: { id: adminId }, data: { passwordHash: await hashPassword(nextPassword), mustChangePassword: false } });
   const revoked = await controlPrisma.platformAdminSession.updateMany({
     where: { adminUserId: adminId, revokedAt: null, id: { not: currentSessionId } },
     data: { revokedAt: new Date() }

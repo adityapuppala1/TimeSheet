@@ -375,6 +375,12 @@ describe("creating an operator is queued too — it is the console's clearest pr
     expect(approved.body.result.temporaryPassword).toMatch(/^[A-Za-z0-9]{12}!7aQ$/);
   });
 
+  it("creates the account behind the rotation gate — a password the approver has seen is not the operator's own", async () => {
+    const queued = await as(OWNER_A, "post", "/admins", { email: "new@timesphere.app", name: "New", role: "OPERATOR" });
+    await as(OWNER_B, "post", `/governance/requests/${queued.body.requestId}/approve`);
+    expect(control.platformAdminUser.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ mustChangePassword: true }) }));
+  });
+
   it("refuses to create an account whose address is already taken — checked at approval", async () => {
     const queued = await as(OWNER_A, "post", "/admins", { email: "taken@timesphere.app", name: "Taken", role: "READ_ONLY" });
     control.platformAdminUser.findUnique.mockImplementation(async ({ where }: { where: { id?: string; email?: string } }) =>

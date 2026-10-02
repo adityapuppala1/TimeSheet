@@ -396,10 +396,22 @@ if (-not $apiReady) {
 Write-Step "Running the one-time seed (roles, permissions, control-plane plan tiers, platform-admin account)..."
 # Auto-heal: retry a few times with backoff - a fresh mysql container can still be finishing
 # init-file replay for a few seconds after /health reports ready (TCP-reachable != fully migrated).
+# The bootstrap platform admin's password is generated HERE, per install, and handed to the seed -
+# it used to be the public PlatformAdmin@12345 on every deployment. The seed only uses it when it
+# CREATES the account (a re-run never touches an existing one) and says which happened on a marker
+# line, which is how the summary below knows whether to print it. Alphanumeric so it survives being
+# pasted into a JSON body or a shell without quoting.
+$PaBootstrapPassword = ((New-RandomBase64 32) -replace '[^A-Za-z0-9]', '').Substring(0, 24)
+$PaBootstrapCreated = $false
 $seedOk = $false
 for ($attempt = 1; $attempt -le 3; $attempt++) {
-  docker compose -f $ComposeFile exec -T api npm run control:seed -w apps/api
-  if ($LASTEXITCODE -eq 0) {
+  # stdout only is captured (and echoed), so a native stderr line cannot become a terminating error
+  # under $ErrorActionPreference = "Stop".
+  $controlSeedOutput = docker compose -f $ComposeFile exec -T -e "PLATFORM_ADMIN_BOOTSTRAP_PASSWORD=$PaBootstrapPassword" api npm run control:seed -w apps/api
+  $controlSeedExit = $LASTEXITCODE
+  $controlSeedOutput | ForEach-Object { Write-Host $_ }
+  if ($controlSeedOutput -match "platform-admin-bootstrap: created") { $PaBootstrapCreated = $true }
+  if ($controlSeedExit -eq 0) {
     docker compose -f $ComposeFile exec -T api npm run seed -w apps/api
     if ($LASTEXITCODE -eq 0) { $seedOk = $true; break }
   }
@@ -442,9 +454,22 @@ Verify "control-plane schema at latest migration" {
   docker compose -f $ComposeFile exec -T api npx prisma migrate status --schema=apps/api/prisma/control/schema.prisma | Out-Null
   $LASTEXITCODE -eq 0
 }
-Verify "platform-admin login returns a token" {
-  $body = '{"email":"platform-admin@timesphere.local","password":"PlatformAdmin@12345"}'
-  (Invoke-WebRequest -Uri "http://localhost:4000/api/platform-admin/auth/login" -Method Post -ContentType "application/json" -Body $body -UseBasicParsing -TimeoutSec 5).Content -match "accessToken"
+# On a re-run the account already existed and its password is the operator's own, so the check proves
+# the same path with an address that does not exist: a clean 401 needs the DB read and the bcrypt
+# compare too, and it adds no failure to a real account's lockout counter.
+Verify "platform-admin login path works" {
+  if ($PaBootstrapCreated) {
+    $body = (@{ email = "platform-admin@timesphere.local"; password = $PaBootstrapPassword } | ConvertTo-Json -Compress)
+    (Invoke-WebRequest -Uri "http://localhost:4000/api/platform-admin/auth/login" -Method Post -ContentType "application/json" -Body $body -UseBasicParsing -TimeoutSec 5).Content -match "accessToken"
+  } else {
+    $body = '{"email":"install-check@timesphere.invalid","password":"not-a-real-password"}'
+    try {
+      Invoke-WebRequest -Uri "http://localhost:4000/api/platform-admin/auth/login" -Method Post -ContentType "application/json" -Body $body -UseBasicParsing -TimeoutSec 5 | Out-Null
+      $false
+    } catch {
+      [int]$_.Exception.Response.StatusCode -eq 401
+    }
+  }
 }
 Verify "web app serves the SPA" {
   (Invoke-WebRequest -Uri "http://localhost:5173" -UseBasicParsing -TimeoutSec 5).Content -match 'id="root"'
@@ -474,7 +499,13 @@ Write-Host "TimeSphere is up." -ForegroundColor Green
 Write-Host ""
 Write-Host "  Web app:              $WebOrigin"
 Write-Host "  Platform admin:       $WebOrigin/platform-admin/login"
-Write-Host "  Platform admin login: platform-admin@timesphere.local / PlatformAdmin@12345 (change this)"
+if ($PaBootstrapCreated) {
+  Write-Host "  Platform admin login: platform-admin@timesphere.local / $PaBootstrapPassword"
+  Write-Host "                        (generated for this install and shown ONCE - store it in a password manager now." -ForegroundColor Yellow
+  Write-Host "                         Production consoles ask you to set up two-factor authentication at first sign-in.)" -ForegroundColor Yellow
+} else {
+  Write-Host "  Platform admin login: platform-admin@timesphere.local - already existed; its password was left unchanged"
+}
 Write-Host ""
 Write-Host "Included out of the box - no extra setup required:" -ForegroundColor DarkGray
 Write-Host "  - Timesheets, Jira-style ticketing (Kanban board incl. `"Group by manager`" swimlanes)" -ForegroundColor DarkGray

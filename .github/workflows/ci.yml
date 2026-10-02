@@ -134,6 +134,9 @@ jobs:
       JWT_ACCESS_SECRET: "ci-only-access-secret-not-for-real-use-0123456789"
       JWT_REFRESH_SECRET: "ci-only-refresh-secret-not-for-real-use-0123456789"
       PLATFORM_ADMIN_JWT_SECRET: "ci-only-platform-admin-secret-not-for-real-use-0123456789"
+      # The control seed generates (and flags for rotation) a random bootstrap password unless one is
+      # passed. CI passes the known dev value so the e2e suite's console sign-in keeps working.
+      PLATFORM_ADMIN_BOOTSTRAP_PASSWORD: "PlatformAdmin@12345"
       # Exactly 64 hex characters — `env.ts` requires /^[0-9a-f]{64}$/i (32 bytes for AES-256-GCM).
       # This was 62 for as long as it has existed: two characters short, and never caught, because
       # every step that loads the app config sat behind an earlier failing gate in this same job and
@@ -353,6 +356,9 @@ jobs:
       JWT_ACCESS_SECRET: "ci-only-access-secret-not-for-real-use-0123456789"
       JWT_REFRESH_SECRET: "ci-only-refresh-secret-not-for-real-use-0123456789"
       PLATFORM_ADMIN_JWT_SECRET: "ci-only-platform-admin-secret-not-for-real-use-0123456789"
+      # The control seed generates (and flags for rotation) a random bootstrap password unless one is
+      # passed. CI passes the known dev value so the e2e suite's console sign-in keeps working.
+      PLATFORM_ADMIN_BOOTSTRAP_PASSWORD: "PlatformAdmin@12345"
       ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
       WEB_ORIGIN: "http://localhost:5173"
       APP_BASE_URL: "http://localhost:5173"

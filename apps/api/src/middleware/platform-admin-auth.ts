@@ -22,6 +22,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { PLATFORM_ROLE_CAPABILITIES, platformRoleHas, type PlatformCapability, type PlatformRole } from "@timesheet/shared";
 import { controlPrisma } from "../config/control-prisma.js";
+import { isAccountEssentialPath, platformAccountGateFor } from "../services/platform-account-gate.js";
 import { verifyPlatformAdminAccessToken } from "../utils/platform-admin-security.js";
 import { AppError } from "./error.js";
 
@@ -32,6 +33,9 @@ export interface PlatformAdminRequestUser {
   /** Read from the database on every request, never from the token — see the note in
    *  `requirePlatformAdmin` for why that is the whole design. */
   role: PlatformRole;
+  /** While true, every console route but the caller's own `/auth/*` answers 403 — see
+   *  services/platform-account-gate.ts. Reported on `/auth/me` so the console can route to the form. */
+  mustChangePassword: boolean;
 }
 
 declare global {
@@ -93,8 +97,15 @@ export async function requirePlatformAdmin(req: Request, _res: Response, next: N
   // hand-edited in the control database, degrades to READ_ONLY rather than to unchecked.
   const role: PlatformRole = Object.hasOwn(PLATFORM_ROLE_CAPABILITIES, admin.role) ? (admin.role as PlatformRole) : "READ_ONLY";
 
-  req.platformAdmin = { id: admin.id, name: admin.name, email: admin.email, role };
+  const mustChangePassword = admin.mustChangePassword === true;
+  req.platformAdmin = { id: admin.id, name: admin.name, email: admin.email, role, mustChangePassword };
   req.platformAdminSessionId = payload.sid;
+
+  // The account gates (C1): HERE, in the one function every console route passes through, rather
+  // than as a second middleware each route must remember. `req.path` is relative to the router's
+  // mount, so `/auth/...` is the same test on both console routers.
+  const gate = platformAccountGateFor({ mustChangePassword });
+  if (gate && !isAccountEssentialPath(req.path)) throw new AppError(403, gate.message, { code: gate.code });
   next();
 }
 

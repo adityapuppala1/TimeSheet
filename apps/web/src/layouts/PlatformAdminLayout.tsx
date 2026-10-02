@@ -23,7 +23,7 @@
  * each one is load-bearing and each one is there because something visibly broke without it.
  */
 import { Activity, AtSign, Banknote, BarChart3, BellRing, Building2, Command, DatabaseBackup, GitPullRequestArrow, Handshake, HeartHandshake, KeyRound, LayoutDashboard, LogOut, Mails, Menu, MessageSquareHeart, Radio, Settings2, ShieldAlert, ShieldCheck, SlidersHorizontal, UserPlus, UsersRound } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -40,8 +40,9 @@ import { PRIMARY_BTN } from "../pages/platform-admin/console-ui";
 /* The console's own palette, NOT the tenant one — see its header for why the two are separate
    components rather than one parameterised over "which store". */
 import { ConsoleCommandPalette, useConsolePaletteHotkey } from "../pages/platform-admin/console-command-palette";
-import { platformAdminAuthApi } from "../services/platform-admin-api";
+import { platformAdminAuthApi, registerPlatformAccountGateHandler } from "../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../store/platform-admin-auth";
+import { consoleAccountGate } from "../lib/platform-console";
 import { cn } from "../lib/utils";
 
 export interface ConsoleNavItem {
@@ -226,26 +227,29 @@ function SeededPasswordBanner({ onChangePassword }: { onChangePassword: () => vo
   );
 }
 
-function ChangePasswordDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+/**
+ * The password change itself, shared by the dialog (an operator who chose to rotate) and the
+ * rotation gate below (an operator the server will not admit until they do). One form, so the two
+ * can never disagree about the rules.
+ */
+function ChangePasswordForm({ onDone, onCancel }: { onDone: () => void; onCancel?: () => void }) {
   const admin = usePlatformAdminAuthStore((s) => s.admin);
   const setAdmin = usePlatformAdminAuthStore((s) => s.setAdmin);
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
 
-  const reset = () => {
-    setCurrent("");
-    setNext("");
-    setConfirm("");
-  };
-
   const mutation = useMutation({
     mutationFn: () => platformAdminAuthApi.changePassword(current, next),
     onSuccess: (result) => {
-      if (admin) setAdmin({ ...admin, usingSeededPassword: false });
+      // Clearing `mustChangePassword` here is what lifts the gate in the layout; the server has
+      // already cleared it on the row.
+      if (admin) setAdmin({ ...admin, usingSeededPassword: false, mustChangePassword: false });
       toast.success(result.otherSessionsRevoked > 0 ? `Password changed. ${result.otherSessionsRevoked} other session${result.otherSessionsRevoked === 1 ? "" : "s"} signed out.` : "Password changed.");
-      reset();
-      onOpenChange(false);
+      setCurrent("");
+      setNext("");
+      setConfirm("");
+      onDone();
     },
     onError: (error: unknown) => {
       const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
@@ -257,50 +261,76 @@ function ChangePasswordDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   const canSubmit = current.length >= 8 && next.length >= 12 && next === confirm && !mutation.isPending;
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(value) => {
-        if (!value) reset();
-        onOpenChange(value);
+    <form
+      className="grid gap-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (canSubmit) mutation.mutate();
       }}
     >
+      <div className="grid gap-1.5">
+        <Label htmlFor="pa-current">Current password</Label>
+        <Input id="pa-current" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor="pa-next">New password</Label>
+        <Input id="pa-next" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
+        <p className="text-xs text-muted-foreground">At least 12 characters. This account can reach every tenant — treat it like the root of the platform.</p>
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor="pa-confirm">Confirm new password</Label>
+        <Input id="pa-confirm" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-invalid={mismatch || undefined} />
+        {mismatch && <p className="text-xs text-destructive">The two passwords do not match.</p>}
+      </div>
+      <DialogFooter>
+        {onCancel && (
+          <Button type="button" variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+        <Button type="submit" disabled={!canSubmit} className={PRIMARY_BTN}>
+          {mutation.isPending ? "Changing…" : "Change password"}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+function ChangePasswordDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Change your password</DialogTitle>
           <DialogDescription>Every other session of this console is signed out when it changes. This one stays.</DialogDescription>
         </DialogHeader>
-        <form
-          className="grid gap-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (canSubmit) mutation.mutate();
-          }}
-        >
-          <div className="grid gap-1.5">
-            <Label htmlFor="pa-current">Current password</Label>
-            <Input id="pa-current" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="pa-next">New password</Label>
-            <Input id="pa-next" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
-            <p className="text-xs text-muted-foreground">At least 12 characters. This account can reach every tenant — treat it like the root of the platform.</p>
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="pa-confirm">Confirm new password</Label>
-            <Input id="pa-confirm" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-invalid={mismatch || undefined} />
-            {mismatch && <p className="text-xs text-destructive">The two passwords do not match.</p>}
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={!canSubmit} className={PRIMARY_BTN}>
-              {mutation.isPending ? "Changing…" : "Change password"}
-            </Button>
-          </DialogFooter>
-        </form>
+        {/* Mounted only while open, so closing the dialog discards whatever was typed. */}
+        {open && <ChangePasswordForm onDone={() => onOpenChange(false)} onCancel={() => onOpenChange(false)} />}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * What the console shows INSTEAD of a page while the server's rotation gate is up (C1). The API
+ * already refuses every console route but the operator's own `/auth/*` with 403
+ * PASSWORD_ROTATION_REQUIRED; this is the same decision made visible, so the operator meets a form
+ * rather than a screen of errors. Not dismissable: there is nothing behind it they could use.
+ */
+function PasswordRotationGate() {
+  return (
+    <div className="mx-auto grid w-full max-w-lg gap-4 rounded-xl border border-warning/40 bg-card p-5 sm:p-6">
+      <div className="grid gap-1.5">
+        <p className="flex items-center gap-2 font-semibold text-foreground">
+          <ShieldAlert className="h-4 w-4 shrink-0 text-warning" />
+          Choose your own password first
+        </p>
+        <p className="text-sm text-muted-foreground">
+          This account is still on a password somebody else issued — a generated bootstrap password, or a temporary one from whoever approved your account. The console opens once you replace it.
+        </p>
+      </div>
+      <ChangePasswordForm onDone={() => undefined} />
+    </div>
   );
 }
 
@@ -322,6 +352,17 @@ export function PlatformAdminLayout() {
   // function — a new identity every render would tear down and re-add the listener on each one.
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   useConsolePaletteHotkey(openPalette);
+
+  const gate = consoleAccountGate(admin);
+  // A gate the store did not know about — set on the server while this tab was open — arrives as a
+  // 403 on whatever the page asked for. Re-reading the account turns that into the gate's own form.
+  const setAdmin = usePlatformAdminAuthStore((s) => s.setAdmin);
+  useEffect(() => {
+    registerPlatformAccountGateHandler(() => {
+      platformAdminAuthApi.me().then(setAdmin).catch(() => undefined);
+    });
+    return () => registerPlatformAccountGateHandler(null);
+  }, [setAdmin]);
 
   const openPassword = () => {
     setDrawerOpen(false);
@@ -383,7 +424,7 @@ export function PlatformAdminLayout() {
             breakpoints the page kit uses — and one measure, so a page never sets its own. */}
         <main className="min-w-0 flex-1 px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
           <div className="mx-auto w-full min-w-0 max-w-[1400px]">
-            <Outlet />
+            {gate === "password" ? <PasswordRotationGate /> : <Outlet />}
           </div>
         </main>
       </div>
