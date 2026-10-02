@@ -25,6 +25,7 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { computeEffortVariance, computeProjectBudgets } from "../services/budget.service.js";
 import { buildPlan, dayKey, toDay } from "../services/plan-schedule.service.js";
+import { platformToday } from "../utils/date-window.js";
 // `assertPlanningEnabled` as well as the resource-specific gate: budgets live in this file for
 // proximity to workload, but they are a TEAM-tier capability while resource management is
 // Enterprise-only. Gating the budget panel on `assertResourcesEnabled` would quietly sell it one
@@ -45,12 +46,30 @@ const assertResourcesEnabled = () =>
 const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.");
 
 /** Default window when none is given: the current week plus seven more. Long enough to plan
- *  against, short enough that the grid stays readable without horizontal scrolling on a laptop. */
+ *  against, short enough that the grid stays readable without horizontal scrolling on a laptop.
+ *  "Today" is the platform's (IST) day — UTC's is yesterday until 05:30. */
 function defaultWindow() {
-  const today = toDay(new Date());
+  const today = platformToday();
   const from = new Date(today.getTime() - 7 * 86_400_000);
   const to = new Date(today.getTime() + 49 * 86_400_000);
   return { from, to };
+}
+
+/**
+ * The window a board request asked for, or the default. A malformed date is a 422 that says what
+ * shape it wants: it used to become an Invalid Date and surface as a 500 from deep in the bucket
+ * builder — or, on the routes that hand it straight to Prisma, as a database error.
+ */
+function requestedWindow(query: Record<string, unknown>): { from: Date; to: Date } {
+  const window = defaultWindow();
+  const pick = (raw: unknown, fallback: Date, name: string): Date => {
+    if (raw === undefined || raw === "") return fallback;
+    const parsed = DATE.safeParse(raw);
+    const day = parsed.success ? toDay(parsed.data) : null;
+    if (!day || Number.isNaN(day.getTime())) throw new AppError(422, `\`${name}\` must be a date in YYYY-MM-DD form.`);
+    return day;
+  };
+  return { from: pick(query.from, window.from, "from"), to: pick(query.to, window.to, "to") };
 }
 
 /* ---------- The board ---------- */
@@ -58,9 +77,7 @@ function defaultWindow() {
 resourceRouter.get("/workload", requirePermission(permissions.RESOURCES_MANAGE), async (req, res) => {
   await assertResourcesEnabled();
 
-  const window = defaultWindow();
-  const from = typeof req.query.from === "string" ? toDay(req.query.from) : window.from;
-  const to = typeof req.query.to === "string" ? toDay(req.query.to) : window.to;
+  const { from, to } = requestedWindow(req.query);
   if (to < from) throw new AppError(422, "The end of the range is before its start.");
 
   const granularity = req.query.granularity === "day" ? "day" : "week";
@@ -98,9 +115,7 @@ resourceRouter.get("/workload", requirePermission(permissions.RESOURCES_MANAGE),
 resourceRouter.get("/conflicts", requirePermission(permissions.RESOURCES_MANAGE), async (req, res) => {
   await assertResourcesEnabled();
   const settings = await getPlanningSettings();
-  const window = defaultWindow();
-  const from = typeof req.query.from === "string" ? toDay(req.query.from) : window.from;
-  const to = typeof req.query.to === "string" ? toDay(req.query.to) : window.to;
+  const { from, to } = requestedWindow(req.query);
 
   const bookings = await prisma.resourceBooking.findMany({
     where: { startDate: { lte: to }, endDate: { gte: from } },
@@ -168,9 +183,7 @@ resourceRouter.get("/conflicts", requirePermission(permissions.RESOURCES_MANAGE)
 
 resourceRouter.get("/bookings", requirePermission(permissions.RESOURCES_MANAGE), async (req, res) => {
   await assertResourcesEnabled();
-  const window = defaultWindow();
-  const from = typeof req.query.from === "string" ? toDay(req.query.from) : window.from;
-  const to = typeof req.query.to === "string" ? toDay(req.query.to) : window.to;
+  const { from, to } = requestedWindow(req.query);
 
   const bookings = await prisma.resourceBooking.findMany({
     where: {

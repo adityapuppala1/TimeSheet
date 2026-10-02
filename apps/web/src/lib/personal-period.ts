@@ -17,6 +17,7 @@
  *     far" against the days just before it would compare Mon–Thu with Thu–Sun, and every delta would
  *     read as growth because the baseline contains a weekend.
  */
+import { addLocalDays as addDays, isoToLocalDate, localDateKey } from "./local-day";
 
 export interface PersonalRow {
   id: string;
@@ -35,26 +36,6 @@ export const LOGGED_STATUSES: ReadonlySet<string> = new Set(["SUBMITTED", "APPRO
 export const isLoggedStatus = (status: string): boolean => LOGGED_STATUSES.has(status);
 
 const DAY_MS = 86_400_000;
-
-/** "YYYY-MM-DD" from a Date's LOCAL calendar components. Never `toISOString()` for a day: local
- *  midnight east of Greenwich is the previous UTC day. */
-export function localDateKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-/** A `YYYY-MM-DD` key as a LOCAL date, or null. */
-export function isoToLocalDate(iso: string): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, (m || 1) - 1, d || 1);
-}
-
-/** Calendar-day arithmetic on local dates; `setDate` keeps a DST change from shifting the day. */
-function addDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-}
 
 function daysBetweenInclusive(from: Date, to: Date): number {
   return Math.max(1, Math.round((to.getTime() - from.getTime()) / DAY_MS) + 1);

@@ -54,6 +54,7 @@ import {
 } from "../services/api";
 import { DateRangePicker } from "../components/ui/date-range-picker";
 import { runInBackground } from "../lib/run-in-background";
+import { localWindowFromToday } from "../lib/local-day";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -130,8 +131,6 @@ const RAMP_CLASS = ["bg-capacity-0", "bg-capacity-1", "bg-capacity-2", "bg-capac
 /** Text colour per ramp step comes from `--capacity-N-foreground` (index.css), measured per theme. */
 const rampTextStyle = (step: 0 | 1 | 2 | 3 | 4) => ({ color: `hsl(var(--capacity-${step}-foreground))` });
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
-const isoPlusDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
 
 export function WorkloadPage() {
   const user = useAuthStore((s) => s.user);
@@ -150,8 +149,9 @@ export function WorkloadPage() {
   const [bookingOpen, setBookingOpen] = useState(false);
   const [editing, setEditing] = useState<ResourceBookingRow | null>(null);
 
-  const from = todayIso();
-  const to = isoPlusDays(weeks * 7);
+  // The viewer's today, not UTC's — `toISOString()` named yesterday until 05:30 IST, so the board
+  // opened on a day that had already gone.
+  const { from, to } = localWindowFromToday(weeks * 7);
 
   const config = useQuery({ queryKey: ["planning", "settings"], queryFn: planningApi.settings });
   const enabled = Boolean(config.data?.effective.resourceManagement) && canManage;
@@ -686,11 +686,13 @@ function BookingDialog({
   projects: any[];
 }) {
   const queryClient = useQueryClient();
+  // A new booking defaults to the viewer's today and four days on — on their calendar, not UTC's.
+  const fresh = localWindowFromToday(4);
   const [form, setForm] = useState({
     userId: "",
     projectId: "",
-    startDate: todayIso(),
-    endDate: isoPlusDays(4),
+    startDate: fresh.from,
+    endDate: fresh.to,
     hoursPerDay: "4",
     note: "",
     isTimeOff: false
@@ -711,7 +713,7 @@ function BookingDialog({
             note: editing.note ?? "",
             isTimeOff: editing.isTimeOff
           }
-        : { userId: "", projectId: "", startDate: todayIso(), endDate: isoPlusDays(4), hoursPerDay: "4", note: "", isTimeOff: false }
+        : { userId: "", projectId: "", startDate: localWindowFromToday(4).from, endDate: localWindowFromToday(4).to, hoursPerDay: "4", note: "", isTimeOff: false }
     );
   }, [open, editing]);
 
