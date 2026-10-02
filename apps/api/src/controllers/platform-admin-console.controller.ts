@@ -379,7 +379,10 @@ platformAdminConsoleRouter.get("/email-log", validate(z.object({ query: z.object
 platformAdminConsoleRouter.get("/email-log/:id", async (req, res) => {
   const row = await controlPrisma.platformEmailLog.findUnique({ where: { id: String(req.params.id) }, include: { organization: { select: { name: true, slug: true } } } });
   if (!row) throw new AppError(404, "Not in the log");
-  res.json({ ...row, html: (row.payload as { html?: string } | null)?.html ?? null, payload: undefined });
+  // `redacted` names the credentials blanked out of the stored body (G13) — the body is what was
+  // sent, minus those; the recipient, subject, status and error are what diagnose delivery.
+  const payload = row.payload as { html?: string; redacted?: string[] } | null;
+  res.json({ ...row, html: payload?.html ?? null, redacted: payload?.redacted ?? [], payload: undefined });
 });
 
 platformAdminConsoleRouter.post("/email-log/:id/resend", support, requirePlatformReason, async (req, res) => {

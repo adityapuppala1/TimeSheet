@@ -30,7 +30,18 @@ export interface PlatformTemplateDef {
   sample: Record<string, string>;
   subject: string;
   html: string;
+  /**
+   * Variables whose VALUE is a credential — a one-time code, a link that acts for the customer.
+   * platform-mail.service.ts blanks them in the copy kept in `PlatformEmailLog.payload` (the sent
+   * message is untouched), because every console role can open that log (G13). Declared here, beside
+   * the body that uses them, so a new template cannot add a credential without saying so.
+   */
+  sensitiveVars?: string[];
 }
+
+/** The retention emails' links act for the customer: one restores a lapsed workspace, the other
+ *  files feedback in their name. Neither belongs in a log every console role can read. */
+const RETENTION_SENSITIVE = ["reactivateUrl", "feedbackUrl"];
 
 const RETENTION_VARS = [
   "name",
@@ -113,6 +124,7 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
     group: "Trial retention",
     description: "Day 10 of the trial: a friendly check-in with the feedback form, while the experience is fresh.",
     variables: ["name", "workspace", "workspaceUrl", "feedbackUrl", "billingUrl", "daysLeft", "appUrl"],
+    sensitiveVars: ["feedbackUrl"],
     sample: { ...RETENTION_SAMPLE, daysLeft: "5" },
     subject: "How is {{workspace}} going so far?",
     html: shell(
@@ -129,6 +141,7 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
     group: "Trial retention",
     description: "The day the trial ends: the workspace is paused, the data is safe, and the 90-day policy is stated plainly.",
     variables: RETENTION_VARS,
+    sensitiveVars: RETENTION_SENSITIVE,
     sample: { ...RETENTION_SAMPLE, daysSinceTrial: "0", daysUntilDeletion: "90" },
     subject: "Your TimeSphere trial has ended — your data is safe for {{retentionDays}} days",
     html: shell(
@@ -146,6 +159,7 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
     group: "Trial retention",
     description: "30 days after the trial ended: we miss you, the data is still here.",
     variables: RETENTION_VARS,
+    sensitiveVars: RETENTION_SENSITIVE,
     sample: { ...RETENTION_SAMPLE, daysSinceTrial: "30", daysUntilDeletion: "60" },
     subject: "We miss you at {{workspace}} — everything is still here",
     html: shell(
@@ -163,6 +177,7 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
     group: "Trial retention",
     description: "60 days after the trial ended: still here for you, one month before deletion.",
     variables: RETENTION_VARS,
+    sensitiveVars: RETENTION_SENSITIVE,
     sample: { ...RETENTION_SAMPLE, daysSinceTrial: "60", daysUntilDeletion: "30" },
     subject: "{{workspace}} is kept for {{daysUntilDeletion}} more days",
     html: shell(
@@ -180,6 +195,7 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
     group: "Trial retention",
     description: "80 days after the trial ended: ten days' notice before the workspace is deleted.",
     variables: RETENTION_VARS,
+    sensitiveVars: RETENTION_SENSITIVE,
     sample: { ...RETENTION_SAMPLE, daysSinceTrial: "80", daysUntilDeletion: "10" },
     subject: "{{daysUntilDeletion}} days until {{workspace}} is deleted",
     html: shell(
@@ -197,6 +213,7 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
     group: "Trial retention",
     description: "Day 90: the final notice. The deletion runs on the next daily tick after this is sent.",
     variables: RETENTION_VARS,
+    sensitiveVars: RETENTION_SENSITIVE,
     sample: { ...RETENTION_SAMPLE, daysSinceTrial: "90", daysUntilDeletion: "1" },
     subject: "Final notice: {{workspace}} is deleted tomorrow",
     html: shell(
@@ -213,6 +230,7 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
     group: "Trial retention",
     description: "Sent once the workspace has been deleted: a plain confirmation, and the door left open.",
     variables: ["name", "workspace", "signupUrl", "feedbackUrl", "appUrl"],
+    sensitiveVars: ["feedbackUrl"],
     sample: { name: "Priya", workspace: "Acme Corp", signupUrl: "https://timesphere.app/signup", feedbackUrl: "https://timesphere.app/feedback/demo-token", appUrl: "https://timesphere.app" },
     subject: "{{workspace}} has been deleted",
     html: shell(
@@ -229,6 +247,7 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
     group: "Signup",
     description: "The six-digit code that proves an address before a trial workspace is created.",
     variables: ["code", "appUrl"],
+    sensitiveVars: ["code"],
     sample: { code: "418902", appUrl: "https://timesphere.app" },
     subject: "Your TimeSphere verification code",
     html: shell(

@@ -415,6 +415,12 @@ function LogTable({ rows, compact = false }: { rows: PlatformEmailLogRow[]; comp
               {entry.data ? `${entry.data.templateKey} → ${entry.data.to} · ${entry.data.status} · ${shortDateTime(entry.data.createdAt)}` : "Loading…"}
             </DialogDescription>
           </DialogHeader>
+          {Boolean(entry.data?.redacted?.length) && (
+            <p className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+              The copy kept here has its one-time credentials blanked ({entry.data?.redacted?.join(", ")}): the customer received them, the log does not hold them. Such a message cannot be
+              resent as it was — send it fresh instead.
+            </p>
+          )}
           {entry.data?.html ? (
             <iframe title="Sent email" sandbox="" srcDoc={entry.data.html} className="h-[380px] w-full rounded-md border border-border bg-white sm:h-[520px]" />
           ) : (

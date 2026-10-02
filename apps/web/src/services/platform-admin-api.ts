@@ -855,7 +855,9 @@ export const platformAdminConsoleApi = {
   emailTemplateLog: async (key: string) => (await platformAdminApi.get<PlatformEmailLogRow[]>(`/email-templates/${encodeURIComponent(key)}/log`)).data,
 
   emailLog: async (params?: { status?: string; orgId?: string; limit?: number }) => (await platformAdminApi.get<PlatformEmailLogRow[]>("/email-log", { params })).data,
-  emailLogEntry: async (id: string) => (await platformAdminApi.get<PlatformEmailLogRow & { html: string | null; metadata: Record<string, unknown> | null }>(`/email-log/${id}`)).data,
+  /** `redacted` names the one-time credentials blanked out of the stored body (signup codes, retention links). */
+  emailLogEntry: async (id: string) =>
+    (await platformAdminApi.get<PlatformEmailLogRow & { html: string | null; metadata: Record<string, unknown> | null; redacted?: string[] }>(`/email-log/${id}`)).data,
   resendEmail: async (id: string) => (await platformAdminApi.post<{ sent: true; emailLogId: string | null }>(`/email-log/${id}/resend`)).data,
   emailAnalytics: async (range?: { from?: string; to?: string }) =>
     (await platformAdminApi.get<PlatformEmailAnalytics>("/email-analytics", { params: range })).data,

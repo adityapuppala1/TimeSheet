@@ -159,6 +159,12 @@ export interface PlatformSendArgs {
   replyTo?: string;
   /** Throw on failure (the signup path — a person is watching) instead of returning it. */
   throwOnFailure?: boolean;
+  /**
+   * The copy to KEEP in the log when it must differ from what is sent — the body with its one-time
+   * credentials blanked (G13), and the names of the variables that were. Set by
+   * `sendPlatformTemplate` from the template's `sensitiveVars`; omitted, the log keeps what was sent.
+   */
+  logCopy?: { html: string; subject: string; redacted: string[] };
 }
 
 export interface PlatformSendResult {
@@ -175,7 +181,7 @@ async function logPlatformEmail(args: PlatformSendArgs, status: PlatformSendResu
         organizationId: args.organizationId ?? null,
         templateKey: args.templateKey ?? "platform.raw",
         to: args.to,
-        subject: args.subject.slice(0, 255),
+        subject: (args.logCopy?.subject ?? args.subject).slice(0, 255),
         status,
         errorMessage: errorMessage ?? null,
         dayMarker: args.dayMarker ?? null,
@@ -189,7 +195,14 @@ async function logPlatformEmail(args: PlatformSendArgs, status: PlatformSendResu
         // the deployment instead of to the prospect: silent, and noticed only by whoever gets a
         // reply they did not expect. Written only when there IS one, so a row for an ordinary
         // message keeps the `{ html }` shape every row has had until now.
-        payload: { html: args.html, ...(args.replyTo ? { replyTo: args.replyTo } : {}) },
+        //
+        // A body that carried a one-time credential is kept with the credential blanked, and says
+        // which ones (`redacted`) — so the resend below can refuse it instead of mailing a dead link.
+        payload: {
+          html: args.logCopy?.html ?? args.html,
+          ...(args.replyTo ? { replyTo: args.replyTo } : {}),
+          ...(args.logCopy?.redacted.length ? { redacted: args.logCopy.redacted } : {})
+        },
         metadata: args.metadata ? JSON.parse(JSON.stringify(args.metadata)) : undefined
       },
       select: { id: true }
@@ -252,7 +265,7 @@ export async function sendPlatformMail(args: PlatformSendArgs): Promise<Platform
 /** Render a registered template and send it — the path every retention email and the signup code take. */
 export async function sendPlatformTemplate(
   key: string,
-  args: Omit<PlatformSendArgs, "subject" | "html" | "templateKey"> & { vars: Record<string, PlatformVarValue> }
+  args: Omit<PlatformSendArgs, "subject" | "html" | "templateKey" | "logCopy"> & { vars: Record<string, PlatformVarValue> }
 ): Promise<PlatformSendResult & { subject: string }> {
   const rendered = await renderPlatformTemplate(key, args.vars);
   const result = await sendPlatformMail({
@@ -260,9 +273,29 @@ export async function sendPlatformTemplate(
     templateKey: key,
     subject: rendered.subject,
     html: rendered.html,
+    logCopy: redactedCopy(key, args.vars, rendered),
     metadata: { ...(args.metadata ?? {}), fromOverride: rendered.fromOverride }
   });
   return { ...result, subject: rendered.subject };
+}
+
+/** The marker a blanked credential leaves in the stored copy. */
+const REDACTED = "[redacted]";
+
+/**
+ * The copy of a rendered message that is safe to keep (G13): every value of the template's
+ * `sensitiveVars` replaced — raw and HTML-escaped, since an operator's override may print either —
+ * in the body and the subject. Undefined when the template declares none or none was supplied.
+ */
+function redactedCopy(key: string, vars: Record<string, PlatformVarValue>, rendered: { subject: string; html: string }) {
+  const names = (platformTemplateDef(key)?.sensitiveVars ?? []).filter((name) => {
+    const value = vars[name];
+    return value !== undefined && value !== null && String(value).length > 0;
+  });
+  if (!names.length) return undefined;
+  const needles = [...new Set(names.flatMap((name) => [String(vars[name]), escapeHtml(String(vars[name]))]))].sort((a, b) => b.length - a.length);
+  const blank = (text: string) => needles.reduce((out, needle) => out.split(needle).join(REDACTED), text);
+  return { html: blank(rendered.html), subject: blank(rendered.subject), redacted: names };
 }
 
 /** Send the stored rendering of a logged message again — the console's Resend button. */
@@ -272,9 +305,16 @@ export async function resendPlatformEmail(logId: string, actorLabel: string): Pr
   // Rows written before the reply-to was kept carry `{ html }` only, and rows for a message that
   // never named one still do — both read as `undefined` here and resend on the deployment-wide
   // address, which is the behaviour they were sent with.
-  const payload = row.payload as { html?: string; replyTo?: string } | null;
+  const payload = row.payload as { html?: string; replyTo?: string; redacted?: string[] } | null;
   const html = payload?.html;
   if (!html) throw new AppError(409, "That message's body was not kept, so it cannot be resent as it was — send the template again instead.");
+  // A body kept with its credentials blanked would go out with a dead code or a dead link.
+  if (payload?.redacted?.length) {
+    throw new AppError(
+      409,
+      `That message carried a one-time credential (${payload.redacted.join(", ")}), which is not kept, so it cannot be resent as it was. Send it fresh instead: for a retention email use "Send this stage" on Trial retention; a signup code is requested again by the person signing up.`
+    );
+  }
   return sendPlatformMail({
     to: row.to,
     subject: row.subject,
