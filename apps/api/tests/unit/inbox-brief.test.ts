@@ -257,6 +257,14 @@ describe("sign-offs waiting on you", () => {
     expect(where).toMatchObject({ approverId: "u-b", decision: "PENDING", request: { status: "PENDING" } });
   });
 
+  it("leaves out sign-offs on a deleted ticket — nobody can open it to decide", async () => {
+    // A soft-deleted ticket keeps its approval request PENDING, so its step counted for good and
+    // the link opened onto a ticket that 404s (audit 2026-10 R3, notifications).
+    await buildDailyBrief({ id: "u-b", permissions: [] }, NOW);
+    const where = (approvalStepFindMany.mock.calls[0][0] as any).where;
+    expect(where.request).toMatchObject({ status: "PENDING", ticket: { deletedAt: null } });
+  });
+
   it("counts a sequential step only when it is that step's turn", async () => {
     // u-b is step 2 of A→B: not their turn while A has not decided.
     approvalStepFindMany.mockResolvedValue([

@@ -180,11 +180,13 @@ export async function buildDailyBrief(
  * order). It used to count every PENDING step naming them — but a rejected chain deliberately leaves
  * its later steps PENDING forever, and a sequential chain's later steps are PENDING long before their
  * turn — so people saw "Sign-offs waiting on you: 1" for a decision nobody could make, and the brief
- * never read all-clear. Oldest request first, for the link.
+ * never read all-clear. A request on a DELETED ticket is left out too: deleting a ticket leaves its
+ * request PENDING, and the count then stood forever beside a link to a ticket that is gone. Oldest
+ * request first, for the link.
  */
 async function signOffsWaitingOn(userId: string): Promise<{ count: number; oldest: { ticketId: string; key: string; title: string } | null }> {
   const steps = await prisma.approvalStep.findMany({
-    where: { approverId: userId, decision: "PENDING", request: { status: "PENDING" } },
+    where: { approverId: userId, decision: "PENDING", request: { status: "PENDING", ticket: { deletedAt: null } } },
     select: {
       id: true,
       request: {
