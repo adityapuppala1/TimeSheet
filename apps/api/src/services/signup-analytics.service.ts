@@ -221,8 +221,9 @@ export async function getSignupAnalytics(requestedDays: number, now = new Date()
   const days = clampSignupPeriod(requestedDays);
   const gte = new Date(now.getTime() - days * DAY_MS);
 
-  const [funnel, failures, created, domainStages] = await Promise.all([
-    peopleFunnel(gte),
+  // The funnel is started LAST: a query that throws while this array is being built then leaves no
+  // half-started funnel behind to reject unobserved.
+  const [failures, created, domainStages, funnel] = await Promise.all([
     controlPrisma.signupAttempt.findMany({
       where: { stage: "FAILED", createdAt: { gte } },
       select: { createdAt: true, domain: true, detail: true },
@@ -234,7 +235,8 @@ export async function getSignupAnalytics(requestedDays: number, now = new Date()
       select: { id: true, name: true, slug: true, ownerEmail: true, createdVia: true, createdAt: true, status: true, planTier: true, trialTier: true, trialEndsAt: true, stripeSubscriptionId: true },
       orderBy: { createdAt: "desc" }
     }),
-    controlPrisma.signupAttempt.groupBy({ by: ["domain", "stage"], where: { createdAt: { gte }, domain: { not: null } }, _count: { _all: true } })
+    controlPrisma.signupAttempt.groupBy({ by: ["domain", "stage"], where: { createdAt: { gte }, domain: { not: null } }, _count: { _all: true } }),
+    peopleFunnel(gte)
   ]);
 
   const selfServe = created.filter((o) => o.createdVia === "SELF_SERVE");

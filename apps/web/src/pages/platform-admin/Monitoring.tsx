@@ -48,7 +48,7 @@ import {
   TrendingUp,
   TriangleAlert
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -60,6 +60,7 @@ import type { ServiceStatusValue, StatusPageService } from "../../services/api";
 import { platformOpsApi, type FleetHealthRow, type HealthAlert, type TenantDatabaseMetrics } from "../../services/platform-admin-api";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, formatBytes, KpiCard, KpiGrid, Num, OrgStatusPill, SegmentedControl, TierPill, Toolbar, shortDateTime } from "./console-ui";
 import { AdvisorPanel, SchemaPanel, TrendPanel } from "./MonitoringPanels";
+import { runInBackground } from "../../lib/run-in-background";
 import type { OrgStatus } from "../../services/platform-admin-api";
 
 /* ------------------------------------------------------------------------------------------- */
@@ -175,11 +176,16 @@ type FleetFilter = "all" | "alerting" | "unreachable" | "maintenance";
 
 function FleetView({ onOpen }: { onOpen: (orgId: string) => void }) {
   const [filter, setFilter] = useState<FleetFilter>("all");
+  // Only the Refresh button asks the server for a NEW sweep; the minute poll takes the server's last
+  // one (up to five minutes old), so the page no longer opens a connection per workspace per minute.
+  const freshNext = useRef(false);
   const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: ["platform-admin", "monitoring-fleet"],
-    queryFn: platformOpsApi.fleetHealth,
-    // A minute: every pass opens one connection per workspace, so this is a screen that refreshes
-    // itself, not a live dashboard. The button is there when an operator wants it now.
+    queryFn: () => {
+      const fresh = freshNext.current;
+      freshNext.current = false;
+      return platformOpsApi.fleetHealth(fresh);
+    },
     refetchInterval: 60_000
   });
 
@@ -201,6 +207,8 @@ function FleetView({ onOpen }: { onOpen: (orgId: string) => void }) {
     return rows.filter((row) => row.maintenancePhase === "active" || row.maintenancePhase === "scheduled");
   }, [rows, filter]);
 
+  const unregistered = rows.filter((row) => row.databaseName === null).length;
+
   // The size bar is relative to the LARGEST workspace on the deployment, not to an absolute
   // ceiling: what an operator is looking for here is the outlier, and an absolute scale hides it.
   const largest = Math.max(1, ...rows.map((row) => row.totalBytes ?? 0));
@@ -219,7 +227,14 @@ function FleetView({ onOpen }: { onOpen: (orgId: string) => void }) {
   return (
     <>
       <KpiGrid>
-        <KpiCard label="Databases" value={data?.totals.databases ?? 0} icon={Database} hint="Workspaces with a database registered" />
+        {/* The count is every active, in-grace and suspended workspace — including any with no
+            database registered, which the hint used to say were not in it. */}
+        <KpiCard
+          label="Databases"
+          value={data?.totals.databases ?? 0}
+          icon={Database}
+          hint={unregistered ? `Active, grace and suspended workspaces · ${unregistered} with no database` : "Active, grace and suspended workspaces"}
+        />
         <KpiCard
           label="Reachable"
           value={data?.totals.reachable ?? 0}
@@ -278,7 +293,17 @@ function FleetView({ onOpen }: { onOpen: (orgId: string) => void }) {
                 { value: "unreachable", label: "Unreachable", count: counts.unreachable }
               ]}
             />
-            <Button variant="outline" size="sm" className="gap-1.5" disabled={isFetching} onClick={() => void refetch()}>
+            {data?.measuredAt && <span className="text-xs text-muted-foreground">Measured {shortDateTime(data.measuredAt)}</span>}
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={isFetching}
+              onClick={() => {
+                freshNext.current = true;
+                runInBackground(refetch());
+              }}
+            >
               <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
               Refresh
             </Button>

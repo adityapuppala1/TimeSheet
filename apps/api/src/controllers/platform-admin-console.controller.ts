@@ -68,7 +68,7 @@ import { getPlatformEmailAnalytics } from "../services/platform-email-analytics.
 import { getTrialFeedbackAnalytics } from "../services/platform-feedback.service.js";
 import { deleteSnapshot, listSnapshots, restoreSnapshot, snapshotPath } from "../services/platform-backup.service.js";
 import { broadcastMaintenance, getFleetMaintenance, listBroadcasts } from "../services/platform-maintenance.service.js";
-import { getDatabaseMetrics, getFleetHealth, getTenantHealth } from "../services/platform-tenant-health.service.js";
+import { FLEET_HEALTH_MAX_AGE_MS, getDatabaseMetrics, getFleetHealth, getTenantHealth } from "../services/platform-tenant-health.service.js";
 import { ALERT_SEVERITIES, deliverAlertWebhook, getAlertsOverview, runAlertDigest, updateAlertSettings } from "../services/platform-alerts.service.js";
 import { getFleetSchemaDrift } from "../services/tenant-schema-check.service.js";
 import { getOrgTimeline } from "../services/platform-org-timeline.service.js";
@@ -1066,8 +1066,10 @@ platformAdminConsoleRouter.post("/maintenance/broadcast", operate, requirePlatfo
 /* ============================== Per-tenant monitoring =========================== */
 
 /** Every workspace's database at a glance, with the alerts each one's numbers imply. */
-platformAdminConsoleRouter.get("/monitoring/fleet", async (_req, res) => {
-  res.json(await getFleetHealth());
+platformAdminConsoleRouter.get("/monitoring/fleet", async (req, res) => {
+  // The page polls every minute; a sweep up to five minutes old answers it, and `?fresh=1` (its
+  // Refresh button) reads the fleet now.
+  res.json(await getFleetHealth({ maxAgeMs: req.query.fresh === "1" ? 0 : FLEET_HEALTH_MAX_AGE_MS }));
 });
 
 /**
@@ -1653,8 +1655,8 @@ platformAdminConsoleRouter.delete(
 );
 
 /* Re-exported so the console's organizations page can show analytics for one org without a second loop. */
-platformAdminConsoleRouter.get("/analytics/summary", async (_req, res) => {
-  res.json(await getPlatformAnalytics());
+platformAdminConsoleRouter.get("/analytics/summary", async (req, res) => {
+  res.json(await getPlatformAnalytics({ fresh: req.query.fresh === "1" }));
 });
 
 /* ============================= Revenue, health and snapshots ============================ */

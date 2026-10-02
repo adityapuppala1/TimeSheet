@@ -139,6 +139,16 @@ export async function getTenantClient(orgId: string, dsn: string): Promise<Prism
   return client;
 }
 
+/**
+ * The cached client for `orgId` if one is live — WITHOUT creating one and without touching its place
+ * in the LRU. For the platform console's fleet monitoring, which reads every workspace on a timer:
+ * going through `getTenantClient` there opened a pool for every idle workspace and, past
+ * `MAX_CACHED_CLIENTS` workspaces, evicted the clients live requests were using, every minute.
+ */
+export function peekTenantClient(orgId: string): PrismaClient | null {
+  return clientCache.get(orgId)?.client ?? null;
+}
+
 /** Closes every cached tenant client's connection pool — called during graceful shutdown
  *  (server.ts), since there's no single static `prisma` to disconnect anymore. */
 export async function disconnectAllTenantClients(): Promise<void> {

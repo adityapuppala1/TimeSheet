@@ -37,7 +37,7 @@ import {
   Search,
   Users
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -48,6 +48,7 @@ import { cn } from "../../lib/utils";
 import { Link } from "react-router";
 import { platformAdminAnalyticsApi, platformRevenueApi, type AccountHealthRow, type OrgAnalyticsSummary } from "../../services/platform-admin-api";
 import { exportCsv, type CsvColumn } from "../../utils/console-csv";
+import { runInBackground } from "../../lib/run-in-background";
 import { HealthBandPill, HealthSignalLine } from "./health-ui";
 import {
   ConsolePage,
@@ -237,7 +238,17 @@ function SortIcon({ direction }: { direction: false | "asc" | "desc" }) {
  *  reassuring default. The band is always rendered WITH the signal that produced it — a bare score
  *  in a column is the thing account health was written not to be. */
 export function PlatformAdminAnalytics() {
-  const analytics = useQuery({ queryKey: ["platform-admin", "analytics"], queryFn: platformAdminAnalyticsApi.get });
+  // The server answers repeat views from a minute-long sweep; the Refresh button alone asks for a new
+  // one, through this flag, so a refocus of the tab never re-reads every tenant database.
+  const freshNext = useRef(false);
+  const analytics = useQuery({
+    queryKey: ["platform-admin", "analytics"],
+    queryFn: () => {
+      const fresh = freshNext.current;
+      freshNext.current = false;
+      return platformAdminAnalyticsApi.get(fresh);
+    }
+  });
   // Its own query on purpose: health comes from the nightly snapshot, not from the live fleet
   // sweep, so a slow sweep must not hold it up and a failed sweep must not blank it.
   const health = useQuery({ queryKey: ["platform-admin", "account-health"], queryFn: () => platformRevenueApi.health(30) });
@@ -283,7 +294,15 @@ export function PlatformAdminAnalytics() {
       description="Aggregate metrics across every organization — seat counts, ticket volume, AI spend, outbound mail health, practice-update adoption, and snapshot-scored account health. Counts only: no ticket, comment, timesheet or email content ever surfaces here."
       actions={
         // A read-only snapshot has exactly one action, so refetching IS this page's primary one.
-        <Button size="sm" className={PRIMARY_BTN} onClick={() => analytics.refetch()} disabled={analytics.isFetching}>
+        <Button
+          size="sm"
+          className={PRIMARY_BTN}
+          onClick={() => {
+            freshNext.current = true;
+            runInBackground(analytics.refetch());
+          }}
+          disabled={analytics.isFetching}
+        >
           <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", analytics.isFetching && "animate-spin")} />
           {analytics.isFetching ? "Refreshing…" : "Refresh"}
         </Button>

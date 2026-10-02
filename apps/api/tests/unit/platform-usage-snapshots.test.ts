@@ -98,11 +98,18 @@ const tenantClient = {
   }
 };
 
+/** How many tenant connections were being opened at once, at most — the fleet loop's concurrency. */
+const opening = { now: 0, max: 0 };
+const getTenantClient = vi.fn(async (orgId: string) => {
+  opening.now += 1;
+  opening.max = Math.max(opening.max, opening.now);
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  opening.now -= 1;
+  if (unreachable.has(orgId)) throw new Error("ECONNREFUSED 10.0.0.9:3306");
+  return tenantClient;
+});
 vi.mock("../../src/config/prisma.js", () => ({
-  getTenantClient: vi.fn(async (orgId: string) => {
-    if (unreachable.has(orgId)) throw new Error("ECONNREFUSED 10.0.0.9:3306");
-    return tenantClient;
-  }),
+  getTenantClient,
   prisma: {},
   disconnectAllTenantClients: vi.fn()
 }));
@@ -113,7 +120,9 @@ vi.mock("../../src/utils/encryption.js", () => ({ decryptSecret: (value: string)
 // The platform's zone, as config/env.ts defaults it: a snapshot's day and its month to date are India's.
 vi.mock("../../src/config/env.js", () => ({ env: { TZ: "Asia/Kolkata" } }));
 
-const { captureOrgUsageSnapshots, getPlatformAnalytics, USAGE_SNAPSHOT_RETENTION_DAYS } = await import("../../src/services/platform-admin-analytics.service.js");
+const { __resetPlatformAnalyticsCacheForTests, captureOrgUsageSnapshots, getPlatformAnalytics, USAGE_SNAPSHOT_RETENTION_DAYS } = await import(
+  "../../src/services/platform-admin-analytics.service.js"
+);
 const { platformDate } = await import("../../src/utils/platform-time.js");
 
 const org = (id: string, overrides: Partial<OrgRow> = {}): OrgRow => ({
@@ -305,6 +314,31 @@ describe("captureOrgUsageSnapshots", () => {
 });
 
 describe("getPlatformAnalytics — the live per-workspace figures", () => {
+  beforeEach(() => {
+    __resetPlatformAnalyticsCacheForTests();
+    opening.now = 0;
+    opening.max = 0;
+  });
+
+  it("reads the fleet a few tenants at a time, not one after another and not all at once", async () => {
+    orgs = Array.from({ length: 9 }, (_, i) => org(`w${i}`));
+    const result = await getPlatformAnalytics();
+    expect(result.orgs).toHaveLength(9);
+    // In the order the control plane listed them, whatever order they finished in.
+    expect(result.orgs.map((row) => row.slug)).toEqual(orgs.map((row) => row.slug));
+    expect(opening.max).toBeGreaterThan(1);
+    expect(opening.max).toBeLessThanOrEqual(4);
+  });
+
+  it("answers a repeat view from a short cache, and reads afresh when asked to", async () => {
+    orgs = [org("acme"), org("globex")];
+    await getPlatformAnalytics();
+    await getPlatformAnalytics();
+    expect(getTenantClient).toHaveBeenCalledTimes(2);
+    await getPlatformAnalytics({ fresh: true });
+    expect(getTenantClient).toHaveBeenCalledTimes(4);
+  });
+
   it("counts no soft-deleted ticket, and calls a ticket open by the same rule as the snapshot", async () => {
     orgs = [org("acme")];
     const result = await getPlatformAnalytics();

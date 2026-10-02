@@ -23,8 +23,10 @@
  * section to `null` with its error rather than failing the page: a workspace whose database is down
  * is precisely when an operator needs the other four panels to still render.
  */
-import { PrismaClient as ControlPrismaClient } from "../generated/control-client/index.js";
+import { PrismaClient } from "@prisma/client";
 import { controlPrisma } from "../config/control-prisma.js";
+import { peekTenantClient } from "../config/prisma.js";
+import { tenantContext } from "../config/tenant-context.js";
 import { withOrgTenant } from "../config/with-org-tenant.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
@@ -172,207 +174,221 @@ export function redactStatement(sql: string | null): string | null {
 }
 
 /**
- * Read one workspace's database metrics through its OWN connection string.
+ * A client for one monitoring read of one workspace (analytics audit M14).
  *
- * A dedicated short-lived client rather than the cached tenant client: this runs from an operator
- * screen, not the request path, and `information_schema` queries against a large server are exactly
- * the kind of thing that should not sit in a pool other requests are waiting on.
+ * The workspace's LIVE cached tenant client when it has one — no new pool, and no change to its place
+ * in the cache. Otherwise ONE short-lived client for this read, closed after. Never `getTenantClient`:
+ * the fleet view reads every workspace every minute, and adding each idle one to the 50-entry cache
+ * evicted the clients live requests were using. It used to build a fresh client per workspace per
+ * poll whether or not a live one existed.
+ */
+async function withMonitoringClient<T>(orgId: string, dsn: string, read: (client: PrismaClient) => Promise<T>): Promise<T> {
+  const live = peekTenantClient(orgId);
+  if (live) return read(live);
+  const client = new PrismaClient({ datasources: { db: { url: dsn } } });
+  try {
+    return await read(client);
+  } finally {
+    await client.$disconnect().catch(() => undefined);
+  }
+}
+
+/**
+ * Read one workspace's database metrics through its own connection string — the live tenant client
+ * when there is one, a short-lived one otherwise (`withMonitoringClient`).
  */
 export async function getDatabaseMetrics(orgId: string): Promise<DatabaseMetrics> {
   const org = await controlPrisma.organization.findUnique({ where: { id: orgId }, include: { database: true } });
   if (!org) throw new AppError(404, "Organization not found");
   if (!org.database) throw new AppError(409, "This workspace has no database registered.");
+  const database = org.database;
+  return withMonitoringClient(org.id, decryptSecret(database.encryptedDsn), (client) => readDatabaseMetrics(client, database));
+}
 
-  const dsn = decryptSecret(org.database.encryptedDsn);
-  const client = new ControlPrismaClient({ datasources: { db: { url: dsn } } });
+async function readDatabaseMetrics(client: PrismaClient, database: { databaseName: string; host: string }): Promise<DatabaseMetrics> {
   const started = Date.now();
+  const [tables, status, variables, indexes, processes] = await Promise.all([
+    client.$queryRawUnsafe<
+      Array<{
+        TABLE_NAME: string;
+        TABLE_ROWS: bigint | null;
+        DATA_LENGTH: bigint | null;
+        INDEX_LENGTH: bigint | null;
+        DATA_FREE: bigint | null;
+        AVG_ROW_LENGTH: bigint | null;
+        ENGINE: string | null;
+        TABLE_COLLATION: string | null;
+        AUTO_INCREMENT: bigint | null;
+      }>
+    >(
+      `SELECT TABLE_NAME, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, DATA_FREE, AVG_ROW_LENGTH,
+              ENGINE, TABLE_COLLATION, AUTO_INCREMENT
+         FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'`,
+      database.databaseName
+    ),
+    // One round trip for every counter this screen reads. `SHOW GLOBAL STATUS` is cheap and the
+    // alternative — one query per counter — multiplies latency for no benefit.
+    client
+      .$queryRawUnsafe<Array<{ Variable_name: string; Value: string }>>(
+        `SHOW GLOBAL STATUS WHERE Variable_name IN
+         ('Uptime','Threads_connected','Threads_running','Slow_queries','Questions','Aborted_connects',
+          'Innodb_buffer_pool_read_requests','Innodb_buffer_pool_reads',
+          'Handler_read_rnd_next','Handler_read_next','Innodb_rows_read','Com_select',
+          'Created_tmp_disk_tables','Created_tmp_tables','Open_tables')`
+      )
+      .catch(() => []),
+    client
+      .$queryRawUnsafe<Array<{ Variable_name: string; Value: string }>>(
+        `SHOW GLOBAL VARIABLES WHERE Variable_name IN ('max_connections','version','table_open_cache','innodb_buffer_pool_size')`
+      )
+      .catch(() => []),
+    // The SCHEMA, never the contents. Index names and column lists describe the shape of the
+    // database, which is the platform's own product; a workspace's DATA is never read here and
+    // no query in this service selects from a tenant table.
+    client
+      .$queryRawUnsafe<Array<{ TABLE_NAME: string; INDEX_NAME: string; COLUMN_NAME: string; NON_UNIQUE: number | bigint; CARDINALITY: bigint | null; SEQ_IN_INDEX: number | bigint }>>(
+        `SELECT TABLE_NAME, INDEX_NAME, COLUMN_NAME, NON_UNIQUE, CARDINALITY, SEQ_IN_INDEX
+           FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = ?
+          ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`,
+        database.databaseName
+      )
+      .catch(() => []),
+    // Requires PROCESS privilege. A deployment whose API user does not have it gets an empty
+    // panel that says so rather than a failed page — this is a nice-to-have, not the point.
+    client
+      .$queryRawUnsafe<Array<{ ID: bigint; USER: string; HOST: string | null; COMMAND: string; TIME: bigint | number; STATE: string | null; INFO: string | null }>>(
+        // `INFO NOT LIKE '%information_schema%'` keeps this panel from showing the monitor
+        // watching itself: the three queries above are running on this very connection while it
+        // executes, and an operator scanning for a stuck statement should not have to skip past
+        // the tool they are scanning with.
+        `SELECT ID, USER, HOST, COMMAND, TIME, STATE, INFO
+           FROM information_schema.PROCESSLIST
+          WHERE DB = ? AND COMMAND <> 'Sleep'
+            AND (INFO IS NULL OR INFO NOT LIKE '%information_schema%')
+          ORDER BY TIME DESC
+          LIMIT 25`,
+        database.databaseName
+      )
+      .catch(() => [])
+  ]);
 
-  try {
-    const [tables, status, variables, indexes, processes] = await Promise.all([
-      client.$queryRawUnsafe<
-        Array<{
-          TABLE_NAME: string;
-          TABLE_ROWS: bigint | null;
-          DATA_LENGTH: bigint | null;
-          INDEX_LENGTH: bigint | null;
-          DATA_FREE: bigint | null;
-          AVG_ROW_LENGTH: bigint | null;
-          ENGINE: string | null;
-          TABLE_COLLATION: string | null;
-          AUTO_INCREMENT: bigint | null;
-        }>
-      >(
-        `SELECT TABLE_NAME, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, DATA_FREE, AVG_ROW_LENGTH,
-                ENGINE, TABLE_COLLATION, AUTO_INCREMENT
-           FROM information_schema.TABLES
-          WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'`,
-        org.database.databaseName
-      ),
-      // One round trip for every counter this screen reads. `SHOW GLOBAL STATUS` is cheap and the
-      // alternative — one query per counter — multiplies latency for no benefit.
-      client
-        .$queryRawUnsafe<Array<{ Variable_name: string; Value: string }>>(
-          `SHOW GLOBAL STATUS WHERE Variable_name IN
-           ('Uptime','Threads_connected','Threads_running','Slow_queries','Questions','Aborted_connects',
-            'Innodb_buffer_pool_read_requests','Innodb_buffer_pool_reads',
-            'Handler_read_rnd_next','Handler_read_next','Innodb_rows_read','Com_select',
-            'Created_tmp_disk_tables','Created_tmp_tables','Open_tables')`
-        )
-        .catch(() => []),
-      client
-        .$queryRawUnsafe<Array<{ Variable_name: string; Value: string }>>(
-          `SHOW GLOBAL VARIABLES WHERE Variable_name IN ('max_connections','version','table_open_cache','innodb_buffer_pool_size')`
-        )
-        .catch(() => []),
-      // The SCHEMA, never the contents. Index names and column lists describe the shape of the
-      // database, which is the platform's own product; a workspace's DATA is never read here and
-      // no query in this service selects from a tenant table.
-      client
-        .$queryRawUnsafe<Array<{ TABLE_NAME: string; INDEX_NAME: string; COLUMN_NAME: string; NON_UNIQUE: number | bigint; CARDINALITY: bigint | null; SEQ_IN_INDEX: number | bigint }>>(
-          `SELECT TABLE_NAME, INDEX_NAME, COLUMN_NAME, NON_UNIQUE, CARDINALITY, SEQ_IN_INDEX
-             FROM information_schema.STATISTICS
-            WHERE TABLE_SCHEMA = ?
-            ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`,
-          org.database.databaseName
-        )
-        .catch(() => []),
-      // Requires PROCESS privilege. A deployment whose API user does not have it gets an empty
-      // panel that says so rather than a failed page — this is a nice-to-have, not the point.
-      client
-        .$queryRawUnsafe<Array<{ ID: bigint; USER: string; HOST: string | null; COMMAND: string; TIME: bigint | number; STATE: string | null; INFO: string | null }>>(
-          // `INFO NOT LIKE '%information_schema%'` keeps this panel from showing the monitor
-          // watching itself: the three queries above are running on this very connection while it
-          // executes, and an operator scanning for a stuck statement should not have to skip past
-          // the tool they are scanning with.
-          `SELECT ID, USER, HOST, COMMAND, TIME, STATE, INFO
-             FROM information_schema.PROCESSLIST
-            WHERE DB = ? AND COMMAND <> 'Sleep'
-              AND (INFO IS NULL OR INFO NOT LIKE '%information_schema%')
-            ORDER BY TIME DESC
-            LIMIT 25`,
-          org.database.databaseName
-        )
-        .catch(() => [])
-    ]);
+  const statusOf = (name: string) => {
+    const row = status.find((r) => r.Variable_name === name);
+    return row ? Number(row.Value) : null;
+  };
+  const variableOf = (name: string) => variables.find((r) => r.Variable_name === name)?.Value ?? null;
 
-    const statusOf = (name: string) => {
-      const row = status.find((r) => r.Variable_name === name);
-      return row ? Number(row.Value) : null;
-    };
-    const variableOf = (name: string) => variables.find((r) => r.Variable_name === name)?.Value ?? null;
-
-    /* Index metadata, folded from one row per COLUMN into one row per INDEX. */
-    const indexByKey = new Map<string, IndexRow>();
-    const indexNamesByTable = new Map<string, Set<string>>();
-    for (const row of indexes) {
-      const key = `${row.TABLE_NAME}.${row.INDEX_NAME}`;
-      const existing = indexByKey.get(key);
-      if (existing) {
-        existing.columns.push(row.COLUMN_NAME);
-      } else {
-        indexByKey.set(key, {
-          table: row.TABLE_NAME,
-          name: row.INDEX_NAME,
-          columns: [row.COLUMN_NAME],
-          unique: Number(row.NON_UNIQUE) === 0,
-          cardinality: bigintToNumber(row.CARDINALITY)
-        });
-      }
-      const names = indexNamesByTable.get(row.TABLE_NAME) ?? new Set<string>();
-      names.add(row.INDEX_NAME);
-      indexNamesByTable.set(row.TABLE_NAME, names);
+  /* Index metadata, folded from one row per COLUMN into one row per INDEX. */
+  const indexByKey = new Map<string, IndexRow>();
+  const indexNamesByTable = new Map<string, Set<string>>();
+  for (const row of indexes) {
+    const key = `${row.TABLE_NAME}.${row.INDEX_NAME}`;
+    const existing = indexByKey.get(key);
+    if (existing) {
+      existing.columns.push(row.COLUMN_NAME);
+    } else {
+      indexByKey.set(key, {
+        table: row.TABLE_NAME,
+        name: row.INDEX_NAME,
+        columns: [row.COLUMN_NAME],
+        unique: Number(row.NON_UNIQUE) === 0,
+        cardinality: bigintToNumber(row.CARDINALITY)
+      });
     }
-    const allIndexes = [...indexByKey.values()];
-    const primaryKeyTables = new Set(allIndexes.filter((i) => i.name === "PRIMARY").map((i) => i.table));
-
-    const rows: TableRow[] = tables.map((table) => {
-      const dataBytes = bigintToNumber(table.DATA_LENGTH);
-      const indexBytes = bigintToNumber(table.INDEX_LENGTH);
-      const freeBytes = bigintToNumber(table.DATA_FREE);
-      const totalBytes = dataBytes + indexBytes;
-      const autoIncrement = table.AUTO_INCREMENT === null ? null : bigintToNumber(table.AUTO_INCREMENT);
-      return {
-        name: table.TABLE_NAME,
-        estimatedRows: bigintToNumber(table.TABLE_ROWS),
-        dataBytes,
-        indexBytes,
-        totalBytes,
-        freeBytes,
-        fragmentation: totalBytes + freeBytes > 0 ? freeBytes / (totalBytes + freeBytes) : null,
-        engine: table.ENGINE,
-        collation: table.TABLE_COLLATION,
-        avgRowBytes: bigintToNumber(table.AVG_ROW_LENGTH),
-        indexCount: indexNamesByTable.get(table.TABLE_NAME)?.size ?? 0,
-        // Against signed INT, which is what this schema's auto-increment columns are. A BIGINT key
-        // would report a nonsense fraction of a percent, which is the honest answer for a BIGINT.
-        autoIncrementUsePercent: autoIncrement === null ? null : (autoIncrement / 2_147_483_647) * 100,
-        hasPrimaryKey: primaryKeyTables.has(table.TABLE_NAME)
-      };
-    });
-
-    const dataBytes = rows.reduce((sum, r) => sum + r.dataBytes, 0);
-    const indexBytes = rows.reduce((sum, r) => sum + r.indexBytes, 0);
-    const freeBytes = rows.reduce((sum, r) => sum + r.freeBytes, 0);
-
-    const engineCounts = new Map<string, number>();
-    for (const row of rows) engineCounts.set(row.engine ?? "unknown", (engineCounts.get(row.engine ?? "unknown") ?? 0) + 1);
-    const readRequests = statusOf("Innodb_buffer_pool_read_requests");
-    const diskReads = statusOf("Innodb_buffer_pool_reads");
-    const maxConnections = Number(variableOf("max_connections")) || null;
-    const threadsConnected = statusOf("Threads_connected");
-
-    return {
-      databaseName: org.database.databaseName,
-      host: org.database.host,
-      serverVersion: variableOf("version"),
-      schema: {
-        tableCount: rows.length,
-        estimatedRows: rows.reduce((sum, r) => sum + r.estimatedRows, 0),
-        dataBytes,
-        indexBytes,
-        totalBytes: dataBytes + indexBytes,
-        indexShare: dataBytes + indexBytes > 0 ? indexBytes / (dataBytes + indexBytes) : null,
-        largestTables: [...rows].sort((a, b) => b.totalBytes - a.totalBytes).slice(0, 12),
-        freeBytes,
-        tablesWithoutPrimaryKey: rows.filter((r) => !r.hasPrimaryKey).map((r) => r.name),
-        // 2:1 index-to-data, and only once the table is big enough for the ratio to mean anything —
-        // a 16KB lookup table is all index by definition and is not a finding.
-        indexHeavyTables: rows.filter((r) => r.dataBytes > 1_000_000 && r.indexBytes > r.dataBytes * 2).map((r) => r.name),
-        engines: [...engineCounts.entries()].map(([engine, count]) => ({ engine, tables: count })).sort((a, b) => b.tables - a.tables),
-        indexCount: allIndexes.length,
-        widestIndexes: [...allIndexes].sort((a, b) => b.columns.length - a.columns.length || b.cardinality - a.cardinality).slice(0, 10)
-      },
-      server: {
-        scope: "server",
-        uptimeSec: statusOf("Uptime"),
-        threadsConnected,
-        threadsRunning: statusOf("Threads_running"),
-        maxConnections,
-        connectionUsePercent: maxConnections && threadsConnected !== null ? (threadsConnected / maxConnections) * 100 : null,
-        slowQueries: statusOf("Slow_queries"),
-        questions: statusOf("Questions"),
-        bufferPoolHitRate: readRequests && readRequests > 0 && diskReads !== null ? ((readRequests - diskReads) / readRequests) * 100 : null,
-        abortedConnects: statusOf("Aborted_connects"),
-        rowsExaminedPerReturned: rowsExaminedRatio(statusOf("Innodb_rows_read"), statusOf("Com_select")),
-        tmpDiskTablePercent: percentOf(statusOf("Created_tmp_disk_tables"), statusOf("Created_tmp_tables")),
-        openTables: statusOf("Open_tables"),
-        tableOpenCache: Number(variableOf("table_open_cache")) || null,
-        bufferPoolBytes: Number(variableOf("innodb_buffer_pool_size")) || null
-      },
-      activeQueries: processes.map((process) => ({
-        id: Number(process.ID),
-        user: process.USER,
-        host: process.HOST,
-        command: process.COMMAND,
-        seconds: Number(process.TIME),
-        state: process.STATE,
-        digest: redactStatement(process.INFO)
-      })),
-      queryMs: Date.now() - started
-    };
-  } finally {
-    await client.$disconnect().catch(() => undefined);
+    const names = indexNamesByTable.get(row.TABLE_NAME) ?? new Set<string>();
+    names.add(row.INDEX_NAME);
+    indexNamesByTable.set(row.TABLE_NAME, names);
   }
+  const allIndexes = [...indexByKey.values()];
+  const primaryKeyTables = new Set(allIndexes.filter((i) => i.name === "PRIMARY").map((i) => i.table));
+
+  const rows: TableRow[] = tables.map((table) => {
+    const dataBytes = bigintToNumber(table.DATA_LENGTH);
+    const indexBytes = bigintToNumber(table.INDEX_LENGTH);
+    const freeBytes = bigintToNumber(table.DATA_FREE);
+    const totalBytes = dataBytes + indexBytes;
+    const autoIncrement = table.AUTO_INCREMENT === null ? null : bigintToNumber(table.AUTO_INCREMENT);
+    return {
+      name: table.TABLE_NAME,
+      estimatedRows: bigintToNumber(table.TABLE_ROWS),
+      dataBytes,
+      indexBytes,
+      totalBytes,
+      freeBytes,
+      fragmentation: totalBytes + freeBytes > 0 ? freeBytes / (totalBytes + freeBytes) : null,
+      engine: table.ENGINE,
+      collation: table.TABLE_COLLATION,
+      avgRowBytes: bigintToNumber(table.AVG_ROW_LENGTH),
+      indexCount: indexNamesByTable.get(table.TABLE_NAME)?.size ?? 0,
+      // Against signed INT, which is what this schema's auto-increment columns are. A BIGINT key
+      // would report a nonsense fraction of a percent, which is the honest answer for a BIGINT.
+      autoIncrementUsePercent: autoIncrement === null ? null : (autoIncrement / 2_147_483_647) * 100,
+      hasPrimaryKey: primaryKeyTables.has(table.TABLE_NAME)
+    };
+  });
+
+  const dataBytes = rows.reduce((sum, r) => sum + r.dataBytes, 0);
+  const indexBytes = rows.reduce((sum, r) => sum + r.indexBytes, 0);
+  const freeBytes = rows.reduce((sum, r) => sum + r.freeBytes, 0);
+
+  const engineCounts = new Map<string, number>();
+  for (const row of rows) engineCounts.set(row.engine ?? "unknown", (engineCounts.get(row.engine ?? "unknown") ?? 0) + 1);
+  const readRequests = statusOf("Innodb_buffer_pool_read_requests");
+  const diskReads = statusOf("Innodb_buffer_pool_reads");
+  const maxConnections = Number(variableOf("max_connections")) || null;
+  const threadsConnected = statusOf("Threads_connected");
+
+  return {
+    databaseName: database.databaseName,
+    host: database.host,
+    serverVersion: variableOf("version"),
+    schema: {
+      tableCount: rows.length,
+      estimatedRows: rows.reduce((sum, r) => sum + r.estimatedRows, 0),
+      dataBytes,
+      indexBytes,
+      totalBytes: dataBytes + indexBytes,
+      indexShare: dataBytes + indexBytes > 0 ? indexBytes / (dataBytes + indexBytes) : null,
+      largestTables: [...rows].sort((a, b) => b.totalBytes - a.totalBytes).slice(0, 12),
+      freeBytes,
+      tablesWithoutPrimaryKey: rows.filter((r) => !r.hasPrimaryKey).map((r) => r.name),
+      // 2:1 index-to-data, and only once the table is big enough for the ratio to mean anything —
+      // a 16KB lookup table is all index by definition and is not a finding.
+      indexHeavyTables: rows.filter((r) => r.dataBytes > 1_000_000 && r.indexBytes > r.dataBytes * 2).map((r) => r.name),
+      engines: [...engineCounts.entries()].map(([engine, count]) => ({ engine, tables: count })).sort((a, b) => b.tables - a.tables),
+      indexCount: allIndexes.length,
+      widestIndexes: [...allIndexes].sort((a, b) => b.columns.length - a.columns.length || b.cardinality - a.cardinality).slice(0, 10)
+    },
+    server: {
+      scope: "server",
+      uptimeSec: statusOf("Uptime"),
+      threadsConnected,
+      threadsRunning: statusOf("Threads_running"),
+      maxConnections,
+      connectionUsePercent: maxConnections && threadsConnected !== null ? (threadsConnected / maxConnections) * 100 : null,
+      slowQueries: statusOf("Slow_queries"),
+      questions: statusOf("Questions"),
+      bufferPoolHitRate: readRequests && readRequests > 0 && diskReads !== null ? ((readRequests - diskReads) / readRequests) * 100 : null,
+      abortedConnects: statusOf("Aborted_connects"),
+      rowsExaminedPerReturned: rowsExaminedRatio(statusOf("Innodb_rows_read"), statusOf("Com_select")),
+      tmpDiskTablePercent: percentOf(statusOf("Created_tmp_disk_tables"), statusOf("Created_tmp_tables")),
+      openTables: statusOf("Open_tables"),
+      tableOpenCache: Number(variableOf("table_open_cache")) || null,
+      bufferPoolBytes: Number(variableOf("innodb_buffer_pool_size")) || null
+    },
+    activeQueries: processes.map((process) => ({
+      id: Number(process.ID),
+      user: process.USER,
+      host: process.HOST,
+      command: process.COMMAND,
+      seconds: Number(process.TIME),
+      state: process.STATE,
+      digest: redactStatement(process.INFO)
+    })),
+    queryMs: Date.now() - started
+  };
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -648,18 +664,66 @@ export interface FleetRow {
   alerts: HealthAlert[];
 }
 
+export interface FleetHealth {
+  rows: FleetRow[];
+  totals: { databases: number; reachable: number; totalBytes: number; alerts: number };
+  /** When this sweep read the fleet — a cached answer says how old it is. */
+  measuredAt: string;
+}
+
+/** How old a fleet sweep the Monitoring page's 60-second poll accepts. The Refresh button asks for 0. */
+export const FLEET_HEALTH_MAX_AGE_MS = 5 * 60_000;
+
+let lastSweep: { at: number; value: Promise<FleetHealth> } | null = null;
+
+/** Test seam: forget the last sweep. */
+export function __resetFleetHealthCacheForTests(): void {
+  lastSweep = null;
+}
+
 /**
  * Every workspace's database at a glance.
  *
- * SEQUENTIAL, NOT PARALLEL, and that is the point: this opens a fresh connection per workspace, and
- * forty at once against one MySQL server is a self-inflicted connection storm on the box the whole
- * platform runs on. A screen an operator opens occasionally can afford to take a few seconds.
+ * SEQUENTIAL, NOT PARALLEL, and that is the point: forty connections at once against one MySQL
+ * server is a self-inflicted connection storm on the box the whole platform runs on. Each workspace
+ * is read through its live tenant client when it has one, and through ONE short-lived client
+ * otherwise (`withMonitoringClient`) — metrics and maintenance phase together — never through the
+ * shared tenant-client cache, which a minute-by-minute sweep of every idle workspace thrashed.
+ *
+ * `maxAgeMs` lets a poller take the last sweep instead of a new one (the Monitoring page passes
+ * `FLEET_HEALTH_MAX_AGE_MS`; its Refresh button passes 0). The default, 0, is what every other caller
+ * — the alerts digest — has always had: a fresh read.
  */
-export async function getFleetHealth(): Promise<{ rows: FleetRow[]; totals: { databases: number; reachable: number; totalBytes: number; alerts: number } }> {
+export function getFleetHealth(options: { maxAgeMs?: number } = {}): Promise<FleetHealth> {
+  const maxAgeMs = options.maxAgeMs ?? 0;
+  if (maxAgeMs > 0 && lastSweep && Date.now() - lastSweep.at < maxAgeMs) return lastSweep.value;
+  const value = sweepFleetHealth();
+  lastSweep = { at: Date.now(), value };
+  value.catch(() => {
+    if (lastSweep?.value === value) lastSweep = null;
+  });
+  return value;
+}
+
+/** One workspace's maintenance phase, read through the client already open for it. Null when the
+ *  read fails: the phase is a column on the row, never a reason to drop the row. */
+async function maintenancePhaseVia(client: PrismaClient, org: { id: string; slug: string }): Promise<string | null> {
+  try {
+    return await tenantContext.run({ orgId: org.id, orgSlug: org.slug, client }, async () => {
+      const { getMaintenanceSettings, phaseOf } = await import("./maintenance.service.js");
+      return phaseOf(await getMaintenanceSettings());
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function sweepFleetHealth(): Promise<FleetHealth> {
+  const measuredAt = new Date().toISOString();
   const orgs = await controlPrisma.organization.findMany({
     where: { status: { in: ["ACTIVE", "GRACE", "SUSPENDED"] } },
     orderBy: { name: "asc" },
-    include: { database: { select: { databaseName: true } } }
+    include: { database: { select: { databaseName: true, host: true, encryptedDsn: true } } }
   });
 
   const rows: FleetRow[] = [];
@@ -677,16 +741,11 @@ export async function getFleetHealth(): Promise<{ rows: FleetRow[]; totals: { da
       continue;
     }
     try {
-      const metrics = await getDatabaseMetrics(org.id);
-      let phase: string | null = null;
-      try {
-        phase = await withOrgTenant(org.slug, async () => {
-          const { getMaintenanceSettings, phaseOf } = await import("./maintenance.service.js");
-          return phaseOf(await getMaintenanceSettings());
-        });
-      } catch {
-        phase = null;
-      }
+      const database = org.database;
+      const { metrics, phase } = await withMonitoringClient(org.id, decryptSecret(database.encryptedDsn), async (client) => ({
+        metrics: await readDatabaseMetrics(client, database),
+        phase: await maintenancePhaseVia(client, org)
+      }));
       rows.push({
         ...base,
         reachable: true,
@@ -710,6 +769,7 @@ export async function getFleetHealth(): Promise<{ rows: FleetRow[]; totals: { da
       reachable: rows.filter((r) => r.reachable).length,
       totalBytes: rows.reduce((sum, r) => sum + (r.totalBytes ?? 0), 0),
       alerts: rows.reduce((sum, r) => sum + r.alerts.length, 0)
-    }
+    },
+    measuredAt
   };
 }

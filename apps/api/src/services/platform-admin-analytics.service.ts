@@ -40,6 +40,7 @@ import type { Prisma } from "../generated/control-client/index.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { getTenantClient } from "../config/prisma.js";
 import { tenantContext } from "../config/tenant-context.js";
+import { mapWithConcurrency } from "../utils/bounded-map.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { platformDate, startOfPlatformMonth } from "../utils/platform-time.js";
 
@@ -133,57 +134,80 @@ async function summarizeOrg(org: { id: string; slug: string; name: string; statu
   });
 }
 
-/** Loops every org regardless of status (an unreachable/suspended org still shows up in the
- *  console, just flagged `reachable: false` rather than silently vanishing from the list). */
-export async function getPlatformAnalytics(): Promise<{ orgs: OrgAnalyticsSummary[]; totals: { orgCount: number; seatCount: number; aiSpendThisMonthUsd: number } }> {
+type PlatformAnalytics = { orgs: OrgAnalyticsSummary[]; totals: { orgCount: number; seatCount: number; aiSpendThisMonthUsd: number } };
+
+/** Tenant databases read at once. Four keeps a 40-workspace page to a few seconds without opening
+ *  forty connection pools in the same instant on the box the platform runs on. */
+const FLEET_READ_CONCURRENCY = 4;
+/** How long one sweep answers repeat views. The page is opened, refocused and revisited far more often
+ *  than month-to-date counts move; its Refresh button asks for a fresh sweep. */
+const FLEET_READ_CACHE_MS = 60_000;
+
+let cachedSweep: { at: number; value: Promise<PlatformAnalytics> } | null = null;
+
+/** Test seam: forget the cached sweep. */
+export function __resetPlatformAnalyticsCacheForTests(): void {
+  cachedSweep = null;
+}
+
+/**
+ * Loops every org regardless of status (an unreachable/suspended org still shows up in the
+ * console, just flagged `reachable: false` rather than silently vanishing from the list).
+ *
+ * BOUNDED AND CACHED (M14). This read every tenant database ONE AFTER ANOTHER on EVERY view — six
+ * queries per workspace, so the page's latency was the fleet's latency summed, and every refocus of
+ * the tab paid it again. It now reads `FLEET_READ_CONCURRENCY` tenants at a time, and one sweep —
+ * in flight or finished — answers every view for `FLEET_READ_CACHE_MS`, unless `fresh` asks for a new
+ * one (the page's Refresh button). Historical figures belong to the nightly snapshot; this stays the
+ * "as of now" read, just not a per-view stampede.
+ */
+export function getPlatformAnalytics(options: { fresh?: boolean } = {}): Promise<PlatformAnalytics> {
+  if (!options.fresh && cachedSweep && Date.now() - cachedSweep.at < FLEET_READ_CACHE_MS) return cachedSweep.value;
+  const value = sweepFleet();
+  cachedSweep = { at: Date.now(), value };
+  // A failed sweep is not cached: the next view tries again rather than serving the error for a minute.
+  value.catch(() => {
+    if (cachedSweep?.value === value) cachedSweep = null;
+  });
+  return value;
+}
+
+/** A workspace this sweep could not read: listed, flagged unreachable, every count zero. */
+function unreadSummary(org: { id: string; slug: string; name: string; status: string; planTier: string }): OrgAnalyticsSummary {
+  return {
+    orgId: org.id,
+    slug: org.slug,
+    name: org.name,
+    status: org.status,
+    planTier: org.planTier,
+    seatCount: 0,
+    ticketCountsByStatus: {},
+    ticketsOpen: 0,
+    ticketsTotal: 0,
+    aiSpendThisMonthUsd: 0,
+    emailsSentThisMonth: 0,
+    emailsFailedThisMonth: 0,
+    practiceUpdatesSentThisMonth: 0,
+    lastActivityAt: null,
+    reachable: false
+  };
+}
+
+async function sweepFleet(): Promise<PlatformAnalytics> {
   const orgs = await controlPrisma.organization.findMany({ include: { database: true }, orderBy: { createdAt: "asc" } });
 
-  const summaries: OrgAnalyticsSummary[] = [];
-  for (const org of orgs) {
+  const summaries = await mapWithConcurrency(orgs, FLEET_READ_CONCURRENCY, async (org): Promise<OrgAnalyticsSummary> => {
     if (!org.database) {
-      summaries.push({
-        orgId: org.id,
-        slug: org.slug,
-        name: org.name,
-        status: org.status,
-        planTier: org.planTier,
-        seatCount: 0,
-        ticketCountsByStatus: {},
-        ticketsOpen: 0,
-        ticketsTotal: 0,
-        aiSpendThisMonthUsd: 0,
-        emailsSentThisMonth: 0,
-        emailsFailedThisMonth: 0,
-        practiceUpdatesSentThisMonth: 0,
-        lastActivityAt: null,
-        reachable: false
-      });
-      continue;
+      return unreadSummary(org);
     }
     try {
       const dsn = decryptSecret(org.database.encryptedDsn);
-      summaries.push(await summarizeOrg(org, dsn));
+      return await summarizeOrg(org, dsn);
     } catch (error) {
       console.error(`[platform-admin-analytics] failed to summarize org "${org.slug}":`, (error as Error).message);
-      summaries.push({
-        orgId: org.id,
-        slug: org.slug,
-        name: org.name,
-        status: org.status,
-        planTier: org.planTier,
-        seatCount: 0,
-        ticketCountsByStatus: {},
-        ticketsOpen: 0,
-        ticketsTotal: 0,
-        aiSpendThisMonthUsd: 0,
-        emailsSentThisMonth: 0,
-        emailsFailedThisMonth: 0,
-        practiceUpdatesSentThisMonth: 0,
-        lastActivityAt: null,
-        reachable: false
-      });
+      return unreadSummary(org);
     }
-  }
+  });
 
   const totals = summaries.reduce(
     (acc, s) => ({

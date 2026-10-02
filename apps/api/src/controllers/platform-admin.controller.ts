@@ -958,6 +958,7 @@ platformAdminRouter.patch("/billing-settings", requirePlatformAdmin, billing, re
 
 /* ================================== Analytics =================================== */
 
-platformAdminRouter.get("/analytics", requirePlatformAdmin, readOnly, async (_req, res) => {
-  res.json(await getPlatformAnalytics());
+// `?fresh=1` is the page's Refresh button: a new sweep rather than the minute-long cached one.
+platformAdminRouter.get("/analytics", requirePlatformAdmin, readOnly, async (req, res) => {
+  res.json(await getPlatformAnalytics({ fresh: req.query.fresh === "1" }));
 });

@@ -430,7 +430,8 @@ export const platformAdminPlanTierApi = {
 };
 
 export const platformAdminAnalyticsApi = {
-  get: async () => (await platformAdminApi.get<PlatformAnalytics>("/analytics")).data
+  /** One sweep answers repeat views for a minute on the server; `fresh` asks for a new one. */
+  get: async (fresh = false) => (await platformAdminApi.get<PlatformAnalytics>("/analytics", { params: fresh ? { fresh: 1 } : undefined })).data
 };
 
 /** Platform-wide Stripe configuration — see platform-admin.controller.ts's Billing section. */
@@ -1311,8 +1312,15 @@ export const platformOpsApi = {
     emailSuperAdmins?: boolean;
   }) => (await platformAdminApi.post<{ broadcastId: string; outcomes: BroadcastOutcome[] }>("/maintenance/broadcast", payload)).data,
 
-  fleetHealth: async () =>
-    (await platformAdminApi.get<{ rows: FleetHealthRow[]; totals: { databases: number; reachable: number; totalBytes: number; alerts: number } }>("/monitoring/fleet")).data,
+  /** The server answers a poll from a sweep up to five minutes old (`measuredAt` says when); `fresh`
+   *  — the Refresh button — reads every workspace now. */
+  fleetHealth: async (fresh = false) =>
+    (
+      await platformAdminApi.get<{ rows: FleetHealthRow[]; totals: { databases: number; reachable: number; totalBytes: number; alerts: number }; measuredAt: string }>(
+        "/monitoring/fleet",
+        { params: fresh ? { fresh: 1 } : undefined }
+      )
+    ).data,
 
   tenantHealth: async (orgId: string, days = 30) =>
     (
