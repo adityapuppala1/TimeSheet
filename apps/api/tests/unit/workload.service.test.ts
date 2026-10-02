@@ -265,3 +265,56 @@ describe("findConflicts", () => {
     expect(conflicts).toHaveLength(0);
   });
 });
+
+describe("a partial week at the edge of the range", () => {
+  // The board starts TODAY, so its first column is a partial week on every day but Monday. Capacity
+  // was clamped to the days inside the range while bookings, logged hours and tickets were summed
+  // over the whole Monday-to-Sunday week — a full week of work against two days of capacity.
+  const THU = toDay("2026-03-05");
+  const buckets = buildBuckets(THU, toDay("2026-03-15"), "week");
+  const base = { buckets, workingDays: [1, 2, 3, 4, 5], defaultWeeklyCapacityHours: 40 };
+
+  it("records the part of the week the range actually covers", () => {
+    expect(buckets[0]).toMatchObject({ start: "2026-03-02", effectiveStart: "2026-03-05", effectiveEnd: "2026-03-08", workingDays: 2 });
+    expect(buckets[1]).toMatchObject({ effectiveStart: "2026-03-09", effectiveEnd: "2026-03-15", workingDays: 5 });
+  });
+
+  it("sums bookings over the same days as capacity, so a fully booked person reads 100%, not 250%", () => {
+    const [row] = buildWorkload({
+      ...base,
+      people: [person()],
+      bookings: [booking({ id: "b", startDate: MON, endDate: toDay("2026-03-13") })],
+      logged: []
+    });
+    // Thu + Fri: 16h available, 16h booked. Summed over the full week it was 40h booked of 16h.
+    expect(row.cells[0]).toMatchObject({ capacityHours: 16, bookedHours: 16, allocationPct: 100, isOverAllocated: false });
+    expect(row.cells[1]).toMatchObject({ capacityHours: 40, bookedHours: 40, allocationPct: 100 });
+  });
+
+  it("counts only the logged hours and time off inside the range", () => {
+    const [row] = buildWorkload({
+      ...base,
+      people: [person()],
+      bookings: [booking({ id: "leave", startDate: MON, endDate: toDay("2026-03-04"), isTimeOff: true })],
+      logged: [
+        { userId: "u1", workDate: MON, hours: 8 },
+        { userId: "u1", workDate: THU, hours: 6 }
+      ]
+    });
+    expect(row.cells[0].loggedHours).toBe(6);
+    // Leave on Mon–Wed falls before the range; it must not eat Thursday and Friday's capacity.
+    expect(row.cells[0].timeOffHours).toBe(0);
+    expect(row.cells[0].capacityHours).toBe(16);
+  });
+
+  it("does not place a ticket due before the range in the first column", () => {
+    const [row] = buildWorkload({
+      ...base,
+      people: [person()],
+      bookings: [],
+      logged: [],
+      tickets: [{ userId: "u1", startDate: null, endDate: null, dueAt: MON, storyPoints: 3 }]
+    });
+    expect(row.cells[0].ticketCount).toBe(0);
+  });
+});

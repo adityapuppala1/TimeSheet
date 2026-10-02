@@ -29,6 +29,8 @@ import {
   DEFAULT_WORKING_DAYS
 } from "./plan-schedule.service.js";
 import { getPlanningSettings } from "./planning.service.js";
+import { platformDayStart } from "../utils/date-window.js";
+import { platformDayKey } from "../utils/platform-time.js";
 
 /* ================================================================== *
  * Pure core
@@ -73,6 +75,20 @@ export interface Bucket {
   end: string;
   label: string;
   workingDays: number;
+  /**
+   * The part of [start, end] the requested range actually covers. A week column at either edge of
+   * the board is cut by the range — the board opens on TODAY, so its first column is partial on
+   * every day but Monday — and every sum in the column must be over these days, not the full week.
+   * Capacity already was (`workingDays` is clamped); bookings, logged hours, leave and tickets were
+   * not, so a person booked solidly read 250% on a Thursday. Absent = the whole bucket.
+   */
+  effectiveStart?: string;
+  effectiveEnd?: string;
+}
+
+/** The days a bucket's figures are summed over — see `Bucket.effectiveStart`. */
+export function bucketSpan(bucket: Pick<Bucket, "start" | "end" | "effectiveStart" | "effectiveEnd">): { from: Date; to: Date } {
+  return { from: toDay(bucket.effectiveStart ?? bucket.start), to: toDay(bucket.effectiveEnd ?? bucket.end) };
 }
 
 /**
@@ -130,14 +146,21 @@ export interface TicketLoad {
 /** Statuses that no longer count as load. Reopened does. */
 export const CLOSED_FOR_LOAD = ["RESOLVED", "CLOSED"] as const;
 
-/** One bucket spanning the whole board, for window totals. */
+/** One bucket spanning the whole board, for window totals — from the first column's first COVERED
+ *  day to the last column's last covered day. */
 function windowOf(buckets: Bucket[]): Bucket {
-  return { start: buckets[0]?.start ?? "1970-01-01", end: buckets.at(-1)?.end ?? "1970-01-01", label: "", workingDays: 0 };
+  const first = buckets[0];
+  const last = buckets.at(-1);
+  return {
+    start: first?.effectiveStart ?? first?.start ?? "1970-01-01",
+    end: last?.effectiveEnd ?? last?.end ?? "1970-01-01",
+    label: "",
+    workingDays: 0
+  };
 }
 
 export function ticketLoadForBucket(tickets: TicketLoad[], bucket: Bucket): { ticketCount: number; storyPoints: number } {
-  const from = toDay(bucket.start);
-  const to = toDay(bucket.end);
+  const { from, to } = bucketSpan(bucket);
   let ticketCount = 0;
   let storyPoints = 0;
   for (const t of tickets) {
@@ -218,7 +241,9 @@ export function buildBuckets(
         start: dayKey(cursor),
         end: dayKey(cursor),
         label: dayKey(cursor).slice(5),
-        workingDays: isWorkingDay(cursor, workingDays) ? 1 : 0
+        workingDays: isWorkingDay(cursor, workingDays) ? 1 : 0,
+        effectiveStart: dayKey(cursor),
+        effectiveEnd: dayKey(cursor)
       });
       if (buckets.length > 400) break;
     }
@@ -244,7 +269,9 @@ export function buildBuckets(
       start: dayKey(cursor),
       end: dayKey(bucketEnd),
       label: dayKey(cursor).slice(5),
-      workingDays: workingDaysBetween(effectiveStart, effectiveEnd, workingDays)
+      workingDays: workingDaysBetween(effectiveStart, effectiveEnd, workingDays),
+      effectiveStart: dayKey(effectiveStart),
+      effectiveEnd: dayKey(effectiveEnd)
     });
     cursor = addDays(cursor, 7);
     if (buckets.length > 200) break;
@@ -287,8 +314,8 @@ export function buildWorkload(params: {
     const theirTickets = ticketsByUser.get(person.id) ?? [];
 
     const cells: WorkloadCell[] = buckets.map((bucket) => {
-      const from = toDay(bucket.start);
-      const to = toDay(bucket.end);
+      // The COVERED days, the same ones `capacityForBucket` counts — see `Bucket.effectiveStart`.
+      const { from, to } = bucketSpan(bucket);
 
       let booked = 0;
       let timeOff = 0;
@@ -649,9 +676,12 @@ export interface AgentWorkloadRow {
 }
 
 export async function loadAgentWorkload(params: { from: Date; to: Date; buckets: Bucket[]; projectId?: string }): Promise<AgentWorkloadRow[]> {
+  // `from`/`to` are calendar DAYS (UTC midnight, from `toDay`) and `occurredAt` is a timestamp, so
+  // the window is the instants those days begin and end on the platform's calendar. `lte: to` was
+  // midnight UTC of the last day: every run after 05:30 IST on it was cut off the board.
   const entries = await prisma.agentWorkEntry.findMany({
     where: {
-      occurredAt: { gte: params.from, lte: params.to },
+      occurredAt: { gte: platformDayStart(toDay(params.from)), lt: platformDayStart(addDays(toDay(params.to), 1)) },
       ...(params.projectId ? { projectId: params.projectId } : {})
     },
     select: { agentUserId: true, occurredAt: true, durationSeconds: true, costUsd: true, displacedMinutes: true }
@@ -668,8 +698,10 @@ export async function loadAgentWorkload(params: { from: Date; to: Date; buckets:
    *  start is not after the entry wins — the same rule the human side uses. */
   const bucketFor = (at: Date): string | null => {
     let found: string | null = null;
+    // The run's day on the platform's calendar — a run at 01:00 IST on a Monday is Monday's work.
+    const day = platformDayKey(at);
     for (const bucket of params.buckets) {
-      if (dayKey(at) >= bucket.start) found = bucket.start;
+      if (day >= bucket.start) found = bucket.start;
       else break;
     }
     return found;

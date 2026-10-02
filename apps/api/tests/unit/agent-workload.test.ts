@@ -83,3 +83,26 @@ describe("the agent series", () => {
     expect(await loadAgentWorkload({ from, to, buckets })).toEqual([]);
   });
 });
+
+describe("the agent series' window", () => {
+  it("includes the whole of the last day, measured on the platform's (IST) calendar", async () => {
+    // The controller hands this `toDay("2026-08-16")` — UTC midnight. `occurredAt <= to` dropped every
+    // run on the 16th after 00:00 UTC, and started the window at 05:30 IST on the 3rd.
+    await loadAgentWorkload({ from: new Date("2026-08-03T00:00:00.000Z"), to: new Date("2026-08-16T00:00:00.000Z"), buckets });
+    expect(entryFindMany.mock.calls[0][0].where.occurredAt).toEqual({
+      gte: new Date("2026-08-02T18:30:00.000Z"),
+      lt: new Date("2026-08-16T18:30:00.000Z")
+    });
+  });
+
+  it("buckets a run by its IST day, so 01:00 IST on Monday is Monday's week", async () => {
+    entryFindMany.mockResolvedValue([
+      // 19:30 UTC on Sunday the 9th is 01:00 IST on Monday the 10th.
+      { agentUserId: "a-1", occurredAt: new Date("2026-08-09T19:30:00.000Z"), durationSeconds: 3600, costUsd: "0.1000", displacedMinutes: null }
+    ]);
+    userFindMany.mockResolvedValue([{ id: "a-1", name: "Triage bot", avatarUrl: null }]);
+    const [row] = await loadAgentWorkload({ from, to, buckets });
+    expect(cellAt(row, "2026-08-10").runs).toBe(1);
+    expect(cellAt(row, "2026-08-03").runs).toBe(0);
+  });
+});
