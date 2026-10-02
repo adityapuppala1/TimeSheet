@@ -46,12 +46,15 @@ function toMinutes(time: string): number {
   return (h || 0) * 60 + (m || 0);
 }
 
-/** Mon–Fri days in an inclusive range; zero when the range is empty. */
-function countWorkingDays(from: Date, to: Date): number {
+/** Monday to Friday — the working week until planning settings say otherwise (0 = Sunday … 6). */
+export const DEFAULT_WORKING_DAYS: readonly number[] = [1, 2, 3, 4, 5];
+
+/** The workspace's working days in an inclusive range; zero when the range is empty. */
+function countWorkingDays(from: Date, to: Date, workingDays: readonly number[]): number {
+  const working = new Set(workingDays);
   let count = 0;
   for (let day = new Date(from); day <= to; day = addDays(day, 1)) {
-    const weekday = day.getDay();
-    if (weekday !== 0 && weekday !== 6) count += 1;
+    if (working.has(day.getDay())) count += 1;
   }
   return count;
 }
@@ -131,6 +134,9 @@ export interface PersonalPeriodInput<Row extends PersonalRow> {
   /** The signed-in person. */
   userId: string | undefined;
   today?: Date;
+  /** The workspace's working weekdays from planning settings (0 = Sunday … 6 = Saturday) — the set
+   *  the server's utilisation counts. Monday to Friday until they have loaded. */
+  workingDays?: readonly number[];
 }
 
 export function summarisePersonalPeriod<Row extends PersonalRow>({
@@ -139,7 +145,8 @@ export function summarisePersonalPeriod<Row extends PersonalRow>({
   from,
   to,
   userId,
-  today = new Date()
+  today = new Date(),
+  workingDays = DEFAULT_WORKING_DAYS
 }: PersonalPeriodInput<Row>) {
   const rangeStart = isoToLocalDate(from) ?? isoToLocalDate(localDateKey(today))!;
   const rangeEnd = isoToLocalDate(to) ?? rangeStart;
@@ -211,7 +218,7 @@ export function summarisePersonalPeriod<Row extends PersonalRow>({
     dayCount,
     /** Working days from the range's start to today (or to its end, if that is earlier) — what the
      *  target scales against. Counting the days still to come would make every Thursday look behind. */
-    workingDaysToDate: countWorkingDays(rangeStart, rangeEnd < todayLocal ? rangeEnd : todayLocal),
+    workingDaysToDate: countWorkingDays(rangeStart, rangeEnd < todayLocal ? rangeEnd : todayLocal, workingDays),
     daysLogged: daysLogged.size,
     loggedHours,
     prevLoggedHours,

@@ -27,8 +27,9 @@ const ALL_OFF: PlanningEffective = {
   sprints: false
 };
 
-export function usePlanningFeatures(): { features: PlanningEffective; isLoading: boolean } {
-  const query = useQuery({
+/** The one planning-settings query; every hook below shares its cache entry. */
+function usePlanningSettingsQuery() {
+  return useQuery({
     queryKey: ["planning", "settings"],
     queryFn: planningApi.settings,
     // Longer than the app default: these are admin settings that change once in a while, and the
@@ -37,5 +38,19 @@ export function usePlanningFeatures(): { features: PlanningEffective; isLoading:
     staleTime: 5 * 60_000,
     retry: false
   });
+}
+
+export function usePlanningFeatures(): { features: PlanningEffective; isLoading: boolean } {
+  const query = usePlanningSettingsQuery();
   return { features: query.data?.effective ?? ALL_OFF, isLoading: query.isLoading };
+}
+
+/**
+ * The workspace's working weekdays (0 = Sunday … 6 = Saturday) from planning settings — the set the
+ * server's utilisation and capacity count. Undefined until they load, or when the read fails, so a
+ * caller falls back to its own default (Monday to Friday) rather than to an empty week.
+ */
+export function useWorkingDays(): readonly number[] | undefined {
+  const days = usePlanningSettingsQuery().data?.settings.workingDays;
+  return Array.isArray(days) && days.length > 0 ? days : undefined;
 }

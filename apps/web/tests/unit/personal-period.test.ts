@@ -92,6 +92,16 @@ describe("the target", () => {
     const period = summarisePersonalPeriod({ rows: [], from: "2026-09-14", to: "2026-09-27", userId: ME, today: TODAY });
     expect(period.workingDaysToDate).toBe(10);
   });
+
+  it("counts the workspace's own working days, so a six-day week counts its Saturdays", () => {
+    // Planning settings → working days (0 = Sunday … 6 = Saturday), the set the server's utilisation
+    // uses. Mon 21 Sep – Thu 1 Oct to date holds nine weekdays and one Saturday (the 26th).
+    const sixDay = summarisePersonalPeriod({ rows: [], from: "2026-09-21", to: "2026-10-04", userId: ME, today: TODAY, workingDays: [1, 2, 3, 4, 5, 6] });
+    expect(sixDay.workingDaysToDate).toBe(10);
+    // Without settings (still loading, or an older server) it is Monday to Friday, as before.
+    const fallback = summarisePersonalPeriod({ rows: [], from: "2026-09-21", to: "2026-10-04", userId: ME, today: TODAY });
+    expect(fallback.workingDaysToDate).toBe(9);
+  });
 });
 
 describe("the comparison", () => {

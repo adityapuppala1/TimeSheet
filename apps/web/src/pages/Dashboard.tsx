@@ -80,6 +80,7 @@ import { DateRangePicker, type DateRangeValue } from "../components/ui/date-rang
 import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
 import { useAuthStore } from "../store/auth";
 import { useCardLayout } from "../lib/use-media-query";
+import { useWorkingDays } from "../lib/use-planning";
 
 function startOfWeek(date: Date) {
   const d = new Date(date);
@@ -167,6 +168,8 @@ function periodPhrase(label: string): string {
 export function Dashboard() {
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.permissions.includes("reports:view");
+  // The sidebar's own planning-settings read (shared cache), not a second request.
+  const workingDays = useWorkingDays();
 
   /**
    * ONE range drives the whole page. Every card used to hardcode its own window — this week, this
@@ -307,9 +310,12 @@ export function Dashboard() {
         prevRows: Array.isArray(previous.data) ? (previous.data as TimesheetRowLite[]) : undefined,
         from: range.from,
         to: range.to,
-        userId: user?.id
+        userId: user?.id,
+        // The workspace's own working week, so the target to date and "days logged / N" agree with
+        // the server's utilisation in a six-day (or Sunday–Thursday) workspace.
+        workingDays
       }),
-    [allForCalendar, previous.data, range.from, range.to, user?.id]
+    [allForCalendar, previous.data, range.from, range.to, user?.id, workingDays]
   );
 
   /** The timeline's rows grouped by calendar day, from its own role-scoped request. Kept separate
