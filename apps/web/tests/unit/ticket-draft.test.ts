@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { draftFor, draftFromFilters } from "../../src/lib/ticket-draft";
+import { draftFor, draftFromFilters, pickableTicketTypes } from "../../src/lib/ticket-draft";
 import type { TicketFilters } from "../../src/components/SavedViewsBar";
 
 const base: TicketFilters = { projectId: "all", moduleId: "all", type: "all", priority: "all", status: "all", assigneeId: "all", labelId: "all", sprintId: "all", search: "" } as unknown as TicketFilters;
@@ -32,5 +32,18 @@ describe("draftFor", () => {
     expect(draftFor("priority", "HIGH", base, projects)).toEqual({ priority: "HIGH" });
     expect(draftFor("priority", "nope", base, projects)).toEqual({});
     expect(draftFor("type", "TASK", base, projects)).toEqual({ type: "TASK" });
+  });
+});
+
+describe("the CHANGE type is not something a new ticket can be given", () => {
+  // Changes are raised from the Changes page, which creates their ticket; the API refuses a plain
+  // ticket of type CHANGE, so offering it here would only ever produce a refusal.
+  it("is left out of the type picker", () => {
+    const types = [{ id: "1", name: "BUG" }, { id: "2", name: "CHANGE" }, { id: "3", name: "TASK" }];
+    expect(pickableTicketTypes(types).map((t) => t.name)).toEqual(["BUG", "TASK"]);
+  });
+  it("is not carried into a new ticket's draft from a CHANGE type filter or group", () => {
+    expect(draftFromFilters({ ...base, type: "CHANGE" })).toEqual({});
+    expect(draftFor("type", "CHANGE", base, projects)).toEqual({});
   });
 });

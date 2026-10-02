@@ -35,15 +35,14 @@ import {
   securityFindingTypeDisciplines,
   securityFindingTypes,
   securityFindingVerificationLabels,
-  ticketStatusTransitions,
   unresolvedSecurityFindingStatuses,
   type SecurityFindingSeverity,
   type SecurityFindingType,
-  type TicketPriority,
-  type TicketStatus
+  type TicketPriority
 } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
+import { AppError } from "../middleware/error.js";
 import { classifyCiFailure, classifySecurityFinding } from "./ai.service.js";
 import { audit } from "./audit.service.js";
 import { repositoryFromPrUrl, resolveFindingLocationLive } from "./finding-routing.service.js";
@@ -838,26 +837,19 @@ async function settleTicketVerification(args: {
 
   // THE SECOND RUNG. The mark-and-notify above happened because verification is on; whether the
   // TICKET moves is a separate decision an admin makes separately, and `maybeReopenTicketOnRegression`
-  // is the one place in this app that owns it — it checks `autoReopenEnabled`, checks the transition
-  // is legal against `ticketStatusTransitions`, and writes the audit row. Reimplementing any of that
-  // here would be a second, quieter way for an automated process to move somebody's ticket.
+  // is the one place in this app that owns it — it checks `autoReopenEnabled` and hands the move to
+  // the one transition path every surface uses. Reimplementing any of that here would be a second,
+  // quieter way for an automated process to move somebody's ticket.
   const reason = `A ${args.run.tool} scan still reporting ${args.survived.length} finding${args.survived.length === 1 ? "" : "s"} marked fixed`;
   const didReopen = await maybeReopenTicketOnRegression(args.ticketId, reason);
 
-  // THE SLA CLOCK, restarted only when the ticket actually moved.
-  //
-  // WHY HERE AND NOT INSIDE `maybeReopenTicketOnRegression`: that function has two other callers
-  // (a failed CI run, a new finding on a closed ticket) whose behaviour real workspaces already
-  // depend on, and silently changing their due dates is not this block's decision to make. A
-  // verification failure is the case where leaving the old date is clearly wrong — the ticket was
-  // closed, its window elapsed, and reopening it onto a date three weeks in the past means the
-  // escalation worker treats it as permanently breached from the first minute, which is noise
-  // rather than urgency.
+  // THE SLA CLOCK. Every reopen now restarts it (ticket-transition.service.ts — a fresh window from
+  // now, with the old breach cleared), so the digest reads back the date the reopen actually set
+  // rather than computing its own. Untouched when the ticket did not move.
   let slaDueAt: Date | null = ticket.dueAt;
   if (didReopen) {
-    const slaSettings = await getGlobalTicketSettings();
-    slaDueAt = computeTicketDueDate(new Date(), ticket.priority as TicketPriority, slaSettings);
-    await prisma.ticket.update({ where: { id: ticket.id }, data: { dueAt: slaDueAt } });
+    const reopened = await prisma.ticket.findFirst({ where: { id: ticket.id }, select: { dueAt: true } });
+    slaDueAt = reopened?.dueAt ?? null;
   }
 
   await postSystemComment(
@@ -1230,12 +1222,12 @@ export async function maybeAssignFindingViaCodeowners(finding: {
  * currently RESOLVED/CLOSED and `IngestionSettings.autoReopenEnabled` is on, transitions it back
  * to REOPENED — the one place in this app an automated process changes ticket state with no
  * human click, which is exactly why it's its own explicit opt-in (not folded into any other
- * toggle) and always stamps an audit-log entry + notifies the assignee, matching the "every
+ * toggle) and always stamps an audit-log entry + notifies everyone on the ticket, matching the "every
  * automated decision is auditable" principle the rest of the AI surface already follows.
  * Deterministic — matches on the CI-supplied ticketKey directly, no AI call involved (that's
  * classifyCiFailure below, a separate opt-in). `reason` is a short human-readable trigger
  * description (e.g. "A failed github-actions test run", "A new CRITICAL SAST finding from
- * semgrep") — shown verbatim in the audit log and the assignee's notification, so whoever's
+ * semgrep") — shown verbatim in the audit log and the participants' notification, so whoever's
  * looking at "why did this reopen" always sees the actual regression source, not a generic label.
  * Mirrors Black Duck's Jira-plugin auto-reopen-on-policy-violation behavior — see
  * docs/ROADMAP.md's "Competitive parity" section for the full comparison this was modeled on.
@@ -1245,7 +1237,7 @@ export async function maybeAssignFindingViaCodeowners(finding: {
  * ticket's SLA now stands, and with `autoReopenEnabled` off this function is a deliberate no-op —
  * so an email that assumed it had reopened would tell a manager a clock restarted that did not.
  * `false` covers every reason it declined: the toggle is off, the ticket is gone, it was never
- * resolved or closed, or the transition is illegal.
+ * resolved or closed, the transition is illegal, or the ticket belongs to a change request.
  */
 export async function maybeReopenTicketOnRegression(ticketId: string, reason: string): Promise<boolean> {
   const settings = await prisma.ingestionSettings.findUnique({ where: { id: "global" } });
@@ -1255,27 +1247,21 @@ export async function maybeReopenTicketOnRegression(ticketId: string, reason: st
   if (!ticket) return false;
   if (ticket.status !== "RESOLVED" && ticket.status !== "CLOSED") return false;
 
-  const currentStatus = ticket.status as TicketStatus;
-  const allowed = ticketStatusTransitions[currentStatus] ?? [];
-  if (!allowed.includes("REOPENED")) return false; // stays consistent with the one source of truth for legal transitions, even though both current states already allow it
-
-  await prisma.ticket.update({ where: { id: ticket.id }, data: { status: "REOPENED", resolvedAt: null, closedAt: null } });
-  await audit(undefined, "ticket.auto_reopened", "Ticket", ticket.id, { reason, from: currentStatus }, {
-    actorType: "INTEGRATION",
-    actorLabel: "security-ingestion",
-    before: { status: currentStatus }
-  });
-
-  if (ticket.assigneeId) {
-    await dispatchNotification({
-      userId: ticket.assigneeId,
-      category: "ticket.status_changed",
-      title: `${ticket.key} auto-reopened`,
-      body: `${reason} reopened this ticket automatically.`,
-      link: `/app/tickets?open=${ticket.id}`
-    });
+  // The move itself is the one transition every surface makes (ticket-transition.service.ts):
+  // legality against `ticketStatusTransitions`, a fresh SLA clock with the old breach cleared, the
+  // `ticket.status_changed` audit row (marked `via: "auto_reopen"` with this reason, as an
+  // integration), `ticket.reopened`, and the reporter, assignee, watchers and collaborators told —
+  // not only the assignee, which is all this used to do. Imported at call time: the transition
+  // service imports this file back for the findings gate and the close digest.
+  const { transitionTicketStatus } = await import("./ticket-transition.service.js");
+  try {
+    await transitionTicketStatus(ticket.id, "REOPENED", { via: "auto_reopen", reason, label: "security-ingestion" });
+  } catch (error) {
+    // A refusal is the documented `false`: most importantly a change request's own ticket, which
+    // moves only from the change — an ingestion reopening it would walk past the change's approver.
+    if (error instanceof AppError) return false;
+    throw error;
   }
-
   return true;
 }
 

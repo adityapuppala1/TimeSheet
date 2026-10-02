@@ -140,5 +140,7 @@ export function emitDomainEvent(event: DomainEvent, payload: Record<string, unkn
 export function emitTicketStatusChanged(ticket: unknown, from: string, to: string): void {
   emitDomainEvent("ticket.status_changed", { ticket, from, to });
   if (to === "CLOSED") emitDomainEvent("ticket.closed", { ticket });
-  if (from === "CLOSED" && to !== "CLOSED") emitDomainEvent("ticket.reopened", { ticket, to });
+  // A reopen is any move INTO REOPENED — from RESOLVED as much as from CLOSED (a resolved ticket
+  // reopened before anybody closed it is the commoner case) — plus any move out of CLOSED.
+  if (to === "REOPENED" || (from === "CLOSED" && to !== "CLOSED")) emitDomainEvent("ticket.reopened", { ticket, to });
 }

@@ -7,11 +7,10 @@
  *
  * Scope for this phase (see docs/API.md's "Public API" section for the full contract):
  *   - Read: list/get tickets, list timesheets.
- *   - Write: create a ticket, change a ticket's status (re-checks the same
- *     `ticketStatusTransitions` legality rule and `blockResolveOnFailingTests` CI gate
- *     ticket.controller.ts's authenticated route enforces — duplicated rather than imported,
- *     same "independent integration surface, not a shared dependency" reasoning
- *     devops-webhook.controller.ts's own header comment gives for its withOrgTenant copy), and
+ *   - Write: create a ticket, change a ticket's status (through the same
+ *     services/ticket-transition.service.ts the app's own route, MCP and the security auto-reopen
+ *     use — it used to be a copy here, and the copy had lost the notifications, the findings gate,
+ *     the close digest and the audit action every ticket metric replays), and
  *     add a ticket comment. Timesheet writes remain unbuilt — creating one legitimately needs the
  *     same overlap-detection/SLA-deadline logic `timesheet.controller.ts#saveTimesheet` already
  *     owns, and duplicating that here risked exactly the kind of two-copies-drift-apart bug
@@ -29,15 +28,15 @@
  */
 import { Router } from "express";
 import { z } from "zod";
-import { ticketStatusTransitions, type TicketStatus } from "@timesheet/shared";
+import type { TicketStatus } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
 import { publicApiAuth, requireWriteScope, type PublicApiRequest } from "../middleware/public-api-auth.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
-import { emitDomainEvent, emitTicketStatusChanged } from "../services/domain-events.js";
+import { emitDomainEvent } from "../services/domain-events.js";
+import { transitionTicketStatus } from "../services/ticket-transition.service.js";
 import {
-  assertQualityGateAllowsResolve,
   assertValidTicketType,
   computeTicketDueDate,
   getGlobalTicketSettings,
@@ -145,57 +144,36 @@ const updateStatusSchema = z.object({
   body: z.object({ status: z.enum(["OPEN", "IN_PROGRESS", "IN_REVIEW", "RESOLVED", "CLOSED", "REOPENED"]) })
 });
 
+/**
+ * The person an API key's writes are attributed to: whoever created it. Loaded with the name and
+ * email the transition's notifications and close digest need, not just the id.
+ */
+async function apiKeyActor(req: PublicApiRequest): Promise<{ id: string; name: string; email: string }> {
+  const apiKey = await prisma.apiKey.findUnique({ where: { id: req.apiKey!.id } });
+  const creator = apiKey?.createdById
+    ? await prisma.user.findUnique({ where: { id: apiKey.createdById }, select: { id: true, name: true, email: true } })
+    : null;
+  if (!creator) throw new AppError(500, "This API key has no attributable creator — regenerate it from Workspace Settings.");
+  return creator;
+}
+
 publicApiRouter.patch(
   "/tickets/:key/status",
   requireWriteScope,
   validate(updateStatusSchema),
   async (req: PublicApiRequest, res) => {
-    const existing = await prisma.ticket.findFirst({ where: { key: String(req.params.key), deletedAt: null } });
+    const existing = await prisma.ticket.findFirst({ where: { key: String(req.params.key), deletedAt: null }, select: { id: true } });
     if (!existing) throw new AppError(404, "Ticket not found");
+    const actor = await apiKeyActor(req);
 
-    const apiKey = await prisma.apiKey.findUnique({ where: { id: req.apiKey!.id } });
-    const actorId = apiKey?.createdById;
-    if (!actorId) throw new AppError(500, "This API key has no attributable creator — regenerate it from Workspace Settings.");
+    // The same transition every other surface makes — legality, the change-ownership guard, the CI
+    // and quality gates, the SLA clock on a reopen, the `ticket.status_changed` audit row (marked
+    // `via: "api"`), the participants' notifications, the findings gate and the close digest. See
+    // services/ticket-transition.service.ts for why there is exactly one.
+    await transitionTicketStatus(existing.id, req.body.status as TicketStatus, { via: "api", user: actor, apiKeyId: req.apiKey!.id });
 
-    const nextStatus = req.body.status as TicketStatus;
-    const currentStatus = existing.status as TicketStatus;
-    const allowed = ticketStatusTransitions[currentStatus] ?? [];
-    if (!allowed.includes(nextStatus)) {
-      throw new AppError(422, `Cannot move a ticket from ${currentStatus} to ${nextStatus}`);
-    }
-
-    // Same CI gate ticket.controller.ts's authenticated status route enforces — see this file's
-    // header comment for why it's duplicated here rather than imported.
-    if (nextStatus === "RESOLVED") {
-      const ticketSettings = await prisma.globalTicketSettings.findUnique({ where: { id: "global" } });
-      if (ticketSettings?.blockResolveOnFailingTests) {
-        const latestRun = await prisma.testRun.findFirst({ where: { ticketId: existing.id }, orderBy: { createdAt: "desc" } });
-        if (latestRun?.status === "FAILED") {
-          throw new AppError(422, `Cannot resolve ${existing.key} — its latest CI run (${latestRun.provider}) is failing.`);
-        }
-      }
-      // And the quality-gate sibling. Imported rather than copied — see its header in
-      // ticket.service.ts for why this one is shared where the CI gate above is duplicated.
-      await assertQualityGateAllowsResolve(existing);
-    }
-
-    const data: Record<string, unknown> = { status: nextStatus };
-    if (nextStatus === "RESOLVED") data.resolvedAt = new Date();
-    if (nextStatus === "CLOSED") data.closedAt = new Date();
-    if (nextStatus === "IN_PROGRESS" || nextStatus === "REOPENED") {
-      data.resolvedAt = null;
-      data.closedAt = null;
-    }
-
-    const ticket = await prisma.ticket.update({ where: { id: existing.id }, data, select: PUBLIC_TICKET_SELECT });
-
-    await audit(actorId, "ticket.status_changed_via_api", "Ticket", ticket.id, {
-      from: currentStatus,
-      to: nextStatus,
-      apiKeyId: req.apiKey!.id
-    });
-    emitTicketStatusChanged(ticket, currentStatus, nextStatus);
-
+    // Re-read in this API's own published shape rather than returning the app's richer row.
+    const ticket = await prisma.ticket.findUniqueOrThrow({ where: { id: existing.id }, select: PUBLIC_TICKET_SELECT });
     res.json(ticket);
   }
 );

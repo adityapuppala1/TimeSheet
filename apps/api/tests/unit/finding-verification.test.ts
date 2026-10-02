@@ -115,9 +115,14 @@ vi.mock("../../src/services/git-provider.service.js", () => ({
   fetchGitHubLastCommitAuthor: vi.fn(),
   parseCodeownersOwners: vi.fn()
 }));
-vi.mock("../../src/services/ticket.service.js", () => ({
+// The real module, because the auto-reopen now runs through the one transition path
+// (ticket-transition.service.ts) and that reads its guards from here; only the SLA arithmetic is
+// pinned, so a restarted clock lands on a date a test can name.
+vi.mock("../../src/services/ticket.service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/services/ticket.service.js")>()),
   computeTicketDueDate: vi.fn(() => new Date("2026-09-15T12:00:00Z")),
   getGlobalTicketSettings: vi.fn().mockResolvedValue({}),
+  restartSlaClock: vi.fn(async () => ({ dueAt: new Date("2026-09-15T12:00:00Z"), slaBreachAt: null })),
   issueTicketKey: vi.fn()
 }));
 vi.mock("../../src/utils/encryption.js", () => ({ decryptSecret: (v: string) => v }));
@@ -136,10 +141,18 @@ function addTicket(overrides: Row = {}): Row {
     title: "SQL injection in the login handler",
     status: "RESOLVED",
     priority: "HIGH",
+    reporterId: "user-reporter",
     assigneeId: "user-assignee",
     moduleId: null,
     dueAt: new Date("2026-08-01T12:00:00Z"),
+    slaBreachAt: null,
+    needsReview: false,
     deletedAt: null,
+    // The relations the transition service loads with `include`. This stand-in ignores `include`,
+    // so the row carries them as Prisma would return them.
+    watchers: [],
+    collaborators: [],
+    changeRequest: null,
     ...overrides
   };
   tickets.push(ticket);

@@ -54,6 +54,8 @@ vi.mock("../../src/config/prisma.js", () => ({
 vi.mock("../../src/services/ticket.service.js", async () => {
   const { AppError } = await import("../../src/middleware/error.js");
   return {
+    // A value, like the real one: the candidate list a triage suggestion may choose from.
+    PLAIN_TICKET_TYPE_WHERE: { isActive: true, name: { not: "CHANGE" } },
     ticketProjectScope: (...args: unknown[]) => scope(...args),
     // The real predicate, over the same mocked scope — see ai-proposal-scope.test.ts.
     assertTicketVisible: async (req: unknown, projectId: string) => {
@@ -150,6 +152,14 @@ describe("/api/ai project-id routes are bounded by the caller's project scope", 
       .send({ projectId: MINE, title: "Login is broken" })
       .expect(200);
     expect(classifyTicket).toHaveBeenCalledOnce();
+  });
+
+  it("never offers the classifier CHANGE, which only a change request's own ticket may carry", async () => {
+    await request(app())
+      .post("/ai/tickets/suggest-triage")
+      .send({ projectId: MINE, title: "Login is broken" })
+      .expect(200);
+    expect(ticketTypeFindMany).toHaveBeenCalledWith(expect.objectContaining({ where: { isActive: true, name: { not: "CHANGE" } } }));
   });
 
   it("does not constrain a privileged role", async () => {

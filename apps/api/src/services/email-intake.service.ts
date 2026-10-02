@@ -32,7 +32,7 @@ import { assertUploadIsClean } from "./virus-scan.service.js";
 import { audit } from "./audit.service.js";
 import { classifyTicket, getGlobalAISettings, EXTERNAL_INTAKE_CONFIDENCE_CEILING } from "./ai.service.js";
 import { dispatchNotification, dispatchTransactional, templates } from "./notify.service.js";
-import { computeTicketDueDate, getGlobalTicketSettings, issueTicketKey } from "./ticket.service.js";
+import { computeTicketDueDate, getGlobalTicketSettings, issueTicketKey, PLAIN_TICKET_TYPE_WHERE } from "./ticket.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
 import { lazyCreateSettings } from "../utils/lazy-create-settings.js";
 
@@ -176,7 +176,8 @@ export async function processInboundEmail(email: ParsedInboundEmail): Promise<Pr
   const project = await prisma.project.findUnique({ where: { id: projectId }, include: { modules: true } });
   if (!project) return { created: false, reason: "PROJECT_NOT_FOUND" };
 
-  const types = await prisma.ticketType.findMany({ where: { isActive: true }, select: { name: true } });
+  // CHANGE is never a candidate: an email cannot raise a change request, only a ticket.
+  const types = await prisma.ticketType.findMany({ where: PLAIN_TICKET_TYPE_WHERE, select: { name: true } });
   const aiSettings = await getGlobalAISettings();
 
   const imageAttachments = email.attachments

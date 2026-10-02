@@ -47,7 +47,7 @@ import {
 import { enqueueEvalRun, getEvalRun, isReplayable, listEvalRuns } from "../services/ai-eval.service.js";
 import { setInteractionFeedback } from "../services/ai-quality.service.js";
 import { computeTimesheetCost } from "../services/billing-rate.service.js";
-import { assertTicketVisible, ticketProjectScope } from "../services/ticket.service.js";
+import { assertTicketVisible, PLAIN_TICKET_TYPE_WHERE, ticketProjectScope } from "../services/ticket.service.js";
 import {
   formatStandupFacts,
   gatherStandupFacts,
@@ -108,7 +108,8 @@ aiRouter.post("/tickets/suggest-triage", requirePermission(permissions.TICKETS_W
   });
   if (!project) throw new AppError(404, "Project not found");
 
-  const types = await prisma.ticketType.findMany({ where: { isActive: true }, select: { name: true } });
+  // CHANGE is not a type a suggestion may pick: only a change request's own ticket carries it.
+  const types = await prisma.ticketType.findMany({ where: PLAIN_TICKET_TYPE_WHERE, select: { name: true } });
 
   const result = await classifyTicket({
     title: req.body.title,

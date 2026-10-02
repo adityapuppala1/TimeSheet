@@ -20,12 +20,27 @@ export interface NamedRef {
   name: string;
 }
 
+/**
+ * The type every change request's ticket is filed under (the API's `CHANGE_TICKET_TYPE`). The Tickets
+ * page may still FILTER by it — that is how changes are isolated or hidden in the list — but a new
+ * ticket can never be given it: changes are raised from the Changes page, which creates their
+ * ticket, and the API refuses a plain ticket of this type.
+ */
+export const CHANGE_TICKET_TYPE = "CHANGE";
+
+/** The types a person may give a new ticket: the active ones, minus CHANGE. */
+export function pickableTicketTypes<T extends { name: string }>(types: ReadonlyArray<T>): T[] {
+  return types.filter((t) => t.name !== CHANGE_TICKET_TYPE);
+}
+
+const isPickableType = (type: string): boolean => Boolean(type) && type !== CHANGE_TICKET_TYPE;
+
 /** Everything the active filters pin down. "all" pins nothing. */
 export function draftFromFilters(filters: TicketFilters): TicketDraftInitial {
   const initial: TicketDraftInitial = {};
   if (filters.projectId !== "all") initial.projectId = filters.projectId;
   if (filters.moduleId !== "all") initial.moduleId = filters.moduleId;
-  if (filters.type !== "all") initial.type = filters.type;
+  if (filters.type !== "all" && isPickableType(filters.type)) initial.type = filters.type;
   if (filters.priority !== "all") initial.priority = filters.priority as TicketPriorityId;
   // A sprint is per project, so it is only meaningful with the project it was filtered under.
   if (filters.sprintId !== "all" && filters.projectId !== "all") initial.sprintId = filters.sprintId;
@@ -61,7 +76,7 @@ export function draftFor(
 ): TicketDraftInitial {
   const initial = draftFromFilters(filters);
   if (axis === "priority" && typeof value === "string" && value in PRIORITY_VARIANT) initial.priority = value as TicketPriorityId;
-  if (axis === "type" && typeof value === "string" && value) initial.type = value;
+  if (axis === "type" && typeof value === "string" && isPickableType(value)) initial.type = value;
   if (axis === "project") applyProjectGroup(initial, value, filters, projects);
   if (axis === "sprint") applySprintGroup(initial, value, sprints);
   return initial;

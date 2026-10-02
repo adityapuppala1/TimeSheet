@@ -65,6 +65,20 @@ describe("the ticket.closed rule, now written once", () => {
     // ...and the public webhook fan-out never saw it.
     expect(dispatchSpy.mock.calls.map((c) => c[0])).not.toContain("ticket.reopened");
   });
+
+  it("recognises reopening a RESOLVED ticket too, not only a CLOSED one", async () => {
+    const seen: string[] = [];
+    registerDomainSubscriber({
+      name: "test-reopen-from-resolved",
+      events: ["ticket.reopened"],
+      handle: async (event) => void seen.push(event)
+    });
+
+    emitTicketStatusChanged({ id: "t2" }, "RESOLVED", "REOPENED");
+    await settle();
+
+    expect(seen).toEqual(["ticket.reopened"]);
+  });
 });
 
 describe("the internal vocabulary is a superset of the public one", () => {

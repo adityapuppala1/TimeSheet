@@ -26,7 +26,7 @@
  */
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { permissions, ticketStatusTransitions, type TicketStatus } from "@timesheet/shared";
+import { permissions, type TicketStatus } from "@timesheet/shared";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
@@ -34,11 +34,9 @@ import { requirePermission, type RequestUser } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { audit } from "../services/audit.service.js";
 import { saveTimesheet } from "../controllers/timesheet.controller.js";
-import { emitTicketStatusChanged } from "./domain-events.js";
+import { transitionTicketStatus } from "./ticket-transition.service.js";
 import {
   addTicketCommentForActor,
-  assertQualityGateAllowsResolve,
-  canWorkOnTicket,
   createTicketForActor,
   resolveVisibleProjectByCode,
   resolveVisibleTicketByKey,
@@ -625,11 +623,13 @@ const TOOLS: readonly McpToolRegistration[] = [
     title: "Move a ticket to another status",
     description:
       "Call this ONLY when the acting user explicitly asks to change a ticket's status — 'mark " +
-      "WEB-142 resolved', 'reopen that bug'. This is visible to everyone watching the ticket, " +
-      "notifies them, fires this workspace's outbound webhooks, and stops or restarts SLA " +
-      "clocks; it is not a bookkeeping detail you should tidy up on your own initiative. Only " +
-      "the moves the workspace's workflow allows from the current status will succeed. Confirm " +
-      "with the user before calling it.",
+      "WEB-142 resolved', 'reopen that bug'. This is visible to everyone on the ticket: it " +
+      "notifies its reporter, assignee, watchers and collaborators, fires this workspace's " +
+      "outbound webhooks, and starts or stops its SLA clock (a reopen restarts it; resolving " +
+      "stops it). It is not a bookkeeping detail you should tidy up on your own initiative. Only " +
+      "the moves the workspace's workflow allows from the current status will succeed, and a " +
+      "change request's ticket is refused — it moves from the change. Confirm with the user " +
+      "before calling it.",
     inputSchema: {
       ticketKey: z.string().min(1).max(20),
       status: z.enum(["OPEN", "IN_PROGRESS", "IN_REVIEW", "RESOLVED", "CLOSED", "REOPENED"])
@@ -640,53 +640,17 @@ const TOOLS: readonly McpToolRegistration[] = [
     untrustedContent: false,
     handler: async (ctx, args) => {
       const existing = await resolveVisibleTicketByKey(ctx, args.ticketKey);
-      // Visibility is not permission to edit: ticket.controller.ts's own status route applies
-      // this same reporter/assignee/collaborator-or-manager predicate on top of tickets:write.
-      if (!(await canWorkOnTicket(ctx.req, existing))) {
-        throw new AppError(403, `${existing.key} can only be moved by its reporter, its assignee, a collaborator on it, or their manager.`);
-      }
-
-      const currentStatus = existing.status as TicketStatus;
-      const nextStatus = args.status as TicketStatus;
-      const allowed = ticketStatusTransitions[currentStatus] ?? [];
-      if (!allowed.includes(nextStatus)) {
-        throw new AppError(
-          422,
-          `${existing.key} is ${currentStatus}; from there it can only move to ${allowed.join(", ") || "nothing"}.`
-        );
-      }
-
-      // The same CI gate ticket.controller.ts and public-api.controller.ts enforce: a workspace
-      // that has opted into blocking resolution on failing tests must not have that bypassed by
-      // whichever surface happens to make the call.
-      if (nextStatus === "RESOLVED") {
-        const ticketSettings = await prisma.globalTicketSettings.findUnique({ where: { id: "global" } });
-        if (ticketSettings?.blockResolveOnFailingTests) {
-          const latestRun = await prisma.testRun.findFirst({
-            where: { ticketId: existing.id },
-            orderBy: { createdAt: "desc" }
-          });
-          if (latestRun?.status === "FAILED") {
-            throw new AppError(422, `Cannot resolve ${existing.key} — its latest CI run (${latestRun.provider}) is failing.`);
-          }
-        }
-        // And the quality-gate sibling, for the same reason: a workspace that opted into blocking
-        // on a failing gate must not have it bypassed by whichever surface makes the call.
-        await assertQualityGateAllowsResolve(existing);
-      }
-
-      const data: Record<string, unknown> = { status: nextStatus };
-      if (nextStatus === "RESOLVED") data.resolvedAt = new Date();
-      if (nextStatus === "CLOSED") data.closedAt = new Date();
-      if (nextStatus === "IN_PROGRESS" || nextStatus === "REOPENED") {
-        data.resolvedAt = null;
-        data.closedAt = null;
-      }
-
-      const ticket = await prisma.ticket.update({ where: { id: existing.id }, data, select: TICKET_SELECT });
-      emitTicketStatusChanged(ticket, currentStatus, nextStatus);
-
-      return { updated: true, key: ticket.key, from: currentStatus, to: nextStatus };
+      // Everything else — may this person work on it, the change-ownership guard, legality, the
+      // closed→reopen right, the CI and quality gates, the SLA clock, the audit row on the ticket,
+      // the participants' notifications, the findings gate and the close digest — is the one
+      // transition every surface makes (services/ticket-transition.service.ts). This tool used to
+      // carry a copy that had lost most of that list.
+      const { from, to } = await transitionTicketStatus(existing.id, args.status as TicketStatus, {
+        via: "mcp",
+        req: ctx.req,
+        caller: ctx.caller
+      });
+      return { updated: true, key: existing.key, from, to };
     }
   }
 ];

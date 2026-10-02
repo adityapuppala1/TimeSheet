@@ -24,7 +24,7 @@ import { audit } from "./audit.service.js";
 import { classifyChatMessage, getGlobalAISettings, EXTERNAL_INTAKE_CONFIDENCE_CEILING } from "./ai.service.js";
 import { sendChatReply } from "./chat-outbound.service.js";
 import { dispatchNotification, templates } from "./notify.service.js";
-import { computeTicketDueDate, getGlobalTicketSettings, issueTicketKey } from "./ticket.service.js";
+import { computeTicketDueDate, getGlobalTicketSettings, issueTicketKey, PLAIN_TICKET_TYPE_WHERE } from "./ticket.service.js";
 
 /** Seeded once (see prisma/seed.ts) with an unguessable random password — exists purely to
  *  satisfy Ticket.reporterId's required FK for chat-sourced tickets. The real sender lives in
@@ -100,7 +100,8 @@ export async function processInboundChatMessage(message: ParsedInboundChatMessag
   const project = await prisma.project.findUnique({ where: { id: projectId }, include: { modules: true } });
   if (!project) return { created: false, reason: "PROJECT_NOT_FOUND" };
 
-  const types = await prisma.ticketType.findMany({ where: { isActive: true }, select: { name: true } });
+  // CHANGE is never a candidate: a chat message cannot raise a change request, only a ticket.
+  const types = await prisma.ticketType.findMany({ where: PLAIN_TICKET_TYPE_WHERE, select: { name: true } });
 
   let classification: Awaited<ReturnType<typeof classifyChatMessage>> | null = null;
   try {

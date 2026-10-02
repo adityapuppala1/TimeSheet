@@ -4,8 +4,9 @@
  * hooks that other AI features stamp onto a ticket.
  *
  * WHAT each major section does (see the "---------- X ----------" banner comments below):
- * list/detail/create/update own the core record; status enforces `ticketStatusTransitions`
- * (no illegal jump, e.g. OPEN straight to RESOLVED) and stamps resolvedAt/closedAt; watchers/
+ * list/detail/create/update own the core record; status hands off to
+ * services/ticket-transition.service.ts, which enforces `ticketStatusTransitions` (no illegal jump,
+ * e.g. OPEN straight to RESOLVED) and stamps resolvedAt/closedAt for every surface; watchers/
  * labels/links/checklist are the ticket's many-to-many "extras"; comments/attachments are the
  * collaboration surface.
  *
@@ -20,10 +21,11 @@
  * every route that reads or writes a specific ticket — never trust that a client-supplied id
  * belongs to a project the caller can see.
  */
+import type { TicketPriority } from "@prisma/client";
 import { Router } from "express";
 import PDFDocument from "pdfkit";
 import { z } from "zod";
-import { permissions, ticketStatusTransitions, type TicketStatus } from "@timesheet/shared";
+import { permissions, type TicketStatus } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
@@ -37,16 +39,17 @@ import { assertSprintsEnabled } from "../services/planning.service.js";
 import { getCustomFieldValues, setCustomFieldValues } from "../services/custom-field.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
-import { buildTicketSecurityReport, markFindingsAwaitingVerification, sendTicketClosedDigest } from "../services/security-report.service.js";
+import { buildTicketSecurityReport } from "../services/security-report.service.js";
 import { renderSecurityReportPdf } from "../services/security-report-pdf.service.js";
 import { buildTicketLineage } from "../services/ticket-lineage.service.js";
 import { explainAssigneeSuggestion } from "../services/ai.service.js";
 import { setInteractionFeedback } from "../services/ai-quality.service.js";
-import { emitDomainEvent, emitTicketStatusChanged } from "../services/domain-events.js";
+import { emitDomainEvent } from "../services/domain-events.js";
+import { transitionTicketStatus } from "../services/ticket-transition.service.js";
 import { createGitHubBranch, getGitAccessTokenOrNull, listGitHubRepos } from "../services/git-provider.service.js";
 import {
   applyTicketRules,
-  assertQualityGateAllowsResolve,
+  assertNotChangeOwned,
   assertTicketVisible,
   assertValidTicketType,
   canReassignTicket,
@@ -58,6 +61,7 @@ import {
   getGlobalTicketSettings,
   isProjectMember,
   issueTicketKey,
+  restartSlaClock,
   ticketProjectScope
 } from "../services/ticket.service.js";
 import { htmlToPlainText, sanitizeRichText } from "../utils/sanitize.js";
@@ -782,14 +786,22 @@ async function applySprintFields(body: { sprintId?: string | null; storyPoints?:
 }
 
 ticketRouter.patch("/:id", requirePermission(permissions.TICKETS_WRITE), validate(patchSchema), async (req, res) => {
-  const existing = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
+  const existing = await prisma.ticket.findFirst({
+    where: { id: String(req.params.id), deletedAt: null },
+    include: { changeRequest: { select: { id: true } } }
+  });
   if (!existing) throw new AppError(404, "Ticket not found");
   // Two different questions, both required: assertTicketVisible answers "is this ticket in a
   // project you can see at all" (canWorkOnTicket can't — it answers yes for a privileged role
   // tenant-wide), canWorkOnTicket answers "may you edit this one".
   await assertTicketVisible(req, existing.projectId);
   if (!(await canWorkOnTicket(req, existing))) throw new AppError(403, WORK_FORBIDDEN_MESSAGE);
-  if (typeof req.body.type === "string") await assertValidTicketType(req.body.type);
+  if (typeof req.body.type === "string" && req.body.type !== existing.type) {
+    // A change's ticket keeps its type — it is what files it under Changes. Its title and
+    // description stay editable here; only its lifecycle belongs to the change.
+    assertNotChangeOwned(existing);
+    await assertValidTicketType(req.body.type);
+  }
 
   const data: any = {};
   if (typeof req.body.title === "string") data.title = req.body.title;
@@ -797,8 +809,10 @@ ticketRouter.patch("/:id", requirePermission(permissions.TICKETS_WRITE), validat
   if (typeof req.body.type === "string") data.type = req.body.type;
   if (typeof req.body.priority === "string") {
     data.priority = req.body.priority;
-    const slaSettings = await getGlobalTicketSettings();
-    data.dueAt = computeTicketDueDate(existing.createdAt, req.body.priority as any, slaSettings);
+    // A REAL priority change is a new resolution window, counted from now with any old breach
+    // cleared (see ticket.service.ts#restartSlaClock). An edit that re-sends the same priority
+    // alongside a title change must not quietly extend the deadline.
+    if (req.body.priority !== existing.priority) Object.assign(data, await restartSlaClock(req.body.priority as TicketPriority));
   }
   if ("moduleId" in req.body) data.moduleId = req.body.moduleId || null;
   await applySprintFields(req.body, existing.projectId, data);
@@ -874,178 +888,19 @@ const statusSchema = z.object({
   })
 });
 
+/**
+ * Moves a ticket's status. Everything a move involves — who may make it, the change-ownership
+ * guard, legality, the face gate, the CI and quality gates, the SLA clock, the audit row, the
+ * notifications, the findings gate and the close digest — lives in
+ * services/ticket-transition.service.ts, which the public API, MCP and the security auto-reopen call
+ * too. This route only says which surface it is.
+ */
 ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), validate(statusSchema), async (req, res) => {
-  const existing = await prisma.ticket.findFirst({
-    where: { id: String(req.params.id), deletedAt: null },
-    include: { watchers: true, collaborators: { select: { userId: true } } }
+  const { ticket } = await transitionTicketStatus(String(req.params.id), req.body.status as TicketStatus, {
+    via: "ui",
+    req: { user: req.user! },
+    faceVerificationId: req.body.faceVerificationId
   });
-  if (!existing) throw new AppError(404, "Ticket not found");
-  await assertTicketVisible(req, existing.projectId);
-  if (!(await canWorkOnTicket(req, existing))) throw new AppError(403, WORK_FORBIDDEN_MESSAGE);
-
-  const nextStatus = req.body.status as TicketStatus;
-  const currentStatus = existing.status as TicketStatus;
-  const allowed = ticketStatusTransitions[currentStatus] ?? [];
-  if (!allowed.includes(nextStatus)) {
-    throw new AppError(422, `Cannot move a ticket from ${currentStatus} to ${nextStatus}`);
-  }
-  if (currentStatus === "CLOSED" && nextStatus === "REOPENED" && !canReopenClosedTicket(req)) {
-    throw new AppError(403, "Only an assigner or admin can reopen a closed ticket");
-  }
-
-  // Identity gate — status transitions are the workflow-authoritative ticket actions ("who
-  // actually resolved this?"), so they're covered by the same requireForTicket policy as
-  // creation. Before every other write/side effect, and bound to the ticket immediately since
-  // it already exists.
-  if (await isFaceVerificationRequired(req.user!.id, "TICKET")) {
-    await consumeVerification({
-      verificationId: req.body.faceVerificationId,
-      userId: req.user!.id,
-      context: "TICKET",
-      ticketId: existing.id
-    });
-  }
-
-  // CI gate — see docs/ROADMAP.md's "Auto testing on branch/PR push" theme. Off by default
-  // (GlobalTicketSettings.blockResolveOnFailingTests) so orgs that don't ingest test runs, or
-  // that want this as a warning rather than a hard stop, are unaffected. Only the ticket's
-  // single latest TestRun matters — an older passing run doesn't excuse a newer failure.
-  if (nextStatus === "RESOLVED") {
-    const ticketSettings = await prisma.globalTicketSettings.findUnique({ where: { id: "global" } });
-    if (ticketSettings?.blockResolveOnFailingTests) {
-      const latestRun = await prisma.testRun.findFirst({
-        where: { ticketId: existing.id },
-        orderBy: { createdAt: "desc" }
-      });
-      if (latestRun?.status === "FAILED") {
-        throw new AppError(
-          422,
-          `Cannot resolve ${existing.key} — its latest CI run (${latestRun.provider}) is failing. Fix the build or ask an admin to disable the CI gate in Workspace Settings.`
-        );
-      }
-    }
-    // The quality-gate sibling — its own setting, off by default, checked after the CI gate so the
-    // build failure (the more urgent of the two) is the message somebody sees first. Written once in
-    // ticket.service.ts and called from all three surfaces that can resolve a ticket; see that
-    // function's header for why this one is not copy-pasted the way the CI gate above is.
-    await assertQualityGateAllowsResolve(existing);
-  }
-
-  const data: Record<string, unknown> = { status: nextStatus };
-  if (nextStatus === "RESOLVED") data.resolvedAt = new Date();
-  if (nextStatus === "CLOSED") data.closedAt = new Date();
-  if (nextStatus === "IN_PROGRESS" || nextStatus === "REOPENED") {
-    data.resolvedAt = null;
-    data.closedAt = null;
-  }
-
-  const ticket = await prisma.ticket.update({
-    where: { id: existing.id },
-    data,
-    include: {
-      project: { select: { id: true, code: true, name: true, color: true } },
-      module: { select: { id: true, name: true } },
-      reporter: { select: USER_SUMMARY },
-      assignee: { select: USER_SUMMARY }
-    }
-  });
-  await audit(req.user!.id, "ticket.status_changed", "Ticket", ticket.id, { from: currentStatus, to: nextStatus });
-  emitTicketStatusChanged(ticket, currentStatus, nextStatus);
-
-  const recipients = new Set<string>();
-  if (existing.reporterId !== req.user!.id) recipients.add(existing.reporterId);
-  if (existing.assigneeId && existing.assigneeId !== req.user!.id) recipients.add(existing.assigneeId);
-  for (const watcher of existing.watchers) if (watcher.userId !== req.user!.id) recipients.add(watcher.userId);
-  // Collaborators are working the ticket, not merely observing it, so they hear about a status
-  // change on the same terms as the assignee rather than having to opt in as watchers.
-  for (const c of existing.collaborators) if (c.userId !== req.user!.id) recipients.add(c.userId);
-
-  /**
-   * The last thing anybody said on the ticket, carried into the status email as CONTEXT.
-   *
-   * This route takes no note of its own — a status change is a status change — so there is no
-   * "reason" to quote and the template labels this as the latest comment rather than implying it
-   * explains the move. It is here because "moved to RESOLVED" with no idea what was discussed is the
-   * email people open the app to understand.
-   */
-  const latestComment = await prisma.ticketComment.findFirst({
-    where: { ticketId: ticket.id },
-    orderBy: { createdAt: "desc" },
-    select: { body: true, author: { select: { name: true } } }
-  });
-  const latestCommentText = latestComment
-    ? `${latestComment.author?.name ?? "Somebody"}: ${plainDescription(latestComment.body)}`
-    : "";
-
-  for (const userId of recipients) {
-    await dispatchNotification({
-      userId,
-      category: "ticket.status_changed",
-      title: `${ticket.key} moved to ${nextStatus}`,
-      body: `${req.user!.name} moved "${ticket.title}" from ${currentStatus} to ${nextStatus}.`,
-      link: `/app/tickets?open=${ticket.id}`,
-      email: {
-        templateKey: "ticket.status_changed",
-        vars: {
-          ticketKey: ticket.key,
-          title: ticket.title,
-          from: currentStatus,
-          to: nextStatus,
-          changedBy: req.user!.name,
-          type: ticket.type ?? "",
-          comment: latestCommentText
-        },
-        fallback: {
-          subject: `${ticket.key} moved to ${nextStatus}`,
-          html: templates.ticketStatusChanged({
-            ticketKey: ticket.key,
-            title: ticket.title,
-            from: currentStatus,
-            to: nextStatus,
-            changedBy: req.user!.name,
-            type: ticket.type ?? null,
-            comment: latestCommentText || null,
-            ticketId: ticket.id
-          })
-        }
-      }
-    });
-  }
-
-  // THE RESOLUTION GATE — see services/security-report.service.ts#markFindingsAwaitingVerification.
-  //
-  // Resolving or closing a ticket used to retire its security findings by implication: they stopped
-  // counting because somebody decided they were done, and nothing ever asked the scanner whether the
-  // vulnerability was actually gone. From here the findings become a CLAIM (PENDING_VERIFICATION,
-  // still counted as unresolved everywhere) and the next scan by the tool that found them settles
-  // it. No-ops entirely unless IngestionSettings.verifyResolutionEnabled is on.
-  //
-  // AWAITED, unlike the digest below, because it sends no mail and renders no report — it is a few
-  // indexed writes, and detaching it would mean the whole feature silently not happening for a
-  // ticket with nothing to show for it. WRAPPED, because the reverse is worse: refusing to close
-  // somebody's ticket over a failed security bookkeeping write would be its own defect. A failure
-  // here logs and lets the status change stand.
-  if (nextStatus === "RESOLVED" || nextStatus === "CLOSED") {
-    try {
-      await markFindingsAwaitingVerification({ id: ticket.id, key: ticket.key }, req.user!.id);
-    } catch (error) {
-      console.error(`[ticket] could not mark findings awaiting verification for ${ticket.key}:`, (error as Error).message);
-    }
-  }
-
-  // Security/test-status digest — see services/security-report.service.ts. Separate from the
-  // generic status-changed notification loop above (different recipients: closer + their
-  // manager + this org's admins, not reporter/assignee/watchers) and gated on its own toggle,
-  // so an org that hasn't connected a scan source never gets an empty digest. Detached: it
-  // renders a report and sends real SMTP mail, none of which the close response depends on —
-  // awaiting it made closing a ticket hang for seconds.
-  if (nextStatus === "CLOSED") {
-    void sendTicketClosedDigest(
-      { id: ticket.id, key: ticket.key, title: ticket.title },
-      { id: req.user!.id, name: req.user!.name, email: req.user!.email }
-    ).catch((error) => console.error(`[ticket] closed digest failed for ${ticket.key}:`, (error as Error).message));
-  }
-
   res.json(ticket);
 });
 
@@ -1125,9 +980,15 @@ ticketRouter.patch("/:id/assign", requirePermission(permissions.TICKETS_ASSIGN),
 });
 
 ticketRouter.delete("/:id", requirePermission(permissions.TICKETS_MANAGE), async (req, res) => {
-  const existing = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
+  const existing = await prisma.ticket.findFirst({
+    where: { id: String(req.params.id), deletedAt: null },
+    include: { changeRequest: { select: { id: true } } }
+  });
   if (!existing) throw new AppError(404, "Ticket not found");
   await assertTicketVisible(req, existing.projectId);
+  // Deleting a change's ticket orphaned the change: GET /changes kept listing it with no ticket
+  // behind it. A change is cancelled from the change.
+  assertNotChangeOwned(existing);
   await prisma.ticket.update({ where: { id: existing.id }, data: { deletedAt: new Date() } });
   await audit(req.user!.id, "ticket.deleted", "Ticket", existing.id);
   res.status(204).send();

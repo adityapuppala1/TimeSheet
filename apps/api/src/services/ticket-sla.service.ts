@@ -50,7 +50,12 @@ export async function processTicketSlaSweep(now: Date = new Date()) {
       status: { notIn: ["RESOLVED", "CLOSED"] },
       slaBreachAt: null,
       dueAt: { lte: now },
-      deletedAt: null
+      deletedAt: null,
+      // A change request's own ticket is timed by the change's STAGE SLAs (approval, implementation,
+      // review), not by this resolution window. Without this, a MEDIUM change scheduled a week out
+      // was "breached" after 72h and escalated to the requester's skip-level manager while it sat,
+      // correctly, waiting for its window.
+      changeRequest: { is: null }
     },
     include: { assignee: true, reporter: true, _count: { select: { comments: true, branches: true } } },
     take: 200

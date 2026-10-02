@@ -49,12 +49,11 @@ export async function getGlobalTicketSettings() {
  * not excuse a newer failure, and a newer passing one settles an older failure. A gate is a
  * statement about the code as it stands, not a history to be searched for the answer you want.
  *
- * WHY IT IS A FUNCTION AND THE TEST GATE IS THREE COPIES. Three surfaces move a ticket to RESOLVED:
- * this app's own route (ticket.controller.ts), the public REST API (public-api.controller.ts) and
- * the MCP tool an assistant calls (services/mcp-tools.ts). The test gate is written out in all
- * three, which works because it is four lines; this one has to resolve the ticket's branches first,
- * and a rule enforced in one caller and forgotten in another is not a rule — it is a bypass with a
- * changelog entry. So it is written once and called three times.
+ * WHY IT IS A FUNCTION. Three surfaces move a ticket to RESOLVED: this app's own route
+ * (ticket.controller.ts), the public REST API (public-api.controller.ts) and the MCP tool an
+ * assistant calls (services/mcp-tools.ts). A rule enforced in one caller and forgotten in another is
+ * not a rule — it is a bypass with a changelog entry. All three now go through
+ * ticket-transition.service.ts, which calls this and its CI-gate sibling (`assertCiAllowsResolve`).
  *
  * HOW A TICKET AND A GATE ARE MATCHED: on BRANCH NAME, via `TicketBranch`. Sonar knows a project key
  * and a branch; this app knows repositories and tickets, and nothing maps a Sonar project key onto a
@@ -107,6 +106,25 @@ export async function assertQualityGateAllowsResolve(ticket: { id: string; key: 
   );
 }
 
+/**
+ * THE CI GATE — refuses a RESOLVED transition while the ticket's single latest TestRun is FAILED.
+ * Off by default (`GlobalTicketSettings.blockResolveOnFailingTests`), so orgs that don't ingest test
+ * runs, or that want it as a warning rather than a hard stop, are unaffected. Only the latest run
+ * matters — an older passing run doesn't excuse a newer failure. Called from the one transition path
+ * (ticket-transition.service.ts), so it no longer exists in three copies.
+ */
+export async function assertCiAllowsResolve(ticket: { id: string; key: string }): Promise<void> {
+  const settings = await prisma.globalTicketSettings.findUnique({ where: { id: GLOBAL_ID } });
+  if (!settings?.blockResolveOnFailingTests) return;
+  const latestRun = await prisma.testRun.findFirst({ where: { ticketId: ticket.id }, orderBy: { createdAt: "desc" } });
+  if (latestRun?.status === "FAILED") {
+    throw new AppError(
+      422,
+      `Cannot resolve ${ticket.key} — its latest CI run (${latestRun.provider}) is failing. Fix the build or ask an admin to disable the CI gate in Workspace Settings.`
+    );
+  }
+}
+
 type TicketSlaHours = { slaLowHours: number; slaMediumHours: number; slaHighHours: number; slaCriticalHours: number };
 
 /** Due date for a ticket, computed from its priority against the workspace's configured SLA hours. */
@@ -119,6 +137,51 @@ export function computeTicketDueDate(createdAt: Date, priority: TicketPriority, 
   };
   const hours = hoursByPriority[priority] ?? settings.slaMediumHours;
   return new Date(createdAt.getTime() + hours * 60 * 60 * 1000);
+}
+
+/**
+ * A FRESH SLA CLOCK: the columns to write when a ticket's resolution window starts again — on any
+ * reopen (the app, the public API, MCP, the security auto-reopen) and on a real priority change.
+ *
+ * WHY `slaBreachAt` IS CLEARED TOO: it is the sweep's "already escalated" marker
+ * (ticket-sla.service.ts only looks at `slaBreachAt: null`). Resetting `dueAt` alone left a ticket
+ * that breached in its first life un-escalatable in its second, while the list kept painting its
+ * new, future due date red. Not resetting `dueAt` was the opposite failure: a ticket resolved on
+ * time and reopened weeks later breached at the very next tick, hundreds of hours "overdue".
+ *
+ * One helper so every caller restarts the clock the same way — counted from NOW, not from creation.
+ */
+export async function restartSlaClock(priority: TicketPriority, now: Date = new Date()): Promise<{ dueAt: Date; slaBreachAt: null }> {
+  const settings = await getGlobalTicketSettings();
+  return { dueAt: computeTicketDueDate(now, priority, settings), slaBreachAt: null };
+}
+
+/**
+ * The ticket type every change request is filed under. Must equal change.controller.ts's
+ * `CHANGE_TICKET_TYPE`, which upserts the row; it is restated here rather than imported so the
+ * ticket layer does not pull the whole change controller into its module graph.
+ */
+export const CHANGE_TICKET_TYPE = "CHANGE";
+
+/** The ticket types a classifier may choose for a NEW plain ticket — every active one but CHANGE,
+ *  which only a change request's own ticket carries (see `assertValidTicketType`). The AI triage
+ *  suggestion and both intake pipelines read their candidate list through this. */
+export const PLAIN_TICKET_TYPE_WHERE = { isActive: true, name: { not: CHANGE_TICKET_TYPE } } as const;
+
+/** The refusal every ticket writer raises for a change's own ticket. Phrased once. */
+export const CHANGE_OWNED_MESSAGE = "This ticket belongs to a change request, so its status, type and lifecycle are managed there. Move it from the change.";
+
+/**
+ * A CHANGE IS A TICKET, AND THE CHANGE OWNS IT. ChangeRequest and Ticket are 1:1, and the change
+ * module walks the ticket's status in step with the change's own state (approval, scheduling,
+ * implementation, review). A ticket writer that moved, retyped or deleted that ticket directly left
+ * the two disagreeing — a CLOSED ticket under a change still AWAITING_APPROVAL, with the closed
+ * digest already sent — so every ticket writer refuses, and says where the move belongs.
+ *
+ * Takes the row with its `changeRequest` relation loaded; an absent or null relation is a plain ticket.
+ */
+export function assertNotChangeOwned(ticket: { changeRequest?: { id: string } | null }): void {
+  if (ticket.changeRequest) throw new AppError(409, CHANGE_OWNED_MESSAGE, { code: "CHANGE_OWNED_TICKET" });
 }
 
 /**
@@ -267,8 +330,18 @@ export const WORK_FORBIDDEN_MESSAGE =
 export const REASSIGN_FORBIDDEN_MESSAGE =
   "Only a super admin, an admin, or the manager this ticket's reporter or assignee reports to can change who works on it.";
 
-/** Throws a 422 unless `type` matches an active TicketType.name row. */
+/**
+ * Throws a 422 unless `type` matches an active TicketType.name row a PLAIN ticket may carry.
+ *
+ * CHANGE is refused although its row is active: change.controller.ts upserts it the first time a
+ * change is raised, so "is it an active type?" alone would let any ticket writer file a plain ticket
+ * that every list and report then treats as a change, with no change request behind it. Changes are
+ * raised from the Changes page, which creates the ticket itself.
+ */
 export async function assertValidTicketType(type: string): Promise<void> {
+  if (type === CHANGE_TICKET_TYPE) {
+    throw new AppError(422, "A ticket can't be given the CHANGE type — raise a change request from the Changes page instead.");
+  }
   const match = await prisma.ticketType.findFirst({ where: { name: type, isActive: true } });
   if (!match) throw new AppError(422, `"${type}" is not a valid ticket type`);
 }

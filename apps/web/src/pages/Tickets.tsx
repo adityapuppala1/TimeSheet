@@ -88,7 +88,7 @@ import { formatGroupLabel, groupRuns } from "../lib/group-rows";
 import { windowCardItems } from "../lib/card-window";
 import { applyOptimistic, replaceById, rollbackOptimistic, settleOptimistic } from "../lib/optimistic";
 import { cn } from "../lib/utils";
-import { draftFor, draftFromFilters, type TicketDraftInitial } from "../lib/ticket-draft";
+import { draftFor, draftFromFilters, pickableTicketTypes, type TicketDraftInitial } from "../lib/ticket-draft";
 import { IDENTITY_WASH_ALPHA, resolveIdentityColor } from "../lib/identity-colors";
 import { currentTheme, subscribeTheme } from "../lib/theme";
 import { useSyncExternalStore } from "react";
@@ -1561,7 +1561,8 @@ function CreateTicketDialog({
               <Select value={draft.type} onValueChange={(v) => setDraft((d) => ({ ...d, type: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {(ticketTypesQuery.data ?? []).map((t) => <SelectItem key={t.id} value={t.name}>{t.name}</SelectItem>)}
+                  {/* CHANGE is left out: a change is raised from the Changes page, which creates its ticket. */}
+                  {pickableTicketTypes(ticketTypesQuery.data ?? []).map((t) => <SelectItem key={t.id} value={t.name}>{t.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
