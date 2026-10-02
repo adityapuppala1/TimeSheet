@@ -163,7 +163,7 @@ function NoHistoryYet({ canSweep }: { canSweep: boolean }) {
         title="Nothing has been captured yet."
         description={
           <>
-            Revenue, churn and retention are all computed from a daily snapshot of every workspace, taken at 03:40 UTC. Nothing can be backfilled — the figures
+            Revenue, churn and retention are all computed from a daily snapshot of every workspace, taken at 03:40 platform time (IST). Nothing can be backfilled — the figures
             it records are point-in-time counts, and there was never any history to recover — so this page fills in from the first sweep onward.{" "}
             {canSweep ? "Use “Snapshot now” to take the first one immediately." : "An operator with platform:operate can take the first one immediately."}
           </>
@@ -477,7 +477,7 @@ function BilledRevenue({ stripe }: { stripe: NonNullable<RevenueOverview["stripe
         <Stat
           label="Last reconciled"
           value={stripe.lastReconciledAt ? shortDate(stripe.lastReconciledAt) : "—"}
-          hint={stripe.lastReconciledAt ? "Nightly at 03:50 UTC" : "The nightly sweep has not run"}
+          hint={stripe.lastReconciledAt ? "Nightly at 03:50 platform time (IST)" : "The nightly sweep has not run"}
         />
       </dl>
 

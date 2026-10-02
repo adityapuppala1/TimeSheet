@@ -41,6 +41,7 @@ import { controlPrisma } from "../config/control-prisma.js";
 import { getTenantClient } from "../config/prisma.js";
 import { tenantContext } from "../config/tenant-context.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { platformDate, startOfPlatformMonth } from "../utils/platform-time.js";
 
 export interface OrgAnalyticsSummary {
   orgId: string;
@@ -67,10 +68,9 @@ export interface OrgAnalyticsSummary {
   reachable: boolean;
 }
 
-function startOfMonth(): Date {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), 1);
-}
+/** India's month to date — the same window the nightly snapshot measures, so the live page and the
+ *  history agree. `new Date(y, m, 1)` was the PROCESS's month, which is UTC's wherever `TZ` is unset. */
+const startOfMonth = (): Date => startOfPlatformMonth(new Date());
 
 async function summarizeOrg(org: { id: string; slug: string; name: string; status: string; planTier: string }, dsn: string): Promise<OrgAnalyticsSummary> {
   const client = await getTenantClient(org.id, dsn);
@@ -192,7 +192,7 @@ export const USAGE_SNAPSHOT_RETENTION_DAYS = 1100;
 const OPEN_TICKET_STATUSES = new Set(["OPEN", "IN_PROGRESS", "IN_REVIEW", "REOPENED"]);
 
 export interface SnapshotSweepResult {
-  /** UTC midnight of the day every row in this pass was written against. */
+  /** The platform calendar date every row in this pass was written against (UTC midnight of it). */
   day: string;
   captured: number;
   /** Workspaces whose tenant database could not be read. A row was still written for each. */
@@ -200,17 +200,14 @@ export interface SnapshotSweepResult {
   prunedRows: number;
 }
 
-/** Midnight UTC of the day `at` falls in — the snapshot's grain, and the second half of its
- *  uniqueness key. UTC rather than local so a deployment that moves timezone does not grow two
- *  rows for one day. */
-export function startOfUtcDay(at: Date): Date {
-  return new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
-}
-
-/** Start of the calendar month `at` falls in, UTC — the window "month to date" means. */
-function startOfUtcMonth(at: Date): Date {
-  return new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), 1));
-}
+/*
+ * THE SNAPSHOT'S DAY AND MONTH ARE THE PLATFORM'S (`TZ`, Asia/Kolkata by default), like every other
+ * console day key (utils/platform-time.ts). They were UTC's, and the sweep runs at 03:40 IST — 22:10
+ * UTC the evening before — so every nightly row was labelled a day early, and "month to date" began
+ * at 05:30 IST on the 1st while the live Analytics page used India's month: the two disagreed for the
+ * first five and a half hours of every month. `day` stays a date-only value (UTC midnight of India's
+ * date), so the unique key still holds one row per workspace per day.
+ */
 
 /** The tier a workspace is ENTITLED to, which is not what it has paid for while a trial runs.
  *  Inlined rather than imported from plan-limits.service.ts because that module's version compares
@@ -237,8 +234,8 @@ function entitledTier(org: { planTier: string; trialTier: string | null; trialEn
  * fleet total that sums the day.
  */
 export async function captureOrgUsageSnapshots(now = new Date()): Promise<SnapshotSweepResult> {
-  const day = startOfUtcDay(now);
-  const monthStart = startOfUtcMonth(now);
+  const day = platformDate(now);
+  const monthStart = startOfPlatformMonth(now);
 
   const [orgs, tierLimits] = await Promise.all([
     controlPrisma.organization.findMany({ include: { database: true }, orderBy: { createdAt: "asc" } }),

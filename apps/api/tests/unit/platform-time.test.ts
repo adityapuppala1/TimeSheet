@@ -8,7 +8,9 @@ import { describe, expect, it, vi } from "vitest";
 const envMock: { TZ?: string } = { TZ: "Asia/Kolkata" };
 vi.mock("../../src/config/env.js", () => ({ env: envMock }));
 
-const { platformDayEnd, platformDayKey, platformHourKey } = await import("../../src/utils/platform-time.js");
+const { platformDate, platformDayEnd, platformDayKey, platformDayStart, platformHourKey, platformMonthKey, platformWeekStartKey, shiftDayKey, startOfPlatformMonth } = await import(
+  "../../src/utils/platform-time.js"
+);
 
 describe("platform time", () => {
   it("names the day as India sees it — 19:00 UTC on the 1st is already the 2nd", () => {
@@ -24,6 +26,37 @@ describe("platform time", () => {
   it("follows an operator's own choice of zone", () => {
     envMock.TZ = "UTC";
     expect(platformDayKey(new Date("2026-10-01T19:00:00Z"))).toBe("2026-10-01");
+    envMock.TZ = "Asia/Kolkata";
+  });
+
+  it("names the month as India sees it — 20:00 UTC on 30 Sept is already October", () => {
+    expect(platformMonthKey(new Date("2026-09-30T20:00:00Z"))).toBe("2026-10");
+    expect(platformMonthKey(new Date("2026-09-30T18:29:59Z"))).toBe("2026-09");
+  });
+
+  it("starts India's day at 18:30 UTC the evening before, not at UTC midnight", () => {
+    expect(platformDayStart("2026-10-02").toISOString()).toBe("2026-10-01T18:30:00.000Z");
+    expect(startOfPlatformMonth(new Date("2026-10-15T10:00:00Z")).toISOString()).toBe("2026-09-30T18:30:00.000Z");
+    // 00:30 IST on 1 Oct is already October's month to date.
+    expect(startOfPlatformMonth(new Date("2026-09-30T19:00:00Z")).toISOString()).toBe("2026-09-30T18:30:00.000Z");
+  });
+
+  it("encodes a platform date as UTC midnight of that date, for date-only columns", () => {
+    // 03:40 IST on 2 Oct is 22:10 UTC on 1 Oct — the row describes India's 2 Oct.
+    expect(platformDate(new Date("2026-10-01T22:10:00Z")).toISOString()).toBe("2026-10-02T00:00:00.000Z");
+  });
+
+  it("starts the calendar week on India's Monday", () => {
+    // Fri 2 Oct 2026 → Mon 28 Sept. Sun 4 Oct is still that week; Mon 5 Oct 00:30 IST starts the next.
+    expect(platformWeekStartKey(new Date("2026-10-02T08:00:00Z"))).toBe("2026-09-28");
+    expect(platformWeekStartKey(new Date("2026-10-04T12:00:00Z"))).toBe("2026-09-28");
+    expect(platformWeekStartKey(new Date("2026-10-04T19:00:00Z"))).toBe("2026-10-05");
+    expect(shiftDayKey("2026-10-01", -1)).toBe("2026-09-30");
+  });
+
+  it("finds the start of a day in a zone far east of UTC too", () => {
+    envMock.TZ = "Pacific/Kiritimati"; // UTC+14
+    expect(platformDayStart("2026-10-02").toISOString()).toBe("2026-10-01T10:00:00.000Z");
     envMock.TZ = "Asia/Kolkata";
   });
 });

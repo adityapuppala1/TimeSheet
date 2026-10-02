@@ -260,10 +260,10 @@ server.on("listening", async () => {
   startPlatformRetentionWorker();
   startBackupWorker();
   startTenantDbSampleWorker();
-  // Nightly, at 03:40 UTC — the daily business snapshot the console's revenue, churn, cohort and
+  // Nightly, at 03:40 platform time (TZ, IST by default) — the daily business snapshot the console's revenue, churn, cohort and
   // account-health screens all read instead of reopening every tenant database on every click.
   startOrgUsageSnapshotWorker();
-  // Nightly at 03:50 UTC, and only where Stripe is configured — what each subscribed workspace is
+  // Nightly at 03:50 platform time, and only where Stripe is configured — what each subscribed workspace is
   // actually billed, so the console can show the gap against list price. The one nightly job that
   // makes an outbound call, which is precisely why it is a job and not a page read.
   startBilledRevenueReconcileWorker();

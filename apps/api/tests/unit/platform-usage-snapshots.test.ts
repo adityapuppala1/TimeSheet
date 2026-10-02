@@ -108,8 +108,11 @@ vi.mock("../../src/config/tenant-context.js", () => ({
   tenantContext: { run: (_store: unknown, fn: () => Promise<unknown>) => fn(), getStore: () => undefined }
 }));
 vi.mock("../../src/utils/encryption.js", () => ({ decryptSecret: (value: string) => value, encryptSecret: (value: string) => value }));
+// The platform's zone, as config/env.ts defaults it: a snapshot's day and its month to date are India's.
+vi.mock("../../src/config/env.js", () => ({ env: { TZ: "Asia/Kolkata" } }));
 
-const { captureOrgUsageSnapshots, startOfUtcDay, USAGE_SNAPSHOT_RETENTION_DAYS } = await import("../../src/services/platform-admin-analytics.service.js");
+const { captureOrgUsageSnapshots, USAGE_SNAPSHOT_RETENTION_DAYS } = await import("../../src/services/platform-admin-analytics.service.js");
+const { platformDate } = await import("../../src/utils/platform-time.js");
 
 const org = (id: string, overrides: Partial<OrgRow> = {}): OrgRow => ({
   id,
@@ -142,30 +145,45 @@ beforeEach(() => {
 });
 
 describe("captureOrgUsageSnapshots", () => {
-  it("writes exactly one row per workspace, keyed to midnight UTC of the day", async () => {
+  it("writes exactly one row per workspace, keyed to the platform's calendar date", async () => {
     const result = await captureOrgUsageSnapshots(NOW);
 
     expect(result.captured).toBe(3);
     expect(snapshots.size).toBe(3);
-    // The grain. Every key carries the SAME day, and that day is midnight UTC — not the moment the
-    // sweep happened to run, which would give a re-run at 04:00 its own row.
+    // The grain. Every key carries the SAME day, a date-only value (UTC midnight of India's date) —
+    // not the moment the sweep happened to run, which would give a re-run at 04:00 its own row.
     for (const key of snapshots.keys()) {
       expect(key.endsWith("|2026-08-31T00:00:00.000Z")).toBe(true);
     }
-    expect(startOfUtcDay(NOW).toISOString()).toBe("2026-08-31T00:00:00.000Z");
   });
 
   it("is idempotent: a second pass on the same day updates the row instead of adding one", async () => {
     await captureOrgUsageSnapshots(NOW);
     // A later run of the same day, with the workspace having grown by one seat.
     tenantClient.user.count.mockImplementation(async ({ where }: { where: { isAgent: boolean } }) => (where.isAgent ? 2 : 8));
-    const second = await captureOrgUsageSnapshots(new Date("2026-08-31T19:00:00Z"));
+    const second = await captureOrgUsageSnapshots(new Date("2026-08-31T15:00:00Z")); // 20:30 IST, same day
 
     expect(second.captured).toBe(3);
     // THE ASSERTION THAT MATTERS. Three workspaces, two passes, three rows — not six. Without the
     // per-day uniqueness every fleet total that sums a day would double.
     expect(snapshots.size).toBe(3);
     expect(snapshots.get("acme|2026-08-31T00:00:00.000Z")!.activeSeats).toBe(8);
+  });
+
+  it("keys the row to India's calendar date — the 03:40 IST run on 2 Oct describes 2 Oct, not UTC's 1 Oct", async () => {
+    // 03:40 IST is 22:10 UTC the evening before. Keyed by UTC's date, every nightly row was labelled
+    // a day early, and the row taken on the 1st of a month landed on the last day of the previous one.
+    await captureOrgUsageSnapshots(new Date("2026-10-01T22:10:00Z"));
+    expect([...snapshots.keys()].every((key) => key.endsWith("|2026-10-02T00:00:00.000Z"))).toBe(true);
+  });
+
+  it("measures month to date from India's 1st, not from 05:30 IST on it", async () => {
+    // 03:40 IST on 1 Oct. October began at 18:30 UTC on 30 Sept; UTC's month would still be September.
+    await captureOrgUsageSnapshots(new Date("2026-09-30T22:10:00Z"));
+    const aiWindow = tenantClient.aIUsageLog.aggregate.mock.calls[0][0] as { where: { createdAt: { gte: Date } } };
+    const mailWindow = tenantClient.emailLog.groupBy.mock.calls[0][0] as { where: { createdAt: { gte: Date } } };
+    expect(aiWindow.where.createdAt.gte.toISOString()).toBe("2026-09-30T18:30:00.000Z");
+    expect(mailWindow.where.createdAt.gte.toISOString()).toBe("2026-09-30T18:30:00.000Z");
   });
 
   it("keeps sweeping after a workspace whose database cannot be opened", async () => {
@@ -261,7 +279,7 @@ describe("captureOrgUsageSnapshots", () => {
   it("prunes beyond the retention horizon, measured from the captured day", async () => {
     await captureOrgUsageSnapshots(NOW);
     expect(deletedBefore).not.toBeNull();
-    const expected = new Date(startOfUtcDay(NOW).getTime() - USAGE_SNAPSHOT_RETENTION_DAYS * 86_400_000);
+    const expected = new Date(platformDate(NOW).getTime() - USAGE_SNAPSHOT_RETENTION_DAYS * 86_400_000);
     expect(deletedBefore!.toISOString()).toBe(expected.toISOString());
     // Three years, not the sampler's 400 days: a cohort table is about what a customer who signed
     // up two years ago is doing now, and a series that has forgotten them cannot answer it.

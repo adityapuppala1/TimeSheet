@@ -1144,7 +1144,9 @@ model TenantDbSample {
 model OrgUsageSnapshot {
   id             String   @id @default(uuid())
   organizationId String
-  /// Midnight UTC of the day this row describes. The unique key with `organizationId`, so a
+  /// The platform calendar date this row describes (`TZ`, India by default), stored as UTC midnight
+  /// of that date. Rows written before October 2026 carry UTC's date of the capture instead (a
+  /// day earlier for the 03:40 IST run). The unique key with `organizationId`, so a
   /// re-run of the nightly sweep UPDATES the day instead of appending a second row — which is what
   /// stops a retried pass double-counting every workspace into the fleet totals.
   day            DateTime

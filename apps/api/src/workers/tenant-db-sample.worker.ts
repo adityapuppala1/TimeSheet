@@ -9,9 +9,11 @@
  *
  * ON THE MINUTE 25 OFFSET: :00 is the trial lifecycle, :05 backups, :30 retention. Four jobs that
  * all open tenant databases in the same second is a self-inflicted thundering herd on a box that is
- * also serving requests.
+ * also serving requests. In the platform's zone (`TZ`), named explicitly like every console sweep:
+ * India is UTC+5:30, so "minute 25" is a different minute on a process left in UTC.
  */
 import cron from "node-cron";
+import { env } from "../config/env.js";
 import { sampleAllTenantDatabases } from "../services/tenant-db-metrics.service.js";
 import { runOncePerTick } from "../services/job-claim.service.js";
 
@@ -40,5 +42,5 @@ export function startTenantDbSampleWorker(): void {
     } finally {
       running = false;
     }
-  });
+  }, { timezone: env.TZ });
 }

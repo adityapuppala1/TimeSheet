@@ -14,13 +14,16 @@
  * service and not in a new one because it loops every tenant database, and that file is this
  * codebase's single audited place for doing so.
  *
- * ON 03:40 UTC: :00 is the trial lifecycle, :05 backups, :25 the hourly database sample, :30
- * retention. Four jobs opening tenant databases in the same second is a self-inflicted thundering
- * herd on a box that is also serving requests. 03:40 is quiet, and it is AFTER midnight UTC by
- * enough that "yesterday's" month-to-date figures have already rolled over on the first of a month
- * — a sweep at 00:01 would attribute a new month's empty spend to the day before.
+ * ON 03:40 IN THE PLATFORM'S ZONE (`TZ`, Asia/Kolkata by default) — named in the schedule rather
+ * than left to whatever zone the process starts in, the way signup-digest.worker.ts names it. This
+ * header used to say "03:40 UTC" while the process ran in IST, so the job fired at 03:40 IST and the
+ * copy was wrong. :00 is the trial lifecycle, :05 backups, :25 the hourly database sample, :30
+ * retention: four jobs opening tenant databases in the same second is a self-inflicted thundering
+ * herd on a box that is also serving requests. 03:40 is quiet, and it is after India's midnight, so
+ * the row is India's date and its month to date has already rolled over on the 1st.
  */
 import cron from "node-cron";
+import { env } from "../config/env.js";
 import { captureOrgUsageSnapshots } from "../services/platform-admin-analytics.service.js";
 import { runOncePerTick } from "../services/job-claim.service.js";
 
@@ -51,5 +54,5 @@ export function startOrgUsageSnapshotWorker(): void {
     } finally {
       running = false;
     }
-  });
+  }, { timezone: env.TZ });
 }

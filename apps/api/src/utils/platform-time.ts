@@ -12,7 +12,9 @@
  * implementation of "what day is it there" in the codebase, not two.
  */
 import { env } from "../config/env.js";
-import { startOfZonedDayUtc, zonedParts } from "./recipient-time.js";
+import { dateKeyToUtc, startOfZonedDayUtc, zonedParts } from "./recipient-time.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** `YYYY-MM-DD` of `instant` in the platform's zone. */
 export function platformDayKey(instant: Date): string {
@@ -34,6 +36,52 @@ export function platformDayEnd(dateKey: string): Date {
   let probe = new Date(Date.UTC(y, m - 1, d + 1, 12));
   if (zonedParts(probe, env.TZ).dateKey > nextKey) probe = new Date(probe.getTime() - 86_400_000);
   return new Date(startOfZonedDayUtc(probe, env.TZ).getTime() - 1);
+}
+
+/** `YYYY-MM` of `instant` in the platform's zone — the console's month key (cohorts, feedback). */
+export function platformMonthKey(instant: Date): string {
+  return platformDayKey(instant).slice(0, 7);
+}
+
+/**
+ * The platform calendar date of `instant`, encoded as UTC midnight of that date — the date-only shape
+ * `OrgUsageSnapshot.day` stores. NOT an instant: 2 Oct in India is written `2026-10-02T00:00:00Z`
+ * whatever the hour, so a reader takes the date back with `getUTC*`/`toISOString().slice(0, 10)`.
+ */
+export function platformDate(instant: Date): Date {
+  return dateKeyToUtc(platformDayKey(instant));
+}
+
+/** `YYYY-MM-DD` shifted by whole days. Date-only arithmetic, so no zone and no DST cliff. */
+export function shiftDayKey(dayKey: string, days: number): string {
+  return new Date(dateKeyToUtc(dayKey).getTime() + days * DAY_MS).toISOString().slice(0, 10);
+}
+
+/**
+ * The instant a platform calendar day began. India's 2 Oct starts at 18:30 UTC on 1 Oct, so a window
+ * "from 2 Oct" must start there, not at `2026-10-02T00:00:00Z` (05:30 IST) — which is what
+ * `new Date("2026-10-02")` gives and what left mail sent after midnight IST out of "today".
+ */
+export function platformDayStart(dayKey: string): Date {
+  // Noon UTC of the date is the same calendar date in every zone from UTC−11 to UTC+11; nudged a day
+  // for the few zones beyond that, then the zone's own midnight is found from inside the right day.
+  let probe = new Date(dateKeyToUtc(dayKey).getTime() + DAY_MS / 2);
+  const probed = platformDayKey(probe);
+  if (probed > dayKey) probe = new Date(probe.getTime() - DAY_MS);
+  else if (probed < dayKey) probe = new Date(probe.getTime() + DAY_MS);
+  return startOfZonedDayUtc(probe, env.TZ);
+}
+
+/** The instant the platform calendar month containing `instant` began — what "month to date" means. */
+export function startOfPlatformMonth(instant: Date): Date {
+  return platformDayStart(`${platformMonthKey(instant)}-01`);
+}
+
+/** `YYYY-MM-DD` of the Monday that starts the platform calendar week (Mon–Sun) containing `instant`. */
+export function platformWeekStartKey(instant: Date): string {
+  const parts = zonedParts(instant, env.TZ);
+  // `weekday` is 0 = Sunday … 6 = Saturday; a Monday week puts Sunday at the END, six days in.
+  return shiftDayKey(parts.dateKey, -((parts.weekday + 6) % 7));
 }
 
 /** `YYYY-MM-DDTHH` of `instant` in the platform's zone — the key for "once per hour". */

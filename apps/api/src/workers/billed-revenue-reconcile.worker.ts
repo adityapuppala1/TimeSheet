@@ -14,7 +14,8 @@
  * what to keep; this file only decides when. That is what lets a test drive the same pass without
  * cron, and the console trigger one by hand from the Revenue page.
  *
- * ON 03:50 UTC: :00 is the trial lifecycle, :05 backups, :25 the hourly database sample, :30
+ * ON 03:50 IN THE PLATFORM'S ZONE (`TZ`, Asia/Kolkata by default; named in the schedule, not left
+ * to the process — this said "UTC" while it ran in IST): :00 is the trial lifecycle, :05 backups, :25 the hourly database sample, :30
  * retention, :40 the usage snapshot. This runs last of the nightly set on purpose — it is the only
  * one that leaves the building, so it should not be competing for the box with four jobs opening
  * tenant databases, and nothing else waits on its result.
@@ -32,6 +33,7 @@
  * revenue screen should never be what changes a customer's subscription.
  */
 import cron from "node-cron";
+import { env } from "../config/env.js";
 import { reconcileSubscriptionSeats } from "../services/billing-sync.service.js";
 import { reconcileBilledRevenue } from "../services/platform-billing-reconcile.service.js";
 import { runOncePerTick } from "../services/job-claim.service.js";
@@ -88,5 +90,5 @@ export function startBilledRevenueReconcileWorker(): void {
     } finally {
       running = false;
     }
-  });
+  }, { timezone: env.TZ });
 }

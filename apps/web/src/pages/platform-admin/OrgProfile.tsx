@@ -231,7 +231,7 @@ export function PlatformAdminOrgProfile() {
           <EmptyState
             icon={Activity}
             title="No snapshot for this workspace yet."
-            description="Health is scored from the daily usage snapshot, which runs at 03:40 UTC. It cannot be backfilled, so this fills in from the first sweep onward."
+            description="Health is scored from the daily usage snapshot, which runs at 03:40 platform time (IST). It cannot be backfilled, so this fills in from the first sweep onward."
           />
         )}
         {usage.data && usage.data.coverage.snapshots > 0 && (

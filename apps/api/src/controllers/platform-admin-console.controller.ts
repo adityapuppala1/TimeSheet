@@ -1765,7 +1765,7 @@ platformAdminConsoleRouter.get("/analytics/org/:orgId", async (req, res) => {
 });
 
 /**
- * Take today's snapshot now rather than waiting for 03:40 UTC.
+ * Take today's snapshot now rather than waiting for 03:40 platform time (IST).
  *
  * `platform:operate`, matching `POST /monitoring/sample`: this opens a connection to every tenant
  * database in the fleet. Safe to run twice — the pass upserts on (organizationId, day), so a
@@ -1800,7 +1800,7 @@ platformAdminConsoleRouter.get("/analytics/billed-revenue", async (_req, res) =>
 });
 
 /**
- * Reconcile against Stripe NOW rather than waiting for 03:50 UTC.
+ * Reconcile against Stripe NOW rather than waiting for 03:50 platform time (IST).
  *
  * `platform:billing`, and this is the one route on this screen that is not `platform:read`. It is
  * the only action in the console that spends our Stripe API quota, and what it fetches is money —
