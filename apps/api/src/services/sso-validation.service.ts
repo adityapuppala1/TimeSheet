@@ -91,25 +91,62 @@ export interface CertificateFacts {
   fingerprint: string;
 }
 
+const PEM_BLOCK = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+
+/** Re-armours base64 certificate DER as canonical PEM: one header, 64-character lines, one footer —
+ *  the exact shape node-saml's PEM check accepts, whatever line endings the admin's paste carried. */
+function canonicalPem(body: string): string {
+  const base64 = body.replace(/-----(?:BEGIN|END) CERTIFICATE-----/g, "").replace(/\s+/g, "");
+  return `-----BEGIN CERTIFICATE-----\n${base64.replace(/(.{64})/g, "$1\n").trimEnd()}\n-----END CERTIFICATE-----`;
+}
+
 /**
- * Parses a SAML IdP signing certificate.
+ * Every certificate in a stored IdP certificate field, as canonical PEM.
+ *
+ * A BUNDLE IS HOW CERTIFICATE ROLLOVER WORKS WITHOUT AN OUTAGE. An IdP that rotates its signing
+ * certificate publishes the new one ahead of time; an admin who pastes both (old and new, PEM
+ * armoured, one after the other) keeps sign-in working on either side of the switch. The field was
+ * always text, so this needs no schema change: one certificate is simply a bundle of one.
+ *
+ * Accepts the bare base64 an Okta metadata blob carries as well — one certificate, since without the
+ * armour there is nothing to split on.
+ */
+export function certificatePems(raw: string | null | undefined): string[] {
+  const trimmed = raw?.trim() ?? "";
+  if (!trimmed) return [];
+  if (!trimmed.includes("BEGIN CERTIFICATE")) return [canonicalPem(trimmed)];
+  return (trimmed.match(PEM_BLOCK) ?? []).map(canonicalPem);
+}
+
+/** Facts about EVERY certificate in the field, or null when any of them cannot be read — a bundle
+ *  with one garbled member is a paste that went wrong, and saving it would hide that. */
+export function describeCertificates(raw: string | null | undefined): CertificateFacts[] | null {
+  const pems = certificatePems(raw);
+  if (pems.length === 0) return null;
+  const facts = pems.map(describeOne);
+  return facts.every((fact): fact is CertificateFacts => fact !== null) ? facts : null;
+}
+
+/**
+ * Parses a SAML IdP signing certificate field — one certificate or a rollover bundle.
  *
  * Accepts it with or without PEM armour, because IdP admin consoles hand out both: Okta gives a
  * bare base64 blob inside its metadata XML, while ADFS exports a `-----BEGIN CERTIFICATE-----`
  * file. Rejecting the bare form would fail the more common of the two.
  *
+ * For a bundle it describes the certificate that expires LAST, because that date — not the old
+ * certificate's — is when sign-in actually stops working.
+ *
  * Returns null rather than throwing on anything unparseable, so the caller decides whether that is
  * a validation error (on save) or a test failure (on test).
  */
 export function describeCertificate(raw: string | null | undefined): CertificateFacts | null {
-  if (!raw) return null;
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
+  const all = describeCertificates(raw);
+  if (!all) return null;
+  return all.reduce((latest, next) => (next.validTo > latest.validTo ? next : latest));
+}
 
-  const pem = trimmed.includes("BEGIN CERTIFICATE")
-    ? trimmed
-    : `-----BEGIN CERTIFICATE-----\n${trimmed.replace(/\s+/g, "").replace(/(.{64})/g, "$1\n")}\n-----END CERTIFICATE-----`;
-
+function describeOne(pem: string): CertificateFacts | null {
   let cert: X509Certificate;
   try {
     cert = new X509Certificate(pem);

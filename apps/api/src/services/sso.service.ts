@@ -22,14 +22,17 @@
  * module-level store — see samlRequestIdCache below for its limits.
  */
 import * as client from "openid-client";
-import { SAML, ValidateInResponseTo, type CacheProvider } from "@node-saml/node-saml";
+import { SAML, ValidateInResponseTo, type CacheProvider, type Profile } from "@node-saml/node-saml";
 import { Client as LdapClient, type Entry as LdapEntry } from "ldapts";
 import jwt from "jsonwebtoken";
+import { z } from "zod";
 import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { JWT_ALGORITHM } from "../utils/security.js";
+import { certificatePems } from "./sso-validation.service.js";
+import { workspaceUrlForSlug } from "./workspace-directory.service.js";
 
 export type OidcProviderType = "GOOGLE" | "MICROSOFT";
 export type SsoProviderType = OidcProviderType | "SAML" | "LDAP";
@@ -262,6 +265,9 @@ interface SamlConfig {
   idpSsoUrl: string;
   idpCertificate: string;
   spEntityId: string | null;
+  /** Somebody has completed a sign-in through this configuration. The staged-rollout signal for the
+   *  message checks in checkSamlAddressing — see there. */
+  proven: boolean;
 }
 
 /** Same "fetch + validate + reconstruct" shape as getEnabledSsoConfig above, kept as a
@@ -272,7 +278,13 @@ export async function getEnabledSamlConfig(orgId: string): Promise<SamlConfig> {
   if (!config?.isEnabled || !config.idpEntityId || !config.idpSsoUrl || !config.idpCertificate) {
     throw new AppError(404, "SAML sign-in isn't configured for this workspace.");
   }
-  return { idpEntityId: config.idpEntityId, idpSsoUrl: config.idpSsoUrl, idpCertificate: config.idpCertificate, spEntityId: config.spEntityId };
+  return {
+    idpEntityId: config.idpEntityId,
+    idpSsoUrl: config.idpSsoUrl,
+    idpCertificate: config.idpCertificate,
+    spEntityId: config.spEntityId,
+    proven: Boolean(config.lastSuccessfulLoginAt)
+  };
 }
 
 /**
@@ -361,18 +373,193 @@ function samlRequestIdStore(orgId: string): CacheProvider {
   };
 }
 
-/** Not cached across calls — same reasoning as buildOidcConfig: constructing a SAML instance
- *  is cheap (no network round-trip, unlike OIDC discovery), so there's nothing worth caching.
- *  The request-id store it is handed is the shared control-plane table; see above. */
+/** How far apart our clock and the IdP's may be. node-saml's default is zero, so an IdP running a
+ *  few seconds ahead produced "SAML assertion not yet valid" — three minutes is the common allowance
+ *  and still far inside any assertion's own validity window. */
+const SAML_CLOCK_SKEW_MS = 3 * 60_000;
+
+/**
+ * Not cached across calls — same reasoning as buildOidcConfig: constructing a SAML instance
+ * is cheap (no network round-trip, unlike OIDC discovery), so there's nothing worth caching.
+ * The request-id store it is handed is the shared control-plane table; see above.
+ *
+ * EITHER SIGNATURE IS ENOUGH: `wantAuthnResponseSigned` and `wantAssertionsSigned` are both off.
+ * node-saml 5 defaults both ON, demanding the response AND the assertion be signed — and Entra ID
+ * ("Sign SAML assertion") and Google Workspace sign only the assertion by default, so SAML through
+ * either failed with "Invalid document signature" (audit H2). With both off node-saml still requires
+ * a valid signature from a configured certificate over the response OR the assertion, still refuses
+ * an unsigned response, and still refuses a second assertion beside the signed one (the signature-
+ * wrapping attack). tests/unit/saml-signed-response.test.ts signs real responses to prove all of it.
+ *
+ * `idpCert` is an ARRAY — every certificate in the stored field, so a rollover bundle verifies
+ * against old and new alike. `idpIssuer` is passed because node-saml checks it on logout messages;
+ * it does NOT check it on a sign-in response, which is why checkSamlAddressing does that itself.
+ */
 function buildSamlClient(config: SamlConfig, orgId: string): SAML {
   return new SAML({
     callbackUrl: samlCallbackUrl(),
     entryPoint: config.idpSsoUrl,
     issuer: config.spEntityId || DEFAULT_SP_ENTITY_ID,
-    idpCert: config.idpCertificate,
+    idpCert: certificatePems(config.idpCertificate),
+    idpIssuer: config.idpEntityId,
+    wantAuthnResponseSigned: false,
+    wantAssertionsSigned: false,
+    acceptedClockSkewMs: SAML_CLOCK_SKEW_MS,
     validateInResponseTo: ValidateInResponseTo.always,
     cacheProvider: samlRequestIdStore(orgId)
   });
+}
+
+const ACS_PATH = "/api/auth/sso/saml/acs";
+
+/** host[:port] + path, lower-cased host, no trailing slash. The SCHEME is deliberately left out: a
+ *  TLS-terminating proxy makes "is this https?" depend on proxy configuration, while the thing
+ *  Destination and Recipient exist to stop — a response meant for ANOTHER service provider — is a
+ *  different host or path, never a different scheme. */
+function acsLocation(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.host.toLowerCase()}${parsed.pathname.replace(/\/$/, "")}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every address at which THIS workspace's ACS legitimately receives responses.
+ *
+ * Not just `APP_BASE_URL`: the route answers on every hostname that reaches the API (the org comes
+ * from the signed RelayState, never the Host), and the settings card showed the ACS as a RELATIVE
+ * path until this release, so admins registered it on whatever hostname they were looking at — the
+ * workspace's own subdomain, or its custom domain. Each of those is a correct registration, and
+ * refusing it would be a lockout, not a security fix. `receivedHosts` adds the host this POST
+ * actually arrived at (Host and X-Forwarded-Host), which is the location the SAML spec means.
+ */
+async function acceptedAcsLocations(orgId: string, receivedHosts: string[]): Promise<Set<string>> {
+  const locations = new Set<string>();
+  const add = (base: string) => {
+    const location = acsLocation(`${base.replace(/\/$/, "")}${ACS_PATH}`);
+    if (location) locations.add(location);
+  };
+  add(env.APP_BASE_URL);
+  for (const host of receivedHosts) add(`https://${host}`);
+  const org = await controlPrisma.organization.findUnique({
+    where: { id: orgId },
+    select: { slug: true, domains: { where: { verifiedAt: { not: null } }, select: { domain: true } } }
+  });
+  if (org) {
+    add(workspaceUrlForSlug(org.slug));
+    for (const { domain } of org.domains) add(`https://${domain}`);
+  }
+  return locations;
+}
+
+/** The `Destination` on the response's ROOT element, read from its start tag alone.
+ *  Walks past the prolog (declaration, comments, processing instructions) by hand rather than with
+ *  one regex, so a `Destination` hidden in a comment ahead of the root is never the one read. */
+const PROLOG_ITEMS: Array<[open: string, close: string]> = [
+  ["<?", "?>"],
+  ["<!--", "-->"]
+];
+
+function responseDestination(xml: string): string | null {
+  let at = 0;
+  for (;;) {
+    while (at < xml.length && (xml.codePointAt(at) ?? 0) <= 32) at++;
+    const item = PROLOG_ITEMS.find(([open]) => xml.startsWith(open, at));
+    if (!item) break;
+    const close = xml.indexOf(item[1], at);
+    if (close === -1) return null; // an unterminated comment or declaration: nothing trustworthy to read
+    at = close + item[1].length;
+  }
+  const end = xml.indexOf(">", at);
+  if (xml[at] !== "<" || end === -1) return null;
+  const match = /(?:^|\s)Destination\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(xml.slice(at + 1, end));
+  return match ? (match[1] ?? match[2] ?? null) : null;
+}
+
+type ParsedSubject = { SubjectConfirmation?: Array<{ SubjectConfirmationData?: Array<{ $?: { Recipient?: unknown } }> }> };
+
+/** Every SubjectConfirmationData Recipient in the VERIFIED assertion (node-saml's parsed copy of the
+ *  signed XML, so these values are covered by the signature). */
+function subjectRecipients(profile: Profile): string[] {
+  const parsed = profile.getAssertion?.() as { Assertion?: { Subject?: ParsedSubject[] } } | undefined;
+  const confirmations = parsed?.Assertion?.Subject?.[0]?.SubjectConfirmation ?? [];
+  return confirmations
+    .flatMap((confirmation) => confirmation.SubjectConfirmationData ?? [])
+    .map((data) => data.$?.Recipient)
+    .filter((recipient): recipient is string => typeof recipient === "string" && recipient.length > 0);
+}
+
+/** An entity ID compared the way admins actually mistype one: letter case and one trailing slash. */
+const sameEntity = (a: string, b: string) => a.trim().replace(/\/$/, "").toLowerCase() === b.trim().replace(/\/$/, "").toLowerCase();
+
+/**
+ * The message checks node-saml does not make for us (audit M5): the response must come from the
+ * configured IdP entity, and be addressed (Destination, SubjectConfirmationData Recipient) to this
+ * workspace's ACS. Each is checked only when the IdP sent it — both addressing fields are optional
+ * in the protocol.
+ *
+ * STAGED, SO NOBODY IS LOCKED OUT. None of these was ever checked before, so an existing workspace
+ * whose IdP entity ID was typed with a stray difference, or whose IdP addresses an ACS behind a
+ * proxy that rewrites the Host header, has been signing in happily and would stop on deploy. So:
+ * a configuration nobody has ever signed in with (`proven` false — every NEW configuration) is
+ * refused outright; one that has demonstrably let people in is accepted with an operator warning
+ * naming exactly what did not match. The signature, audience, InResponseTo and validity window are
+ * enforced for everyone regardless — this staging only covers checks that are new.
+ */
+async function checkSamlAddressing(orgId: string, config: SamlConfig, profile: Profile, receivedHosts: string[]): Promise<void> {
+  const problems: string[] = [];
+  if (profile.issuer && !sameEntity(profile.issuer, config.idpEntityId)) {
+    problems.push(`issuer "${profile.issuer}" is not the configured IdP entity ID "${config.idpEntityId}"`);
+  }
+
+  const destination = responseDestination(profile.getSamlResponseXml?.() ?? "");
+  const recipients = subjectRecipients(profile);
+  if (destination !== null || recipients.length > 0) {
+    const accepted = await acceptedAcsLocations(orgId, receivedHosts);
+    const isOurs = (url: string) => accepted.has(acsLocation(url) ?? "");
+    if (destination !== null && !isOurs(destination)) problems.push(`Destination "${destination}" is not this workspace's ACS URL`);
+    for (const recipient of recipients) {
+      if (!isOurs(recipient)) problems.push(`Recipient "${recipient}" is not this workspace's ACS URL`);
+    }
+  }
+
+  if (problems.length === 0) return;
+  if (!config.proven) {
+    throw new AppError(400, `The identity provider's response doesn't match this workspace's SAML settings: ${problems.join("; ")}.`, {
+      code: "SSO_CONFIG"
+    });
+  }
+  console.warn(
+    `[sso] org ${orgId}: SAML response accepted although its ${problems.join("; ")} — allowed because this configuration has signed people in before. Correct the SAML settings so this check can be enforced.`
+  );
+}
+
+const ENTRA_EMAIL_CLAIM = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress";
+const ENTRA_DISPLAY_NAME_CLAIM = "http://schemas.microsoft.com/identity/claims/displayname";
+/** NameID formats whose value MAY be an email address. Transient and persistent NameIDs are opaque
+ *  identifiers by definition — using one as an address created a junk account, holding a seat, per
+ *  sign-in (audit L1) — and the rest (Kerberos, X.509 subject, Windows domain) are not addresses. */
+const EMAIL_NAMEID_FORMATS = new Set(["urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress", "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"]);
+const EMAIL_ADDRESS = z.string().email();
+
+function firstText(value: unknown): string | null {
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === "string" && first.trim() !== "" ? first.trim() : null;
+}
+
+/** The first syntactically valid address among: the `email`/`mail` attribute (node-saml folds both,
+ *  and the eduPerson OID, into `email`), Entra's emailaddress claim, then the NameID — only when its
+ *  format allows an address. */
+function samlEmail(profile: Profile): string | null {
+  const nameIdMayBeEmail = !profile.nameIDFormat || EMAIL_NAMEID_FORMATS.has(profile.nameIDFormat);
+  const candidates = [profile.email, profile[ENTRA_EMAIL_CLAIM], nameIdMayBeEmail ? profile.nameID : null];
+  for (const candidate of candidates) {
+    const text = firstText(candidate);
+    if (text && EMAIL_ADDRESS.safeParse(text).success) return text;
+  }
+  return null;
 }
 
 export async function buildSamlAuthorizationRedirect(orgId: string): Promise<string> {
@@ -386,8 +573,12 @@ export async function buildSamlAuthorizationRedirect(orgId: string): Promise<str
  *  why the SAML route needs express.urlencoded() — unlike every other route in this app, which
  *  only ever receives JSON. RelayState carries org identity exactly like OIDC's `state` param;
  *  node-saml doesn't return it from validatePostResponseAsync so it's read here, separately,
- *  straight off the body. */
-export async function completeSamlLogin(body: Record<string, string>): Promise<{ orgId: string; identity: SsoIdentity }> {
+ *  straight off the body. `received.hosts` is the Host (and X-Forwarded-Host) the POST arrived
+ *  with — see acceptedAcsLocations. */
+export async function completeSamlLogin(
+  body: Record<string, string>,
+  received: { hosts: string[] } = { hosts: [] }
+): Promise<{ orgId: string; identity: SsoIdentity }> {
   const relayState = body.RelayState;
   if (!relayState) throw new AppError(400, "Missing RelayState parameter.");
   const { orgId, provider } = verifySsoState(relayState);
@@ -397,18 +588,25 @@ export async function completeSamlLogin(body: Record<string, string>): Promise<{
   const saml = buildSamlClient(config, orgId);
 
   // Rejects a response whose InResponseTo names a request this server never issued, or already
-  // saw answered — see samlRequestIdCache above for why that is the replay boundary.
+  // saw answered — see samlRequestIdStore above for why that is the replay boundary.
   const { profile } = await saml.validatePostResponseAsync(body);
-  const email = profile?.email ?? (typeof profile?.nameID === "string" ? profile.nameID : null);
+  if (!profile) throw new AppError(400, "The identity provider's response didn't contain a sign-in.", { code: "SSO_CONFIG" });
+  await checkSamlAddressing(orgId, config, profile, received.hosts);
+
+  const email = samlEmail(profile);
   if (!email) {
-    throw new AppError(400, "The identity provider didn't return an email address — sign-in can't continue.");
+    throw new AppError(
+      400,
+      "The identity provider didn't send a usable email address — map an email attribute (or an email-format NameID) in the SAML app.",
+      { code: "SSO_CONFIG" }
+    );
   }
 
   return {
     orgId,
     identity: {
       email,
-      name: typeof profile?.displayName === "string" ? profile.displayName : null,
+      name: firstText(profile.displayName) ?? firstText(profile[ENTRA_DISPLAY_NAME_CLAIM]),
       emailVerified: true
     }
   };

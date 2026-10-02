@@ -18,7 +18,8 @@
  * Google's uptime.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { describeCertificate, testOidcConnection } from "../../src/services/sso-validation.service.js";
+import { certificatePems, describeCertificate, describeCertificates, testOidcConnection } from "../../src/services/sso-validation.service.js";
+import { IDP_A_CERT } from "../helpers/saml-idp.js";
 
 // A real, self-signed certificate generated for this test. Long-dated on purpose: a fixture that
 // expires turns into a mystery failure years later, on a test that is not about expiry.
@@ -94,6 +95,29 @@ describe("describeCertificate", () => {
   it("refuses base64 that is not a certificate", () => {
     // Well-formed base64, wrong contents — the shape a copy-paste from the wrong field produces.
     expect(describeCertificate("aGVsbG8gd29ybGQgdGhpcyBpcyBub3QgYSBjZXJ0aWZpY2F0ZQ==")).toBeNull();
+  });
+});
+
+describe("certificate rollover bundles", () => {
+  it("splits a bundle into every certificate it holds", () => {
+    expect(certificatePems(`${PEM}\n${IDP_A_CERT}`)).toHaveLength(2);
+    expect(describeCertificates(`${PEM}\r\n\r\n${IDP_A_CERT}`)).toHaveLength(2);
+  });
+
+  it("describes the certificate that expires LAST, because that is when sign-in actually stops", () => {
+    // PEM runs to 2036, IDP_A_CERT to 2056 — in either order.
+    expect(describeCertificate(`${PEM}\n${IDP_A_CERT}`)!.validTo.slice(0, 4)).toBe("2056");
+    expect(describeCertificate(`${IDP_A_CERT}\n${PEM}`)!.validTo.slice(0, 4)).toBe("2056");
+  });
+
+  it("refuses a bundle with one garbled member rather than saving half a paste", () => {
+    const garbled = "-----BEGIN CERTIFICATE-----\nnot-a-certificate\n-----END CERTIFICATE-----";
+    expect(describeCertificate(`${PEM}\n${garbled}`)).toBeNull();
+  });
+
+  it("treats one certificate as a bundle of one, so existing configurations read exactly as before", () => {
+    expect(certificatePems(PEM)).toHaveLength(1);
+    expect(describeCertificate(PEM)!.fingerprint).toBe(describeCertificates(PEM)![0].fingerprint);
   });
 });
 

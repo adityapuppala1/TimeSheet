@@ -143,7 +143,13 @@ ssoRouter.get("/saml/start", async (req, res, next) => {
 // body parser, scoped locally rather than adding express.urlencoded() globally in app.ts.
 ssoRouter.post("/saml/acs", express.urlencoded({ extended: false }), async (req, res, next) => {
   try {
-    const { orgId, identity } = await completeSamlLogin(req.body as Record<string, string>);
+    // The host this POST arrived at, as the browser named it and as a proxy recorded it — the ACS
+    // location the response's Destination/Recipient are checked against (sso.service.ts).
+    const forwarded = req.headers["x-forwarded-host"];
+    const hosts = [req.headers.host, Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(",")[0]?.trim()].filter(
+      (host): host is string => Boolean(host)
+    );
+    const { orgId, identity } = await completeSamlLogin(req.body as Record<string, string>, { hosts });
     await finishSsoLogin(req, res, orgId, identity, "SAML");
   } catch (error) {
     next(error);
