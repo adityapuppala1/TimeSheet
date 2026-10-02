@@ -234,6 +234,8 @@ signupRouter.post(
 
     const workspaces = await findWorkspacesForEmail(email);
     if (workspaces.length > 0) {
+      // Not a prospect: the console's funnel counts these apart from people who could become customers.
+      await recordSignupStage("EXISTING_MEMBER", { email });
       res.json({ next: "member", workspaces });
       return;
     }

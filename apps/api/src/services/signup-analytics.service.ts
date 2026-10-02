@@ -5,6 +5,10 @@
  * WHERE EACH NUMBER COMES FROM, because each has a trap:
  *  - The funnel is the SignupAttempt rows (signup-funnel.service.ts). They carry a domain and a keyed
  *    hash, never an address, so this page can be read by any console role without exposing people.
+ *    It counts PEOPLE — distinct hashes — as a cohort: everyone whose FIRST code was sent in the
+ *    period, and how many of THEM went on to each step. It used to count rows per stage, so a resend
+ *    was a second "code sent", an existing member signing in was a "verified" prospect, and a step
+ *    rate could pass 100%.
  *  - "Converted" is trial-conversion.ts#isConverted — the rule Revenue, retention and the lifecycle
  *    worker use: a checkout (which clears the trial tier), a subscription, or a paid tier set by hand.
  *    A trial grants Team through `trialTier` on top of STARTER, so a running trial is never converted.
@@ -28,7 +32,11 @@ export type SignupPeriod = (typeof PERIODS)[number];
 
 export interface SignupAnalytics {
   days: SignupPeriod;
-  funnel: { codeSent: number; verified: number; created: number; joinRequested: number; unavailable: number; refused: number; failed: number };
+  /** People, not rows. `codeSent` is the cohort; every later step counts cohort members who reached
+   *  it AND the step before it, so no rate exceeds 100%. `existingMembers` verified only to reach a
+   *  workspace they already belong to. `refused` is people refused before a code went out — outside
+   *  the cohort by definition. */
+  funnel: { codeSent: number; verified: number; existingMembers: number; created: number; joinRequested: number; unavailable: number; refused: number; failed: number };
   byDay: Array<{ day: string; selfServe: number; console: number }>;
   /** Every self-serve workspace created in the period, and how many of them have converted. */
   selfServe: { total: number; converted: number };
@@ -58,21 +66,19 @@ export function clampSignupPeriod(days: number): SignupPeriod {
   return PERIODS.reduce((best, p) => (Math.abs(p - days) < Math.abs(best - days) ? p : best), PERIODS[0]);
 }
 
-const STAGE_KEY: Record<string, keyof SignupAnalytics["funnel"]> = {
-  CODE_SENT: "codeSent",
-  VERIFIED: "verified",
-  CREATED: "created",
-  JOIN_REQUESTED: "joinRequested",
-  UNAVAILABLE: "unavailable",
-  REFUSED: "refused",
-  FAILED: "failed"
-};
+/** The steps after verification, as the funnel key each one is counted under. */
+const AFTER_VERIFIED: Array<[string, keyof SignupAnalytics["funnel"]]> = [
+  ["EXISTING_MEMBER", "existingMembers"],
+  ["CREATED", "created"],
+  ["JOIN_REQUESTED", "joinRequested"],
+  ["UNAVAILABLE", "unavailable"],
+  ["FAILED", "failed"]
+];
 
 /** Days are the platform's (Asia/Kolkata by default), never UTC's — see utils/platform-time.ts. */
 const dayKey = platformDayKey;
 
-type StageCount = { stage: string; _count: { _all: number } };
-type DomainStageCount = StageCount & { domain: string | null };
+type DomainStageCount = { stage: string; domain: string | null; _count: { _all: number } };
 type CreatedOrg = {
   id: string;
   name: string;
@@ -90,12 +96,36 @@ type CreatedOrg = {
 /** How many self-serve workspaces the page lists. The counts above it are over all of them. */
 const RECENT_LIMIT = 100;
 
-function funnelFrom(stageCounts: StageCount[]): SignupAnalytics["funnel"] {
-  const funnel: SignupAnalytics["funnel"] = { codeSent: 0, verified: 0, created: 0, joinRequested: 0, unavailable: 0, refused: 0, failed: 0 };
-  for (const row of stageCounts) {
-    const key = STAGE_KEY[row.stage];
-    if (key) funnel[key] += row._count._all;
-  }
+/**
+ * The funnel as people. The cohort is every hash whose FIRST `CODE_SENT` ever falls inside the
+ * period — someone who first asked for a code last month and verified this week belongs to last
+ * month's cohort, not this one. Each later step is counted among the cohort members who verified,
+ * so a step can never exceed the one before it. Rows with no hash (none are written today) cannot be
+ * told apart and are left out.
+ */
+async function peopleFunnel(gte: Date): Promise<SignupAnalytics["funnel"]> {
+  const [firstCodes, refusedPeople] = await Promise.all([
+    controlPrisma.signupAttempt.groupBy({
+      by: ["emailHash"],
+      where: { stage: "CODE_SENT", emailHash: { not: null } },
+      _min: { createdAt: true },
+      having: { createdAt: { _min: { gte } } }
+    }),
+    controlPrisma.signupAttempt.groupBy({ by: ["emailHash"], where: { stage: "REFUSED", emailHash: { not: null }, createdAt: { gte } }, _count: { _all: true } })
+  ]);
+  const cohort = firstCodes.map((row) => row.emailHash).filter((hash): hash is string => hash !== null);
+  const funnel: SignupAnalytics["funnel"] = { codeSent: cohort.length, verified: 0, existingMembers: 0, created: 0, joinRequested: 0, unavailable: 0, refused: refusedPeople.length, failed: 0 };
+  if (cohort.length === 0) return funnel;
+
+  const reached = await controlPrisma.signupAttempt.findMany({
+    where: { emailHash: { in: cohort }, stage: { in: ["VERIFIED", ...AFTER_VERIFIED.map(([stage]) => stage)] } },
+    select: { emailHash: true, stage: true },
+    distinct: ["emailHash", "stage"]
+  });
+  const peopleAt = (stage: string) => new Set(reached.filter((row) => row.stage === stage).map((row) => row.emailHash));
+  const verified = peopleAt("VERIFIED");
+  funnel.verified = verified.size;
+  for (const [stage, key] of AFTER_VERIFIED) funnel[key] = [...peopleAt(stage)].filter((hash) => verified.has(hash)).length;
   return funnel;
 }
 
@@ -186,8 +216,8 @@ export async function getSignupAnalytics(requestedDays: number, now = new Date()
   const days = clampSignupPeriod(requestedDays);
   const gte = new Date(now.getTime() - days * DAY_MS);
 
-  const [stageCounts, failures, created, domainStages] = await Promise.all([
-    controlPrisma.signupAttempt.groupBy({ by: ["stage"], where: { createdAt: { gte } }, _count: { _all: true } }),
+  const [funnel, failures, created, domainStages] = await Promise.all([
+    peopleFunnel(gte),
     controlPrisma.signupAttempt.findMany({
       where: { stage: "FAILED", createdAt: { gte } },
       select: { createdAt: true, domain: true, detail: true },
@@ -207,7 +237,7 @@ export async function getSignupAnalytics(requestedDays: number, now = new Date()
   const seats = await latestSeatsFor(listed.map((o) => o.id));
   return {
     days,
-    funnel: funnelFrom(stageCounts),
+    funnel,
     byDay: byDayFrom(created, days, now),
     selfServe: { total: selfServe.length, converted: selfServe.filter(isConverted).length },
     recent: listed.map((o) => recentRow(o, seats, now)),

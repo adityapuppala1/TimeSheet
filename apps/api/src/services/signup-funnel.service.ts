@@ -15,7 +15,9 @@ import { companyDomainOf } from "../utils/company-domain.js";
 import { emailDomainOf } from "../utils/free-mail-domains.js";
 import { directoryHash } from "./workspace-directory.service.js";
 
-export type SignupStage = "CODE_SENT" | "REFUSED" | "VERIFIED" | "CREATED" | "JOIN_REQUESTED" | "UNAVAILABLE" | "FAILED";
+/** `EXISTING_MEMBER`: verified, and the address already belongs to a workspace — somebody signing in
+ *  through the signup page, not a prospect. Recorded so the funnel can tell the two apart. */
+export type SignupStage = "CODE_SENT" | "REFUSED" | "VERIFIED" | "EXISTING_MEMBER" | "CREATED" | "JOIN_REQUESTED" | "UNAVAILABLE" | "FAILED";
 
 const DETAIL_MAX = 500;
 

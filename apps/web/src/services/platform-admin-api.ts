@@ -115,7 +115,10 @@ export type PlanTier = "STARTER" | "TEAM" | "ENTERPRISE";
 /** GET /signups — see signup-analytics.service.ts. Addresses never appear except a workspace's owner. */
 export interface SignupAnalytics {
   days: 7 | 30 | 90;
-  funnel: { codeSent: number; verified: number; created: number; joinRequested: number; unavailable: number; refused: number; failed: number };
+  /** PEOPLE, as a cohort: everyone whose first code was sent in the period (`codeSent`), and how many
+   *  of them reached each later step — never more than the step before. `existingMembers` verified
+   *  only to reach a workspace they already belong to; `refused` were refused before any code. */
+  funnel: { codeSent: number; verified: number; existingMembers: number; created: number; joinRequested: number; unavailable: number; refused: number; failed: number };
   byDay: Array<{ day: string; selfServe: number; console: number }>;
   /** Over EVERY self-serve workspace in the period — `recent` is capped, these counts are not. */
   selfServe: { total: number; converted: number };

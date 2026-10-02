@@ -1,7 +1,8 @@
 /**
  * The console's Signups page (signup Phase 1): what the operators read to answer "is self-serve
  * working, and are the people it brings in staying?". Pinned:
- *  - the funnel counts each stage inside the period, from the funnel rows;
+ *  - the funnel counts PEOPLE (the keyed email hash), as a cohort of those whose FIRST code was sent
+ *    in the period — a resend is not a second person, and no step can exceed the one before it;
  *  - `converted` is the shared trial-conversion rule (trial-conversion.ts#isConverted): a checkout,
  *    a subscription or a paid tier set by hand — the same answer Revenue and retention give;
  *  - the "converted of N self-serve" figure is counted on the server over EVERY self-serve workspace
@@ -12,7 +13,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type Attempt = { stage: string; domain: string | null; organizationId: string | null; detail: string | null; createdAt: Date };
+type Attempt = { stage: string; domain: string | null; emailHash: string | null; organizationId: string | null; detail: string | null; createdAt: Date };
 type Org = {
   id: string;
   name: string;
@@ -33,25 +34,42 @@ let orgs: Org[] = [];
 let snapshots: Snapshot[] = [];
 
 const since = (where: { createdAt?: { gte: Date } }, at: Date) => !where.createdAt || at >= where.createdAt.gte;
+type AttemptWhere = {
+  createdAt?: { gte: Date };
+  domain?: { not: null };
+  emailHash?: { not: null } | { in: string[] };
+  stage?: string | { in: string[] };
+};
+const attemptMatches = (a: Attempt, where: AttemptWhere) => {
+  if (!since(where, a.createdAt)) return false;
+  if (where.domain && a.domain === null) return false;
+  if (where.emailHash && "not" in where.emailHash && a.emailHash === null) return false;
+  if (where.emailHash && "in" in where.emailHash && !(a.emailHash && where.emailHash.in.includes(a.emailHash))) return false;
+  if (typeof where.stage === "string" && a.stage !== where.stage) return false;
+  if (where.stage && typeof where.stage === "object" && !where.stage.in.includes(a.stage)) return false;
+  return true;
+};
 const control = {
   signupAttempt: {
-    groupBy: vi.fn(async ({ by, where }: { by: string[]; where: { createdAt: { gte: Date }; domain?: { not: null } } }) => {
-      const rows = attempts.filter((a) => since(where, a.createdAt) && (!where.domain || a.domain !== null));
-      const groups = new Map<string, Record<string, unknown>>();
+    groupBy: vi.fn(async ({ by, where, having }: { by: string[]; where: AttemptWhere; having?: { createdAt?: { _min?: { gte: Date } } } }) => {
+      const rows = attempts.filter((a) => attemptMatches(a, where));
+      const groups = new Map<string, Record<string, unknown> & { _rows: Attempt[] }>();
       for (const row of rows) {
         const key = by.map((k) => String(row[k as keyof Attempt])).join("|");
-        const group = groups.get(key) ?? { ...Object.fromEntries(by.map((k) => [k, row[k as keyof Attempt]])), _count: { _all: 0 } };
+        const group = groups.get(key) ?? { ...Object.fromEntries(by.map((k) => [k, row[k as keyof Attempt]])), _count: { _all: 0 }, _rows: [] };
         (group._count as { _all: number })._all += 1;
+        group._rows.push(row);
         groups.set(key, group);
       }
-      return [...groups.values()];
+      return [...groups.values()]
+        .map(({ _rows, ...group }) => ({ ...group, _min: { createdAt: new Date(Math.min(..._rows.map((r) => r.createdAt.getTime()))) } }))
+        .filter((group) => !having?.createdAt?._min || group._min.createdAt >= having.createdAt._min.gte);
     }),
-    findMany: vi.fn(async ({ where, take }: { where: { stage: string; createdAt: { gte: Date } }; take: number }) =>
-      attempts
-        .filter((a) => a.stage === where.stage && since(where, a.createdAt))
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-        .slice(0, take)
-    )
+    findMany: vi.fn(async ({ where, take, distinct }: { where: AttemptWhere; take?: number; distinct?: string[] }) => {
+      const rows = attempts.filter((a) => attemptMatches(a, where)).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      const unique = distinct ? [...new Map(rows.map((r) => [distinct.map((k) => String(r[k as keyof Attempt])).join("|"), r])).values()] : rows;
+      return take ? unique.slice(0, take) : unique;
+    })
   },
   organization: {
     findMany: vi.fn(async ({ where }: { where: { createdAt: { gte: Date }; createdVia?: string } }) =>
@@ -73,7 +91,9 @@ const { clampSignupPeriod, getSignupAnalytics, overviewSignups } = await import(
 const now = new Date("2026-10-02T12:00:00Z");
 const DAY = 24 * 60 * 60 * 1000;
 const daysAgo = (n: number) => new Date(now.getTime() - n * DAY);
-const at = (stage: string, n: number, extra: Partial<Attempt> = {}): Attempt => ({ stage, domain: "northwind.co.uk", organizationId: null, detail: null, createdAt: daysAgo(n), ...extra });
+const at = (stage: string, n: number, extra: Partial<Attempt> = {}): Attempt => ({ stage, domain: "northwind.co.uk", emailHash: "h-priya", organizationId: null, detail: null, createdAt: daysAgo(n), ...extra });
+/** One person's attempt — the keyed hash is what makes them one person across rows. */
+const by = (person: string, stage: string, n: number, extra: Partial<Attempt> = {}): Attempt => at(stage, n, { emailHash: `h-${person}`, ...extra });
 const org = (extra: Partial<Org>): Org => ({
   id: "o",
   name: "Org",
@@ -108,24 +128,58 @@ describe("clampSignupPeriod", () => {
 });
 
 describe("getSignupAnalytics", () => {
-  it("counts each funnel stage inside the period only", async () => {
+  it("counts each funnel step as PEOPLE whose first code was sent in the period", async () => {
     attempts = [
-      at("CODE_SENT", 1),
-      at("CODE_SENT", 2),
-      at("CODE_SENT", 3),
-      at("VERIFIED", 1),
-      at("VERIFIED", 2),
-      at("CREATED", 1),
-      at("JOIN_REQUESTED", 2),
-      at("UNAVAILABLE", 2),
-      at("REFUSED", 1, { domain: "gmail.com" }),
-      at("FAILED", 1, { detail: "Access denied" }),
-      at("CODE_SENT", 20) // outside 7 days
+      by("a", "CODE_SENT", 3),
+      by("a", "VERIFIED", 3),
+      by("a", "CREATED", 3),
+      by("b", "CODE_SENT", 2),
+      by("b", "VERIFIED", 2),
+      by("b", "JOIN_REQUESTED", 2),
+      by("c", "CODE_SENT", 2),
+      by("c", "VERIFIED", 2),
+      by("c", "UNAVAILABLE", 2),
+      by("d", "CODE_SENT", 1),
+      by("d", "VERIFIED", 1),
+      by("d", "FAILED", 1, { detail: "Access denied" }),
+      by("e", "REFUSED", 1, { domain: "gmail.com" }),
+      by("f", "CODE_SENT", 20) // first code outside 7 days
     ];
     const result = await getSignupAnalytics(7, now);
     expect(result.days).toBe(7);
-    expect(result.funnel).toEqual({ codeSent: 3, verified: 2, created: 1, joinRequested: 1, unavailable: 1, refused: 1, failed: 1 });
+    expect(result.funnel).toEqual({ codeSent: 4, verified: 4, existingMembers: 0, created: 1, joinRequested: 1, unavailable: 1, refused: 1, failed: 1 });
     expect(result.failures).toEqual([{ at: daysAgo(1).toISOString(), domain: "northwind.co.uk", detail: "Access denied" }]);
+  });
+
+  it("counts a person once however many codes they asked for", async () => {
+    // Three resends and two verifications are one person who verified — counted as events, the
+    // funnel read 3 codes and 2 verifications, and step rates drifted with how often people resend.
+    attempts = [by("a", "CODE_SENT", 3), by("a", "CODE_SENT", 2), by("a", "CODE_SENT", 1), by("a", "VERIFIED", 2), by("a", "VERIFIED", 1)];
+    const result = await getSignupAnalytics(7, now);
+    expect(result.funnel.codeSent).toBe(1);
+    expect(result.funnel.verified).toBe(1);
+  });
+
+  it("leaves out someone whose first code was sent before the period — they are an earlier cohort", async () => {
+    attempts = [by("old", "CODE_SENT", 20), by("old", "CODE_SENT", 1), by("old", "VERIFIED", 1), by("old", "CREATED", 1)];
+    const result = await getSignupAnalytics(7, now);
+    expect(result.funnel).toMatchObject({ codeSent: 0, verified: 0, created: 0 });
+  });
+
+  it("never lets a step exceed the one before it", async () => {
+    // A verification with no code in this cohort (its code was earlier, or its row failed to write)
+    // used to push "verified of codes sent" past 100%.
+    attempts = [by("a", "CODE_SENT", 2), by("ghost", "VERIFIED", 1), by("ghost", "CREATED", 1)];
+    const result = await getSignupAnalytics(7, now);
+    expect(result.funnel.verified).toBeLessThanOrEqual(result.funnel.codeSent);
+    expect(result.funnel.created).toBeLessThanOrEqual(result.funnel.verified);
+    expect(result.funnel).toMatchObject({ codeSent: 1, verified: 0, created: 0 });
+  });
+
+  it("counts people who verified only to reach a workspace they already belong to", async () => {
+    attempts = [by("m", "CODE_SENT", 1), by("m", "VERIFIED", 1), by("m", "EXISTING_MEMBER", 1), by("n", "CODE_SENT", 1), by("n", "VERIFIED", 1), by("n", "CREATED", 1)];
+    const result = await getSignupAnalytics(7, now);
+    expect(result.funnel).toMatchObject({ codeSent: 2, verified: 2, existingMembers: 1, created: 1 });
   });
 
   it("calls a workspace converted by the shared rule — the same answer Revenue and retention give", async () => {

@@ -342,6 +342,8 @@ describe("verify — the code is checked once, and the answer is a decision", ()
     const res = await verify();
     expect(res.body).toEqual({ next: "member", workspaces: [{ slug: "northwind", name: "Northwind", url: "https://northwind.timesphere.test" }] });
     expect(directory.issueSignupContinuation).not.toHaveBeenCalled();
+    // Recorded apart, so the console's funnel does not count a member signing in as a prospect.
+    expect(stages()).toEqual(["VERIFIED", "EXISTING_MEMBER"]);
   });
 
   it("answers a wrong or expired code with 400 and too many guesses with 429", async () => {

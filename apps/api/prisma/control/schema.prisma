@@ -1585,7 +1585,7 @@ model OrgEmailDomain {
 /// control plane already holds enough.
 model SignupAttempt {
   id             String   @id @default(uuid())
-  /// CODE_SENT | REFUSED | VERIFIED | CREATED | JOIN_REQUESTED | UNAVAILABLE | FAILED
+  /// CODE_SENT | REFUSED | VERIFIED | EXISTING_MEMBER | CREATED | JOIN_REQUESTED | UNAVAILABLE | FAILED
   stage          String   @db.VarChar(16)
   domain         String?  @db.VarChar(253)
   emailHash      String?  @db.Char(64)

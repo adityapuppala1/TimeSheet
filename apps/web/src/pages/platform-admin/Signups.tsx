@@ -63,7 +63,7 @@ export function PlatformAdminSignups() {
     <ConsolePage
       eyebrow="Growth"
       title="Signups"
-      description="Self-serve signup end to end: where people drop, who got a workspace, how each is doing, and what failed."
+      description="Self-serve signup end to end: where people drop (counted as people whose first code went out in the period), who got a workspace, how each is doing, and what failed."
       actions={
         <>
           <SegmentedControl<Period>
@@ -84,8 +84,22 @@ export function PlatformAdminSignups() {
       {d && (
         <>
           <KpiGrid>
-            <KpiCard label="Verified their address" value={d.funnel.verified} icon={MailCheck} hint={d.funnel.codeSent ? `of ${d.funnel.codeSent} codes sent (${pct(d.funnel.verified, d.funnel.codeSent)})` : "no codes sent yet"} />
-            <KpiCard label="New workspaces" value={d.funnel.created} icon={Building2} tone="accent" hint={d.funnel.verified ? `${pct(d.funnel.created, d.funnel.verified)} of the verified` : "nobody verified yet"} delay={0.05} />
+            {/* PEOPLE, not rows: everyone whose FIRST code went out in the period, and how far each got.
+                A resend is not a second person, and no step can exceed the one before it. */}
+            <KpiCard
+              label="Verified their address"
+              value={d.funnel.verified}
+              icon={MailCheck}
+              hint={d.funnel.codeSent ? `of ${d.funnel.codeSent} ${d.funnel.codeSent === 1 ? "person" : "people"} sent a first code (${pct(d.funnel.verified, d.funnel.codeSent)})` : "nobody was sent a code"}
+            />
+            <KpiCard
+              label="New workspaces"
+              value={d.funnel.created}
+              icon={Building2}
+              tone="accent"
+              hint={d.funnel.verified ? `${pct(d.funnel.created, d.funnel.verified)} of the verified · ${d.funnel.existingMembers} already had one` : "nobody verified yet"}
+              delay={0.05}
+            />
             <KpiCard label="Asked to join" value={d.funnel.joinRequested} icon={UserPlus} hint="their company already had a workspace" delay={0.1} />
             {/* Counted on the server over every self-serve workspace in the period — the list below
                 stops at a hundred, and a figure counted from it stopped there too. */}
