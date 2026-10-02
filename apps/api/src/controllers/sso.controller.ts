@@ -28,6 +28,7 @@ import {
   completeAuthorizationCodeGrant,
   completeSamlLogin,
   recordSsoLoginSuccess,
+  samlServiceProviderMetadata,
   verifySsoState,
   type OidcProviderType
 } from "../services/sso.service.js";
@@ -207,6 +208,15 @@ ssoRouter.get("/saml/start", async (req, res) => {
   } catch (error) {
     failSsoRedirect(res, "saml start", workspace.orgId, workspace.loginBase, error);
   }
+});
+
+// The SP metadata the default SAML entity ID has always pointed at (`<APP_BASE_URL>/api/auth/sso/saml/
+// metadata`) and nothing served (audit M4). Public, like every SP metadata document. The workspace is
+// resolved from the Host only to pick up its own SP entity ID if it set one; a hostname that is no
+// workspace still gets the deployment default, which is what that URL names.
+ssoRouter.get("/saml/metadata", async (req, res) => {
+  const workspace = await resolveStartingWorkspace(req);
+  res.type("application/samlmetadata+xml").send(await samlServiceProviderMetadata(workspace?.orgId ?? null));
 });
 
 // SAML uses POST binding (the IdP's browser-form-posts the assertion here), unlike OIDC's

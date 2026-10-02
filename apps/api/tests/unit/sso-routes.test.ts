@@ -29,7 +29,8 @@ const orgs = [
   { id: "org-acme", slug: "acme", status: "ACTIVE" }
 ];
 
-const { sso, completeSsoLogin } = vi.hoisted(() => ({
+const { sso, completeSsoLogin, samlRow } = vi.hoisted(() => ({
+  samlRow: { current: null as Record<string, unknown> | null },
   sso: {
     buildAuthorizationRedirect: vi.fn(),
     buildSamlAuthorizationRedirect: vi.fn(),
@@ -53,7 +54,7 @@ vi.mock("../../src/config/control-prisma.js", async () => {
         findUnique: async ({ where }: { where: { domain: string } }) =>
           where.domain === "time.acme.example" ? { verifiedAt: new Date(), organization: { slug: "acme" } } : null
       },
-      orgSsoConfig: { updateMany: async () => ({ count: 1 }) },
+      orgSsoConfig: { updateMany: async () => ({ count: 1 }), findUnique: async () => samlRow.current },
       ssoHandoffCode: { create: async () => ({}), deleteMany: async () => ({ count: 0 }) }
     }
   };
@@ -186,6 +187,33 @@ describe("every SSO failure lands on the workspace's login page with a code (M3)
     const res = await request(app()).get(`/api/auth/sso/google/callback?code=c&state=${encodeURIComponent(stateFor("org-acme"))}`);
     expect(res.status).toBe(302);
     expect(res.headers.location).not.toContain("sso_error");
+  });
+});
+
+describe("GET /saml/metadata — the SP metadata the default entity ID always pointed at (M4)", () => {
+  beforeEach(() => {
+    samlRow.current = null;
+  });
+
+  it("serves SAML metadata naming the default entity ID and the absolute ACS URL", async () => {
+    const res = await request(app()).get("/api/auth/sso/saml/metadata").set("Host", "acme.timesphere.example");
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/xml/);
+    expect(res.text).toContain('entityID="http://localhost:5173/api/auth/sso/saml/metadata"');
+    expect(res.text).toContain('Location="http://localhost:5173/api/auth/sso/saml/acs"');
+    expect(res.text).toContain("urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST");
+  });
+
+  it("names a workspace's own SP entity ID when it set one, so its IdP sees the value it was configured with", async () => {
+    samlRow.current = { spEntityId: "urn:acme:timesphere" };
+    const res = await request(app()).get("/api/auth/sso/saml/metadata").set("Host", "acme.timesphere.example");
+    expect(res.text).toContain('entityID="urn:acme:timesphere"');
+  });
+
+  it("still answers on a hostname that is no workspace — the default entity ID is deployment-wide", async () => {
+    const res = await request(app()).get("/api/auth/sso/saml/metadata").set("Host", "nobody.timesphere.example");
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('entityID="http://localhost:5173/api/auth/sso/saml/metadata"');
   });
 });
 

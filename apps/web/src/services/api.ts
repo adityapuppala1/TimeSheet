@@ -2665,10 +2665,21 @@ export interface SsoTestResult {
   testedAt: string;
 }
 
+/** The values an admin registers with their identity provider — absolute, exactly as the flows send them. */
+export interface SsoRegistrationValues {
+  googleRedirectUri: string;
+  microsoftRedirectUri: string;
+  samlAcsUrl: string;
+  /** The EFFECTIVE SP entity ID: the workspace's own when it set one, else the deployment default. */
+  samlSpEntityId: string;
+  samlMetadataUrl: string;
+}
+
 export interface SsoSettings {
   providers: SsoProviderConfig[];
   passwordLoginEnabled: boolean;
   requireSsoOnly: boolean;
+  registration?: SsoRegistrationValues;
 }
 
 export interface EmailTemplateRow {

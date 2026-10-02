@@ -22,7 +22,7 @@
  * module-level store — see samlRequestIdCache below for its limits.
  */
 import * as client from "openid-client";
-import { SAML, ValidateInResponseTo, type CacheProvider, type Profile } from "@node-saml/node-saml";
+import { SAML, ValidateInResponseTo, generateServiceProviderMetadata, type CacheProvider, type Profile } from "@node-saml/node-saml";
 import { Client as LdapClient, type Entry as LdapEntry } from "ldapts";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
@@ -260,6 +260,48 @@ const DEFAULT_SP_ENTITY_ID = `${env.APP_BASE_URL.replace(/\/$/, "")}/api/auth/ss
 
 function samlCallbackUrl(): string {
   return `${env.APP_BASE_URL.replace(/\/$/, "")}/api/auth/sso/saml/acs`;
+}
+
+/**
+ * The exact values an admin registers with their identity provider — absolute, as the login flows
+ * actually send them, because the settings card showed the SAML ACS as a RELATIVE path, never showed
+ * the OAuth redirect URIs or the default SP entity ID at all, and the entity ID pointed at a metadata
+ * URL nothing served (audit M4). Built by the same functions the flows use, so the two cannot drift.
+ * `samlSpEntityId` is the EFFECTIVE one: a workspace's own value when it set one, else the default —
+ * which is what every existing SAML configuration's IdP was set up with, and is not changed here.
+ */
+export function ssoRegistrationValues(spEntityId: string | null | undefined) {
+  return {
+    googleRedirectUri: callbackUrl("GOOGLE"),
+    microsoftRedirectUri: callbackUrl("MICROSOFT"),
+    samlAcsUrl: samlCallbackUrl(),
+    samlSpEntityId: spEntityId || DEFAULT_SP_ENTITY_ID,
+    samlMetadataUrl: DEFAULT_SP_ENTITY_ID
+  };
+}
+
+/**
+ * SP metadata XML — served at the URL the default entity ID has always named.
+ *
+ * `issuer` is the workspace's own SP entity ID when the requesting hostname resolves to a workspace
+ * that set one, else the deployment default; the ACS is the one the flow posts to. Nothing about it is
+ * secret: it is what an IdP admin would otherwise type in by hand. `WantAssertionsSigned` is advertised
+ * because it is what Entra and Google do by default; validation itself accepts either signature (see
+ * buildSamlClient), so an IdP that signs only the response still works.
+ */
+export async function samlServiceProviderMetadata(orgId: string | null): Promise<string> {
+  let spEntityId: string | null = null;
+  if (orgId) {
+    const config = await controlPrisma.orgSsoConfig.findUnique({
+      where: { organizationId_providerType: { organizationId: orgId, providerType: "SAML" } }
+    });
+    spEntityId = config?.spEntityId ?? null;
+  }
+  return generateServiceProviderMetadata({
+    issuer: spEntityId || DEFAULT_SP_ENTITY_ID,
+    callbackUrl: samlCallbackUrl(),
+    wantAssertionsSigned: true
+  });
 }
 
 interface SamlConfig {

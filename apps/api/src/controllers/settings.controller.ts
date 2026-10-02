@@ -78,6 +78,7 @@ import {
   type SsoTestResult
 } from "../services/sso-validation.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
+import { ssoRegistrationValues } from "../services/sso.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
 import { describeMcpCatalogue, generateMcpToken, getGlobalMcpSettings, updateGlobalMcpSettings } from "../services/mcp.service.js";
 import { MCP_TOOLS } from "../services/mcp-tools.js";
@@ -1005,7 +1006,9 @@ settingsRouter.get("/sso", requireSuperAdmin, async (_req, res) => {
       certificateCount: certificatePems(c.idpCertificate).length
     })),
     passwordLoginEnabled: authMethod?.passwordLoginEnabled ?? true,
-    requireSsoOnly: authMethod?.requireSsoOnly ?? false
+    requireSsoOnly: authMethod?.requireSsoOnly ?? false,
+    // What the admin registers with their IdP, absolute and exactly as the flows send it (audit M4).
+    registration: ssoRegistrationValues(configs.find((c) => c.providerType === "SAML")?.spEntityId)
   });
 });
 

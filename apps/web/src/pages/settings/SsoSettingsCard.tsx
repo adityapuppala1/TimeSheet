@@ -46,7 +46,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
 import { GoogleMark, LdapMark, MicrosoftMark, SamlMark, ScimMark } from "../../components/ui/provider-marks";
 import { copyText } from "../../lib/clipboard";
-import { apiUrl, SERVER_ORIGIN, settingsApi, type SsoProviderConfig, type SsoTestResult } from "../../services/api";
+import { SERVER_ORIGIN, settingsApi, type SsoProviderConfig, type SsoRegistrationValues, type SsoTestResult } from "../../services/api";
 import { runInBackground } from "../../lib/run-in-background";
 import { SSO_TEST_OUTCOME_LABEL, ssoTestOutcome, type SsoTestOutcome } from "../../lib/sso-test-status";
 
@@ -240,7 +240,15 @@ function SsoVerification({
    Each takes `open`/`onToggle` from the parent rather than owning it, because the board's tiles
    have to be able to open them. */
 
-type CardProps = { config?: SsoProviderConfig; readOnly: boolean; isLoading: boolean; open: boolean; onToggle: () => void };
+/** `registration` is what the admin registers with their IdP — absolute, from the API (audit M4). */
+type CardProps = {
+  config?: SsoProviderConfig;
+  registration?: SsoRegistrationValues;
+  readOnly: boolean;
+  isLoading: boolean;
+  open: boolean;
+  onToggle: () => void;
+};
 
 /**
  * Tenant IDs that do NOT restrict sign-in to one organization: blank (the server falls back to
@@ -257,7 +265,7 @@ const isMultiTenantMicrosoft = (tenantHint: string) => MULTI_TENANT_MICROSOFT_AU
  * that org's own credentials. `clientSecret` is write-only (never echoed back), same masking
  * convention as the AI tab's BYOK API key and the email-intake IMAP password.
  */
-function OidcProviderCard({ provider, config, readOnly, isLoading, open, onToggle }: CardProps & { provider: "GOOGLE" | "MICROSOFT" }) {
+function OidcProviderCard({ provider, config, registration, readOnly, isLoading, open, onToggle }: CardProps & { provider: "GOOGLE" | "MICROSOFT" }) {
   const queryClient = useQueryClient();
   const [clientId, setClientId] = useState(config?.clientId ?? "");
   const [clientSecret, setClientSecret] = useState("");
@@ -301,7 +309,7 @@ function OidcProviderCard({ provider, config, readOnly, isLoading, open, onToggl
       name={SSO_PROVIDER_LABEL[provider]}
       blurb={
         provider === "GOOGLE"
-          ? "Register an OAuth client in Google Cloud Console; the redirect URI is fixed regardless of which org configures it."
+          ? "Register an OAuth client in Google Cloud Console and add the redirect URI below to it."
           : "Register an app in Azure AD (Microsoft Entra ID) and enter its Directory (tenant) ID below, so only your organization's accounts can sign in."
       }
       state={stateFrom(complete, started, Boolean(config?.isEnabled))}
@@ -336,6 +344,13 @@ function OidcProviderCard({ provider, config, readOnly, isLoading, open, onToggl
               />
             </div>
           </div>
+
+          {registration && (
+            <CopyableUrl
+              label={`Redirect URI (add this to your ${provider === "GOOGLE" ? "Google OAuth client" : "Azure app registration"})`}
+              url={provider === "GOOGLE" ? registration.googleRedirectUri : registration.microsoftRedirectUri}
+            />
+          )}
 
           {provider === "MICROSOFT" && (
             <div className="grid gap-3">
@@ -394,7 +409,7 @@ function OidcProviderCard({ provider, config, readOnly, isLoading, open, onToggl
   );
 }
 
-function SamlProviderCard({ config, readOnly, isLoading, open, onToggle }: CardProps) {
+function SamlProviderCard({ config, registration, readOnly, isLoading, open, onToggle }: CardProps) {
   const queryClient = useQueryClient();
   const [idpEntityId, setIdpEntityId] = useState(config?.idpEntityId ?? "");
   const [idpSsoUrl, setIdpSsoUrl] = useState(config?.idpSsoUrl ?? "");
@@ -417,7 +432,6 @@ function SamlProviderCard({ config, readOnly, isLoading, open, onToggle }: CardP
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });
 
-  const acsUrl = apiUrl("/auth/sso/saml/acs");
   const complete = Boolean(config?.idpEntityId && config?.idpSsoUrl && config?.idpCertificateSet);
   const started = Boolean(config?.idpEntityId || config?.idpSsoUrl || config?.idpCertificateSet);
 
@@ -434,10 +448,18 @@ function SamlProviderCard({ config, readOnly, isLoading, open, onToggle }: CardP
       {isLoading && <Skeleton className="h-32 w-full" />}
       {!isLoading && (
         <>
-          <div className="grid gap-1.5">
-            <Label>ACS URL (give this to your IdP admin)</Label>
-            <Input readOnly value={acsUrl} className="font-mono text-xs" onFocus={(e) => e.target.select()} />
-          </div>
+          {/* Absolute, from the API — this was a RELATIVE path (`/api/auth/sso/saml/acs`) and the entity ID
+              was not shown at all, so admins had to guess both. An EXISTING configuration's values are
+              unchanged: its IdP was set up with them. */}
+          {registration && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <CopyableUrl label="ACS (reply) URL — give this to your IdP admin" url={registration.samlAcsUrl} />
+              <CopyableUrl label="SP entity ID (audience / identifier)" url={registration.samlSpEntityId} />
+              <div className="sm:col-span-2">
+                <CopyableUrl label="SP metadata URL — for IdPs that import metadata" url={registration.samlMetadataUrl} />
+              </div>
+            </div>
+          )}
 
           <ToggleRow
             label="Enabled"
@@ -932,6 +954,7 @@ export function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
           key={provider}
           provider={provider}
           config={providerOf(provider)}
+          registration={settings.data?.registration}
           readOnly={readOnly}
           isLoading={settings.isLoading}
           open={openId === provider.toLowerCase()}
@@ -941,6 +964,7 @@ export function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
 
       <SamlProviderCard
         config={providerOf("SAML")}
+        registration={settings.data?.registration}
         readOnly={readOnly}
         isLoading={settings.isLoading}
         open={openId === "saml"}
