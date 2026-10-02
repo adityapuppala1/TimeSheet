@@ -133,6 +133,20 @@ describe("a workflow that submits a change", () => {
   });
 });
 
+describe("submitting a STANDARD change", () => {
+  it("asks its approver like any other change — there is no pre-approved path", async () => {
+    // A decision, not an omission: with no catalogue of approved standard-change templates, letting
+    // a type the requester picks freely skip approval would be a way round it.
+    const world = createChangeWorld({ change: { changeKind: "STANDARD" } });
+
+    const res = await request(buildChangeApp(changeRouter, world.client)).post(`/api/changes/${CHANGE_ID}/transition`).send({ to: "AWAITING_APPROVAL" });
+
+    expect(res.status).toBe(200);
+    expect(world.change.state).toBe("AWAITING_APPROVAL");
+    expect(world.approvals).toEqual([expect.objectContaining({ approverId: "manager-1", status: "PENDING" })]);
+  });
+});
+
 describe("deciding a change that has no open approval round", () => {
   it("answers 409 with a way out, rather than crashing on the missing row", async () => {
     // The state a pre-fix workflow left behind: AWAITING_APPROVAL with no rows at all.

@@ -431,16 +431,6 @@ export function assertReadyFor(change: ChangeReadinessInput, target: ChangeState
   }
 }
 
-/**
- * What a change moves to when it is submitted.
- *
- * A STANDARD change is pre-approved by definition — that is what the word means — so it goes
- * straight to APPROVED without troubling anybody. Everything else goes to the board.
- */
-export function stateAfterSubmit(kind: ChangeKind): ChangeState {
-  return kind === "STANDARD" ? "APPROVED" : "AWAITING_APPROVAL";
-}
-
 /** The ticket status that must be written alongside every change state. Never write one without
  *  the other — that pair is what keeps every pre-existing reader of `Ticket.status` correct. */
 export function ticketStatusFor(state: ChangeState) {

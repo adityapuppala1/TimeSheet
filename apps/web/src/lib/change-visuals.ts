@@ -56,11 +56,17 @@ export const CHANGE_KIND_TONE: Record<ChangeKind, Tone> = {
  * succeeds — see `changeKinds` in @timesheet/shared. A picker that renders four bare words lets
  * somebody take on both without knowing, and then meet them as a 422 at submission time. The rule is
  * the same one the risk section follows: say what a field will demand before it demands it.
+ *
+ * AND NOTHING IT DOES NOT DO. Every type goes to the same approver — the requester's manager, or
+ * the super admins. STANDARD used to read "pre-approved", but nothing ever skipped approval for it,
+ * and deliberately so: with no catalogue of approved standard-change templates, auto-approving a
+ * type the requester picks freely would be a way round approval. EMERGENCY used to promise a
+ * different decision path that does not exist either.
  */
 export const CHANGE_KIND_MEANING: Record<ChangeKind, string> = {
-  STANDARD: "Pre-approved routine work. Low ceremony.",
+  STANDARD: "Routine, low-risk work. Still decided by an approver like any other change.",
   NORMAL: "Planned work that earns a decision. The default.",
-  EMERGENCY: "Cannot wait for the usual decision. Expect scrutiny after the fact.",
+  EMERGENCY: "Urgent work. Goes to the same approver as any change — say in the justification why it cannot wait.",
   MAJOR: "Normal, escalated. Always needs a backout plan and a post-implementation review, whatever the risk score says."
 };
 

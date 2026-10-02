@@ -7,7 +7,26 @@
  * as a mistake, and the requester looking for how to edit a submitted change will not find it.
  */
 import { describe, expect, it } from "vitest";
-import { changeActionLabel } from "../../src/lib/change-visuals";
+import { CHANGE_KIND_MEANING, changeActionLabel } from "../../src/lib/change-visuals";
+
+/**
+ * What the type picker promises. Picking a type changes nothing about who decides a change: every
+ * type goes to the requester's manager (or the super admins). Standard changes KEEP requiring
+ * approval by decision — with no catalogue of approved templates, auto-approving a type the
+ * requester picks freely would be a loophole. So the picker must not say "pre-approved", and must
+ * not imply an emergency gets a faster or different decision.
+ */
+describe("CHANGE_KIND_MEANING", () => {
+  it("does not promise that a standard change skips approval", () => {
+    expect(CHANGE_KIND_MEANING.STANDARD).not.toMatch(/pre-?approved/i);
+    expect(CHANGE_KIND_MEANING.STANDARD).toMatch(/approv/i);
+  });
+
+  it("does not promise an emergency change a different decision path", () => {
+    expect(CHANGE_KIND_MEANING.EMERGENCY).not.toMatch(/cannot wait for the usual decision/i);
+    expect(CHANGE_KIND_MEANING.EMERGENCY).toMatch(/same approv/i);
+  });
+});
 
 describe("changeActionLabel", () => {
   it("calls taking back a change that is waiting for approval a withdrawal", () => {
