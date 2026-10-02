@@ -29,6 +29,7 @@ import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { allowedAttachmentExtensions } from "../middleware/upload.js";
 import { assertUploadIsClean } from "./virus-scan.service.js";
+import { AppError } from "../middleware/error.js";
 import { audit } from "./audit.service.js";
 import { classifyTicket, getGlobalAISettings, EXTERNAL_INTAKE_CONFIDENCE_CEILING } from "./ai.service.js";
 import { dispatchNotification, dispatchTransactional, templates } from "./notify.service.js";
@@ -171,6 +172,8 @@ export interface ProcessResult {
   ticketKey?: string;
   /** Set when the message was a reply, added to this existing ticket as a comment. */
   appendedTo?: string;
+  /** Set when the message replied to this CLOSED ticket, so it opened a new, related ticket instead. */
+  followUpTo?: string;
 }
 
 /* ------------------------------------------------------------------------------------------ *
@@ -261,6 +264,9 @@ function messageIdHost(): string {
   }
 }
 
+/** Who is on a reply's ticket, so a reply nobody would hear about can go to the triagers instead. */
+const REPLY_TARGET_INCLUDE = { watchers: { select: { userId: true } }, collaborators: { select: { userId: true } } } as const;
+
 /**
  * The existing ticket this message replies to, or null.
  *
@@ -274,29 +280,118 @@ async function findReplyTarget(email: ParsedInboundEmail) {
   for (const id of ids) {
     const ticketId = CONFIRMATION_ID.exec(id)?.[1];
     if (!ticketId) continue;
-    const ticket = await prisma.ticket.findFirst({ where: { id: ticketId.toLowerCase(), deletedAt: null, source: "EMAIL" } });
+    const ticket = await prisma.ticket.findFirst({ where: { id: ticketId.toLowerCase(), deletedAt: null, source: "EMAIL" }, include: REPLY_TARGET_INCLUDE });
     if (ticket) return ticket;
   }
 
   const key = SUBJECT_KEY.exec(email.subject || "")?.[1];
   if (!key) return null;
-  const ticket = await prisma.ticket.findFirst({ where: { key, deletedAt: null, source: "EMAIL" } });
+  const ticket = await prisma.ticket.findFirst({ where: { key, deletedAt: null, source: "EMAIL" }, include: REPLY_TARGET_INCLUDE });
   if (!ticket?.externalReporterEmail) return null;
   return ticket.externalReporterEmail.toLowerCase() === email.from.address.toLowerCase() ? ticket : null;
 }
 
-/** Adds a reply to its ticket as a comment by the intake account, naming the real sender. */
-async function appendReply(
-  ticket: { id: string; key: string },
-  email: ParsedInboundEmail,
-  systemUser: { id: string; name: string }
-): Promise<ProcessResult> {
+type ReplyTarget = {
+  id: string;
+  key: string;
+  title: string;
+  type: string | null;
+  status: string;
+  projectId: string;
+  reporterId: string;
+  assigneeId: string | null;
+  watchers: Array<{ userId: string }>;
+  collaborators: Array<{ userId: string }>;
+};
+
+/**
+ * The people who triage this project's intake: every active super admin and admin, and the
+ * project's own managers and team leads. The needs-review notice goes to them, and so does a
+ * customer's reply on a ticket nobody else is on.
+ */
+function intakeTriagers(projectId: string) {
+  return prisma.user.findMany({
+    where: {
+      deletedAt: null,
+      status: "ACTIVE",
+      OR: [
+        { role: { name: { in: ["SUPER_ADMIN", "ADMIN"] } } },
+        { role: { name: { in: ["MANAGER", "TEAM_LEAD"] } }, projectAssignments: { some: { projectId } } }
+      ]
+    },
+    select: { id: true, name: true }
+  });
+}
+
+/**
+ * A customer answering a RESOLVED ticket is saying it is not resolved. Reopened through the one
+ * transition every surface uses — a fresh SLA clock, the audit row the reopen rate reads, the
+ * participants told — as an automatic reopen, because nobody in the workspace acted. A refusal
+ * (only a change's own ticket, which intake never files) leaves the status alone; the reply is still
+ * recorded.
+ */
+async function reopenForReply(ticket: { id: string; key: string }, email: ParsedInboundEmail): Promise<boolean> {
+  // Imported at call time: the transition service pulls in the security and face modules' graphs.
+  const { transitionTicketStatus } = await import("./ticket-transition.service.js");
+  try {
+    await transitionTicketStatus(ticket.id, "REOPENED", {
+      via: "auto_reopen",
+      reason: `A customer reply by email from ${email.from.address}`,
+      label: "email-intake"
+    });
+    return true;
+  } catch (error) {
+    if (!(error instanceof AppError)) throw error;
+    console.warn(`[email-intake] could not reopen ${ticket.key} for a reply: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * The comment path tells the reporter, the assignee, the watchers and the collaborators, minus the
+ * author. On an email ticket the reporter AND the author are the intake account, so on an unassigned,
+ * unwatched one a customer's reply reached nobody at all. The triagers hear instead.
+ */
+async function tellTriagersIfNobodyHears(ticket: ReplyTarget, intakeUserId: string, sender: string, comment: string, reopened: boolean) {
+  const people = [ticket.reporterId, ticket.assigneeId, ...ticket.watchers.map((w) => w.userId), ...ticket.collaborators.map((c) => c.userId)];
+  if (people.some((id) => id && id !== intakeUserId)) return;
+
+  const reopenNote = reopened ? " It had been resolved, so it is reopened." : "";
+  for (const triager of await intakeTriagers(ticket.projectId)) {
+    await dispatchNotification({
+      userId: triager.id,
+      category: "ticket.commented",
+      title: `Customer reply on ${ticket.key}`,
+      body: `${sender} replied by email to "${ticket.title}", which nobody is assigned to or watching.${reopenNote}`,
+      link: `/app/tickets?open=${ticket.id}`,
+      email: {
+        templateKey: "ticket.commented",
+        vars: { ticketKey: ticket.key, title: ticket.title, author: sender, type: ticket.type ?? "", comment },
+        fallback: {
+          subject: `New comment on ${ticket.key}`,
+          html: templates.ticketCommented({ ticketKey: ticket.key, title: ticket.title, author: sender, type: ticket.type ?? null, comment: comment || null, ticketId: ticket.id })
+        }
+      }
+    });
+  }
+}
+
+/**
+ * Adds a reply to its ticket as a comment by the intake account, naming the real sender — after
+ * reopening the ticket when it was RESOLVED. (A CLOSED ticket never gets here: a reply to one opens a
+ * follow-up ticket instead; see processInboundEmail.)
+ */
+async function appendReply(ticket: ReplyTarget, email: ParsedInboundEmail, systemUser: { id: string; name: string }): Promise<ProcessResult> {
   // Imported at call time, like ticket.service.ts's assistant helpers: the comment path pulls in the
   // notification templates, which the rest of this pipeline does not otherwise need at load time.
   const { postTicketComment } = await import("./ticket-comment.service.js");
   const bodyText = email.text || (typeof email.html === "string" ? email.html : "");
   const sender = email.from.name ? `${email.from.name} <${email.from.address}>` : email.from.address;
   const message = email.html && typeof email.html === "string" ? email.html : plainTextToHtml(bodyText || "(no message body)");
+
+  // Reopened FIRST, so the reply lands on a live ticket and its comment notification follows the
+  // reopen rather than describing a ticket that still reads as done.
+  const reopened = ticket.status === "RESOLVED" && (await reopenForReply(ticket, email));
 
   // Posted through the one comment path, so the ticket's reporter, assignee, watchers and
   // collaborators hear about the customer's reply exactly as they would a colleague's comment.
@@ -306,14 +401,38 @@ async function appendReply(
     body: `<p><strong>Reply by email from ${escapeHtml(sender)}</strong></p>${message}`,
     via: "email"
   });
+  await tellTriagersIfNobodyHears(ticket, systemUser.id, sender, (email.text || "").trim(), reopened);
   for (const att of email.attachments) {
     await saveAttachment(ticket.id, att);
   }
-  await audit(undefined, "email_intake.reply_appended", "Ticket", ticket.id, { from: email.from.address, subject: email.subject }, {
+  await audit(undefined, "email_intake.reply_appended", "Ticket", ticket.id, { from: email.from.address, subject: email.subject, reopened }, {
     actorType: "INTEGRATION",
     actorLabel: "email-intake"
   });
   return { created: false, appendedTo: ticket.key, ticketId: ticket.id, ticketKey: ticket.key };
+}
+
+/**
+ * Which project a NEW ticket from this message lands in, and the routing rule (if any) that lends
+ * it a default module.
+ *
+ * A follow-up stays in the project of the conversation it continues. The reply went to the
+ * confirmation's Reply-To, not to the address the customer first wrote to, so routing it afresh
+ * could file it somewhere unrelated. A matched rule still lends its default module to its own
+ * project, and only to that one.
+ */
+async function routeNewTicket(email: ParsedInboundEmail, followUpOf: { projectId: string } | null) {
+  const rule = await resolveRouting(email);
+  const intakeSettings = await getGlobalEmailIntakeSettings();
+  const projectId = followUpOf?.projectId ?? rule?.projectId ?? intakeSettings.fallbackProjectId ?? null;
+  return { intakeSettings, projectId, projectRule: rule?.projectId === projectId ? rule : null };
+}
+
+/** The new ticket's description: the message itself, led — on a follow-up — by the ticket it follows. */
+function newTicketDescription(email: ParsedInboundEmail, bodyText: string, followUpOf: { key: string } | null): string {
+  const message = email.html && typeof email.html === "string" ? sanitizeRichText(email.html) : plainTextToHtml(bodyText || "(no message body)");
+  if (!followUpOf) return message;
+  return `<p><strong>Follow-up to ${escapeHtml(followUpOf.key)}</strong>, which was closed when this reply arrived.</p>${message}`;
 }
 
 /**
@@ -339,16 +458,17 @@ export async function processInboundEmail(email: ParsedInboundEmail): Promise<Pr
 
   // A reply to an existing ticket is added to it, not opened as a new one — and earns no
   // confirmation, which is also what keeps two mailboxes from answering each other through us.
+  // EXCEPT a reply to a CLOSED ticket: closed is final, so the reply opens a NEW ticket that names
+  // the old one (the follow-up pattern helpdesks use), confirmed like any first email.
   const replyTarget = await findReplyTarget(email);
-  if (replyTarget) {
+  if (replyTarget && replyTarget.status !== "CLOSED") {
     const intakeUser = await prisma.user.findUnique({ where: { email: EMAIL_INTAKE_SYSTEM_EMAIL } });
     if (!intakeUser) throw new Error(`Email Intake system user (${EMAIL_INTAKE_SYSTEM_EMAIL}) is missing — run the seed script.`);
     return appendReply(replyTarget, email, intakeUser);
   }
+  const followUpOf = replyTarget;
 
-  const rule = await resolveRouting(email);
-  const intakeSettings = await getGlobalEmailIntakeSettings();
-  const projectId = rule?.projectId ?? intakeSettings.fallbackProjectId ?? null;
+  const { intakeSettings, projectId, projectRule } = await routeNewTicket(email, followUpOf);
 
   if (!projectId) {
     console.warn(`[email-intake] no routing rule matched and no fallback project configured — dropping "${email.subject}" from ${email.from.address}`);
@@ -390,7 +510,7 @@ export async function processInboundEmail(email: ParsedInboundEmail): Promise<Pr
 
   const type = classification?.type ?? types[0]?.name ?? "BUG";
   const priority = classification?.priority ?? "MEDIUM";
-  const moduleId = rule?.defaultModuleId ?? classification?.moduleId ?? null;
+  const moduleId = projectRule?.defaultModuleId ?? classification?.moduleId ?? null;
   // The raw self-reported confidence is stored as-is for admin visibility, but the
   // needsReview GATE uses a capped version — a single free-form number from a model call
   // whose input included unauthenticated external email content shouldn't, by itself, be
@@ -404,11 +524,11 @@ export async function processInboundEmail(email: ParsedInboundEmail): Promise<Pr
   const slaSettings = await getGlobalTicketSettings();
   const createdAt = new Date();
 
-  const description = email.html && typeof email.html === "string" ? sanitizeRichText(email.html) : plainTextToHtml(bodyText || "(no message body)");
+  const description = newTicketDescription(email, bodyText, followUpOf);
 
   const ticket = await prisma.$transaction(async (tx) => {
     const key = await issueTicketKey(tx, project.id);
-    return tx.ticket.create({
+    const created = await tx.ticket.create({
       data: {
         key,
         projectId: project.id,
@@ -426,6 +546,10 @@ export async function processInboundEmail(email: ParsedInboundEmail): Promise<Pr
         dueAt: computeTicketDueDate(createdAt, priority, slaSettings)
       }
     });
+    // RELATES: the closed ticket is the history this one continues — not a duplicate of it, and
+    // nothing either waits on.
+    if (followUpOf) await tx.ticketLink.create({ data: { sourceTicketId: created.id, targetTicketId: followUpOf.id, type: "RELATES" } });
+    return created;
   });
 
   for (const att of email.attachments) {
@@ -458,18 +582,7 @@ export async function processInboundEmail(email: ParsedInboundEmail): Promise<Pr
   }
 
   if (needsReview) {
-    const reviewers = await prisma.user.findMany({
-      where: {
-        deletedAt: null,
-        status: "ACTIVE",
-        OR: [
-          { role: { name: { in: ["SUPER_ADMIN", "ADMIN"] } } },
-          { role: { name: { in: ["MANAGER", "TEAM_LEAD"] } }, projectAssignments: { some: { projectId: project.id } } }
-        ]
-      },
-      select: { id: true, name: true }
-    });
-    for (const reviewer of reviewers) {
+    for (const reviewer of await intakeTriagers(project.id)) {
       await dispatchNotification({
         userId: reviewer.id,
         category: "ticket.needs_review",
@@ -518,13 +631,14 @@ export async function processInboundEmail(email: ParsedInboundEmail): Promise<Pr
     moduleId,
     confidence,
     needsReview,
-    reasoning: classification?.reasoning ?? "(AI classification unavailable — used defaults)"
+    reasoning: classification?.reasoning ?? "(AI classification unavailable — used defaults)",
+    followUpTo: followUpOf?.key ?? null
   }, {
     actorType: "INTEGRATION",
     actorLabel: "email-intake"
   });
 
-  return { created: true, ticketId: ticket.id, ticketKey: ticket.key };
+  return { created: true, ticketId: ticket.id, ticketKey: ticket.key, ...(followUpOf ? { followUpTo: followUpOf.key } : {}) };
 }
 
 export interface ImapTestConfig {

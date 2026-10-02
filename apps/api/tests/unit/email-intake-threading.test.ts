@@ -34,6 +34,8 @@ vi.mock("../../src/services/notify.service.js", () => ({
   templates: new Proxy({}, { get: () => () => "<html>body</html>" })
 }));
 vi.mock("../../src/services/virus-scan.service.js", () => ({ assertUploadIsClean: vi.fn().mockResolvedValue({ clean: true }) }));
+const transitionSpy = vi.fn().mockResolvedValue({});
+vi.mock("../../src/services/ticket-transition.service.js", () => ({ transitionTicketStatus: (...a: unknown[]) => transitionSpy(...a) }));
 
 const { automatedDropSummary, processInboundEmail, ticketConfirmationMessageId } = await import("../../src/services/email-intake.service.js");
 const { classifyTicket } = await import("../../src/services/ai.service.js");
@@ -49,6 +51,7 @@ const EXISTING = {
   externalReporterEmail: "customer@example.com",
   reporterId: SYSTEM_USER.id,
   assigneeId: "assignee-1",
+  status: "IN_PROGRESS",
   deletedAt: null,
   watchers: [],
   collaborators: []
@@ -57,10 +60,14 @@ const EXISTING = {
 let client: PrismaClient;
 let ticketCreate: ReturnType<typeof vi.fn>;
 let commentCreate: ReturnType<typeof vi.fn>;
+let linkCreate: ReturnType<typeof vi.fn>;
+/** Per-test changes to the existing ticket a reply threads onto — its status, who is on it. */
+let ticketOverrides: Record<string, unknown> = {};
 
 function buildClient(): PrismaClient {
   ticketCreate = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: "new-ticket", ...data }));
   commentCreate = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: "comment-1", createdAt: new Date(), ...data }));
+  linkCreate = vi.fn().mockResolvedValue({});
   const self: Record<string, unknown> = {
     emailRoutingRule: { findMany: vi.fn().mockResolvedValue([]) },
     emailIntakeSettings: {
@@ -79,10 +86,11 @@ function buildClient(): PrismaClient {
       create: ticketCreate,
       update: vi.fn().mockResolvedValue({}),
       findFirst: vi.fn(async ({ where }: { where: Record<string, unknown> }) =>
-        (where.key === EXISTING.key || where.id === EXISTING.id) ? { ...EXISTING } : null
+        (where.key === EXISTING.key || where.id === EXISTING.id) ? { ...EXISTING, ...ticketOverrides } : null
       )
     },
     ticketComment: { create: commentCreate },
+    ticketLink: { create: linkCreate },
     ticketAttachment: { create: vi.fn().mockResolvedValue({}) },
     moduleAssigneeRule: { findUnique: vi.fn().mockResolvedValue(null) },
     userProjectAssignment: { findFirst: vi.fn().mockResolvedValue(null) }
@@ -106,6 +114,7 @@ const run = (overrides: Record<string, unknown> = {}) => runInTenant(client, () 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  ticketOverrides = {};
   client = buildClient();
 });
 
@@ -270,5 +279,74 @@ describe("a reply is added to its ticket instead of opening another", () => {
   it("NOT by a key that names no ticket", async () => {
     const result = await run({ subject: "Re: [WEB-999] hello" });
     expect(result.created).toBe(true);
+  });
+});
+
+describe("a reply to a ticket that is already finished", () => {
+  // "Still broken" threaded onto a RESOLVED or CLOSED ticket used to sit there as a comment: the
+  // ticket stayed done, with no SLA clock and no place in anybody's queue.
+  const reply = { subject: "Re: [WEB-12] We received your report", text: "Still broken after your fix." };
+
+  it("RESOLVED: reopens it through the one ticket transition, as an automatic reopen, then adds the reply", async () => {
+    ticketOverrides = { status: "RESOLVED" };
+    const result = await run(reply);
+    expect(result).toMatchObject({ created: false, appendedTo: "WEB-12" });
+    expect(transitionSpy).toHaveBeenCalledWith(
+      EXISTING.id,
+      "REOPENED",
+      expect.objectContaining({ via: "auto_reopen", label: "email-intake", reason: expect.stringContaining("reply by email") })
+    );
+    expect(commentCreate).toHaveBeenCalledTimes(1);
+    // Reopened FIRST, so the comment lands on a live ticket and its notification follows the reopen.
+    expect(transitionSpy.mock.invocationCallOrder[0]).toBeLessThan(commentCreate.mock.invocationCallOrder[0]);
+    expect(ticketCreate).not.toHaveBeenCalled();
+  });
+
+  it("an open ticket is not moved — the reply is only added", async () => {
+    await run(reply);
+    expect(transitionSpy).not.toHaveBeenCalled();
+    expect(commentCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("CLOSED: opens a NEW ticket that names the old one, relates the two, and confirms it like a first email", async () => {
+    ticketOverrides = { status: "CLOSED" };
+    const result = await run(reply);
+    expect(result).toMatchObject({ created: true, ticketKey: "WEB-13", followUpTo: "WEB-12" });
+    expect(commentCreate).not.toHaveBeenCalled();
+    expect(transitionSpy).not.toHaveBeenCalled();
+    const created = ticketCreate.mock.calls[0][0].data as Record<string, unknown>;
+    expect(String(created.description)).toContain("Follow-up to WEB-12");
+    expect(String(created.description)).toContain("Still broken after your fix.");
+    expect(created).toMatchObject({ projectId: "proj-1", source: "EMAIL", externalReporterEmail: "customer@example.com" });
+    expect(linkCreate).toHaveBeenCalledWith({ data: { sourceTicketId: "new-ticket", targetTicketId: EXISTING.id, type: "RELATES" } });
+    expect(transactionalSpy).toHaveBeenCalledWith(expect.objectContaining({ to: "customer@example.com" }));
+  });
+});
+
+describe("a reply that nobody on the ticket would hear about", () => {
+  const reply = { subject: "Re: [WEB-12] We received your report", text: "Any news?" };
+
+  it("reaches the project's triagers — the people the needs-review notice goes to", async () => {
+    ticketOverrides = { assigneeId: null, watchers: [], collaborators: [] };
+    vi.mocked(client.user.findMany).mockResolvedValueOnce([{ id: "lead-1", name: "Lena Lead" }] as never);
+    await run(reply);
+    const where = vi.mocked(client.user.findMany).mock.calls[0][0]!.where as Record<string, unknown>;
+    expect(JSON.stringify(where)).toContain("proj-1");
+    const told = notifySpy.mock.calls.map((c) => c[0] as { userId: string; category: string; link: string });
+    expect(told).toEqual([expect.objectContaining({ userId: "lead-1", category: "ticket.commented", link: `/app/tickets?open=${EXISTING.id}` })]);
+  });
+
+  it("a watcher other than the intake account is somebody, so the triagers are not paged", async () => {
+    ticketOverrides = { assigneeId: null, watchers: [{ userId: "watcher-1" }], collaborators: [] };
+    await run(reply);
+    expect(client.user.findMany).not.toHaveBeenCalled();
+    expect(notifySpy.mock.calls.map((c) => (c[0] as { userId: string }).userId)).toEqual(["watcher-1"]);
+  });
+
+  it("the intake account watching its own ticket does not count as somebody", async () => {
+    ticketOverrides = { assigneeId: null, watchers: [{ userId: SYSTEM_USER.id }], collaborators: [] };
+    vi.mocked(client.user.findMany).mockResolvedValueOnce([{ id: "lead-1", name: "Lena Lead" }] as never);
+    await run(reply);
+    expect(notifySpy.mock.calls.map((c) => (c[0] as { userId: string }).userId)).toContain("lead-1");
   });
 });
