@@ -1060,6 +1060,10 @@ changeRouter.post("/:id/transition", requirePermission(permissions.CHANGES_WRITE
  * ONLY CLOSED WORK is offered. A change is a record of shipping something finished, and letting
  * somebody attach an in-progress ticket would turn the list into a promise rather than a manifest.
  * "Closed" means the two done statuses the rest of the app already agrees on.
+ *
+ * NEVER ANOTHER CHANGE'S OWN TICKET. A change's ticket reads CLOSED once the change closes — and also
+ * the moment it is REJECTED or CANCELLED — so without `changeRequest: { is: null }` a cancelled change
+ * that shipped nothing was offered (and accepted) as delivered work.
  */
 changeRouter.get("/:id/linkable-tickets", async (req, res) => {
   await assertChangeManagementEnabled();
@@ -1078,6 +1082,7 @@ changeRouter.get("/:id/linkable-tickets", async (req, res) => {
       deletedAt: null,
       projectId: change.ticket.projectId,
       status: { in: ["RESOLVED", "CLOSED"] },
+      changeRequest: { is: null },
       id: { notIn: linked.map((l) => l.ticketId) },
       ...(search ? { OR: [{ key: { contains: search } }, { title: { contains: search } }] } : {})
     },
@@ -1097,11 +1102,11 @@ changeRouter.post("/:id/tickets", requirePermission(permissions.CHANGES_WRITE), 
   // Vetted server-side, not trusted from the client: the picker only offers closed tickets in the
   // right project, and this is what makes that a rule rather than a convention.
   const allowed = await prisma.ticket.findMany({
-    where: { id: { in: ticketIds }, deletedAt: null, projectId: change.ticket.projectId, status: { in: ["RESOLVED", "CLOSED"] } },
+    where: { id: { in: ticketIds }, deletedAt: null, projectId: change.ticket.projectId, status: { in: ["RESOLVED", "CLOSED"] }, changeRequest: { is: null } },
     select: { id: true }
   });
   if (allowed.length !== ticketIds.length) {
-    throw new AppError(422, "Only closed tickets from this change's own project can be linked.");
+    throw new AppError(422, "Only closed tickets from this change's own project can be linked — not another change's own ticket.");
   }
 
   await prisma.changeTicketLink.createMany({
