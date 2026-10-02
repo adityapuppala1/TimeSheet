@@ -29,7 +29,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.setConfig({ testTimeout: 45_000, hookTimeout: 45_000 });
 
 const control = {
-  platformAdminUser: { findUnique: vi.fn(), update: vi.fn() },
+  platformAdminUser: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   platformAdminSession: { updateMany: vi.fn(), create: vi.fn() }
 };
 vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: control }));
@@ -65,7 +65,10 @@ describe("changePlatformAdminPassword", () => {
 
   it("refuses when the current password is wrong — an unlocked console is not proof of identity", async () => {
     await expect(changePlatformAdminPassword(ADMIN, CURRENT_SESSION, "not-the-password", "A-Brand-New-Password-99")).rejects.toMatchObject({ statusCode: 400 });
-    expect(control.platformAdminUser.update).not.toHaveBeenCalled();
+    // The only write is the failure being counted (R1-8) — never a new hash.
+    const writes = control.platformAdminUser.update.mock.calls.map((call) => (call[0] as { data: Record<string, unknown> }).data);
+    expect(writes.some((data) => "passwordHash" in data)).toBe(false);
+    expect(writes).toContainEqual(expect.objectContaining({ failedLoginCount: { increment: 1 } }));
   });
 
   it("refuses the seeded bootstrap password as a new value", async () => {

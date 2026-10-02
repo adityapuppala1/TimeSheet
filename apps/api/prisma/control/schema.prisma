@@ -711,8 +711,13 @@ model PlatformAdminUser {
   /// password being guessed from many addresses; this can. Consecutive failures (password or second
   /// factor), reset by a completed sign-in. From the fifth one `lockedUntil` is set, and doubles
   /// with every further failure up to an hour — see platform-admin-auth.service.ts.
-  failedLoginCount Int       @default(0)
-  lockedUntil      DateTime?
+  ///
+  /// `lastFailedLoginAt` is what lets the count DECAY on an account without a second factor: a
+  /// quiet spell after the last failure and the last lock forgives it, so a stranger who stops
+  /// guessing stops costing the owner anything (R1-2).
+  failedLoginCount  Int       @default(0)
+  lockedUntil       DateTime?
+  lastFailedLoginAt DateTime?
 
   sessions      PlatformAdminSession[]
   recoveryCodes PlatformAdminRecoveryCode[]

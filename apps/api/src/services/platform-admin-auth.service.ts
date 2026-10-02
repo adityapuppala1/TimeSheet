@@ -116,10 +116,23 @@ async function completeLogin(admin: AdminRow, userAgent?: string, ipAddress?: st
  * further failure doubles it, up to an hour. A permanent lock would hand anybody who knows an
  * operator's address a way to take them off the console; this caps what that costs while still
  * putting a guess rate on the account far below what NIST 800-63B's 100-attempt ceiling allows.
+ *
+ * WHO CAN ARM IT (R1-2). The bootstrap owner's address is the same, documented one on every
+ * install, and this route answers on every host — so a lock a STRANGER can arm is a way to keep the
+ * platform's owner off the console, about one guess an hour, for as long as they care to. So:
+ *  - An account WITH a second factor locks only at that factor. Its wrong passwords are not
+ *    counted and its right password always reaches the challenge, even mid-lock; only somebody who
+ *    already holds the password can reach the stage that locks. Its count does not decay — that
+ *    would hand a password holder a fresh batch of code guesses every quiet spell.
+ *  - An account WITHOUT one has nothing else to lock, so its count DECAYS the way the tenant
+ *    lockout's does (auth.service.ts): a quiet spell of FAILURE_DECAY_MS after the last failure and
+ *    after the last lock ends forgives it. A persistent stranger can still hold such an account;
+ *    one who stops costs the owner nothing. PLATFORM_ADMIN_REQUIRE_MFA is the real answer there.
  */
 const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_BASE_MS = 60_000;
 const LOCKOUT_MAX_MS = 60 * 60_000;
+const FAILURE_DECAY_MS = 15 * 60_000;
 
 export function lockoutDurationMs(consecutiveFailures: number): number {
   if (!Number.isFinite(consecutiveFailures) || consecutiveFailures < LOCKOUT_THRESHOLD) return 0;
@@ -130,19 +143,48 @@ function lockedNow(admin: { lockedUntil?: Date | null }): boolean {
   return Boolean(admin.lockedUntil && admin.lockedUntil.getTime() > Date.now());
 }
 
+type LockoutSubject = { id: string; mfaEnabled: boolean; mfaSecret: string | null; lockedUntil?: Date | null };
+
+/** The test sign-in itself uses to decide whether a challenge follows the password. */
+const hasSecondFactor = (admin: { mfaEnabled: boolean; mfaSecret: string | null }) => Boolean(admin.mfaEnabled && admin.mfaSecret);
+
+/** For the routes only a signed-in operator reaches: whoever is calling already holds a session,
+ *  so naming the lock tells them nothing, and they need to hear it rather than keep typing. */
+function refuseWhileLocked(admin: { lockedUntil?: Date | null }) {
+  if (!lockedNow(admin)) return;
+  const minutes = Math.max(1, Math.ceil(((admin.lockedUntil as Date).getTime() - Date.now()) / 60_000));
+  throw new AppError(429, `Too many failed sign-in attempts on this account. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`);
+}
+
 /** Count one failure; lock from the threshold on. Incremented in the database, so two failures
- *  racing each other both count. */
-async function recordSignInFailure(adminId: string) {
+ *  racing each other both count — and the decay below is a conditional UPDATE for the same reason:
+ *  failures racing in after a quiet spell must not each reset the count to one. */
+async function recordSignInFailure(admin: LockoutSubject) {
+  const now = new Date();
+  if (!hasSecondFactor(admin)) {
+    const quietSince = new Date(now.getTime() - FAILURE_DECAY_MS);
+    await controlPrisma.platformAdminUser.updateMany({
+      where: {
+        id: admin.id,
+        failedLoginCount: { gt: 0 },
+        AND: [
+          { OR: [{ lastFailedLoginAt: null }, { lastFailedLoginAt: { lt: quietSince } }] },
+          { OR: [{ lockedUntil: null }, { lockedUntil: { lt: quietSince } }] }
+        ]
+      },
+      data: { failedLoginCount: 0, lockedUntil: null }
+    });
+  }
   const row = await controlPrisma.platformAdminUser.update({
-    where: { id: adminId },
-    data: { failedLoginCount: { increment: 1 } },
+    where: { id: admin.id },
+    data: { failedLoginCount: { increment: 1 }, lastFailedLoginAt: now },
     select: { failedLoginCount: true, email: true }
   });
   const lockMs = lockoutDurationMs(Number(row?.failedLoginCount ?? 0));
   if (lockMs > 0) {
-    await controlPrisma.platformAdminUser.update({ where: { id: adminId }, data: { lockedUntil: new Date(Date.now() + lockMs) } });
+    await controlPrisma.platformAdminUser.update({ where: { id: admin.id }, data: { lockedUntil: new Date(Date.now() + lockMs) } });
     // Recorded so an owner can see why a colleague cannot get in — and that somebody is trying.
-    await platformAudit("SYSTEM", null, "platform_admin.locked", "PlatformAdminUser", adminId, {
+    await platformAudit("SYSTEM", null, "platform_admin.locked", "PlatformAdminUser", admin.id, {
       email: row.email,
       consecutiveFailures: row.failedLoginCount,
       lockedForMinutes: Math.round(lockMs / 60_000)
@@ -174,18 +216,23 @@ async function recordSignInFailure(adminId: string) {
  * password is refused exactly like a wrong one: a distinct "locked" answer would tell a stranger
  * which addresses are operators, and a guess that happens to land during a lock must be worth
  * nothing. Guesses made while locked are not counted, so they cannot stretch the lock either.
+ *
+ * EXCEPT ON AN ACCOUNT WITH A SECOND FACTOR, whose password stage never locks and never counts
+ * (R1-2, see the lockout block above): the right password goes on to the challenge, and the
+ * challenge stage is where the lock is enforced and named.
  */
 export async function platformAdminLogin(email: string, password: string, userAgent?: string, ipAddress?: string) {
   const admin = await controlPrisma.platformAdminUser.findUnique({ where: { email } });
   const usable = admin && admin.status === "ACTIVE" ? admin : null;
   const passwordOk = await verifyPassword(password, usable?.passwordHash ?? DUMMY_PASSWORD_HASH);
-  const locked = usable ? lockedNow(usable) : false;
+  const passwordStageLocks = usable !== null && !hasSecondFactor(usable);
+  const locked = passwordStageLocks && lockedNow(usable);
   if (!usable || !passwordOk || locked) {
-    if (usable && !passwordOk && !locked) await recordSignInFailure(usable.id);
+    if (passwordStageLocks && !passwordOk && !locked) await recordSignInFailure(usable);
     throw new AppError(401, "Invalid email or password");
   }
 
-  if (usable.mfaEnabled && usable.mfaSecret) {
+  if (hasSecondFactor(usable)) {
     return {
       mfaRequired: true as const,
       challengeToken: signPlatformAdminMfaChallenge(usable.id),
@@ -228,17 +275,14 @@ export async function platformAdminVerifyMfa(
 
   // Whoever holds a challenge already proved the password, so naming the lock here discloses
   // nothing they did not know — and they need to hear it rather than keep typing codes.
-  if (lockedNow(admin)) {
-    const minutes = Math.max(1, Math.ceil(((admin.lockedUntil as Date).getTime() - Date.now()) / 60_000));
-    throw new AppError(429, `Too many failed sign-in attempts on this account. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`);
-  }
+  refuseWhileLocked(admin);
 
   const recovery = opts.recovery === true;
   const proof = await secondFactorProves(admin, code, recovery);
   if (!proof.ok) {
     // A replayed code is somebody double-submitting far more often than an attack, and the ratchet
     // already makes it worthless — so it is refused without counting against the account.
-    if (!proof.replay) await recordSignInFailure(admin.id);
+    if (!proof.replay) await recordSignInFailure(admin);
     throw new AppError(401, proof.message);
   }
   if (proof.step !== undefined) {
@@ -352,14 +396,24 @@ export async function confirmPlatformAdminMfa(adminId: string, code: string) {
  * stolen password plus a walked-away (or hijacked) console session could strip it. Every recovery
  * code goes with it, because a code that outlives the enrolment it belonged to is a permanent bypass
  * nobody remembers granting.
+ *
+ * A WRONG PROOF HERE IS A SIGN-IN FAILURE (R1-8), and a locked account is refused: otherwise a
+ * hijacked console session could guess the code — or the password — at the global rate limit.
  */
 export async function disablePlatformAdminMfa(adminId: string, currentPassword: string, code: string, opts: { recovery?: boolean } = {}) {
   const admin = await controlPrisma.platformAdminUser.findUnique({ where: { id: adminId } });
   if (!admin || admin.status !== "ACTIVE") throw new AppError(401, "Invalid session");
-  if (!(await verifyPassword(currentPassword, admin.passwordHash))) throw new AppError(400, "Current password is incorrect");
+  refuseWhileLocked(admin);
+  if (!(await verifyPassword(currentPassword, admin.passwordHash))) {
+    await recordSignInFailure(admin);
+    throw new AppError(400, "Current password is incorrect");
+  }
   if (!admin.mfaEnabled) throw new AppError(409, "Two-factor authentication is not on for this account.");
   const proof = await secondFactorProves(admin, code ?? "", opts.recovery === true);
-  if (!proof.ok) throw new AppError(400, `${proof.message} Turning two-factor off needs a current code from your authenticator, or a recovery code.`);
+  if (!proof.ok) {
+    if (!proof.replay) await recordSignInFailure(admin);
+    throw new AppError(400, `${proof.message} Turning two-factor off needs a current code from your authenticator, or a recovery code.`);
+  }
 
   await controlPrisma.platformAdminRecoveryCode.deleteMany({ where: { adminUserId: adminId } });
   await controlPrisma.platformAdminUser.update({
@@ -381,12 +435,17 @@ export async function countPlatformAdminRecoveryCodes(adminId: string) {
  * console must not be enough to lock its owner out), and every OTHER session is revoked so a
  * rotation done because a credential leaked actually ends the leak. The session doing the
  * changing survives — signing the operator out of the very console they are hardening would
- * read as a failure.
+ * read as a failure. A wrong current password counts as a sign-in failure, and a locked account is
+ * refused, for the reason disablePlatformAdminMfa gives (R1-8).
  */
 export async function changePlatformAdminPassword(adminId: string, currentSessionId: string, currentPassword: string, nextPassword: string) {
   const admin = await controlPrisma.platformAdminUser.findUnique({ where: { id: adminId } });
   if (!admin || admin.status !== "ACTIVE") throw new AppError(401, "Invalid session");
-  if (!(await verifyPassword(currentPassword, admin.passwordHash))) throw new AppError(400, "Current password is incorrect");
+  refuseWhileLocked(admin);
+  if (!(await verifyPassword(currentPassword, admin.passwordHash))) {
+    await recordSignInFailure(admin);
+    throw new AppError(400, "Current password is incorrect");
+  }
   // Seeded check first: an operator still ON the seeded password who types it again would otherwise
   // be told "same as current", which is true but not the reason that matters.
   if (nextPassword === SEEDED_PLATFORM_ADMIN_PASSWORD) throw new AppError(400, "That is the seeded bootstrap password — choose your own");

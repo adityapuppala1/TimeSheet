@@ -42,7 +42,7 @@ vi.setConfig({ testTimeout: 45_000, hookTimeout: 45_000 });
 const ADMIN_ID = "11111111-1111-4111-8111-111111111111";
 
 const control = {
-  platformAdminUser: { findUnique: vi.fn(), update: vi.fn() },
+  platformAdminUser: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   platformAdminSession: { create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   platformAdminRecoveryCode: { findMany: vi.fn(), createMany: vi.fn(), deleteMany: vi.fn(), updateMany: vi.fn(), count: vi.fn() }
 };
@@ -266,11 +266,13 @@ describe("enrolment never switches the factor on before it is proved", () => {
 describe("login does not disclose whether a platform-admin account exists", () => {
   const attempt = () => service.platformAdminLogin("ops@timesphere.app", "definitely-not-the-password");
 
-  const cases: [string, unknown][] = [
-    ["an address that does not exist", null],
-    ["an enrolled account", enrolledRow()],
-    ["an unenrolled account", enrolledRow({ mfaEnabled: false, mfaSecret: null })],
-    ["a deactivated account", enrolledRow({ status: "INACTIVE" })]
+  // Thunks, not rows: `enrolledRow` reads the hash and secret `beforeAll` makes, which do not exist
+  // yet while this block is being collected — built here, the "enrolled" row had no factor at all.
+  const cases: [string, () => unknown][] = [
+    ["an address that does not exist", () => null],
+    ["an enrolled account", () => enrolledRow()],
+    ["an unenrolled account", () => enrolledRow({ mfaEnabled: false, mfaSecret: null })],
+    ["a deactivated account", () => enrolledRow({ status: "INACTIVE" })]
   ];
 
   it("answers a wrong password identically in all four cases, and always pays one bcrypt round", async () => {
@@ -278,7 +280,7 @@ describe("login does not disclose whether a platform-admin account exists", () =
 
     for (const [, row] of cases) {
       vi.clearAllMocks();
-      control.platformAdminUser.findUnique.mockResolvedValue(row);
+      control.platformAdminUser.findUnique.mockResolvedValue(row());
       vi.mocked(security.verifyPassword).mockClear();
 
       const error = await attempt().catch((e) => e as { statusCode: number; message: string });
