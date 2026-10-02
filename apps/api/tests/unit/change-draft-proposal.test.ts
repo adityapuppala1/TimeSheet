@@ -23,8 +23,10 @@ import { changeStates } from "@timesheet/shared";
  *  the list it is checking asserts only that the list equals itself. */
 const EXPECTED_WRITABLE = ["backoutPlan", "communicationPlan", "implementationPlan", "justification", "pirNotes", "testPlan"];
 
-/** Mirrors `FROZEN_CHANGE_STATES` there, and `FROZEN_AFTER` in change.controller.ts. */
-const EXPECTED_FROZEN = ["APPROVED", "IMPLEMENTING", "PIR", "SCHEDULED", "VALIDATION", "CLOSED"];
+/** Mirrors `FROZEN_CHANGE_STATES` there, and `PLAN_LOCKED_STATES` in change.service.ts. The plan
+ *  locks at SUBMISSION, not at approval: an approver must not be deciding on a plan that can still
+ *  move underneath them. */
+const EXPECTED_FROZEN = ["AWAITING_APPROVAL", "APPROVED", "IMPLEMENTING", "PIR", "SCHEDULED", "VALIDATION", "CLOSED"];
 
 describe("what a drafted change proposal may touch", () => {
   it("writes only the blocking prose sections, plus the review", async () => {

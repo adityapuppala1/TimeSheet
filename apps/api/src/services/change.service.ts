@@ -31,6 +31,7 @@ import {
   type ChangeKind,
   type ChangeState
 } from "@timesheet/shared";
+import { createHash } from "node:crypto";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";
@@ -103,12 +104,158 @@ export function isNoOpTransition(from: ChangeState, to: ChangeState): boolean {
   return from === to;
 }
 
+/**
+ * Moves the API allows on top of the shared table, until the shared table carries them itself.
+ *
+ * AWAITING_APPROVAL → DRAFT is WITHDRAW. Once submitted, a change's plan, risk, schedule and type
+ * are locked (see `MATERIAL_CHANGE_FIELDS`), so withdrawing is how a requester changes them: the
+ * pending round is settled as WITHDRAWN — it stays on the record — and resubmitting opens the next.
+ * It cannot reach APPROVED or REJECTED, so the rule the shared table exists for is untouched.
+ *
+ * Kept here rather than in `@timesheet/shared` only because that package is edited separately; the
+ * union below makes the entry redundant, not wrong, the day it lands there too.
+ */
+const API_ONLY_TRANSITIONS: Partial<Record<ChangeState, readonly ChangeState[]>> = {
+  AWAITING_APPROVAL: ["DRAFT"]
+};
+
+/** Every state a change may move to by hand from `from`. The page renders its buttons from this
+ *  (via `GET /changes/:id`), so it can never offer a move the API then refuses. */
+export function legalChangeTargets(from: ChangeState): ChangeState[] {
+  return [...new Set([...(changeStateTransitions[from] ?? []), ...(API_ONLY_TRANSITIONS[from] ?? [])])];
+}
+
 export function assertLegalChangeTransition(from: ChangeState, to: ChangeState): void {
   if (isNoOpTransition(from, to)) return;
-  const legal = changeStateTransitions[from] ?? [];
-  if (!legal.includes(to)) {
+  if (!legalChangeTargets(from).includes(to)) {
     throw new AppError(400, `A change cannot move from ${label(from)} to ${label(to)}.`);
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * What an approval is a decision ON
+ * ------------------------------------------------------------------ */
+
+/**
+ * The MATERIAL fields: what an approver is shown and what the approval gates read. An approval is a
+ * judgement on exactly these, so from submission on they are locked — and a change to one after
+ * approval needs approving again.
+ *
+ *   - Type: MAJOR forces a backout plan and a review; the approver is told the type.
+ *   - Environment: where it lands decides what it collides with and what its risk means.
+ *   - Risk inputs: the score and band are derived from these, never written directly, and the band
+ *     decides whether a backout plan is mandatory.
+ *   - Data migration and downtime: they decide which plans are owed (`missingForSubmit`).
+ *   - The plans the submission gate demands.
+ *   - The schedule.
+ *
+ * Everything else — title and description wording, the implementer, owners, the business case,
+ * release identifiers, affected-thing lists, the override reason — is description or staffing, not
+ * the risk somebody accepted, and stays editable.
+ */
+export const MATERIAL_CHANGE_FIELDS = [
+  "changeKind",
+  "environment",
+  "riskInputs",
+  "impact",
+  "likelihood",
+  "dataMigration",
+  "requiresDowntime",
+  "downtimeMinutes",
+  "downtimeStart",
+  "downtimeEnd",
+  "justification",
+  "implementationPlan",
+  "backoutPlan",
+  "testPlan",
+  "communicationPlan",
+  "plannedStart",
+  "plannedEnd"
+] as const;
+
+/** From submission on, the material fields are what somebody is deciding, or has decided. */
+export const PLAN_LOCKED_STATES: readonly ChangeState[] = ["AWAITING_APPROVAL", "APPROVED", "SCHEDULED", "IMPLEMENTING", "VALIDATION", "PIR", "CLOSED"];
+
+/** Approved but not started: a change manager's material edit here re-opens approval rather than
+ *  being refused. Once implementation has begun there is no going back to the approver — the plan
+ *  that ran is the plan that was approved, and a different plan is a different change. */
+export const REAPPROVABLE_STATES: readonly ChangeState[] = ["APPROVED", "SCHEDULED"];
+
+/** Equal for the purpose of "did this save change anything": an ISO string and the Date it names, a
+ *  JSON map in any key order, and null/undefined/absent. */
+function sameFieldValue(next: unknown, current: unknown): boolean {
+  if (next === null || next === undefined || current === null || current === undefined) {
+    return (next ?? null) === (current ?? null);
+  }
+  if (current instanceof Date) return new Date(String(next)).getTime() === current.getTime();
+  if (typeof current === "object") {
+    const sorted = (v: unknown) => JSON.stringify(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)));
+    return typeof next === "object" && sorted(next) === sorted(current);
+  }
+  return next === current;
+}
+
+/** The material fields this request would actually CHANGE. A form that saves on blur re-sends values
+ *  it did not alter, and that is not an edit to the plan. */
+export function materialEdits(body: Record<string, unknown>, current: Record<string, unknown>): string[] {
+  return MATERIAL_CHANGE_FIELDS.filter((field) => field in body && !sameFieldValue(body[field], current[field]));
+}
+
+/** What an edit to a submitted change does: go through, re-open approval, or be refused (and why). */
+export type PlanEditVerdict = { kind: "ALLOW" } | { kind: "REAPPROVE" } | { kind: "REFUSE"; message: string };
+
+/**
+ * The plan-lock rule, as one pure decision.
+ *
+ * `editingPlan` is the older, wider freeze for people who are not change managers: once a change is
+ * approved they may record outcomes and nothing else. `materialKeys` is the narrower lock that now
+ * applies to EVERYONE from submission on. A change manager gets one more door — re-approval —
+ * while the change is approved and not yet started.
+ */
+export function judgePlanEdit(params: { state: ChangeState; privileged: boolean; editingPlan: boolean; materialKeys: string[] }): PlanEditVerdict {
+  const { state, privileged, editingPlan, materialKeys } = params;
+  const approvedOrLater = PLAN_LOCKED_STATES.includes(state) && state !== "AWAITING_APPROVAL";
+  if (!privileged && editingPlan && approvedOrLater) {
+    return { kind: "REFUSE", message: "This change has been approved. Its plan can no longer be edited — raise a new change, or ask a change manager." };
+  }
+  if (materialKeys.length === 0 || !PLAN_LOCKED_STATES.includes(state)) return { kind: "ALLOW" };
+  if (state === "AWAITING_APPROVAL") {
+    return {
+      kind: "REFUSE",
+      message: "This change is waiting for approval, so its plan, risk, schedule and type are locked. Withdraw it to draft to change them, then submit it again."
+    };
+  }
+  if (privileged && REAPPROVABLE_STATES.includes(state)) return { kind: "REAPPROVE" };
+  return {
+    kind: "REFUSE",
+    message: "This change has started, so its plan, risk, schedule and type can no longer change. Raise a new change for the new plan."
+  };
+}
+
+/**
+ * What was approved, as the decision recorded it: the risk, the window, and a fingerprint of the
+ * plans. Written to the decision's audit row so "was the plan that ran the plan that was approved?"
+ * has an answer that does not depend on nobody having edited the change since.
+ */
+export function approvalSnapshot(change: {
+  riskScore: number;
+  riskLevel: string;
+  plannedStart: Date | null;
+  plannedEnd: Date | null;
+  justification?: string | null;
+  implementationPlan?: string | null;
+  backoutPlan?: string | null;
+  testPlan?: string | null;
+  communicationPlan?: string | null;
+}) {
+  const plans = [change.justification, change.implementationPlan, change.backoutPlan, change.testPlan, change.communicationPlan];
+  return {
+    riskScore: change.riskScore,
+    riskLevel: change.riskLevel,
+    plannedStart: change.plannedStart?.toISOString() ?? null,
+    plannedEnd: change.plannedEnd?.toISOString() ?? null,
+    plansSha256: createHash("sha256").update(JSON.stringify(plans.map((p) => p ?? null))).digest("hex")
+  };
 }
 
 function label(state: ChangeState): string {

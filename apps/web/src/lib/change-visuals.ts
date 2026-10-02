@@ -92,6 +92,16 @@ export const CHANGE_ACTION_LABEL: Partial<Record<ChangeState, string>> = {
 };
 
 /**
+ * The label for one move, which can depend on where the change is coming FROM. Back to DRAFT from
+ * AWAITING_APPROVAL is a WITHDRAWAL — the requester taking it back to change its locked plan — and
+ * "Reopen as draft" on a change nobody rejected would read as a mistake.
+ */
+export function changeActionLabel(from: ChangeState, to: ChangeState): string {
+  if (from === "AWAITING_APPROVAL" && to === "DRAFT") return "Withdraw to draft";
+  return CHANGE_ACTION_LABEL[to] ?? humanizeChange(to);
+}
+
+/**
  * Which tab holds the field a submission requirement is complaining about.
  *
  * WHY IT EXISTS: `blockingForSubmit` comes back as a list of human phrases — "Backout plan",

@@ -6379,7 +6379,8 @@ export interface ChangeApprovalRow {
   approver: TicketUserSummary | null;
   /** Why this person was asked — recorded because reporting lines move. */
   reason: "MANAGER_OF_REQUESTER" | "SUPER_ADMIN";
-  status: "PENDING" | "APPROVED" | "REJECTED" | "RETURNED" | "CANCELLED";
+  /** WITHDRAWN: the requester took the change back to draft before anybody decided this round. */
+  status: "PENDING" | "APPROVED" | "REJECTED" | "RETURNED" | "CANCELLED" | "WITHDRAWN";
   comments: string | null;
   decidedAt: string | null;
   dueAt: string | null;
@@ -6484,6 +6485,14 @@ export interface ChangeDetail extends ChangeRow {
    *  round rather than overwriting the first — the objection stays on the record. */
   approvals: ChangeApprovalRow[];
   canEdit: boolean;
+  /** The plan, risk, schedule and type fields this viewer cannot change right now even where
+   *  `canEdit` is true — locked from submission on. Computed server-side from the rule it enforces. */
+  lockedFields: string[];
+  /** A change manager on an approved, not-yet-started change: editing a locked field sends it back
+   *  for approval rather than being refused. */
+  editReopensApproval: boolean;
+  /** The moves this change can make by hand, from the table the API enforces. */
+  allowedTransitions: ChangeState[];
   /** Whether THIS viewer has a pending step and the permission to decide it. Computed server-side:
    *  the browser cannot work that out without the chain, and guessing would render a Decide button
    *  the API then refuses. */

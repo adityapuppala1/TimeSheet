@@ -44,6 +44,8 @@ import { sendChangeDecisionMail } from "../services/change-mail.service.js";
 import {
   assertChangeManagementEnabled,
   activeRiskParameterKeys,
+  approvalSnapshot,
+  assertReadyFor,
   averageApprovalHours,
   canDecideChange,
   computeRiskScore,
@@ -51,12 +53,25 @@ import {
   getChangeSettings,
   getSlaConfig,
   judgeChangeSlas,
+  judgePlanEdit,
+  legalChangeTargets,
+  MATERIAL_CHANGE_FIELDS,
+  materialEdits,
   missingForTransition,
+  PLAN_LOCKED_STATES,
+  type PlanEditVerdict,
+  REAPPROVABLE_STATES,
   requiresBackoutPlan,
   stateAfterDecision,
   ticketWriteFor
 } from "../services/change.service.js";
-import { applyChangeTransition, CHANGE_INCLUDE } from "../services/change-transition.service.js";
+import {
+  announceChangeTransition,
+  applyChangeTransition,
+  CHANGE_INCLUDE,
+  loadChangeDetail,
+  writeChangeTransition
+} from "../services/change-transition.service.js";
 import { assertTicketVisible, computeTicketDueDate, getGlobalTicketSettings, issueTicketKey, ticketProjectScope } from "../services/ticket.service.js";
 import { CSV_EOL, UTF8_BOM, csvCell } from "../utils/csv.js";
 import PDFDocument from "pdfkit";
@@ -473,6 +488,7 @@ changeRouter.get("/:id", async (req, res) => {
 
   const latestRound = change.approvals[0]?.round ?? 0;
   const pending = change.approvals.filter((a) => a.round === latestRound && a.status === "PENDING");
+  const reopensOnEdit = isChangeManager(req.user!) && REAPPROVABLE_STATES.includes(change.state as ChangeState);
 
   res.json({
     ...change,
@@ -481,6 +497,13 @@ changeRouter.get("/:id", async (req, res) => {
     // Approve and Reject buttons the API then refuses.
     canDecide: change.state === "AWAITING_APPROVAL" && canDecideChange(req, pending),
     canEdit: mayEditChange(req, change),
+    /** The material fields this viewer cannot change right now, even where `canEdit` is true — so
+     *  the form disables them rather than letting a save discover the lock. Empty when a change
+     *  manager may edit them at the cost of re-approval; `editReopensApproval` says that. */
+    lockedFields: PLAN_LOCKED_STATES.includes(change.state as ChangeState) && !reopensOnEdit ? [...MATERIAL_CHANGE_FIELDS] : [],
+    editReopensApproval: reopensOnEdit,
+    /** The moves this change can make by hand, from the same table the API enforces. */
+    allowedTransitions: legalChangeTargets(change.state as ChangeState),
     /** What the change still owes before it could be submitted, so the form shows a checklist rather
      *  than letting somebody press Submit to discover it. */
     blockingForSubmit: missingForTransition(change, "AWAITING_APPROVAL", await activeRiskParameterKeys()),
@@ -502,10 +525,15 @@ changeRouter.get("/:id", async (req, res) => {
 /**
  * Who may edit, and when the plan stops being editable.
  *
- * An approved change is a record of what somebody agreed to. Editing the plan afterwards without
- * re-approval is exactly the hole change control exists to close, so the detail fields freeze once
- * a decision is recorded. The OUTCOME fields stay writable throughout, because recording what
- * happened is not the same act as amending what was agreed.
+ * What an approver decides on must not move underneath them, so the MATERIAL fields — plans, risk
+ * inputs, schedule, type; see `MATERIAL_CHANGE_FIELDS` — lock at SUBMISSION, for everyone, change
+ * managers included. Editing them means withdrawing the change to draft. Once approved, a change
+ * manager may still change them, but the change goes back to its approver (`judgePlanEdit`): an
+ * approval of one plan is not an approval of another. People who are not change managers keep the
+ * older, wider freeze after approval — outcomes only.
+ *
+ * The OUTCOME fields stay writable throughout, because recording what happened is not the same act
+ * as amending what was agreed.
  */
 const OUTCOME_FIELDS = [
   "outcome", "pirNotes", "closureNotes", "actualResult", "issuesEncountered", "lessonsLearned",
@@ -518,23 +546,34 @@ const OUTCOME_FIELDS = [
 ];
 const FROZEN_AFTER: ChangeState[] = ["APPROVED", "SCHEDULED", "IMPLEMENTING", "VALIDATION", "PIR", "CLOSED"];
 
+function isChangeManager(user: { role: string; permissions: string[] }): boolean {
+  return ["SUPER_ADMIN", "ADMIN"].includes(user.role) || user.permissions.includes(permissions.CHANGES_MANAGE);
+}
+
 function mayEditChange(req: any, change: { state: string; ticket: { reporter: { id: string }; assignee: { id: string } | null } }): boolean {
-  const privileged = ["SUPER_ADMIN", "ADMIN"].includes(req.user.role) || req.user.permissions.includes(permissions.CHANGES_MANAGE);
-  if (privileged) return true;
+  if (isChangeManager(req.user)) return true;
   const isParty = change.ticket.reporter.id === req.user.id || change.ticket.assignee?.id === req.user.id;
   return isParty && !FROZEN_AFTER.includes(change.state as ChangeState);
 }
 
-function assertMayEditChange(req: any, change: { state: string; ticket: { reporterId: string; assigneeId: string | null } }): void {
-  const privileged = ["SUPER_ADMIN", "ADMIN"].includes(req.user.role) || req.user.permissions.includes(permissions.CHANGES_MANAGE);
+/** What this request's edit does to the change: go through, re-open approval, or be refused. */
+function planEditVerdict(req: any, change: { state: string } & Record<string, unknown>): PlanEditVerdict {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  return judgePlanEdit({
+    state: change.state as ChangeState,
+    privileged: isChangeManager(req.user),
+    editingPlan: Object.keys(body).some((k) => !OUTCOME_FIELDS.includes(k) && k !== "to" && k !== "note"),
+    materialKeys: materialEdits(body, change)
+  });
+}
+
+function assertMayEditChange(req: any, change: { state: string; ticket: { reporterId: string; assigneeId: string | null } } & Record<string, unknown>): void {
   const isParty = change.ticket.reporterId === req.user.id || change.ticket.assigneeId === req.user.id;
-  if (!privileged && !isParty) {
+  if (!isChangeManager(req.user) && !isParty) {
     throw new AppError(403, "Only this change's requester, its implementer, or a change manager can edit it.");
   }
-  const editingPlan = Object.keys(req.body ?? {}).some((k) => !OUTCOME_FIELDS.includes(k) && k !== "to" && k !== "note");
-  if (editingPlan && FROZEN_AFTER.includes(change.state as ChangeState) && !privileged) {
-    throw new AppError(409, "This change has been approved. Its plan can no longer be edited — raise a new change, or ask a change manager.");
-  }
+  const verdict = planEditVerdict(req, change);
+  if (verdict.kind === "REFUSE") throw new AppError(409, verdict.message);
 }
 
 /** Loads a change for a write, having checked both that the caller can see it and may edit it. */
@@ -841,12 +880,39 @@ changeRouter.patch("/:id", requirePermission(permissions.CHANGES_WRITE), validat
   if ("description" in req.body) ticketData.description = req.body.description ?? null;
   if ("implementerId" in req.body) ticketData.assigneeId = req.body.implementerId || null;
 
-  const change = await prisma.$transaction(async (tx) => {
+  // A change manager's material edit to an approved, not-yet-started change: the plan that was
+  // approved is not the plan any more, so the change goes back to its approver — a new round, in
+  // the same transaction as the edit, so the edited plan is never on record as approved. The edited
+  // change has to pass the submission gate first: one that could not be submitted cannot be
+  // re-submitted either, and the edit is refused rather than leaving it approved and incomplete.
+  const reapprove = planEditVerdict(req, existing).kind === "REAPPROVE";
+  const riskKeys = reapprove ? await activeRiskParameterKeys() : [];
+  const now = new Date();
+
+  const approverIds = await prisma.$transaction(async (tx) => {
     if (Object.keys(ticketData).length > 0) await tx.ticket.update({ where: { id: existing.ticket.id }, data: ticketData });
-    return tx.changeRequest.update({ where: { id: existing.id }, data: data as never, include: CHANGE_INCLUDE });
+    const edited = await tx.changeRequest.update({
+      where: { id: existing.id },
+      data: data as never,
+      include: { ticket: { select: { id: true, reporterId: true } } }
+    });
+    if (!reapprove) return [];
+    assertReadyFor(edited, "AWAITING_APPROVAL", riskKeys);
+    return (await writeChangeTransition(tx, edited, "AWAITING_APPROVAL", req.user!, now)).approverIds;
   });
 
+  const change = await loadChangeDetail(existing.id);
   await audit(req.user!.id, "change.updated", "ChangeRequest", change.id, { fields: Object.keys(data) });
+  if (reapprove) {
+    await announceChangeTransition({
+      change,
+      from: existing.state as ChangeState,
+      to: "AWAITING_APPROVAL",
+      actor: req.user!,
+      approverIds,
+      note: `Re-approval needed: ${materialEdits(req.body, existing).join(", ")} changed after approval`
+    });
+  }
   res.json(change);
 });
 
@@ -900,6 +966,17 @@ changeRouter.post("/:id/decision", requirePermission(permissions.CHANGES_APPROVE
   const to = stateAfterDecision(decision);
   const now = new Date();
 
+  // An approval is recorded against the change AS IT IS NOW, so it has to still meet what approval
+  // requires — the same gate submission applied. The plan is locked while it waits, but changes
+  // stripped by the old, unlocked edit path exist, and approving one would record a decision on a
+  // HIGH-risk change with no way back. A rejection needs no such check: it is how one is sent back.
+  if (decision === "APPROVED") {
+    const missing = missingForTransition(change, "AWAITING_APPROVAL", await activeRiskParameterKeys());
+    if (missing.length > 0) {
+      throw new AppError(422, `This change no longer has everything approval requires: ${missing.join(", ")}. Reject it so the requester can complete it.`);
+    }
+  }
+
   const updated = await prisma.$transaction(async (tx) => {
     await tx.changeApproval.update({
       where: { id: mine.id },
@@ -921,7 +998,10 @@ changeRouter.post("/:id/decision", requirePermission(permissions.CHANGES_APPROVE
 
   await audit(req.user!.id, `change.${to.toLowerCase()}`, "ChangeRequest", change.id, {
     changeKey: change.changeKey,
-    comments: req.body.comments
+    comments: req.body.comments,
+    // What was approved — risk, window, a fingerprint of the plans. On the audit row because the
+    // approval row has nowhere to hold it; see `approvalSnapshot`.
+    ...(decision === "APPROVED" ? { approved: approvalSnapshot(change) } : {})
   });
   emitDomainEvent(`change.${to.toLowerCase()}` as never, { change: updated } as never);
   await sendChangeDecisionMail(updated, req.user!, decision, req.body.comments ?? null).catch((error) =>
@@ -1218,11 +1298,12 @@ changeRouter.post("/:id/draft-assist", requirePermission(permissions.CHANGES_WRI
   if (!change) throw new AppError(404, "Change not found");
   await assertTicketVisible(req, change.ticket.projectId);
 
-  // The same freeze the plan itself is under. Drafting into an approved change would rewrite what
-  // was agreed, and the proposal's apply step refuses it too — this is the earlier of the two, so
-  // the person finds out before spending a model call rather than after.
-  if (FROZEN_AFTER.includes(change.state as ChangeState)) {
-    throw new AppError(409, "This change has been approved, so its plan can no longer be edited.");
+  // The same lock the plan itself is under. Every section this drafts is material, so drafting into
+  // a submitted change would rewrite what an approver is deciding on or has decided — and the
+  // proposal's apply step refuses it too. This is the earlier of the two, so the person finds out
+  // before spending a model call rather than after.
+  if (PLAN_LOCKED_STATES.includes(change.state as ChangeState)) {
+    throw new AppError(409, "This change has been submitted, so its plan is locked. Withdraw it to draft to change it.");
   }
 
   const empty = DRAFTABLE_SECTIONS.filter((s) => !looksWritten((change as unknown as Record<string, string | null>)[s.field]));
@@ -1310,11 +1391,14 @@ changeRouter.post("/:id/draft-field", requirePermission(permissions.CHANGES_WRIT
   if (!change) throw new AppError(404, "Change not found");
   await assertTicketVisible(req, change.ticket.projectId);
 
-  if (FROZEN_AFTER.includes(change.state as ChangeState)) {
-    throw new AppError(409, "This change has been approved, so its plan can no longer be edited.");
-  }
-
   const field = String(req.body.field);
+  // After approval nothing is drafted; while it waits, only the material sections are locked.
+  const locked =
+    FROZEN_AFTER.includes(change.state as ChangeState) ||
+    (PLAN_LOCKED_STATES.includes(change.state as ChangeState) && (MATERIAL_CHANGE_FIELDS as readonly string[]).includes(field));
+  if (locked) {
+    throw new AppError(409, "This part of the change is locked now that it has been submitted, so it can no longer be drafted.");
+  }
   if (looksWritten((change as unknown as Record<string, string | null>)[field])) {
     throw new AppError(409, "That section already has something in it. The assistant only drafts empty sections — edit it directly, or clear it first.");
   }

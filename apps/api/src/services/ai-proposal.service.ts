@@ -33,9 +33,10 @@ import { levelRank } from "./ai-capability.registry.js";
 import { dispatchNotification } from "./notify.service.js";
 import { assertNoParentCycle, toDay } from "./plan-schedule.service.js";
 
-/** The states after which a change's PLAN is frozen. Mirrors `FROZEN_AFTER` in change.controller.ts
- *  — a drafted section applied after approval would rewrite what was agreed. */
-const FROZEN_CHANGE_STATES = new Set(["APPROVED", "SCHEDULED", "IMPLEMENTING", "VALIDATION", "PIR", "CLOSED"]);
+/** The states in which a change's PLAN is locked. Mirrors `PLAN_LOCKED_STATES` in change.service.ts
+ *  — from submission on, a drafted section applied would rewrite what an approver is deciding on,
+ *  or has decided. Every field a drafted proposal may write (bar the review) is a material one. */
+const FROZEN_CHANGE_STATES = new Set(["AWAITING_APPROVAL", "APPROVED", "SCHEDULED", "IMPLEMENTING", "VALIDATION", "PIR", "CLOSED"]);
 
 export type ProposalKind =
   | "PLAN_BREAKDOWN"
@@ -470,7 +471,7 @@ export async function applyProposal(params: {
         // PIR assistant unable to write the only field it exists for.
         const touchesPlanOnly = Object.keys(after).some((k) => k !== "pirNotes");
         if (touchesPlanOnly && FROZEN_CHANGE_STATES.has(String(current.state))) {
-          throw new Error("this change has been approved, so its plan can no longer be edited");
+          throw new Error("this change has been submitted, so its plan is locked");
         }
 
         assertNotStale(change.before, current as unknown as Record<string, unknown>);

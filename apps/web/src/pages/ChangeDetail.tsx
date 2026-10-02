@@ -33,7 +33,7 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, ExternalLink, Loader2, Plus, Sh
 import { Fragment, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import {
-  CHANGE_ACTION_LABEL,
+  changeActionLabel,
   CHANGE_KIND_TONE,
   CHANGE_OUTCOME_TONE,
   CHANGE_RISK_TONE,
@@ -268,8 +268,12 @@ export function ChangeDetailPage() {
   }
 
   const ro = !change.canEdit;
+  // The plan, risk, schedule and type lock at submission, for everyone — the server names which
+  // fields, so the form disables exactly what a save would be refused for.
+  const locked = new Set(change.lockedFields ?? []);
+  const roPlan = (field: string) => ro || locked.has(field);
   const set = (patch: Record<string, unknown>) => save.mutate(patch);
-  const legalMoves = (changeStateTransitions[change.state] ?? []) as ChangeState[];
+  const legalMoves = (change.allowedTransitions ?? changeStateTransitions[change.state] ?? []) as ChangeState[];
   const md = master.data;
 
   // Which tabs still owe something, mapped from the server's own list of missing requirements so
@@ -298,6 +302,22 @@ export function ChangeDetailPage() {
               backout plan is the most consequential field here, so a person stays in between. */}
           <DraftAssistButton changeId={change.id} />
         </div>
+      )}
+
+      {/* Why half the form just went grey, and the way through. Said once, up top, rather than as a
+          hint under seventeen disabled fields. */}
+      {!ro && locked.size > 0 && (
+        <p className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+          {change.state === "AWAITING_APPROVAL"
+            ? "Waiting for approval, so the plan, risk, schedule and type are locked. Withdraw it to draft to change them, then submit it again."
+            : "This change has started, so its plan, risk, schedule and type are locked. A different plan is a new change."}
+        </p>
+      )}
+      {change.editReopensApproval && (
+        <p className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm text-muted-foreground">
+          Approved. Changing its plan, risk, schedule or type sends it back to its approver for a new decision. Wording and people
+          can change freely.
+        </p>
       )}
 
       {/* Stated here rather than only on the Runbook tab: this is why the Implement button will
@@ -365,7 +385,7 @@ export function ChangeDetailPage() {
                 <PickField
                   label="Type"
                   required
-                  disabled={ro}
+                  disabled={roPlan("changeKind")}
                   value={change.changeKind}
                   options={changeKinds.map((k) => ({ ...band(k), hint: CHANGE_KIND_MEANING[k] }))}
                   onSave={(v) => set({ changeKind: v })}
@@ -389,7 +409,7 @@ export function ChangeDetailPage() {
                 <PickField
                   label="Environment"
                   required
-                  disabled={ro}
+                  disabled={roPlan("environment")}
                   value={change.environment}
                   options={ENVIRONMENTS.map(band)}
                   onSave={(v) => set({ environment: v })}
@@ -416,11 +436,11 @@ export function ChangeDetailPage() {
                   label="Justification"
                   required
                   hint="Why now, and what happens if it does not go ahead. The first thing an approver reads."
-                  disabled={ro}
+                  disabled={roPlan("justification")}
                   value={change.justification}
                   onSave={(v) => set({ justification: v })}
                 />
-                <FieldAssist changeId={change.id} field="justification" value={change.justification} disabled={ro} onUse={(v) => set({ justification: v })} />
+                <FieldAssist changeId={change.id} field="justification" value={change.justification} disabled={roPlan("justification")} onUse={(v) => set({ justification: v })} />
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="grid gap-2">
                     <TextField label="Problem statement" multiline disabled={ro} value={change.problemStatement} onSave={(v) => set({ problemStatement: v })} />
@@ -470,18 +490,18 @@ export function ChangeDetailPage() {
                       ["externalIntegrationImpact", "External integration impact"]
                     ] as const
                   ).map(([key, label]) => (
-                    <BoolField key={key} label={label} disabled={ro} value={Boolean((change as never as Record<string, boolean>)[key])} onSave={(v) => set({ [key]: v })} />
+                    <BoolField key={key} label={label} disabled={roPlan(key)} value={Boolean((change as never as Record<string, boolean>)[key])} onSave={(v) => set({ [key]: v })} />
                   ))}
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <BoolField label="Requires downtime" disabled={ro} value={change.requiresDowntime} onSave={(v) => set({ requiresDowntime: v })} />
+                  <BoolField label="Requires downtime" disabled={roPlan("requiresDowntime")} value={change.requiresDowntime} onSave={(v) => set({ requiresDowntime: v })} />
                   {change.requiresDowntime && (
                     <TextField
                       label="Expected downtime (minutes)"
                       required
                       type="number"
-                      disabled={ro}
+                      disabled={roPlan("downtimeMinutes")}
                       value={change.downtimeMinutes}
                       onSave={(v) => set({ downtimeMinutes: v ? Number(v) : null })}
                     />
@@ -506,7 +526,7 @@ export function ChangeDetailPage() {
             </TabsContent>
 
             <TabsContent value="risk">
-              <RiskSection change={change} parameters={md?.riskParameters ?? []} disabled={ro} onSave={set} />
+              <RiskSection change={change} parameters={md?.riskParameters ?? []} disabled={roPlan("riskInputs")} onSave={set} />
             </TabsContent>
 
             <TabsContent value="implementation">
@@ -515,11 +535,11 @@ export function ChangeDetailPage() {
                   label="Implementation plan"
                   required
                   hint="Required to submit. What will actually be done, in order."
-                  disabled={ro}
+                  disabled={roPlan("implementationPlan")}
                   value={change.implementationPlan}
                   onSave={(v) => set({ implementationPlan: v })}
                 />
-                <FieldAssist changeId={change.id} field="implementationPlan" value={change.implementationPlan} disabled={ro} onUse={(v) => set({ implementationPlan: v })} />
+                <FieldAssist changeId={change.id} field="implementationPlan" value={change.implementationPlan} disabled={roPlan("implementationPlan")} onUse={(v) => set({ implementationPlan: v })} />
                 <div className="grid gap-4 sm:grid-cols-2">
                   <TextField label="Summary" multiline disabled={ro} value={change.implementationSummary} onSave={(v) => set({ implementationSummary: v })} />
                   <TextField label="Objective" multiline disabled={ro} value={change.implementationObjective} onSave={(v) => set({ implementationObjective: v })} />
@@ -540,11 +560,11 @@ export function ChangeDetailPage() {
                   label="Test plan"
                   required={changeNeedsTestPlan(change)}
                   hint={changeNeedsTestPlan(change) ? "Required to submit — this change is above low risk." : undefined}
-                  disabled={ro}
+                  disabled={roPlan("testPlan")}
                   value={change.testPlan}
                   onSave={(v) => set({ testPlan: v })}
                 />
-                <FieldAssist changeId={change.id} field="testPlan" value={change.testPlan} disabled={ro} onUse={(v) => set({ testPlan: v })} />
+                <FieldAssist changeId={change.id} field="testPlan" value={change.testPlan} disabled={roPlan("testPlan")} onUse={(v) => set({ testPlan: v })} />
                 <div className="grid gap-4 sm:grid-cols-2">
                   <PickField label="Test environment" disabled={ro} value={change.testEnvironment} options={ENVIRONMENTS.map(band)} onSave={(v) => set({ testEnvironment: v })} />
                   <TextField label="Testing team" disabled={ro} value={change.testingTeam} onSave={(v) => set({ testingTeam: v })} />
@@ -567,11 +587,11 @@ export function ChangeDetailPage() {
                       ? "Required to submit — this change is high risk, major, or moves data."
                       : "Optional at this risk level, and still the field people wish they had written."
                   }
-                  disabled={ro}
+                  disabled={roPlan("backoutPlan")}
                   value={change.backoutPlan}
                   onSave={(v) => set({ backoutPlan: v })}
                 />
-                <FieldAssist changeId={change.id} field="backoutPlan" value={change.backoutPlan} disabled={ro} onUse={(v) => set({ backoutPlan: v })} />
+                <FieldAssist changeId={change.id} field="backoutPlan" value={change.backoutPlan} disabled={roPlan("backoutPlan")} onUse={(v) => set({ backoutPlan: v })} />
                 <div className="grid gap-4 sm:grid-cols-2">
                   <BoolField label="Rollback required" disabled={ro} value={change.rollbackRequired} onSave={(v) => set({ rollbackRequired: v })} />
                   <BoolField label="Backup required" disabled={ro} value={change.backupRequired} onSave={(v) => set({ backupRequired: v })} />
@@ -607,7 +627,9 @@ export function ChangeDetailPage() {
             </TabsContent>
 
             <TabsContent value="schedule">
-              <ScheduleSection change={change} disabled={ro} onSave={set} />
+              {/* The window is part of what is approved; the override reason is not — it is the
+                  record of why a window went ahead despite a conflict, and stays writable. */}
+              <ScheduleSection change={change} disabled={roPlan("plannedStart")} reasonDisabled={ro} onSave={set} />
             </TabsContent>
 
             <TabsContent value="comms">
@@ -616,11 +638,11 @@ export function ChangeDetailPage() {
                   label="Communication plan"
                   required={changeNeedsCommunicationPlan(change)}
                   hint={changeNeedsCommunicationPlan(change) ? "Required to submit — this change takes something down. Who gets told, and when?" : undefined}
-                  disabled={ro}
+                  disabled={roPlan("communicationPlan")}
                   value={change.communicationPlan}
                   onSave={(v) => set({ communicationPlan: v })}
                 />
-                <FieldAssist changeId={change.id} field="communicationPlan" value={change.communicationPlan} disabled={ro} onUse={(v) => set({ communicationPlan: v })} />
+                <FieldAssist changeId={change.id} field="communicationPlan" value={change.communicationPlan} disabled={roPlan("communicationPlan")} onUse={(v) => set({ communicationPlan: v })} />
                 <div className="grid gap-4 sm:grid-cols-2">
                   <BoolField label="Internal communication required" disabled={ro} value={change.internalCommRequired} onSave={(v) => set({ internalCommRequired: v })} />
                   <BoolField label="Stakeholder notification required" disabled={ro} value={change.stakeholderNotifyRequired} onSave={(v) => set({ stakeholderNotifyRequired: v })} />
@@ -707,13 +729,14 @@ export function ChangeDetailPage() {
                   onClick={() => move.mutate(to)}
                 >
                   {move.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  {CHANGE_ACTION_LABEL[to] ?? humanizeChange(to)}
+                  {changeActionLabel(change.state, to)}
                 </Button>
               ))}
             </div>
             {change.state === "AWAITING_APPROVAL" && (
               <p className="text-xs text-muted-foreground">
-                Approved and rejected are written only by a recorded decision — that is what the approval is for.
+                Approved and rejected are written only by a recorded decision — that is what the approval is for. Withdrawing it
+                records this round as withdrawn and unlocks the plan.
               </p>
             )}
           </CardContent>
@@ -929,7 +952,8 @@ const DECISION_TONE: Record<string, "success" | "destructive" | "muted"> = {
   REJECTED: "destructive",
   PENDING: "muted",
   CANCELLED: "muted",
-  RETURNED: "muted"
+  RETURNED: "muted",
+  WITHDRAWN: "muted"
 };
 
 function ApprovalCard({ change, onDecided }: { change: ChangeDetailRow; onDecided: () => void }) {
@@ -1108,8 +1132,8 @@ function RiskSection({
         ))}
       </div>
       <p className="text-xs text-muted-foreground">
-        The level is derived from these answers and the weights an admin configured — it is never typed, and it is frozen on the
-        change once approved so retuning the matrix cannot rewrite what was agreed.
+        The level is derived from these answers and the weights an admin configured — it is never typed, and the answers lock
+        once the change is submitted, so what the approver decides on cannot move underneath them.
       </p>
     </div>
   );
@@ -1156,10 +1180,12 @@ function PirAssistButton({ changeId }: { changeId: string }) {
 function ScheduleSection({
   change,
   disabled,
+  reasonDisabled,
   onSave
 }: {
   change: ChangeDetailRow;
   disabled: boolean;
+  reasonDisabled: boolean;
   onSave: (p: Record<string, unknown>) => void;
 }) {
   const conflicts = useQuery({
@@ -1235,7 +1261,7 @@ function ScheduleSection({
           <div className="mt-2">
             <TextField
               label="Override reason"
-              disabled={disabled}
+              disabled={reasonDisabled}
               value={change.conflictOverrideReason}
               placeholder="Why this window is going ahead anyway"
               onSave={(v) => onSave({ conflictOverrideReason: v || null })}

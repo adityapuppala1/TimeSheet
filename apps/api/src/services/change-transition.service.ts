@@ -153,6 +153,16 @@ export async function writeChangeTransition(
     const settings = await getChangeSettings();
     approverIds = (await openApprovalRound(tx, change, settings.approvalSlaHours)).approverIds;
   }
+  // Leaving AWAITING_APPROVAL any way but a decision settles the round nobody decided. WITHDRAWN when
+  // the requester took it back to rework — the round stays on the record, which is the point of
+  // rounds — and CANCELLED when the change itself was called off. Left PENDING, the rows read as
+  // decisions still owed, on a change nobody is being asked about any more.
+  if (change.state === "AWAITING_APPROVAL" && (to === "DRAFT" || to === "CANCELLED")) {
+    await tx.changeApproval.updateMany({
+      where: { changeId: change.id, status: "PENDING" },
+      data: { status: to === "DRAFT" ? "WITHDRAWN" : "CANCELLED", decidedAt: now }
+    });
+  }
 
   // The state and the ticket half are never written apart — the compatibility hinge ~40 readers of
   // `Ticket.status` depend on.
