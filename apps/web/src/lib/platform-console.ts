@@ -5,6 +5,7 @@
  * NONE OF THIS IS THE AUTHORIZATION. The API decides; these only decide what the console shows
  * while it waits to be told.
  */
+import type { OrgStatus } from "../services/platform-admin-api";
 
 /** An account-level gate: something the operator must put right about their OWN account before the
  *  console admits them anywhere else. The server enforces it (middleware/platform-admin-auth.ts). */
@@ -132,4 +133,15 @@ export function countInRetention(queue: ReadonlyArray<{ plan: { inProgramme: boo
 export function shouldNagForMfa(admin: AccountFlags | undefined): boolean {
   if (!admin || admin.mfaEnabled) return false;
   return consoleAccountGate(admin) === null;
+}
+
+/**
+ * The statuses the organization dialog offers, in order. PROVISIONING only to a workspace that is
+ * still in it: the API refuses a move back INTO it (the signup sweep deletes a self-serve workspace it
+ * finds there), and offering it first in the list made it the easiest wrong choice on the page. A
+ * provisioning workspace keeps it because the dialog re-sends the status it opened with.
+ */
+export function orgStatusChoices(current: OrgStatus): OrgStatus[] {
+  const settled: OrgStatus[] = ["ACTIVE", "GRACE", "SUSPENDED", "ARCHIVED"];
+  return current === "PROVISIONING" ? ["PROVISIONING", ...settled] : settled;
 }

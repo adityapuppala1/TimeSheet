@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { accountGateFromError, consoleAccountGate, countInRetention, isQueuedForApproval, issuedCredentialOf, retentionApprovalOf, shouldNagForMfa } from "../../src/lib/platform-console";
+import { accountGateFromError, consoleAccountGate, countInRetention, isQueuedForApproval, issuedCredentialOf, orgStatusChoices, retentionApprovalOf, shouldNagForMfa } from "../../src/lib/platform-console";
 
 describe("issuedCredentialOf — the one time an approver sees a new operator's password", () => {
   it("finds the temporary password an approved admin.create or admin.reactivate returns", () => {
@@ -153,5 +153,17 @@ describe("accountGateFromError", () => {
     expect(accountGateFromError(forbidden())).toBeNull();
     expect(accountGateFromError({ response: { status: 400, data: { code: "PASSWORD_ROTATION_REQUIRED" } } })).toBeNull();
     expect(accountGateFromError(new Error("network"))).toBeNull();
+  });
+});
+
+describe("orgStatusChoices — the statuses the organization dialog offers", () => {
+  it("does not offer Provisioning to a workspace that has left it — the API refuses the move, and the signup sweep deletes what it finds there", () => {
+    for (const status of ["ACTIVE", "GRACE", "SUSPENDED", "ARCHIVED"] as const) {
+      expect(orgStatusChoices(status)).toEqual(["ACTIVE", "GRACE", "SUSPENDED", "ARCHIVED"]);
+    }
+  });
+
+  it("keeps it for a workspace that is provisioning, because the dialog re-sends the status it opened with", () => {
+    expect(orgStatusChoices("PROVISIONING")).toEqual(["PROVISIONING", "ACTIVE", "GRACE", "SUSPENDED", "ARCHIVED"]);
   });
 });

@@ -128,6 +128,12 @@ export async function provisionOrganization(orgId: string, input: ProvisionOrgIn
   if (!org) throw new AppError(404, "Organization not found");
   if (org.status === "ACTIVE") throw new AppError(409, "This organization is already active — re-provisioning an active org isn't supported (use migrate-all-tenants for schema updates).");
 
+  // A run in progress has to look like one. The signup sweep (signup-sweep.service.ts) removes a
+  // self-serve row still PROVISIONING once its last write is half an hour old, and nothing below
+  // writes to this row until the very end — so an operator provisioning a stuck signup by hand was
+  // working on a row the sweep could delete mid-run.
+  await controlPrisma.organization.update({ where: { id: org.id }, data: { updatedAt: new Date() } });
+
   const databaseName = databaseNameForSlug(org.slug);
   const { dsn, host } = buildDsn(env.TENANT_DB_PROVISION_BASE_URL, databaseName);
 

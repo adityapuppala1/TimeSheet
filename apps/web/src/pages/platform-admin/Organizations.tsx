@@ -38,6 +38,7 @@ import { endOfDayIso, hasLiveTrial, trialEditNote } from "../../utils/org-trial"
 import { domainClaimNote } from "../../utils/domain-claim";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, FieldGrid, OrgStatusPill, PRIMARY_BTN, TierPill, Toolbar } from "./console-ui";
 import { runInBackground } from "../../lib/run-in-background";
+import { orgStatusChoices } from "../../lib/platform-console";
 
 /* The status pill is `console-ui.tsx`'s `OrgStatusPill` now — one map for the whole console. The
    local copy here was missing GRACE entirely (it renders `undefined` as a variant), which is
@@ -54,6 +55,17 @@ const PAGE_SIZES = [10, 20, 50, 100];
  * wrapper that stretches whatever badge it contains.
  */
 const PILL_SLOT = "inline-flex [&>*]:w-full [&>*]:justify-center";
+
+/** The edit dialog's status labels. GRACE resolves like ACTIVE and is shut everywhere past
+ *  authentication — the state a lapsed trial or a failed renewal sits in. It was missing from the
+ *  dialog, so an org the lifecycle worker had put in grace could not be read or set back. */
+const ORG_STATUS_LABEL: Record<OrgStatus, string> = {
+  PROVISIONING: "Provisioning",
+  ACTIVE: "Active",
+  GRACE: "Grace (lapsed, billing still reachable)",
+  SUSPENDED: "Suspended",
+  ARCHIVED: "Archived"
+};
 
 /** What the Database column shows — one definition, so search and sort agree with the cell. */
 const databaseLabel = (row: OrgListRow) => (row.database ? `${row.database.host} / ${row.database.databaseName}` : "Not provisioned");
@@ -690,14 +702,12 @@ function EditOrgDialogInner({ org, onOpenChange, onSaved }: { org: OrgListRow; o
               <Select value={status} onValueChange={(v) => setStatus(v as OrgStatus)}>
                 <SelectTrigger id="edit-org-status"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="PROVISIONING">Provisioning</SelectItem>
-                  <SelectItem value="ACTIVE">Active</SelectItem>
-                  {/* GRACE resolves like ACTIVE and is shut everywhere past authentication — the
-                      state a lapsed trial or a failed renewal sits in. It was missing here, so an
-                      org the lifecycle worker had put in grace could not be read or set back. */}
-                  <SelectItem value="GRACE">Grace (lapsed, billing still reachable)</SelectItem>
-                  <SelectItem value="SUSPENDED">Suspended</SelectItem>
-                  <SelectItem value="ARCHIVED">Archived</SelectItem>
+                  {/* Provisioning only for a workspace still in it — see orgStatusChoices. */}
+                  {orgStatusChoices(org.status).map((choice) => (
+                    <SelectItem key={choice} value={choice}>
+                      {ORG_STATUS_LABEL[choice]}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </Field>

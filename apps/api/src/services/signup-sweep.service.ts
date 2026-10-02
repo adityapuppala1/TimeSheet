@@ -18,6 +18,12 @@
  * Provision, for as long as they like; only `createdVia: "SELF_SERVE"` is swept. The physical
  * database, if one got that far, is left for an operator, exactly as the failure path leaves it —
  * dropping a database automatically from a background job is how the wrong one gets dropped.
+ *
+ * NOR A ROW SOMEBODY IS WORKING ON. Old is not abandoned: an operator provisioning a stuck signup by
+ * hand is working on a row created long ago, and deleting it mid-run cascades to the DSN row the run
+ * is about to write and orphans the database. So the row's last write must be past the threshold too
+ * — `provisionOrganization` writes to it as it starts — and a row whose database is already
+ * registered (OrgDatabase, the only copy of its DSN) is never removed here at all.
  */
 import { controlPrisma } from "../config/control-prisma.js";
 import { companyDomainOf } from "../utils/company-domain.js";
@@ -27,16 +33,18 @@ import { recordSignupStage } from "./signup-funnel.service.js";
 export const STALE_PROVISIONING_MINUTES = 30;
 
 export async function sweepAbandonedSignups(now: Date = new Date()): Promise<{ removed: string[] }> {
+  const threshold = new Date(now.getTime() - STALE_PROVISIONING_MINUTES * 60_000);
+  const abandoned = { status: "PROVISIONING" as const, updatedAt: { lt: threshold }, database: { is: null } };
   const stale = await controlPrisma.organization.findMany({
-    where: { status: "PROVISIONING", createdVia: "SELF_SERVE", createdAt: { lt: new Date(now.getTime() - STALE_PROVISIONING_MINUTES * 60_000) } },
+    where: { ...abandoned, createdVia: "SELF_SERVE", createdAt: { lt: threshold } },
     select: { id: true, slug: true, name: true, ownerEmail: true, createdAt: true }
   });
 
   const removed: string[] = [];
   for (const org of stale) {
-    // Conditional on still being PROVISIONING: a signup that finished between the read and here is a
-    // customer's live workspace now.
-    const { count } = await controlPrisma.organization.deleteMany({ where: { id: org.id, status: "PROVISIONING" } });
+    // Conditional on still being abandoned: a signup that finished between the read and here is a
+    // customer's live workspace now, and one an operator started provisioning is in somebody's hands.
+    const { count } = await controlPrisma.organization.deleteMany({ where: { id: org.id, ...abandoned } });
     if (count === 0) continue;
     removed.push(org.slug);
     const minutesStuck = Math.round((now.getTime() - org.createdAt.getTime()) / 60_000);

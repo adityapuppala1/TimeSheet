@@ -54,7 +54,8 @@ describe("provisionOrganization and the company domain", () => {
 
     expect(m.claim).toHaveBeenCalledWith({ id: "org-1", ownerEmail: "admin@acme.com" });
     // After the status flip: the claim points strangers at a workspace that can actually take them.
-    expect(m.orgUpdate.mock.invocationCallOrder[0]).toBeLessThan(m.claim.mock.invocationCallOrder[0]);
+    const flip = m.orgUpdate.mock.calls.findIndex(([args]) => args.data.status === "ACTIVE");
+    expect(m.orgUpdate.mock.invocationCallOrder[flip]).toBeLessThan(m.claim.mock.invocationCallOrder[0]);
     expect(result.domainClaim).toEqual({ outcome: "claimed", domain: "acme.com" });
   });
 
@@ -91,5 +92,21 @@ describe("provisionOrganization and the founder's first password", () => {
   it("leaves the gate off when the caller does not — the self-serve founder chose their own", async () => {
     await provisionOrganization("org-1", input);
     expect(seedTenant).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ mustChangePassword: false }));
+  });
+});
+
+describe("provisionOrganization and the signup sweep", () => {
+  it("writes to the workspace's row before it creates the database, so a run in progress reads as somebody's hands on it", async () => {
+    // The sweep (signup-sweep.service.ts) removes a self-serve row still PROVISIONING once its last
+    // write is half an hour old. Untouched until the final status flip, a stuck signup an operator
+    // was provisioning by hand looked abandoned for the whole run.
+    const { execFileSync } = await import("node:child_process");
+    m.claim.mockResolvedValue({ outcome: "claimed", domain: "acme.com" });
+
+    await provisionOrganization("org-1", input);
+
+    const [first] = m.orgUpdate.mock.calls;
+    expect(first[0]).toEqual({ where: { id: "org-1" }, data: { updatedAt: expect.any(Date) } });
+    expect(m.orgUpdate.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(execFileSync).mock.invocationCallOrder[0]);
   });
 });

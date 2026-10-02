@@ -111,6 +111,43 @@ describe("an operator's status change and the non-payment marker", () => {
   });
 });
 
+/**
+ * PROVISIONING IS WHERE A WORKSPACE STARTS, NOT A STATE TO PUT ONE BACK IN. The signup sweep deletes a
+ * self-serve workspace it finds there half an hour after creation — and the delete cascades to the
+ * row holding its database's DSN, its domain claims, its SSO config and its Stripe ids. An operator
+ * who set a live workspace to "Provisioning" (to get the Provision button back, or as a lock) lost it
+ * within ten minutes, with the customer still being charged.
+ */
+describe("moving a workspace into PROVISIONING", () => {
+  it("is refused for a workspace that has left it, with a message that says why", async () => {
+    control.organization.findUnique.mockResolvedValue(org({ status: "ACTIVE" }));
+
+    const res = await patch({ status: "PROVISIONING" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.message).toMatch(/provisioning/i);
+    expect(res.body.message).toMatch(/suspend/i);
+    expect(control.organization.update).not.toHaveBeenCalled();
+  });
+
+  it("is refused from every other status too", async () => {
+    for (const status of ["GRACE", "SUSPENDED", "ARCHIVED"]) {
+      control.organization.findUnique.mockResolvedValue(org({ status }));
+      expect((await patch({ status: "PROVISIONING" })).status).toBe(422);
+    }
+    expect(control.organization.update).not.toHaveBeenCalled();
+  });
+
+  it("still lets the dialog re-save a workspace that is provisioning", async () => {
+    control.organization.findUnique.mockResolvedValue(org({ status: "PROVISIONING" }));
+
+    const res = await patch({ status: "PROVISIONING", planTier: "TEAM" });
+
+    expect(res.status).toBe(200);
+    expect(written()).toMatchObject({ status: "PROVISIONING", planTier: "TEAM" });
+  });
+});
+
 /** A self-serve workspace mid-trial: entitled to TEAM until `trialEndsAt`, paying for nothing yet. */
 const trialling = (overrides: Record<string, unknown> = {}) =>
   org({ planTier: "STARTER", trialTier: "TEAM", trialEndsAt: new Date(Date.now() + 5 * DAY), ...overrides });

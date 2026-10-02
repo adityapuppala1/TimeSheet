@@ -326,6 +326,17 @@ type OrgRow = NonNullable<Awaited<ReturnType<typeof controlPrisma.organization.f
 /** The columns a STATUS change writes beside the status itself. */
 function statusEffects(before: OrgRow, body: { status?: string; suspendedReason?: string | null }): Record<string, unknown> {
   if (!body.status) return {};
+  // PROVISIONING is where a workspace starts, never a state to put one back in. The signup sweep
+  // deletes a self-serve workspace it finds there (signup-sweep.service.ts), and the delete cascades
+  // to its database's DSN row, domain claims, SSO config and Stripe ids — a live workspace an operator
+  // set to "Provisioning" to get the Provision button back, or as a lock, was gone within minutes.
+  // Re-saving a workspace that IS provisioning re-sends the status, so that stays allowed.
+  if (body.status === "PROVISIONING" && before.status !== "PROVISIONING") {
+    throw new AppError(
+      422,
+      "A workspace can't be moved back to Provisioning — that status is only for one that has never been set up, and a self-serve workspace left in it is deleted. To take this workspace offline, suspend it instead."
+    );
+  }
   const data: Record<string, unknown> = { suspendedAt: body.status === "SUSPENDED" ? new Date() : null };
   if (body.status !== "SUSPENDED" && !("suspendedReason" in body)) data.suspendedReason = null;
   // An operator who MOVES the status has made the lifecycle decision their own, so the webhook's
