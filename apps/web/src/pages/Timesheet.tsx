@@ -46,6 +46,8 @@ import { useFaceStatus } from "../lib/use-face-status";
 import { plainTextLength } from "../lib/safe-html";
 import { runInBackground } from "../lib/run-in-background";
 import { localDateKey } from "../lib/local-date";
+import { dayTotalFor } from "../lib/day-total";
+import { useAuthStore } from "../store/auth";
 
 const MAX_DAILY_HOURS = 12;
 const OPEN_TICKET_STATUSES = "OPEN,IN_PROGRESS,IN_REVIEW,REOPENED";
@@ -221,7 +223,7 @@ export function Timesheet() {
   const [confirmClear, setConfirmClear] = useState(false);
   const mutationLock = useRef(false);
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
-  const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: () => timesheetApi.list() });
+  const currentUser = useAuthStore((s) => s.user);
   /**
    * The activity list, from the workspace's own catalog rather than the frozen twelve-item array
    * in `@timesheet/shared`. A super admin edits it on the Projects screen; this picker is what
@@ -332,12 +334,22 @@ export function Timesheet() {
     enabled: Boolean(projectId)
   });
 
-  const dayTotal = useMemo(() => {
-    const list = Array.isArray(timesheets.data) ? timesheets.data : [];
-    return list
-      .filter((row: any) => String(row.workDate).slice(0, 10) === workDate && row.status !== "REJECTED")
-      .reduce((sum: number, row: any) => sum + Number(row.totalHours ?? 0), 0);
-  }, [timesheets.data, workDate]);
+  /**
+   * The meter's source: the CURRENT user's entries on the chosen day, asked of the server for that
+   * day. It used to be the unscoped list — the whole workspace's newest 100 rows for a
+   * `reports:view` holder — summed by date alone, so a manager's own Submit was disabled by their
+   * reports' hours. `dayTotalFor` also filters by user, because a viewer-of-all gets everybody's
+   * rows for the date from this route. Keyed under `["timesheets"]` so a save refreshes it.
+   */
+  const dayEntries = useQuery({
+    queryKey: ["timesheets", "day", currentUser?.id, workDate],
+    queryFn: () => timesheetApi.list({ userId: currentUser!.id, from: workDate, to: workDate }),
+    enabled: Boolean(currentUser?.id && workDate)
+  });
+  const dayTotal = useMemo(
+    () => dayTotalFor(Array.isArray(dayEntries.data) ? dayEntries.data : [], currentUser?.id, workDate),
+    [dayEntries.data, currentUser?.id, workDate]
+  );
 
   const projectedDayTotal = dayTotal + total;
   const overCap = projectedDayTotal > MAX_DAILY_HOURS;

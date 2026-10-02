@@ -808,6 +808,9 @@ export interface TimesheetListParams extends DateWindow {
    * who manages nobody. Omitted, the route returns exactly what it always did.
    */
   scope?: "team";
+  /** Somebody's entries in particular. Honoured for a `reports:view` holder; everyone else only ever
+   *  gets their own, whatever is sent. */
+  userId?: string;
 }
 
 /** The approvals queue's filters. Every one is applied by the server — see `approvalQueue`. */
