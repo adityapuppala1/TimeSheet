@@ -204,6 +204,24 @@ export function noticesSent(raw: unknown): Record<string, string> {
   return out;
 }
 
+/**
+ * What `retentionNoticesSent` becomes when a platform admin EXTENDS a trial (platform-admin.controller
+ * `trialEffects`).
+ *
+ * The lapse cycle — "ended" and every reminder day — is measured from `trialEndsAt`, so a new end
+ * date starts it again. Kept, the first cycle's record made the second lapse silent: no "ended" (the
+ * trial worker stands its own mail down while this programme is on), no reminder already sent once,
+ * and an extension granted after the final notice reached deletion 90 days later with nothing sent.
+ *
+ * The day-10 check-in is the one marker kept. It is counted from the trial's START, which an
+ * extension does not move, and the reopened trial is already past day 10 — cleared, it would go out a
+ * second time on the next tick.
+ */
+export function noticesAfterTrialExtension(raw: unknown): Record<string, string> {
+  const { feedback10 } = noticesSent(raw);
+  return feedback10 ? { feedback10 } : {};
+}
+
 /** The shared "left the trial for a paid plan" rule — trial-conversion.ts — re-exported so the
  *  callers that have always imported it from here keep doing so. */
 export { isConverted };

@@ -37,7 +37,7 @@ import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { encryptSecret } from "../utils/encryption.js";
 import { forgetOrgStatus } from "../services/org-status.service.js";
-import { isConverted } from "../services/retention.service.js";
+import { isConverted, noticesAfterTrialExtension } from "../services/retention.service.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { resolvePlatformMailConfig, sendPlatformTemplate } from "../services/platform-mail.service.js";
@@ -349,7 +349,8 @@ function statusEffects(before: OrgRow, body: { status?: string; suspendedReason?
  * next edit of any kind.
  *
  * EXTENSION. `trialEndsAt` moves the end of a trial that is still a trial, and re-arms the 7/3/1-day
- * warnings for the new date.
+ * warnings for the new date — and the retention programme's lapse cycle, which is counted from the
+ * same date (retention.service.ts#noticesAfterTrialExtension).
  *
  * Either way, a workspace in GRACE because its trial lapsed goes back to ACTIVE — unless the same edit
  * chose a different status, which wins. The console's dialog always re-sends the status it opened
@@ -369,7 +370,7 @@ function trialEffects(before: OrgRow, body: { planTier?: OrgRow["planTier"]; sta
       throw new AppError(422, `A trial can be extended by at most ${MAX_TRIAL_EXTENSION_DAYS} days — beyond that, set a plan instead.`);
     }
     return {
-      data: { trialEndsAt: until, trialNoticesSent: [], ...reopened },
+      data: { trialEndsAt: until, trialNoticesSent: [], retentionNoticesSent: noticesAfterTrialExtension(before.retentionNoticesSent), ...reopened },
       audit: { action: "organization.trial_extended", metadata: { slug: before.slug, from: before.trialEndsAt?.toISOString() ?? null, to: until.toISOString(), restoredFromGrace: reopen } }
     };
   }

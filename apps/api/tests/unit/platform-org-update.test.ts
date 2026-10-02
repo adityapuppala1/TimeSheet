@@ -46,6 +46,7 @@ vi.mock("../../src/services/workspace-directory.service.js", () => ({ workspaceU
 
 const { platformAdminRouter } = await import("../../src/controllers/platform-admin.controller.js");
 const { errorHandler } = await import("../../src/middleware/error.js");
+const { DEFAULT_RETENTION_SETTINGS, retentionPlan } = await import("../../src/services/retention.service.js");
 
 function buildApp() {
   const app = express();
@@ -257,5 +258,66 @@ describe("extending a trial", () => {
     const res = await patch({ planTier: "TEAM", trialEndsAt: until.toISOString() });
     expect(res.status).toBe(422);
     expect(control.organization.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * THE RETENTION PROGRAMME COUNTS FROM `trialEndsAt` TOO. Its "your trial has ended" message and the
+ * 30/60/80/90-day reminders are each sent once, recorded in `retentionNoticesSent`, and never sent
+ * again. An extension moved the date and kept the record, so the second lapse went out with no
+ * "ended" (the trial worker stands its own down while the programme is on), no reminder already sent
+ * the first time — and, extended after the final notice, the workspace was deleted 90 days after the
+ * new end with nothing sent at all.
+ */
+describe("extending a trial re-arms the retention programme", () => {
+  const firstCycle = { feedback10: "2026-05-11T09:30:00.000Z", ended: "2026-05-22T09:30:00.000Z", "30": "x", "60": "x", "80": "x", "90": "2026-08-20T09:30:00.000Z" };
+  /** The columns retentionPlan reads that the console fixture above does not carry. */
+  const retentionColumns = { trialStartedAt: new Date(Date.now() - 200 * DAY), createdAt: new Date(Date.now() - 200 * DAY), retentionHold: false, retentionDeletedAt: null };
+
+  it("clears the lapse-cycle markers, keeping the day-10 check-in that belongs to the trial's start", async () => {
+    control.organization.findUnique.mockResolvedValue(lapsedTrial({ retentionNoticesSent: firstCycle }));
+
+    await patch({ trialEndsAt: new Date(Date.now() + 14 * DAY).toISOString() });
+
+    expect(written().retentionNoticesSent).toEqual({ feedback10: firstCycle.feedback10 });
+  });
+
+  it("does not send the day-10 check-in a second time to the reopened trial", async () => {
+    const before = lapsedTrial({ ...retentionColumns, retentionNoticesSent: firstCycle });
+    control.organization.findUnique.mockResolvedValue(before);
+
+    await patch({ trialEndsAt: new Date(Date.now() + 14 * DAY).toISOString() });
+
+    expect(retentionPlan({ ...before, ...written() } as never, DEFAULT_RETENTION_SETTINGS, new Date()).due).toEqual([]);
+  });
+
+  it("extended after the final notice, the second lapse gets the whole sequence again before any deletion is due", async () => {
+    // Day 90 of the first lapse: every notice is out and the deletion is due tomorrow. The customer
+    // asks for more time; the operator extends the trial by a fortnight.
+    const before = lapsedTrial({ ...retentionColumns, trialEndsAt: new Date(Date.now() - 90 * DAY), retentionNoticesSent: firstCycle });
+    control.organization.findUnique.mockResolvedValue(before);
+    const newEnd = new Date(Date.now() + 14 * DAY);
+
+    await patch({ trialEndsAt: newEnd.toISOString() });
+
+    // The new end passes unpaid and the trial worker moves the workspace back to GRACE. Then the
+    // retention tick runs daily, recording what it sends exactly as runRetentionTick does.
+    const row = { ...before, ...written(), status: "GRACE" } as Record<string, unknown>;
+    const sentInOrder: string[] = [];
+    let deletionDueOnDay: number | null = null;
+    for (let day = 0; day <= 120 && deletionDueOnDay === null; day += 1) {
+      const now = new Date(newEnd.getTime() + day * DAY + 60 * 60_000);
+      const plan = retentionPlan(row as never, DEFAULT_RETENTION_SETTINGS, now);
+      if (plan.deletionDue) deletionDueOnDay = day;
+      const recorded = { ...(row.retentionNoticesSent as Record<string, string>) };
+      for (const marker of plan.superseded) recorded[marker] = "superseded";
+      for (const marker of plan.due) recorded[marker] = now.toISOString();
+      row.retentionNoticesSent = recorded;
+      sentInOrder.push(...plan.due);
+    }
+
+    expect(sentInOrder).toEqual(["ended", "30", "60", "80", "90"]);
+    // Not on day 90 itself: the final notice has to have been out for a tick first.
+    expect(deletionDueOnDay).toBe(91);
   });
 });
