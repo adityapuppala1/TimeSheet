@@ -107,6 +107,19 @@ describe("prisma/seed.ts", () => {
       { data: people.map((p) => ({ userId: p.id, roleId: p.roleId })), skipDuplicates: true }
     ]);
   });
+
+  // R1-6: a console-provisioned founder's password was typed by an operator.
+  it("creates the founder behind the change-password gate only when asked — the dev seed's admin stays as it was", async () => {
+    const { seedTenant } = await import("../../prisma/seed.js");
+    const founderCreate = async (options: Record<string, unknown>) => {
+      const { client, calls } = recordingClient([]);
+      await seedTenant(client, { adminEmail: "owner@acme.test", adminName: "Owner", adminPassword: "Owner@12345", includeDemoData: false, ...options } as never);
+      const upserts = calls["user.upsert"] as Array<{ where: { email: string }; create: Record<string, unknown> }>;
+      return upserts.find((u) => u.where.email === "owner@acme.test")!.create;
+    };
+    expect(await founderCreate({ mustChangePassword: true })).toMatchObject({ mustChangePassword: true });
+    expect(await founderCreate({})).toMatchObject({ mustChangePassword: false });
+  });
 });
 
 describe("migration 20261002121000_user_role_backfill", () => {

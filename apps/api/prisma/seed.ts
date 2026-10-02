@@ -71,6 +71,10 @@ export interface SeedTenantOptions {
   adminEmail?: string;
   adminName?: string;
   adminPassword?: string;
+  /** Create the admin behind the change-password gate (middleware/auth.ts), so the first password
+   *  sign-in must choose a new one. Set by console provisioning, where an operator typed the password
+   *  (R1-6). Defaults to false: the dev seed's admin and a self-serve founder sign straight in. */
+  mustChangePassword?: boolean;
   /** Demo manager/employee users + the sample "HICS Operations Platform" project. Defaults to
    *  true (unchanged local-dev behavior). Phase B8's real-org provisioning flow
    *  (services/provisioning.service.ts) passes false — a paying customer's brand-new database
@@ -194,6 +198,7 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
     adminEmail = "superadmin@timesheet.local",
     adminName = "Avery Stone",
     adminPassword = "Admin@12345",
+    mustChangePassword = false,
     includeDemoData = true
   } = options;
 
@@ -292,6 +297,7 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
       name: adminName,
       email: adminEmail,
       passwordHash,
+      mustChangePassword,
       roleId: adminRole.id,
       status: "ACTIVE",
       bio: "Workspace administrator — owns billing, compliance, and platform configuration.",

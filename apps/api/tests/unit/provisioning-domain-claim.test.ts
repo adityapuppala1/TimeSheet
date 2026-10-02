@@ -35,6 +35,7 @@ vi.mock("../../src/config/control-prisma.js", () => ({
 vi.mock("../../src/services/company-domain-claims.service.js", () => ({ claimDomainForProvisionedOrg: m.claim }));
 
 const { provisionOrganization } = await import("../../src/services/provisioning.service.js");
+const { seedTenant } = await import("../../prisma/seed.js");
 
 const input = { adminEmail: "Admin@Acme.com", adminName: "Ada", adminPassword: "Password-12" };
 
@@ -74,5 +75,21 @@ describe("provisionOrganization and the company domain", () => {
     const result = await provisionOrganization("org-1", input);
 
     expect(result.domainClaim).toEqual({ outcome: "error", domain: null, detail: "control plane hiccup" });
+  });
+});
+
+// R1-6. The console's founder password is one an operator typed, so the console route asks for the
+// change-password gate; self-serve signup's founder chose theirs, so its call must not set it.
+describe("provisionOrganization and the founder's first password", () => {
+  beforeEach(() => m.claim.mockResolvedValue({ outcome: "claimed", domain: "acme.com" }));
+
+  it("creates the founder behind the change-password gate when the caller asks for it", async () => {
+    await provisionOrganization("org-1", { ...input, mustChangePassword: true });
+    expect(seedTenant).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ adminPassword: "Password-12", mustChangePassword: true }));
+  });
+
+  it("leaves the gate off when the caller does not — the self-serve founder chose their own", async () => {
+    await provisionOrganization("org-1", input);
+    expect(seedTenant).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ mustChangePassword: false }));
   });
 });

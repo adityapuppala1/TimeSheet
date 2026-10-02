@@ -29,6 +29,9 @@ export interface ProvisionOrgInput {
   adminEmail: string;
   adminName: string;
   adminPassword: string;
+  /** Create the founder behind the tenant's change-password gate. The console route sets it — an
+   *  operator typed that password (R1-6); self-serve signup does not, because its founder chose it. */
+  mustChangePassword?: boolean;
 }
 
 export interface ProvisionOrgResult {
@@ -137,6 +140,7 @@ export async function provisionOrganization(orgId: string, input: ProvisionOrgIn
       adminEmail: input.adminEmail,
       adminName: input.adminName,
       adminPassword: input.adminPassword,
+      mustChangePassword: input.mustChangePassword === true,
       includeDemoData: false
     });
   });

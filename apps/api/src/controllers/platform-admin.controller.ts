@@ -27,6 +27,7 @@ import {
 } from "../services/platform-admin-auth.service.js";
 import { getPlatformAnalytics } from "../services/platform-admin-analytics.service.js";
 import { provisionOrganization } from "../services/provisioning.service.js";
+import { assertPasswordPolicy } from "../utils/password-policy.js";
 import { addDomain, listDomains, removeDomain, verifyDomain } from "../services/org-domain.service.js";
 import { workspaceUrlForSlug } from "../services/workspace-directory.service.js";
 import { microsoftSignInExposure } from "../services/sso-microsoft-directory.service.js";
@@ -720,7 +721,14 @@ const provisionOrgSchema = z.object({
 // database, migrations, baseline seed data, and the one real admin account requested. See
 // services/provisioning.service.ts for the full flow and its retry-safety guarantees.
 platformAdminRouter.post("/organizations/:id/provision", requirePlatformAdmin, operate, requirePlatformReason, validate(provisionOrgSchema), async (req, res) => {
-  const result = await provisionOrganization(String(req.params.id), req.body);
+  /*
+   * THE FOUNDER'S FIRST PASSWORD IS ONE AN OPERATOR TYPED (R1-6), so it meets the policy every other
+   * admin-typed password meets — before a database is created — and the founder is created behind
+   * the tenant's change-password gate, which makes their first password sign-in choose their own.
+   * Self-serve signup provisions too, without the flag: its founder chose the password.
+   */
+  assertPasswordPolicy(req.body.adminPassword, { email: req.body.adminEmail });
+  const result = await provisionOrganization(String(req.params.id), { ...req.body, mustChangePassword: true });
 
   /*
    * PROVISIONING WROTE NO AUDIT ROW UNTIL 5.0.0. It creates a physical database, runs every tenant
