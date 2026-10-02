@@ -892,6 +892,9 @@ export const timesheetApi = {
   approve: async (id: string, faceVerificationId?: string) =>
     (await api.patch(`/timesheets/${id}/approve`, faceVerificationId ? { faceVerificationId } : {})).data,
   reject: async (id: string, reason: string) => (await api.patch(`/timesheets/${id}/reject`, { reason })).data,
+  /** Send an APPROVED entry back to the approval queue, with a reason the author is shown. Clears the
+   *  frozen rate; never the author's to do (the server refuses it, as it refuses self-approval). */
+  reopen: async (id: string, reason: string) => (await api.post(`/timesheets/${id}/reopen`, { reason })).data,
   /** DRAFT and REJECTED entries only — the API refuses SUBMITTED (awaiting a decision) and
    *  APPROVED (part of the billing record). Soft delete; the time slot frees up immediately. */
   remove: async (id: string) => api.delete(`/timesheets/${id}`)

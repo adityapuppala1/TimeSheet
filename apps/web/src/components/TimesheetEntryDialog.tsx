@@ -36,6 +36,7 @@ import {
   Loader2,
   Paperclip,
   Pencil,
+  RotateCcw,
   Send,
   ShieldCheck,
   StickyNote,
@@ -291,6 +292,14 @@ export function TimesheetEntryDialog({
               {!query.isError && entry.status === "SUBMITTED" && approveHandler && (
                 <Button variant="success" disabled={decision.isDeciding} onClick={() => approveHandler(entry)}>
                   <Check className="h-4 w-4" />Approve
+                </Button>
+              )}
+              {/* An APPROVED entry used to have no way out at all — not editable, not deletable, and
+                  the advised correcting entry could not be logged. An approver (never the author)
+                  can send it back to the queue with a reason. */}
+              {!query.isError && decision.canReopen(entry) && (
+                <Button variant="outline" disabled={decision.isDeciding} onClick={() => decision.requestReopen(entry)}>
+                  <RotateCcw className="h-4 w-4" />Reopen
                 </Button>
               )}
             </>

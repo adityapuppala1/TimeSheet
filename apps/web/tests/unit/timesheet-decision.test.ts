@@ -8,7 +8,7 @@
  * them press it. The server now refuses (403); the dialog must stop offering what it refuses.
  */
 import { describe, expect, it } from "vitest";
-import { canDecideTimesheet } from "../../src/lib/timesheet-decision";
+import { canDecideTimesheet, canReopenTimesheet } from "../../src/lib/timesheet-decision";
 
 const approver = { id: "lead-1", managerId: "mgr-1", permissions: ["timesheets:approve"] };
 
@@ -38,5 +38,25 @@ describe("canDecideTimesheet", () => {
   it("offers nothing while either side is still loading", () => {
     expect(canDecideTimesheet(null, { userId: "emp-1" })).toBe(false);
     expect(canDecideTimesheet(approver, null)).toBe(false);
+  });
+});
+
+/**
+ * Reopen — sending an APPROVED entry back to the queue (audit 2026-10, timesheets #4). The same
+ * people who may decide may reopen; the author never may.
+ */
+describe("canReopenTimesheet", () => {
+  it("offers Reopen on somebody else's APPROVED entry", () => {
+    expect(canReopenTimesheet(approver, { userId: "emp-1", status: "APPROVED" })).toBe(true);
+  });
+
+  it("never on your own approved entry", () => {
+    expect(canReopenTimesheet(approver, { userId: "lead-1", status: "APPROVED" })).toBe(false);
+  });
+
+  it("only on an APPROVED entry", () => {
+    for (const status of ["DRAFT", "SUBMITTED", "REJECTED"]) {
+      expect(canReopenTimesheet(approver, { userId: "emp-1", status }), status).toBe(false);
+    }
   });
 });

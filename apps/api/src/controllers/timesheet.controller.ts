@@ -22,7 +22,7 @@ import { AppError } from "../middleware/error.js";
 import { preserveTenantContext, upload } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
-import { buildRateSnapshotPatch } from "../services/billing-rate.service.js";
+import { buildRateSnapshotPatch, clearRateSnapshotPatch } from "../services/billing-rate.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { computeApprovalDeadline, resolveEscalationsFor } from "../services/sla.service.js";
@@ -905,6 +905,77 @@ timesheetRouter.patch("/:id/reject", requirePermission(permissions.TIMESHEETS_AP
 
   // Notification and audit happen inside the core — see rejectCore for why they moved there.
   res.json(await rejectCore(String(req.params.id), reason, req.user!, await loadApprovalAuthority(req.user!.id)));
+});
+
+/**
+ * POST /timesheets/:id/reopen — send an APPROVED entry back to the approval queue ("unapprove", the
+ * Harvest/Tempo pattern).
+ *
+ * WHY IT EXISTS: an approved entry had no way out. PATCH refuses a decided entry, DELETE refuses it
+ * even for an approver, and the "correcting entry" every refusal points to cannot be logged — hours
+ * must be positive and an overlapping entry is a 409. So a mistaken approval (a bulk one especially)
+ * stood forever in billedAmount, budget burn and attestations.
+ *
+ * WHAT IT DOES: APPROVED → SUBMITTED, with a stated reason. The frozen rate snapshot is cleared
+ * (clearRateSnapshotPatch — it would otherwise assert a rate for work no longer approved), the
+ * reviewer fields are emptied, and the approval clock restarts so the entry is not instantly
+ * "overdue". Once back in SUBMITTED the author may correct it, and a reviewer decides it again —
+ * which freezes a fresh rate. Attestations already issued keep their frozen payload by design.
+ *
+ * WHO: a `timesheets:approve` holder, under the same rule as deciding — never the author, never an
+ * entry by someone above you in your reporting line. Fully audited, with what the approval had
+ * frozen, and the author is told why. Conditional on the row still being APPROVED, so a double
+ * click lands once.
+ */
+timesheetRouter.post("/:id/reopen", requirePermission(permissions.TIMESHEETS_APPROVE), async (req, res) => {
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!reason) throw new AppError(422, "Say why the entry is being reopened — the author is shown the reason.");
+
+  const existing = await prisma.timesheet.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
+  if (!existing) throw new AppError(404, "Timesheet not found");
+  if (existing.status !== "APPROVED") {
+    throw new AppError(422, `Only an APPROVED entry can be reopened — this one is ${existing.status}.`);
+  }
+  assertMayDecide(await loadApprovalAuthority(req.user!.id), existing.userId);
+
+  const project = await prisma.project.findUnique({ where: { id: existing.projectId }, select: { slaApprovalHours: true } });
+  const claimed = await prisma.timesheet.updateMany({
+    where: { id: existing.id, status: "APPROVED", deletedAt: null },
+    data: {
+      status: "SUBMITTED",
+      reviewedAt: null,
+      reviewedById: null,
+      ...clearRateSnapshotPatch(),
+      approvalDeadline: computeApprovalDeadline(new Date(), project?.slaApprovalHours),
+      slaBreachAt: null,
+      escalatedAt: null
+    }
+  });
+  if (claimed.count === 0) throw new AppError(409, "This entry was reopened or changed a moment ago — refresh to see where it stands.");
+  const item = await prisma.timesheet.findUniqueOrThrow({ where: { id: existing.id }, include: DECISION_INCLUDE });
+
+  await audit(req.user!.id, "timesheet.reopened", "Timesheet", item.id, {
+    reason,
+    // What the approval had frozen, so the record still says what was undone.
+    previous: {
+      reviewedById: existing.reviewedById,
+      reviewedAt: existing.reviewedAt,
+      billedRate: existing.billedRate == null ? null : Number(existing.billedRate),
+      billedAmount: existing.billedAmount == null ? null : Number(existing.billedAmount),
+      billedCurrency: existing.billedCurrency
+    }
+  });
+
+  const dateLabel = item.workDate.toISOString().slice(0, 10);
+  await dispatchNotification({
+    userId: item.userId,
+    category: "timesheet.reopened",
+    title: "Approved timesheet reopened",
+    body: `${req.user!.name ?? req.user!.email} reopened your ${Number(item.totalHours).toFixed(2)}h entry for ${dateLabel} on ${item.project.name}: ${reason}`,
+    link: `/app/history?entry=${item.id}`
+  });
+
+  res.json(item);
 });
 
 /**

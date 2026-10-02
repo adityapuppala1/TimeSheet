@@ -23,7 +23,7 @@
  * 428 on every face-gated workspace.
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ShieldX } from "lucide-react";
+import { RotateCcw, ShieldX } from "lucide-react";
 import { useState } from "react";
 import { timesheetApi, type TimesheetEntryDetail } from "../services/api";
 import { useAuthStore } from "../store/auth";
@@ -42,7 +42,7 @@ import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
 import { toast } from "./ui/toaster";
 import { runInBackground } from "../lib/run-in-background";
-import { canDecideTimesheet, type DecidableEntry } from "../lib/timesheet-decision";
+import { canDecideTimesheet, canReopenTimesheet, type DecidableEntry } from "../lib/timesheet-decision";
 
 function serverMessage(err: any, fallback: string): string {
   return err?.response?.data?.message ?? fallback;
@@ -61,6 +61,8 @@ export function useTimesheetDecision({ onSettled }: UseTimesheetDecisionOptions 
 
   const [rejectTarget, setRejectTarget] = useState<{ id: string; user: string } | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+  const [reopenTarget, setReopenTarget] = useState<{ id: string; user: string } | null>(null);
+  const [reopenReason, setReopenReason] = useState("");
   /** Parked while an identity check runs — the entry id the check is FOR. */
   const [pendingApproveId, setPendingApproveId] = useState<string | null>(null);
   const [pendingSubmitId, setPendingSubmitId] = useState<string | null>(null);
@@ -95,6 +97,20 @@ export function useTimesheetDecision({ onSettled }: UseTimesheetDecisionOptions 
     onError: (err: any) => toast.error("Rejection failed", { description: serverMessage(err, "Try again.") })
   });
 
+  /** APPROVED → SUBMITTED, with a reason. The approval's frozen rate is cleared on the server and the
+   *  author is told; a reviewer then decides it again. */
+  const reopen = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => timesheetApi.reopen(id, reason),
+    onSuccess: (_data, { id }) => {
+      toast.success("Reopened", { description: "It is back in the approval queue, and the author has been told why." });
+      setReopenTarget(null);
+      setReopenReason("");
+      invalidate(id);
+      onSettled?.();
+    },
+    onError: (err: any) => toast.error("Could not reopen", { description: serverMessage(err, "Try again.") })
+  });
+
   const submit = useMutation({
     mutationFn: ({ id, faceVerificationId }: { id: string; faceVerificationId?: string }) =>
       timesheetApi.submitDraft(id, faceVerificationId),
@@ -121,6 +137,10 @@ export function useTimesheetDecision({ onSettled }: UseTimesheetDecisionOptions 
     setRejectTarget({ id: entry.id, user: entry.user?.name ?? "this entry" });
   };
 
+  const requestReopen = (entry: Pick<TimesheetEntryDetail, "id"> & { user?: { name?: string } | null }) => {
+    setReopenTarget({ id: entry.id, user: entry.user?.name ?? "this entry" });
+  };
+
   /** Submitting a draft is gated the same way creating a submitted entry is — the check asserts
    *  who stands behind the hours entering the queue. */
   const requestSubmit = (entry: Pick<TimesheetEntryDetail, "id">) => {
@@ -134,6 +154,7 @@ export function useTimesheetDecision({ onSettled }: UseTimesheetDecisionOptions 
   /** Per ENTRY, not per session: an approver may not decide their own entry or their manager's —
    *  see lib/timesheet-decision.ts, which mirrors the server's rule. */
   const canDecide = (entry: DecidableEntry | null | undefined) => canDecideTimesheet(currentUser, entry);
+  const canReopen = (entry: (DecidableEntry & { status?: string | null }) | null | undefined) => canReopenTimesheet(currentUser, entry);
 
   /**
    * The dialogs this hook needs on screen. Rendered by the caller so they land at the top level of
@@ -190,6 +211,53 @@ export function useTimesheetDecision({ onSettled }: UseTimesheetDecisionOptions 
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={!!reopenTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setReopenTarget(null);
+            setReopenReason("");
+          }
+        }}
+      >
+        <DialogContent className="w-[min(95vw,520px)] max-w-none">
+          <DialogHeader>
+            <DialogTitle>Reopen {reopenTarget?.user}'s approved timesheet</DialogTitle>
+            <DialogDescription>
+              It goes back to the approval queue as submitted. The rate frozen at approval is cleared and a fresh one is taken
+              when it is approved again. The author is shown your reason, and it is recorded in the audit log.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2">
+            <Label htmlFor="decision-reopen-reason">Why it is being reopened</Label>
+            <Textarea
+              id="decision-reopen-reason"
+              rows={4}
+              value={reopenReason}
+              onChange={(event) => setReopenReason(event.target.value)}
+              placeholder="e.g. Approved by mistake in a bulk approval — the hours should be 09:00–13:00."
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setReopenTarget(null);
+                setReopenReason("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={reopenReason.trim().length < 5 || reopen.isPending}
+              onClick={() => reopenTarget && reopen.mutate({ id: reopenTarget.id, reason: reopenReason.trim() })}
+            >
+              <RotateCcw className="h-4 w-4" />Reopen
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <FaceVerificationDialog
         open={pendingApproveId !== null}
         onOpenChange={(open) => !open && setPendingApproveId(null)}
@@ -218,10 +286,12 @@ export function useTimesheetDecision({ onSettled }: UseTimesheetDecisionOptions 
 
   return {
     canDecide,
+    canReopen,
     requestApprove,
     requestReject,
+    requestReopen,
     requestSubmit,
-    isDeciding: approve.isPending || reject.isPending,
+    isDeciding: approve.isPending || reject.isPending || reopen.isPending,
     isSubmitting: submit.isPending,
     dialogs
   };

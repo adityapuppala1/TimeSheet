@@ -72,6 +72,9 @@ export type NotificationCategory =
   /** In-app ONLY — see the `null` in SETTINGS_FIELD. Raised when a reviewer edits somebody
    *  else's timesheet entry, so the change never happens silently behind the author's back. */
   | "timesheet.updated"
+  /** In-app ONLY — see the `null` in SETTINGS_FIELD. Raised when an approver sends an APPROVED entry
+   *  back to the queue (POST /timesheets/:id/reopen), with their reason. */
+  | "timesheet.reopened"
   /** In-app ONLY, and deliberately so — see the `null` in SETTINGS_FIELD. "The workspace is now
    *  running vX.Y.Z" is news, not correspondence: emailing every user of every tenant on every
    *  upgrade is the kind of send that gets a domain filtered, and no category in the email role
@@ -183,6 +186,7 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "maintenance.scheduled": "emailMaintenanceScheduled",
   "ai.autonomy_applied": "emailAiAutonomyApplied",
   "timesheet.updated": null,
+  "timesheet.reopened": null,
   "release.published": null,
   "workflow.attention": null,
   "join.requested": null,

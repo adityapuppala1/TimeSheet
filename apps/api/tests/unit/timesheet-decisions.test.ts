@@ -58,9 +58,13 @@ vi.mock("../../src/services/sla.service.js", () => ({
   computeApprovalDeadline: vi.fn().mockReturnValue(null),
   resolveEscalationsFor: vi.fn().mockResolvedValue(undefined)
 }));
-vi.mock("../../src/services/billing-rate.service.js", () => ({
-  buildRateSnapshotPatch: vi.fn().mockResolvedValue({ billedRate: 100, billedAmount: 300, billedCurrency: "USD" })
-}));
+vi.mock("../../src/services/billing-rate.service.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/services/billing-rate.service.js")>("../../src/services/billing-rate.service.js");
+  return {
+    ...actual,
+    buildRateSnapshotPatch: vi.fn().mockResolvedValue({ billedRate: 100, billedAmount: 300, billedCurrency: "USD" })
+  };
+});
 vi.mock("../../src/services/domain-events.js", () => ({ emitDomainEvent: vi.fn() }));
 
 const { timesheetRouter } = await import("../../src/controllers/timesheet.controller.js");
@@ -147,7 +151,8 @@ function fakeClient(): PrismaClient {
     },
     user: {
       findMany: vi.fn(async () => PEOPLE.map((p) => ({ id: p.id, email: p.email, managerId: p.managerId, status: "ACTIVE", deletedAt: null })))
-    }
+    },
+    project: { findUnique: vi.fn(async () => ({ slaApprovalHours: 48 })) }
   };
   return c as unknown as PrismaClient;
 }
@@ -278,5 +283,87 @@ describe("a decision lands once", () => {
     expect(rows.get(ID_1)!.status).toBe("APPROVED");
     expect(rows.get(ID_1)!.rejectionReason).toBeUndefined();
     expect(notified("timesheet.rejected")).toHaveLength(0);
+  });
+});
+
+/**
+ * Reopening an APPROVED entry (audit 2026-10, timesheets #4).
+ *
+ * An approved entry had no way out: PATCH refuses a decided entry, DELETE refuses it even for an
+ * approver, and the advised "correcting entry" cannot be logged — negative hours are refused and an
+ * overlapping one is a 409. So one mistaken (bulk) approval stood in billedAmount, budget burn and
+ * attestations for good. Reopen is the Harvest/Tempo "unapprove": an approver, never the author,
+ * sends it back to SUBMITTED with a stated reason; the frozen rate is cleared and the author is told.
+ */
+describe("reopening an approved entry", () => {
+  const approved = () => ({
+    ...entry(ID_1, EMPLOYEE.id, "APPROVED"),
+    reviewedById: MANAGER.id,
+    reviewedAt: new Date("2026-09-29T10:00:00.000Z"),
+    billedRate: 100,
+    billedAmount: 300,
+    billedCurrency: "USD",
+    billedRateSource: "USER",
+    rateSnapshotAt: new Date("2026-09-29T10:00:00.000Z")
+  });
+  const reopen = (body: Record<string, unknown> = { reason: "Approved the wrong day by mistake" }) =>
+    request(buildApp()).post(`/api/timesheets/${ID_1}/reopen`).send(body);
+
+  beforeEach(() => {
+    rows.set(ID_1, approved());
+  });
+
+  it("puts it back in the queue as SUBMITTED, with the frozen rate cleared and a fresh review clock", async () => {
+    const res = await reopen();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const row = rows.get(ID_1)!;
+    expect(row.status).toBe("SUBMITTED");
+    for (const field of ["billedRate", "billedAmount", "billedCurrency", "billedRateSource", "rateSnapshotAt", "reviewedById", "reviewedAt"]) {
+      expect(row[field], field).toBeNull();
+    }
+    expect(row).toHaveProperty("approvalDeadline");
+    expect(row.slaBreachAt).toBeNull();
+  });
+
+  it("audits who reopened it, why, and what the approval had frozen", async () => {
+    await reopen();
+    const entryAudit = audited("timesheet.reopened")[0];
+    expect(entryAudit[0]).toBe(MANAGER.id);
+    expect(entryAudit[4]).toMatchObject({ reason: "Approved the wrong day by mistake", previous: { billedAmount: 300, reviewedById: MANAGER.id } });
+  });
+
+  it("tells the author, with the reason", async () => {
+    await reopen();
+    const note = notified("timesheet.reopened")[0];
+    expect(note.userId).toBe(EMPLOYEE.id);
+    expect(note.body).toContain("Approved the wrong day by mistake");
+  });
+
+  it("requires a reason", async () => {
+    const res = await reopen({ reason: "  " });
+    expect(res.status).toBe(422);
+    expect(rows.get(ID_1)!.status).toBe("APPROVED");
+  });
+
+  it("is never the author's to do — not even an approver reopening their own approved hours", async () => {
+    actor = MANAGER;
+    rows.set(ID_1, { ...approved(), userId: MANAGER.id });
+    const res = await reopen();
+    expect(res.status).toBe(403);
+    expect(rows.get(ID_1)!.status).toBe("APPROVED");
+  });
+
+  it("only reopens an APPROVED entry", async () => {
+    rows.set(ID_1, entry(ID_1, EMPLOYEE.id, "REJECTED"));
+    expect((await reopen()).status).toBe(422);
+  });
+
+  it("lands once: a second reopen racing the first gets 409 and sends nothing", async () => {
+    const stale = { ...rows.get(ID_1)! };
+    vi.mocked(client.timesheet.findFirst).mockResolvedValue(stale as never);
+    expect((await reopen()).status).toBe(200);
+    expect((await reopen()).status).toBe(409);
+    expect(notified("timesheet.reopened")).toHaveLength(1);
+    expect(audited("timesheet.reopened")).toHaveLength(1);
   });
 });

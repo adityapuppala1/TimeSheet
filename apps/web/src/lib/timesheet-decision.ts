@@ -31,3 +31,13 @@ export function canDecideTimesheet(user: DecidingUser | null | undefined, entry:
   if (user.managerId && authorId === user.managerId) return false;
   return true;
 }
+
+/** Whether to offer "Reopen" — sending an APPROVED entry back to the approval queue. The same rule as
+ *  deciding (never your own entry, never your manager's), and only on an APPROVED one; the server
+ *  enforces both (POST /timesheets/:id/reopen). */
+export function canReopenTimesheet(
+  user: DecidingUser | null | undefined,
+  entry: (DecidableEntry & { status?: string | null }) | null | undefined
+): boolean {
+  return entry?.status === "APPROVED" && canDecideTimesheet(user, entry);
+}
