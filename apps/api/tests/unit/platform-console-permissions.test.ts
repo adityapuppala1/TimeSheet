@@ -33,7 +33,9 @@ const ADMIN_IDS: Record<PlatformRole, string> = {
   BILLING: "00000000-0000-4000-8000-00000000000d",
   READ_ONLY: "00000000-0000-4000-8000-00000000000e"
 };
-const SESSION_ID = "00000000-0000-4000-8000-0000000000ff";
+/** Each admin's session id IS their admin id here: the session fake below answers "this session
+ *  belongs to the admin whose id it is", which is the binding `requirePlatformAdmin` checks. */
+const sessionOf = (adminId: string) => adminId;
 const DEACTIVATED_ID = "00000000-0000-4000-8000-000000000dead".slice(0, 36);
 
 /* --------------------------------- the fake control plane -------------------------------- */
@@ -62,7 +64,16 @@ const control = {
     ...table(),
     findUnique: vi.fn(async ({ where }: { where: { id?: string } }) => (where.id ? (adminRows.get(where.id) ?? null) : null))
   },
-  platformAdminSession: { ...table(), findUnique: vi.fn(async () => ({ revokedAt: sessionRevoked })) },
+  platformAdminSession: {
+    ...table(),
+    findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({
+      revokedAt: sessionRevoked,
+      adminUserId: where.id,
+      createdAt: new Date(),
+      lastUsedAt: new Date(),
+      expiresAt: new Date(Date.now() + 3_600_000)
+    }))
+  },
   platformAdminRecoveryCode: table(),
   pendingPlatformAction: table(),
   organization: table(),
@@ -225,8 +236,8 @@ beforeAll(async () => {
   app.use("/api/platform-admin", platformAdminConsoleRouter);
   app.use(errorHandler);
 
-  tokenFor = Object.fromEntries(platformRoles.map((role) => [role, signPlatformAdminAccessToken(ADMIN_IDS[role], SESSION_ID)])) as Record<PlatformRole, string>;
-  deactivatedToken = signPlatformAdminAccessToken(DEACTIVATED_ID, SESSION_ID);
+  tokenFor = Object.fromEntries(platformRoles.map((role) => [role, signPlatformAdminAccessToken(ADMIN_IDS[role], sessionOf(ADMIN_IDS[role]))])) as Record<PlatformRole, string>;
+  deactivatedToken = signPlatformAdminAccessToken(DEACTIVATED_ID, sessionOf(DEACTIVATED_ID));
 }, 60_000);
 
 beforeEach(() => {

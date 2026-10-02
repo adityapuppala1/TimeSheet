@@ -17,6 +17,7 @@ import { closeFileLogging, initFileLogging } from "./config/logger.js";
 import { app } from "./app.js";
 import { controlPrisma } from "./config/control-prisma.js";
 import { env, serverTimezone } from "./config/env.js";
+import { productionSecretsToCheck, reusedSecretProblem } from "./config/production-secrets.js";
 import { applyDatabaseTimezone, disconnectAllTenantClients, getTenantClient } from "./config/prisma.js";
 import { tenantContext } from "./config/tenant-context.js";
 import { decryptSecret } from "./utils/encryption.js";
@@ -119,17 +120,19 @@ function assertProductionSafety() {
 
   if (env.NODE_ENV !== "production") return;
 
-  for (const [name, value] of [
-    ["JWT_ACCESS_SECRET", env.JWT_ACCESS_SECRET],
-    ["JWT_REFRESH_SECRET", env.JWT_REFRESH_SECRET],
-    ["ENCRYPTION_KEY", env.ENCRYPTION_KEY]
-  ] as const) {
+  for (const [name, value] of productionSecretsToCheck(env)) {
     const weakness = looksLikeWeakSecret(value);
     if (weakness) {
       console.error(`[boot] FATAL: ${name} ${weakness}.`);
       console.error("[boot] Generate a strong one with: openssl rand -hex 32  (or -base64 48 for JWT secrets)");
       process.exit(1);
     }
+  }
+  const reused = reusedSecretProblem(env);
+  if (reused) {
+    console.error(`[boot] FATAL: ${reused}`);
+    console.error("[boot] Generate a separate one with: openssl rand -base64 48");
+    process.exit(1);
   }
 
   if (PRIVATE_LAN_RE.test(env.WEB_ORIGIN.split(",")[0]?.trim() ?? "")) {

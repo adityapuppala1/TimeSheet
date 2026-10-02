@@ -24,7 +24,8 @@ import { PLATFORM_APPROVAL_TTL_HOURS } from "@timesheet/shared";
 const OWNER_A = "00000000-0000-4000-8000-0000000000a1";
 const OWNER_B = "00000000-0000-4000-8000-0000000000b2";
 const SUPPORT_C = "00000000-0000-4000-8000-0000000000c3";
-const SESSION_ID = "00000000-0000-4000-8000-0000000000ff";
+/** Each admin's session id IS their admin id — see the session fake below. */
+const sessionOf = (adminId: string) => adminId;
 
 const adminRows = new Map<string, Record<string, unknown>>();
 
@@ -73,7 +74,17 @@ const control = {
     }),
     create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: "new-admin", ...data }))
   },
-  platformAdminSession: { ...table(), findUnique: vi.fn(async () => ({ revokedAt: null })) },
+  // Answers "this session belongs to the admin whose id it is" — the binding requirePlatformAdmin checks.
+  platformAdminSession: {
+    ...table(),
+    findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({
+      revokedAt: null,
+      adminUserId: where.id,
+      createdAt: new Date(),
+      lastUsedAt: new Date(),
+      expiresAt: new Date(Date.now() + 3_600_000)
+    }))
+  },
   pendingPlatformAction: {
     ...table(),
     create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
@@ -178,9 +189,9 @@ beforeAll(async () => {
   app.use(errorHandler);
 
   tokens = {
-    [OWNER_A]: signPlatformAdminAccessToken(OWNER_A, SESSION_ID),
-    [OWNER_B]: signPlatformAdminAccessToken(OWNER_B, SESSION_ID),
-    [SUPPORT_C]: signPlatformAdminAccessToken(SUPPORT_C, SESSION_ID)
+    [OWNER_A]: signPlatformAdminAccessToken(OWNER_A, sessionOf(OWNER_A)),
+    [OWNER_B]: signPlatformAdminAccessToken(OWNER_B, sessionOf(OWNER_B)),
+    [SUPPORT_C]: signPlatformAdminAccessToken(SUPPORT_C, sessionOf(SUPPORT_C))
   };
 }, 60_000);
 

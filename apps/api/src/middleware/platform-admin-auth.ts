@@ -65,8 +65,13 @@ export async function requirePlatformAdmin(req: Request, _res: Response, next: N
   if (typeof payload.sub !== "string" || !UUID_RE.test(payload.sub)) throw new AppError(401, "Invalid session");
   if (typeof payload.sid !== "string" || !UUID_RE.test(payload.sid)) throw new AppError(401, "Invalid session");
 
-  const session = await controlPrisma.platformAdminSession.findUnique({ where: { id: payload.sid }, select: { revokedAt: true } });
+  const session = await controlPrisma.platformAdminSession.findUnique({ where: { id: payload.sid }, select: { revokedAt: true, adminUserId: true } });
   if (!session || session.revokedAt) throw new AppError(401, "Session revoked");
+  // THE SESSION BELONGS TO ONE ADMIN, and the token must name that admin. Without this, anybody
+  // holding the signing secret and ANY live session — a READ_ONLY one — could pair their own session
+  // id with an OWNER's id and be that owner; the revocation check above would pass, because their
+  // session really is live.
+  if (session.adminUserId !== payload.sub) throw new AppError(401, "Invalid session");
 
   const admin = await controlPrisma.platformAdminUser.findUnique({ where: { id: payload.sub } });
   if (!admin || admin.status !== "ACTIVE") throw new AppError(401, "Invalid session");

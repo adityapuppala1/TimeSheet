@@ -311,6 +311,10 @@ export async function platformAdminRefresh(refreshToken: unknown) {
   if (!session || session.revokedAt || session.expiresAt < new Date()) {
     throw new AppError(401, "Refresh token expired");
   }
+  // Same binding requirePlatformAdmin enforces: the token's subject must be the admin the session
+  // was created for. Checked BEFORE the secret, and nothing is rotated or minted on a mismatch —
+  // the new tokens below are signed for `session.adminUserId`, never for whatever the token claimed.
+  if (session.adminUserId !== payload.sub) throw new AppError(401, "Invalid refresh token");
 
   const matchesCurrent = await verifyTokenHash(secret, session.refreshHash);
   if (!matchesCurrent) {
@@ -336,8 +340,8 @@ export async function platformAdminRefresh(refreshToken: unknown) {
   const remainingDays = Math.max(1 / 24, (session.expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
 
   return {
-    accessToken: signPlatformAdminAccessToken(payload.sub, session.id),
-    refreshToken: `${signPlatformAdminRefreshToken(payload.sub, session.id, remainingDays)}.${newSecret}`,
+    accessToken: signPlatformAdminAccessToken(session.adminUserId, session.id),
+    refreshToken: `${signPlatformAdminRefreshToken(session.adminUserId, session.id, remainingDays)}.${newSecret}`,
     refreshTokenExpiresAt: session.expiresAt
   };
 }
