@@ -20,8 +20,16 @@ import { controlPrisma } from "../config/control-prisma.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
 import { platformAudit } from "./platform-audit.service.js";
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const REASON_MIN = 8;
+
+/** One "@", something either side, a dot in the domain, no whitespace. Deliberately not a regex —
+ *  the CLI's argument is attacker-adjacent input, and this shape needs no backtracking to check. */
+function looksLikeEmail(value: string): boolean {
+  const parts = value.split("@");
+  if (parts.length !== 2 || /\s/.test(value)) return false;
+  const [local, domain] = parts;
+  return local.length > 0 && domain.includes(".") && !domain.startsWith(".") && !domain.endsWith(".");
+}
 
 export interface BreakGlassOwnerInput {
   email: string;
@@ -35,7 +43,7 @@ export async function createBreakGlassOwner(input: BreakGlassOwnerInput): Promis
   const email = input.email.trim().toLowerCase();
   const name = input.name.trim();
   const reason = input.reason.trim();
-  if (!EMAIL.test(email)) throw new Error(`"${input.email}" is not an email address.`);
+  if (!looksLikeEmail(email)) throw new Error(`"${input.email}" is not an email address.`);
   if (name.length < 2) throw new Error("A name of at least 2 characters is required.");
   if (reason.length < REASON_MIN) throw new Error(`A reason of at least ${REASON_MIN} characters is required — it is recorded in the audit trail.`);
 

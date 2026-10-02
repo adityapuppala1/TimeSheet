@@ -66,8 +66,8 @@ describe("isQueuedForApproval — a 202 is not a success", () => {
 });
 
 describe("consoleAccountGate", () => {
-  it("is the password form while the server says the password must change", () => {
-    expect(consoleAccountGate({ mustChangePassword: true })).toBe("password");
+  it("is the rotation form while the server says the password must change", () => {
+    expect(consoleAccountGate({ mustChangePassword: true })).toBe("rotation");
   });
 
   it("is enrolment while the deployment requires a factor this operator lacks", () => {
@@ -75,7 +75,7 @@ describe("consoleAccountGate", () => {
   });
 
   it("puts the password first, as the server does", () => {
-    expect(consoleAccountGate({ mustChangePassword: true, mfaEnrolmentRequired: true })).toBe("password");
+    expect(consoleAccountGate({ mustChangePassword: true, mfaEnrolmentRequired: true })).toBe("rotation");
   });
 
   it("is nothing for an ordinary signed-in operator", () => {
@@ -101,7 +101,7 @@ describe("accountGateFromError", () => {
   const forbidden = (code?: string) => ({ response: { status: 403, data: { code, message: "no" } } });
 
   it("recognises the server's rotation and enrolment refusals", () => {
-    expect(accountGateFromError(forbidden("PASSWORD_ROTATION_REQUIRED"))).toBe("password");
+    expect(accountGateFromError(forbidden("PASSWORD_ROTATION_REQUIRED"))).toBe("rotation");
     expect(accountGateFromError(forbidden("MFA_ENROLMENT_REQUIRED"))).toBe("mfa");
   });
 

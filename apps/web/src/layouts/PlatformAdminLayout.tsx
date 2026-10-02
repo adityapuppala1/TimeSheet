@@ -484,7 +484,7 @@ export function PlatformAdminLayout() {
             breakpoints the page kit uses — and one measure, so a page never sets its own. */}
         <main className="min-w-0 flex-1 px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
           <div className="mx-auto w-full min-w-0 max-w-[1400px]">
-            {gate === "password" && <PasswordRotationGate />}
+            {gate === "rotation" && <PasswordRotationGate />}
             {gate === "mfa" && <MfaEnrolmentGate />}
             {gate === null && <Outlet />}
           </div>

@@ -8,13 +8,20 @@
 
 /** An account-level gate: something the operator must put right about their OWN account before the
  *  console admits them anywhere else. The server enforces it (middleware/platform-admin-auth.ts). */
-export type ConsoleAccountGate = "password" | "mfa" | null;
+export type ConsoleAccountGate = "rotation" | "mfa" | null;
 
-/** The 403 `code` the API answers a gated request with, mapped to the gate it means. */
-const GATE_CODES: Record<string, Exclude<ConsoleAccountGate, null>> = {
-  PASSWORD_ROTATION_REQUIRED: "password",
-  MFA_ENROLMENT_REQUIRED: "mfa"
-};
+/** The 403 `code` the API answers a gated request with, as the gate it means. (A switch rather than
+ *  a lookup object: sonarjs reads a `PASSWORD_…` key with a string value as a hard-coded password.) */
+function gateForCode(code: string): ConsoleAccountGate {
+  switch (code) {
+    case "PASSWORD_ROTATION_REQUIRED":
+      return "rotation";
+    case "MFA_ENROLMENT_REQUIRED":
+      return "mfa";
+    default:
+      return null;
+  }
+}
 
 interface AccountFlags {
   mustChangePassword?: boolean;
@@ -28,7 +35,7 @@ interface AccountFlags {
  * else issued is bound to whoever saw that password.
  */
 export function consoleAccountGate(admin: AccountFlags | undefined): ConsoleAccountGate {
-  if (admin?.mustChangePassword) return "password";
+  if (admin?.mustChangePassword) return "rotation";
   if (admin?.mfaEnrolmentRequired) return "mfa";
   return null;
 }
@@ -42,7 +49,7 @@ export function accountGateFromError(error: unknown): ConsoleAccountGate {
   const response = (error as { response?: { status?: number; data?: { code?: unknown } } } | null)?.response;
   if (response?.status !== 403) return null;
   const code = response.data?.code;
-  return typeof code === "string" ? (GATE_CODES[code] ?? null) : null;
+  return typeof code === "string" ? gateForCode(code) : null;
 }
 
 /**

@@ -28,21 +28,23 @@ const leads = (policy: Pick<RetentionPolicyShape, "retentionDays" | "reminderDay
   return { first: policy.retentionDays - Math.min(...days), final: policy.retentionDays - Math.max(...days) };
 };
 
+/** Does the change move the first warning or the final notice closer to the deletion? */
+function shortensNotice(current: Partial<RetentionPolicyShape>, next: Partial<RetentionPolicyShape>): boolean {
+  const before = current.reminderDays && current.retentionDays !== undefined ? leads(current as RetentionPolicyShape) : null;
+  const after = next.reminderDays && next.retentionDays !== undefined ? leads(next as RetentionPolicyShape) : null;
+  return Boolean(before && after && (after.first < before.first || after.final < before.final));
+}
+
 /** What this change loosens, as sentences — empty when it is single-person. */
 export function retentionSettingsRisks(current: Partial<RetentionPolicyShape>, patch: Partial<RetentionPolicyShape>): string[] {
   const risks: string[] = [];
-  const next = { ...current, ...patch };
 
   if (typeof patch.retentionDays === "number" && typeof current.retentionDays === "number" && patch.retentionDays < current.retentionDays) {
     risks.push(`shortens the retention window from ${current.retentionDays} to ${patch.retentionDays} days`);
   }
 
-  if (patch.reminderDays !== undefined || patch.retentionDays !== undefined) {
-    const before = current.reminderDays && current.retentionDays !== undefined ? leads(current as RetentionPolicyShape) : null;
-    const after = next.reminderDays && next.retentionDays !== undefined ? leads(next as RetentionPolicyShape) : null;
-    if (before && after && (after.first < before.first || after.final < before.final)) {
-      risks.push("gives customers less notice before their workspace is deleted");
-    }
+  if ((patch.reminderDays !== undefined || patch.retentionDays !== undefined) && shortensNotice(current, { ...current, ...patch })) {
+    risks.push("gives customers less notice before their workspace is deleted");
   }
 
   if (patch.autoDeleteEnabled === true && current.autoDeleteEnabled !== true) risks.push("switches automatic deletion on");

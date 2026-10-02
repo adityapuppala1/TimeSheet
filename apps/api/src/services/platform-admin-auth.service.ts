@@ -402,6 +402,27 @@ export async function changePlatformAdminPassword(adminId: string, currentSessio
   return { otherSessionsRevoked: revoked.count };
 }
 
+/**
+ * The session a refresh token names, if it may still be refreshed. Refused when it is missing,
+ * revoked or past its stored expiry; when the token's subject is not the admin the session belongs
+ * to (M1 — checked BEFORE the secret, and the new tokens are signed for `session.adminUserId`, never
+ * for whatever the token claimed); and when the console's idle or absolute limit has passed (M5),
+ * or the refresh cookie would be the way around them — such a session is revoked on the spot.
+ */
+async function refreshableSession(payload: { sub: string; sid: string }) {
+  const session = await controlPrisma.platformAdminSession.findUnique({ where: { id: payload.sid } });
+  if (!session || session.revokedAt || session.expiresAt < new Date()) {
+    throw new AppError(401, "Refresh token expired");
+  }
+  if (session.adminUserId !== payload.sub) throw new AppError(401, "Invalid refresh token");
+  const lapse = consoleSessionLapse(session, new Date(), sessionPolicy());
+  if (lapse) {
+    await controlPrisma.platformAdminSession.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
+    throw new AppError(401, lapse === "idle" ? "Signed out after a period of inactivity" : "Refresh token expired");
+  }
+  return session;
+}
+
 export async function platformAdminRefresh(refreshToken: unknown) {
   if (typeof refreshToken !== "string" || refreshToken.length === 0) {
     throw new AppError(401, "Missing refresh token");
@@ -423,20 +444,7 @@ export async function platformAdminRefresh(refreshToken: unknown) {
   }
   if (!payload?.sid || !payload?.sub) throw new AppError(401, "Invalid refresh token");
 
-  const session = await controlPrisma.platformAdminSession.findUnique({ where: { id: payload.sid } });
-  if (!session || session.revokedAt || session.expiresAt < new Date()) {
-    throw new AppError(401, "Refresh token expired");
-  }
-  // Same binding requirePlatformAdmin enforces: the token's subject must be the admin the session
-  // was created for. Checked BEFORE the secret, and nothing is rotated or minted on a mismatch —
-  // the new tokens below are signed for `session.adminUserId`, never for whatever the token claimed.
-  if (session.adminUserId !== payload.sub) throw new AppError(401, "Invalid refresh token");
-  // Idle and absolute limits hold here too, or the refresh cookie would be the way around them.
-  const lapse = consoleSessionLapse(session, new Date(), sessionPolicy());
-  if (lapse) {
-    await controlPrisma.platformAdminSession.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
-    throw new AppError(401, lapse === "idle" ? "Signed out after a period of inactivity" : "Refresh token expired");
-  }
+  const session = await refreshableSession(payload);
 
   const matchesCurrent = await verifyTokenHash(secret, session.refreshHash);
   if (!matchesCurrent) {
