@@ -167,8 +167,7 @@ const LATENCY_SELECT = {
   submittedAt: true,
   reviewedAt: true,
   reviewedById: true,
-  approvalDeadline: true,
-  slaBreachAt: true
+  approvalDeadline: true
 } satisfies Prisma.TimesheetSelect;
 
 type LatencyRow = Prisma.TimesheetGetPayload<{ select: typeof LATENCY_SELECT }>;
@@ -221,7 +220,9 @@ function approvalLatencyOf(rows: LatencyRow[], nameById: Map<string, string>): A
   const hoursOf = (r: LatencyRow) => (r.reviewedAt!.getTime() - r.submittedAt!.getTime()) / 3_600_000;
   const latencies = timed.map(hoursOf);
   const withDeadline = rows.filter((r) => r.approvalDeadline != null);
-  const breached = withDeadline.filter((r) => r.slaBreachAt != null || r.reviewedAt!.getTime() > r.approvalDeadline!.getTime());
+  // Reviewed after the deadline (workspace-metrics.ts) — never `slaBreachAt`, which only the
+  // SLA_ENABLED sweep writes.
+  const breached = withDeadline.filter((r) => r.reviewedAt!.getTime() > r.approvalDeadline!.getTime());
 
   const perApprover = new Map<string, number[]>();
   for (const row of timed) {

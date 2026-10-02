@@ -295,6 +295,19 @@ describe("how it reads the table", () => {
     expect(sample.where.reviewedAt).toEqual({ not: null });
   });
 
+  it("counts an approval-SLA breach from the deadline alone, never the sweep's stamp", async () => {
+    // The rule (workspace-metrics.ts): reviewed after the deadline. A stamp left on a row reviewed
+    // in time is not a breach, and a late review is one whether or not the sweep ran.
+    state.rows = [
+      row("asha", "2026-10-01", 8, { approvalDeadline: new Date("2026-10-01T13:00:00.000Z"), slaBreachAt: new Date("2026-10-01T11:00:00.000Z") }),
+      row("asha", "2026-10-02", 8, { approvalDeadline: new Date("2026-10-02T11:00:00.000Z"), slaBreachAt: null })
+    ];
+    const result = await buildTimesheetAnalytics(october);
+    expect(result.approvalLatency.breached).toBe(1);
+    expect(result.approvalLatency.breachRatePct).toBe(50);
+    expect(state.findManyCalls[0].select.slaBreachAt).toBeUndefined();
+  });
+
   it("prices each activity in its own currency and never adds two currencies together", async () => {
     state.rows = [
       row("asha", "2026-10-01", 8, { billedAmount: 8000, billedCurrency: "INR" }),
