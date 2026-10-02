@@ -26,6 +26,8 @@ export interface LapsedActions {
   exports: boolean;
   /** Nothing can be bought on this deployment: say who to contact instead of showing dead buttons. */
   checkoutUnconfigured: boolean;
+  /** Billing could not be read: say so, with a way to try again, rather than offering nothing. */
+  unavailable?: true;
 }
 
 const PLAN_ORDER: PaidTier[] = ["TEAM", "ENTERPRISE"];
@@ -36,9 +38,13 @@ const PLAN_ORDER: PaidTier[] = ["TEAM", "ENTERPRISE"];
  *
  * A WORKSPACE WITH A SUBSCRIPTION GETS THE PORTAL, NOT THE PLANS. It lapsed because a renewal failed;
  * the fix is the card, and a Checkout beside a live past-due subscription would bill for two.
+ *
+ * A READ THAT FAILED IS NOT ONE STILL LOADING. Both used to leave `billing` undefined, so a failure
+ * looked like a page still deciding — the export buttons and nothing to pay with, for good.
  */
-export function lapsedActions(role: string | undefined, billing: BillingSnapshot | undefined): LapsedActions | null {
+export function lapsedActions(role: string | undefined, billing: BillingSnapshot | undefined, billingFailed = false): LapsedActions | null {
   if (role !== "SUPER_ADMIN") return null;
+  if (billingFailed) return { plans: [], portal: false, exports: false, checkoutUnconfigured: false, unavailable: true };
   if (!billing) return { plans: [], portal: false, exports: true, checkoutUnconfigured: false };
   if (billing.hasSubscription) return { plans: [], portal: true, exports: true, checkoutUnconfigured: false };
   const plans = PLAN_ORDER.filter((tier) => billing.checkoutAvailable[tier]);
@@ -58,15 +64,30 @@ export function contactLine(contacts: BillingContact[] | undefined): string {
   return `Ask ${list} to renew it.`;
 }
 
-export type LapsedPageMode = "finishing" | "active" | "lapsed";
+/**
+ * Whether to offer "switch to super admin" to somebody shown the member's face of the page. GRACE
+ * lets only the ACTIVE role reach billing, and the role switcher lives in the app shell this page
+ * never mounts — so a founder who also holds ADMIN, and was acting as it, was told to ask an admin.
+ */
+export function canSwitchToSuperAdmin(user: { role: string; heldRoles?: readonly string[] }): boolean {
+  return user.role !== "SUPER_ADMIN" && (user.heldRoles ?? []).includes("SUPER_ADMIN");
+}
+
+export type LapsedPageMode = "change-password" | "finishing" | "active" | "lapsed";
 
 /**
  * Which face the page shows. `?billing=success` is Stripe sending the browser back after a payment,
  * usually BEFORE its webhook has unlocked the workspace — so the page waits rather than showing a
  * lock to somebody who has just paid. An ACTIVE workspace says so: a status cache a few seconds stale
  * on another server can still send somebody here straight after paying.
+ *
+ * A PASSWORD AN ADMIN SET COMES FIRST. The server answers every call this page makes with 403
+ * PASSWORD_CHANGE_REQUIRED until it is changed, and the trial-ended email signs its reader in with
+ * `next=/plan-lapsed` — straight past the app shell, the only other place that holds them at the
+ * change-password screen.
  */
-export function lapsedPageMode(billingParam: string | null, status: string | undefined): LapsedPageMode {
+export function lapsedPageMode(billingParam: string | null, status: string | undefined, passwordChangeRequired = false): LapsedPageMode {
+  if (passwordChangeRequired) return "change-password";
   if (billingParam === "success") return "finishing";
   if (status === "ACTIVE") return "active";
   return "lapsed";

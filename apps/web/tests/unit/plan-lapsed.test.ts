@@ -6,10 +6,12 @@
  *    whose renewal failed updates its card in the billing portal instead of buying a second one;
  *  - everybody else is told whom to ask, by name;
  *  - coming back from Stripe, the page waits for the webhook, opens the app once the workspace is
- *    ACTIVE, and says plainly when confirmation is taking too long rather than spinning forever.
+ *    ACTIVE, and says plainly when confirmation is taking too long rather than spinning forever;
+ *  - nobody who could renew is left at a dead end: a password an admin set is changed here first, a
+ *    billing read that failed says so, and a super admin acting in another role can switch back.
  */
 import { describe, expect, it } from "vitest";
-import { contactLine, lapsedActions, lapsedPageMode, paymentWaitState, PAYMENT_WAIT_TIMEOUT_MS } from "../../src/utils/plan-lapsed";
+import { canSwitchToSuperAdmin, contactLine, lapsedActions, lapsedPageMode, paymentWaitState, PAYMENT_WAIT_TIMEOUT_MS } from "../../src/utils/plan-lapsed";
 
 const billing = (overrides: Partial<Parameters<typeof lapsedActions>[1] & object> = {}) => ({
   planTier: "STARTER" as const,
@@ -45,6 +47,26 @@ describe("lapsedActions", () => {
 
   it("still offers the exports while billing is loading", () => {
     expect(lapsedActions("SUPER_ADMIN", undefined)).toEqual({ plans: [], portal: false, exports: true, checkoutUnconfigured: false });
+  });
+
+  it("says billing could not be read when the read FAILED, instead of the loading state's lone export buttons", () => {
+    // A failed read used to look exactly like a slow one — the export buttons and nothing to pay
+    // with, forever. What fails the billing read usually fails the export too.
+    expect(lapsedActions("SUPER_ADMIN", undefined, true)).toEqual({ plans: [], portal: false, exports: false, checkoutUnconfigured: false, unavailable: true });
+  });
+});
+
+describe("canSwitchToSuperAdmin", () => {
+  it("offers the switch to somebody who holds super admin but is acting in another role", () => {
+    // Only the ACTIVE role reaches billing in GRACE, and the role switcher lives in the app shell
+    // this page never mounts — so a multi-role founder acting as ADMIN was shown "ask an admin".
+    expect(canSwitchToSuperAdmin({ role: "ADMIN", heldRoles: ["ADMIN", "SUPER_ADMIN"] })).toBe(true);
+  });
+
+  it("does not offer it to a super admin already acting as one, or to anyone who does not hold it", () => {
+    expect(canSwitchToSuperAdmin({ role: "SUPER_ADMIN", heldRoles: ["SUPER_ADMIN", "ADMIN"] })).toBe(false);
+    expect(canSwitchToSuperAdmin({ role: "MANAGER", heldRoles: ["MANAGER", "ADMIN"] })).toBe(false);
+    expect(canSwitchToSuperAdmin({ role: "EMPLOYEE", heldRoles: undefined })).toBe(false);
   });
 });
 
@@ -84,6 +106,15 @@ describe("lapsedPageMode", () => {
     expect(lapsedPageMode(null, "GRACE")).toBe("lapsed");
     expect(lapsedPageMode("cancelled", "GRACE")).toBe("lapsed");
     expect(lapsedPageMode(null, undefined)).toBe("lapsed");
+  });
+
+  it("holds a session whose password an admin set at the change-password screen, before anything else", () => {
+    // The server refuses every call this page makes (403 PASSWORD_CHANGE_REQUIRED) until it is
+    // changed. A super admin arriving from the trial-ended email landed on a page whose every button
+    // failed, and the screen that would have let them through is mounted only by the app shell.
+    expect(lapsedPageMode(null, undefined, true)).toBe("change-password");
+    expect(lapsedPageMode("success", "GRACE", true)).toBe("change-password");
+    expect(lapsedPageMode(null, "GRACE", false)).toBe("lapsed");
   });
 });
 

@@ -26,20 +26,23 @@
  * There is deliberately no countdown, no "act now", and no price. This page is shown to people who
  * have already lost access; pressure here is just unpleasant.
  */
-import { CheckCircle2, CreditCard, FileSpreadsheet, LifeBuoy, Loader2, Lock, LogOut } from "lucide-react";
+import { CheckCircle2, CreditCard, FileSpreadsheet, LifeBuoy, Loader2, Lock, LogOut, Repeat } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Navigate, useLocation, useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ForcedPasswordChange } from "../components/ForcedPasswordChange";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "../components/ui/toaster";
 import { exportStamp, saveBlob } from "../lib/download";
+import { isPasswordChangeRequired } from "../lib/password-change-gate";
 import { runInBackground } from "../lib/run-in-background";
 import { authApi, billingApi, reportApi } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { loginUrlFor } from "../utils/return-to";
 import {
+  canSwitchToSuperAdmin,
   contactLine,
   lapsedActions,
   lapsedPageMode,
@@ -58,17 +61,30 @@ export function PlanLapsedPage() {
   const location = useLocation();
   const [params] = useSearchParams();
   const billingParam = params.get("billing");
-  const standing = useQuery({ queryKey: STANDING_KEY, queryFn: billingApi.standing, enabled: Boolean(user) });
+  // Held at the change-password screen, every call this page makes is refused — so none is made.
+  const passwordChangeRequired = isPasswordChangeRequired(user);
+  const standing = useQuery({ queryKey: STANDING_KEY, queryFn: billingApi.standing, enabled: Boolean(user) && !passwordChangeRequired });
 
   // The session is restored by App.tsx's AuthBootstrap; until it settles, nothing is decided. A
   // visitor with no session — an email link opened in a fresh browser — signs in and comes back here.
   if (!hydrated) return <Frame><Skeleton className="h-40 w-full" /></Frame>;
   if (!user) return <Navigate to={loginUrlFor(location)} replace />;
 
-  const mode = lapsedPageMode(billingParam, standing.data?.status);
+  const mode = lapsedPageMode(billingParam, standing.data?.status, passwordChangeRequired);
+  // The same screen AppLayout holds such a session at; once the password is changed it refreshes the
+  // signed-in user, and this page re-renders as itself.
+  if (mode === "change-password") return <ForcedPasswordChange />;
   if (mode === "finishing") return <FinishingPayment />;
   if (mode === "active") return <OpenAgain />;
-  return <Lapsed role={user.role} contacts={standing.data?.contacts} contactsLoading={standing.isLoading} cancelled={billingParam === "cancelled"} />;
+  return (
+    <Lapsed
+      role={user.role}
+      canSwitch={canSwitchToSuperAdmin(user)}
+      contacts={standing.data?.contacts}
+      contactsLoading={standing.isLoading}
+      cancelled={billingParam === "cancelled"}
+    />
+  );
 }
 
 function Frame({ children }: { children: ReactNode }) {
@@ -100,7 +116,54 @@ function SignOutButton() {
   );
 }
 
-function Lapsed({ role, contacts, contactsLoading, cancelled }: { role: string; contacts?: BillingContact[]; contactsLoading: boolean; cancelled: boolean }) {
+function WhoCanRenew({ contacts, loading }: { contacts?: BillingContact[]; loading: boolean }) {
+  if (loading) return <Skeleton className="h-5 w-3/4" />;
+  return (
+    <p className="text-sm leading-6 text-muted-foreground">
+      Your workspace's plan has lapsed, and only a workspace admin can renew it. {contactLine(contacts)}
+    </p>
+  );
+}
+
+/** For somebody who holds super admin but is acting in another role (see canSwitchToSuperAdmin). The
+ *  server reads the active role on every request, so the switch opens billing straight away. */
+function SwitchToSuperAdmin({ role }: { role: string }) {
+  const setUser = useAuthStore((s) => s.setUser);
+  const queryClient = useQueryClient();
+  const switchRole = useMutation({
+    mutationFn: () => authApi.switchRole("SUPER_ADMIN"),
+    onSuccess: (updated) => {
+      setUser(updated);
+      runInBackground(queryClient.invalidateQueries());
+    },
+    onError: (err: any) => toast.error("Couldn't switch role", { description: err?.response?.data?.message ?? "Try again." })
+  });
+  return (
+    <div className="grid gap-2">
+      <p className="text-sm leading-6 text-muted-foreground">
+        You're signed in as {role.replace("_", " ").toLowerCase()}, but you also hold the super admin role — the one that can renew the plan.
+      </p>
+      <Button size="lg" className="justify-self-start" disabled={switchRole.isPending} onClick={() => switchRole.mutate()}>
+        <Repeat className="h-4 w-4" />
+        Switch to super admin
+      </Button>
+    </div>
+  );
+}
+
+function Lapsed({
+  role,
+  canSwitch,
+  contacts,
+  contactsLoading,
+  cancelled
+}: {
+  role: string;
+  canSwitch: boolean;
+  contacts?: BillingContact[];
+  contactsLoading: boolean;
+  cancelled: boolean;
+}) {
   const isAdmin = role === "SUPER_ADMIN";
   return (
     <Frame>
@@ -127,13 +190,7 @@ function Lapsed({ role, contacts, contactsLoading, cancelled }: { role: string; 
           <AdminActions role={role} />
         ) : (
           <div className="grid gap-2">
-            {contactsLoading ? (
-              <Skeleton className="h-5 w-3/4" />
-            ) : (
-              <p className="text-sm leading-6 text-muted-foreground">
-                Your workspace's plan has lapsed, and only a workspace admin can renew it. {contactLine(contacts)}
-              </p>
-            )}
+            {canSwitch ? <SwitchToSuperAdmin role={role} /> : <WhoCanRenew contacts={contacts} loading={contactsLoading} />}
             <Button variant="outline" asChild className="justify-self-start">
               <a href="/find-workspace">
                 <LifeBuoy className="h-4 w-4" />
@@ -152,7 +209,7 @@ function Lapsed({ role, contacts, contactsLoading, cancelled }: { role: string; 
 function AdminActions({ role }: { role: string }) {
   const [, setParams] = useSearchParams();
   const billing = useQuery({ queryKey: ["billing", "status"], queryFn: billingApi.status });
-  const actions = lapsedActions(role, billing.data);
+  const actions = lapsedActions(role, billing.data, billing.isError);
 
   const checkout = useMutation({
     mutationFn: (tier: PaidTier) => billingApi.checkoutSession(tier),
@@ -193,6 +250,18 @@ function AdminActions({ role }: { role: string }) {
   return (
     <div className="grid gap-4">
       {billing.isLoading && <Skeleton className="h-10 w-full" />}
+
+      {actions.unavailable && (
+        <div className="grid gap-2">
+          <p className="text-sm leading-6 text-muted-foreground">
+            This workspace's billing couldn't be loaded just now, so there's nothing to pay with yet. Try again in a moment — if it
+            keeps failing, sign out and back in.
+          </p>
+          <Button variant="outline" className="justify-self-start" disabled={billing.isFetching} onClick={() => runInBackground(billing.refetch())}>
+            Try again
+          </Button>
+        </div>
+      )}
 
       {actions.plans.length > 0 && (
         <div className="grid gap-2">
