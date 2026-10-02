@@ -35,6 +35,38 @@ function shortensNotice(current: Partial<RetentionPolicyShape>, next: Partial<Re
   return Boolean(before && after && (after.first < before.first || after.final < before.final));
 }
 
+/** Every field the console's policy form edits. */
+export interface RetentionPolicyFields extends RetentionPolicyShape {
+  enabled: boolean;
+  feedbackDay: number;
+}
+
+export type RetentionSettingsChanges = { [K in keyof RetentionPolicyFields]?: { from: RetentionPolicyFields[K]; to: RetentionPolicyFields[K] } };
+
+const RETENTION_FIELDS = ["enabled", "feedbackDay", "reminderDays", "retentionDays", "autoDeleteEnabled", "snapshotDir"] as const;
+
+/** The form's view of a value: reminder days as the set they are stored as, a blank directory as none. */
+function comparable(field: keyof RetentionPolicyFields, value: unknown): string {
+  if (field === "reminderDays" && Array.isArray(value)) return JSON.stringify([...new Set(value as number[])].sort((a, b) => a - b));
+  if (field === "snapshotDir") return JSON.stringify((typeof value === "string" ? value.trim() : "") || null);
+  return JSON.stringify(value);
+}
+
+/**
+ * The fields a save actually changes, old and new (R1-3). The console's form sends the whole policy
+ * every time, so a queued loosening has to be cut down to its difference: that is what the approver
+ * reads, and the only thing an approval may apply — replaying the whole form would put back every
+ * field somebody else changed while the request waited.
+ */
+export function retentionSettingsChanges(current: RetentionPolicyFields, patch: Partial<RetentionPolicyFields>): RetentionSettingsChanges {
+  const changes: Record<string, { from: unknown; to: unknown }> = {};
+  for (const field of RETENTION_FIELDS) {
+    if (patch[field] === undefined || comparable(field, patch[field]) === comparable(field, current[field])) continue;
+    changes[field] = { from: current[field], to: patch[field] };
+  }
+  return changes as RetentionSettingsChanges;
+}
+
 /** What this change loosens, as sentences — empty when it is single-person. */
 export function retentionSettingsRisks(current: Partial<RetentionPolicyShape>, patch: Partial<RetentionPolicyShape>): string[] {
   const risks: string[] = [];

@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { accountGateFromError, consoleAccountGate, countInRetention, isQueuedForApproval, issuedCredentialOf, shouldNagForMfa } from "../../src/lib/platform-console";
+import { accountGateFromError, consoleAccountGate, countInRetention, isQueuedForApproval, issuedCredentialOf, retentionApprovalOf, shouldNagForMfa } from "../../src/lib/platform-console";
 
 describe("issuedCredentialOf — the one time an approver sees a new operator's password", () => {
   it("finds the temporary password an approved admin.create or admin.reactivate returns", () => {
@@ -25,6 +25,50 @@ describe("issuedCredentialOf — the one time an approver sees a new operator's 
 
 /* Same lazy `read` helper the sibling guards use (see console-csv.test.ts for why it is a URL). */
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+
+/*
+ * R1-3. A queued retention-policy change used to show its approver a label, a route and the
+ * requester's own words — never the values. A benign-sounding reason could hide "auto-delete on,
+ * window 90 → 7 days". The server now stores only what changes, and what that loosens.
+ */
+describe("retentionApprovalOf — what a retention-policy approval actually changes", () => {
+  const row = {
+    action: "retention.settings",
+    body: {
+      changes: {
+        retentionDays: { from: 90, to: 7 },
+        autoDeleteEnabled: { from: false, to: true },
+        reminderDays: { from: [30, 60, 80, 90], to: [3, 7] },
+        snapshotDir: { from: "/var/snap", to: null },
+        enabled: { from: false, to: true }
+      },
+      risks: ["shortens the retention window from 90 to 7 days", "switches automatic deletion on"]
+    }
+  };
+
+  it("names every field it changes, old and new, in the policy form's own words", () => {
+    expect(retentionApprovalOf(row)?.changes).toEqual([
+      { label: "Retention window", from: "90 days", to: "7 days" },
+      { label: "Auto-delete after the window", from: "off", to: "on" },
+      { label: "Reminder days after the trial ends", from: "30, 60, 80, 90", to: "3, 7" },
+      { label: "Snapshot directory", from: "/var/snap", to: "none — no snapshot is kept" },
+      { label: "Programme", from: "paused", to: "on" }
+    ]);
+  });
+
+  it("carries the risk sentences the server wrote", () => {
+    expect(retentionApprovalOf(row)?.risks).toEqual(["shortens the retention window from 90 to 7 days", "switches automatic deletion on"]);
+  });
+
+  it("is nothing for another action, or for a request that does not record its changes", () => {
+    expect(retentionApprovalOf({ action: "retention.delete", body: { confirmSlug: "acme" } })).toBeNull();
+    expect(retentionApprovalOf({ action: "retention.settings", body: { autoDeleteEnabled: true } })).toBeNull();
+  });
+
+  it("is what the Approvals card renders", () => {
+    expect(read("../../src/pages/platform-admin/Approvals.tsx")).toMatch(/retentionApprovalOf\(row\)/);
+  });
+});
 
 describe("every page that calls a two-person route says when it was only queued (M2)", () => {
   // The API methods whose route can answer 202 with a queued request instead of doing the thing.

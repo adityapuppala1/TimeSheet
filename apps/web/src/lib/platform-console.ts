@@ -73,6 +73,47 @@ export function issuedCredentialOf(approval: { action: string; result: unknown }
   return { email: result.email, ...(typeof result.name === "string" ? { name: result.name } : {}), temporaryPassword: result.temporaryPassword };
 }
 
+/** The policy form's own labels (pages/platform-admin/Retention.tsx), so the approver reads the
+ *  same words the requester edited. */
+const RETENTION_FIELD_LABEL: Record<string, string> = {
+  retentionDays: "Retention window",
+  autoDeleteEnabled: "Auto-delete after the window",
+  reminderDays: "Reminder days after the trial ends",
+  feedbackDay: "Check-in on trial day",
+  snapshotDir: "Snapshot directory",
+  enabled: "Programme"
+};
+
+function retentionValue(field: string, value: unknown): string {
+  if (field === "snapshotDir") return typeof value === "string" && value.trim() ? value : "none — no snapshot is kept";
+  if (field === "enabled") return value ? "on" : "paused";
+  if (typeof value === "boolean") return value ? "on" : "off";
+  if (Array.isArray(value)) return value.join(", ");
+  if (field === "retentionDays") return `${String(value)} days`;
+  return String(value ?? "—");
+}
+
+/**
+ * What a queued retention-policy change does, as its approver has to read it (R1-3): each field it
+ * changes, old → new, and the server's sentences for what that loosens. Null for any other action,
+ * and for a request that does not record its changes (raised by an earlier version — the server
+ * refuses to apply those). The card used to show only a label and the requester's own words, so a
+ * benign-sounding reason could hide "auto-delete on, window 90 → 7 days".
+ */
+export function retentionApprovalOf(row: { action: string; body: unknown }): { changes: { label: string; from: string; to: string }[]; risks: string[] } | null {
+  if (row.action !== "retention.settings") return null;
+  const body = row.body as { changes?: unknown; risks?: unknown } | null;
+  if (!body || typeof body.changes !== "object" || body.changes === null) return null;
+  return {
+    changes: Object.entries(body.changes as Record<string, { from?: unknown; to?: unknown } | null>).map(([field, change]) => ({
+      label: RETENTION_FIELD_LABEL[field] ?? field,
+      from: retentionValue(field, change?.from),
+      to: retentionValue(field, change?.to)
+    })),
+    risks: Array.isArray(body.risks) ? body.risks.filter((risk): risk is string => typeof risk === "string") : []
+  };
+}
+
 /**
  * How many workspaces are really in the retention programme: ones that had a trial and have NOT
  * converted. `plan.converted` is the server's isConverted (retention.service.ts); counting

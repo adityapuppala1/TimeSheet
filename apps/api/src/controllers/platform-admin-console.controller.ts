@@ -10,7 +10,7 @@
  * is about running the platform rather than one tenant.
  */
 import { createReadStream } from "node:fs";
-import { Router, type RequestHandler } from "express";
+import { Router, type Request, type RequestHandler } from "express";
 import { z } from "zod";
 import { controlPrisma } from "../config/control-prisma.js";
 import { AppError } from "../middleware/error.js";
@@ -36,7 +36,7 @@ import {
   type ConsoleTwoPersonAction,
   type TwoPersonContext
 } from "../services/platform-governance.service.js";
-import { retentionSettingsRisks } from "../services/retention-settings-guard.js";
+import { retentionSettingsChanges, retentionSettingsRisks, type RetentionSettingsChanges } from "../services/retention-settings-guard.js";
 import { PLATFORM_TEMPLATES, PLATFORM_TEMPLATE_KEYS, platformTemplateDef, RETENTION_MARKER_TEMPLATE } from "../services/platform-mail-templates.js";
 import {
   applyPlatformVars,
@@ -126,8 +126,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * malformed body should be refused immediately, not queued), but whether the workspace exists,
  * whether the slug matches, whether the tier allows it — all of that happens inside `execute`, at
  * approval, against the database as it is then. See the service header for why.
+ *
+ * `queuedBody` replaces the stored body when the request as sent is not what an approver should
+ * read or an approval should apply — the retention policy's whole-form save (R1-3).
  */
-function twoPerson(action: ConsoleTwoPersonAction, execute: (ctx: TwoPersonContext) => Promise<unknown>): RequestHandler {
+function twoPerson(
+  action: ConsoleTwoPersonAction,
+  execute: (ctx: TwoPersonContext) => Promise<unknown>,
+  opts: { queuedBody?: (req: Request) => Promise<unknown> } = {}
+): RequestHandler {
   registerTwoPersonAction(action, execute);
   return async (req, res) => {
     const queued = await queuePlatformAction({
@@ -135,7 +142,7 @@ function twoPerson(action: ConsoleTwoPersonAction, execute: (ctx: TwoPersonConte
       route: req.originalUrl.split("?")[0],
       method: req.method,
       params: req.params as Record<string, string>,
-      body: req.body,
+      body: opts.queuedBody ? await opts.queuedBody(req) : req.body,
       reason: req.platformReason!,
       requester: { id: req.platformAdmin!.id, email: req.platformAdmin!.email },
       ipAddress: req.ip
@@ -526,28 +533,68 @@ platformAdminConsoleRouter.get("/retention", async (_req, res) => {
   res.json({ settings, markers: Object.keys(RETENTION_MARKER_TEMPLATE), queue });
 });
 
-const retentionSettingsSchema = z.object({
-  body: z
-    .object({
-      enabled: z.boolean().optional(),
-      feedbackDay: z.number().int().min(1).max(60).optional(),
-      reminderDays: z.array(z.number().int().min(1).max(3650)).min(1).max(12).optional(),
-      retentionDays: z.number().int().min(7).max(3650).optional(),
-      autoDeleteEnabled: z.boolean().optional(),
-      snapshotDir: z.string().max(500).nullable().optional()
-    })
-    .strict()
-});
+const retentionSettingsBody = z
+  .object({
+    enabled: z.boolean().optional(),
+    feedbackDay: z.number().int().min(1).max(60).optional(),
+    reminderDays: z.array(z.number().int().min(1).max(3650)).min(1).max(12).optional(),
+    retentionDays: z.number().int().min(7).max(3650).optional(),
+    autoDeleteEnabled: z.boolean().optional(),
+    snapshotDir: z.string().max(500).nullable().optional()
+  })
+  .strict();
+const retentionSettingsSchema = z.object({ body: retentionSettingsBody });
 
-/** The queued half of a loosening policy change — applied, on approval, to the policy as it is then. */
-const retentionSettingsTwoPersonRoute = twoPerson(consoleTwoPersonActions.RETENTION_SETTINGS, async (ctx) => {
-  const result = await updateRetentionSettings(ctx.body as Parameters<typeof updateRetentionSettings>[0], ctx.actorLabel);
-  await platformAudit("PLATFORM_ADMIN", ctx.actorLabel, "retention.settings_updated_with_approval", "PlatformRetentionSettings", "global", {
-    change: ctx.body,
-    requestedBy: ctx.requester.label
-  }, { reason: ctx.reason, ipAddress: ctx.ipAddress });
-  return result;
-});
+/** What a queued policy change stores in place of the form (R1-3): only the fields it changes, old
+ *  and new, and what that loosens in words — everything the approver's card shows. */
+interface QueuedRetentionChange {
+  changes: RetentionSettingsChanges;
+  risks: string[];
+}
+
+/**
+ * The queued half of a loosening policy change. The console's form sends the whole policy, so the
+ * request keeps only its difference, and approval applies only that — to the policy as it is THEN, so
+ * a pause or a longer window somebody set while it waited survives.
+ *
+ * THE RISKS ARE RE-CHECKED AT APPROVAL, against the policy as it is then. A difference can loosen more
+ * than it did when it was asked — "90 → 60 days" becomes "180 → 60" once somebody lengthened the
+ * window — and an approver who was shown the first did not approve the second. A request that would
+ * now loosen something its card did not say fails, and is raised again.
+ */
+const retentionSettingsTwoPersonRoute = twoPerson(
+  consoleTwoPersonActions.RETENTION_SETTINGS,
+  async (ctx) => {
+    const queued = ctx.body as Partial<QueuedRetentionChange>;
+    const seen = Array.isArray(queued.risks) ? queued.risks : null;
+    // Only the new side of each change, held to the live route's own schema: a stored row must not
+    // be able to write anything the form cannot.
+    const patch = retentionSettingsBody.safeParse(Object.fromEntries(Object.entries(queued.changes ?? {}).map(([field, change]) => [field, change?.to])));
+    if (!queued.changes || !seen || !patch.success) {
+      throw new AppError(409, "This request does not record what it changes (it was raised by an earlier version). Raise it again so the approver can see the change.");
+    }
+
+    const risks = retentionSettingsRisks(await getRetentionSettings(), patch.data);
+    const unseen = risks.filter((risk) => !seen.includes(risk));
+    if (unseen.length > 0) {
+      throw new AppError(409, `The policy changed since this was asked: approving it now ${unseen.join(", and ")} — which the request did not say. Raise it again.`);
+    }
+
+    const result = await updateRetentionSettings(patch.data, ctx.actorLabel);
+    await platformAudit("PLATFORM_ADMIN", ctx.actorLabel, "retention.settings_updated_with_approval", "PlatformRetentionSettings", "global", {
+      changes: queued.changes,
+      risks,
+      requestedBy: ctx.requester.label
+    }, { reason: ctx.reason, ipAddress: ctx.ipAddress });
+    return result;
+  },
+  {
+    queuedBody: async (req): Promise<QueuedRetentionChange> => {
+      const current = await getRetentionSettings();
+      return { changes: retentionSettingsChanges(current, req.body), risks: retentionSettingsRisks(current, req.body) };
+    }
+  }
+);
 
 /**
  * The retention policy decides when customers' workspaces are deleted and where their last copy is

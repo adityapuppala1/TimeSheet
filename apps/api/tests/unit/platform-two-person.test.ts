@@ -514,6 +514,76 @@ describe("loosening the retention policy is two-person (H2)", () => {
     expect(updateRetentionSettings).toHaveBeenCalledWith({ autoDeleteEnabled: true }, "b@timesphere.app");
   });
 
+  /*
+   * R1-3. The console's form sends the WHOLE policy on every save. Stored as sent, the approver saw
+   * only a label and a free-text reason — and the replay put back every field, silently reverting
+   * whatever another operator changed in between (a pause, a longer window). So the request keeps
+   * only what it changes, and what that loosens, in words.
+   */
+  const { updatedAt: _updatedAt, ...FORM } = RETENTION_DEFAULTS;
+  // clearAllMocks keeps an implementation, so a test that moves the live policy must not leak it.
+  beforeEach(() => getRetentionSettings.mockImplementation(async () => RETENTION_DEFAULTS));
+
+  it("stores only the fields the save changes, old and new, plus the risk sentences an approver must read", async () => {
+    const queued = await put(OWNER_A, { ...FORM, retentionDays: 30, reminderDays: [10, 30], autoDeleteEnabled: true });
+    expect(queued.status).toBe(202);
+    expect(pending.get(queued.body.requestId)!.body).toEqual({
+      changes: {
+        retentionDays: { from: 90, to: 30 },
+        reminderDays: { from: [30, 60, 80, 90], to: [10, 30] },
+        autoDeleteEnabled: { from: false, to: true }
+      },
+      risks: ["shortens the retention window from 90 to 30 days", "gives customers less notice before their workspace is deleted", "switches automatic deletion on"]
+    });
+
+    const listed = await request(app).get("/api/platform-admin/governance/requests").set("Authorization", `Bearer ${tokens[OWNER_B]}`);
+    expect(listed.body.rows[0].body.risks).toContain("switches automatic deletion on");
+  });
+
+  it("on approval applies only that change, so what another operator did in between survives", async () => {
+    const queued = await put(OWNER_A, { ...FORM, autoDeleteEnabled: true });
+    // Meanwhile, somebody pauses the programme and lengthens the window — both single-person.
+    getRetentionSettings.mockResolvedValue({ ...RETENTION_DEFAULTS, enabled: false, retentionDays: 180, reminderDays: [30, 60, 120, 180] });
+
+    const approved = await as(OWNER_B, "post", `/governance/requests/${queued.body.requestId}/approve`);
+    expect(approved.status).toBe(200);
+    expect(updateRetentionSettings).toHaveBeenCalledTimes(1);
+    expect(updateRetentionSettings).toHaveBeenCalledWith({ autoDeleteEnabled: true }, "b@timesphere.app");
+    expect(auditRows.find((r) => r.action === "retention.settings_updated_with_approval")).toMatchObject({
+      metadata: { changes: { autoDeleteEnabled: { from: false, to: true } }, risks: ["switches automatic deletion on"] }
+    });
+  });
+
+  it("refuses the approval when, against the policy as it is now, the change loosens more than the approver was shown", async () => {
+    const queued = await put(OWNER_A, { ...FORM, retentionDays: 60, reminderDays: [30, 60] });
+    // Meanwhile the window went UP to 180: approving "90 → 60" would now be "180 → 60".
+    getRetentionSettings.mockResolvedValue({ ...RETENTION_DEFAULTS, retentionDays: 180, reminderDays: [30, 60, 120, 180] });
+
+    const approved = await as(OWNER_B, "post", `/governance/requests/${queued.body.requestId}/approve`);
+    expect(approved.status).toBe(409);
+    expect(approved.body.message).toMatch(/180 to 60/);
+    expect(updateRetentionSettings).not.toHaveBeenCalled();
+    expect(pending.get(queued.body.requestId)!.status).toBe("FAILED");
+  });
+
+  it("refuses a request queued before requests kept only their changes, rather than replaying a whole stale form", async () => {
+    pending.set("req-legacy", {
+      id: "req-legacy",
+      action: "retention.settings",
+      status: "PENDING",
+      params: {},
+      body: { ...FORM, autoDeleteEnabled: true },
+      reason: "old",
+      requestedById: OWNER_A,
+      requestedByLabel: "a@timesphere.app",
+      requestedAt: new Date(),
+      expiresAt: new Date(Date.now() + 3_600_000)
+    });
+    const approved = await as(OWNER_B, "post", "/governance/requests/req-legacy/approve");
+    expect(approved.status).toBe(409);
+    expect(updateRetentionSettings).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["a later check-in day", { feedbackDay: 14 }],
     ["a longer window", { retentionDays: 120, reminderDays: [30, 60, 90, 120] }],

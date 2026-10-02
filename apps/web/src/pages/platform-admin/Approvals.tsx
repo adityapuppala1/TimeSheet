@@ -20,9 +20,12 @@
  * returns a generated temporary password to the approver and nobody else; the server keeps only a
  * hash. This page used to show a toast and discard it, so every new operator account was unusable.
  * It is held in component state for the dialog and nowhere else — closing the dialog is the end of it.
+ *
+ * A RETENTION-POLICY CHANGE SHOWS WHAT IT CHANGES (R1-3): each field old → new, and what it loosens,
+ * because a reason is the requester's summary and the values are the decision. See RetentionChange.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Clock, Copy, KeyRound, ShieldAlert, ThumbsDown } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Copy, KeyRound, ShieldAlert, ThumbsDown } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -32,7 +35,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { toast } from "../../components/ui/toaster";
 import { platformAdminConsoleApi, type PendingPlatformActionRow } from "../../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../../store/platform-admin-auth";
-import { issuedCredentialOf } from "../../lib/platform-console";
+import { issuedCredentialOf, retentionApprovalOf } from "../../lib/platform-console";
 import { ConsolePage, ConsoleSection, EmptyState, PRIMARY_BTN, shortDateTime } from "./console-ui";
 import { runInBackground } from "../../lib/run-in-background";
 
@@ -47,6 +50,35 @@ const STATUS_VARIANT: Record<PendingPlatformActionRow["status"], "success" | "wa
   EXPIRED: "muted",
   FAILED: "destructive"
 };
+
+/** The queued policy change, field by field, then what it loosens — the server's own sentences. */
+function RetentionChange({ change }: { change: NonNullable<ReturnType<typeof retentionApprovalOf>> }) {
+  return (
+    <div className="grid gap-2 rounded-lg border bg-muted/40 p-3 text-sm">
+      <ul className="grid gap-1">
+        {change.changes.map((c) => (
+          <li key={c.label} className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+            <span className="text-muted-foreground">{c.label}</span>
+            <span className="break-all font-mono text-xs">{c.from}</span>
+            <span aria-hidden>→</span>
+            <span className="sr-only">changes to</span>
+            <span className="break-all font-mono text-xs font-semibold">{c.to}</span>
+          </li>
+        ))}
+      </ul>
+      {change.risks.length > 0 && (
+        <ul className="grid gap-1 rounded-md border border-warning/40 bg-warning/10 p-2 text-xs">
+          {change.risks.map((risk) => (
+            <li key={risk} className="flex gap-1.5">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
+              <span>This {risk}.</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 export function PlatformAdminApprovals() {
   const queryClient = useQueryClient();
@@ -87,64 +119,68 @@ export function PlatformAdminApprovals() {
   const pending = rows.filter((r) => r.status === "PENDING" && !r.expired);
   const settled = rows.filter((r) => r.status !== "PENDING" || r.expired);
 
-  const card = (row: PendingPlatformActionRow) => (
-    <li key={row.id} className="grid gap-3 rounded-xl border bg-card p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={row.expired && row.status === "PENDING" ? "muted" : STATUS_VARIANT[row.status]}>{row.expired && row.status === "PENDING" ? "EXPIRED" : row.status}</Badge>
-        <span className="font-semibold">{row.label}</span>
-        <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-          {row.method} {row.route}
-        </code>
-      </div>
-
-      {/* The reason, first and largest. It is the only input an approver actually has. */}
-      <p className="text-sm leading-6">“{row.reason}”</p>
-
-      <p className="text-xs text-muted-foreground">
-        Asked by <span className="font-medium text-foreground">{row.requestedByLabel}</span> · {shortDateTime(row.requestedAt)}
-        {row.status === "PENDING" && !row.expired && (
-          <>
-            {" · "}
-            <span className="inline-flex items-center gap-1">
-              <Clock className="h-3 w-3" />expires {shortDateTime(row.expiresAt)}
-            </span>
-          </>
-        )}
-        {row.approvedByLabel && ` · ${row.status === "REJECTED" ? "refused" : "decided"} by ${row.approvedByLabel}`}
-        {row.resolutionNote && ` — ${row.resolutionNote}`}
-      </p>
-
-      {row.status === "PENDING" && !row.expired && (
-        <div className="flex flex-wrap gap-2">
-          {row.isMine ? (
-            <p className="text-xs text-muted-foreground">
-              You raised this. Somebody else has to approve it — that is the whole point of the second signature. You can withdraw it below.
-            </p>
-          ) : (
-            isOwner && (
-              <Button size="sm" className={`gap-1.5 ${PRIMARY_BTN}`} disabled={approve.isPending} onClick={() => approve.mutate(row.id)}>
-                <CheckCircle2 className="h-3.5 w-3.5" />Approve and run
-              </Button>
-            )
-          )}
-          {(row.isMine || isOwner) && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="gap-1.5"
-              onClick={() => {
-                setRejecting(row);
-                setNote("");
-              }}
-            >
-              <ThumbsDown className="h-3.5 w-3.5" />
-              {row.isMine ? "Withdraw" : "Refuse"}
-            </Button>
-          )}
+  const card = (row: PendingPlatformActionRow) => {
+    const retention = retentionApprovalOf(row);
+    return (
+      <li key={row.id} className="grid gap-3 rounded-xl border bg-card p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={row.expired && row.status === "PENDING" ? "muted" : STATUS_VARIANT[row.status]}>{row.expired && row.status === "PENDING" ? "EXPIRED" : row.status}</Badge>
+          <span className="font-semibold">{row.label}</span>
+          <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+            {row.method} {row.route}
+          </code>
         </div>
-      )}
-    </li>
-  );
+
+        {/* The reason, first and largest — then, for a policy change, the values it is a summary of. */}
+        <p className="text-sm leading-6">“{row.reason}”</p>
+        {retention && <RetentionChange change={retention} />}
+
+        <p className="text-xs text-muted-foreground">
+          Asked by <span className="font-medium text-foreground">{row.requestedByLabel}</span> · {shortDateTime(row.requestedAt)}
+          {row.status === "PENDING" && !row.expired && (
+            <>
+              {" · "}
+              <span className="inline-flex items-center gap-1">
+                <Clock className="h-3 w-3" />expires {shortDateTime(row.expiresAt)}
+              </span>
+            </>
+          )}
+          {row.approvedByLabel && ` · ${row.status === "REJECTED" ? "refused" : "decided"} by ${row.approvedByLabel}`}
+          {row.resolutionNote && ` — ${row.resolutionNote}`}
+        </p>
+
+        {row.status === "PENDING" && !row.expired && (
+          <div className="flex flex-wrap gap-2">
+            {row.isMine ? (
+              <p className="text-xs text-muted-foreground">
+                You raised this. Somebody else has to approve it — that is the whole point of the second signature. You can withdraw it below.
+              </p>
+            ) : (
+              isOwner && (
+                <Button size="sm" className={`gap-1.5 ${PRIMARY_BTN}`} disabled={approve.isPending} onClick={() => approve.mutate(row.id)}>
+                  <CheckCircle2 className="h-3.5 w-3.5" />Approve and run
+                </Button>
+              )
+            )}
+            {(row.isMine || isOwner) && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5"
+                onClick={() => {
+                  setRejecting(row);
+                  setNote("");
+                }}
+              >
+                <ThumbsDown className="h-3.5 w-3.5" />
+                {row.isMine ? "Withdraw" : "Refuse"}
+              </Button>
+            )}
+          </div>
+        )}
+      </li>
+    );
+  };
 
   return (
     <ConsolePage
