@@ -30,6 +30,7 @@ import {
   getChangeSettings,
   isNoOpTransition,
   resolveChangeApprovers,
+  stageStampsOnEnter,
   ticketWriteFor
 } from "./change.service.js";
 import { emitDomainEvent } from "./domain-events.js";
@@ -160,9 +161,7 @@ export async function writeChangeTransition(
     where: { id: change.id },
     data: {
       state: to,
-      ...(to === "AWAITING_APPROVAL" ? { submittedAt: change.submittedAt ?? now } : {}),
-      ...(to === "IMPLEMENTING" ? { actualStart: change.actualStart ?? now } : {}),
-      ...(to === "VALIDATION" ? { actualEnd: change.actualEnd ?? now } : {}),
+      ...stageStampsOnEnter(to, change, now),
       ...(to === "CLOSED" ? { closedAt: now, closedById: actor.id } : {})
     }
   });

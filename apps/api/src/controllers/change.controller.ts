@@ -44,6 +44,7 @@ import { sendChangeDecisionMail } from "../services/change-mail.service.js";
 import {
   assertChangeManagementEnabled,
   activeRiskParameterKeys,
+  averageApprovalHours,
   canDecideChange,
   computeRiskScore,
   findScheduleConflicts,
@@ -159,7 +160,7 @@ changeRouter.get("/metrics", async (req, res) => {
   // week buckets stay readable on a card-sized chart.
   const trendFrom = new Date(now.getTime() - 12 * 7 * 24 * 3600 * 1000);
 
-  const [byState, byRisk, byKind, byEnv, mine, closedRows, approvalRows, trendRows, projectRows] = await Promise.all([
+  const [byState, byRisk, byKind, byEnv, mine, closedRows, approvalRows, trendRows, projectRows, approvedRounds] = await Promise.all([
     prisma.changeRequest.groupBy({ by: ["state"], where, _count: true }),
     prisma.changeRequest.groupBy({ by: ["riskLevel"], where, _count: true }),
     prisma.changeRequest.groupBy({ by: ["changeKind"], where, _count: true }),
@@ -188,6 +189,12 @@ changeRouter.get("/metrics", async (req, res) => {
     prisma.changeRequest.findMany({
       where,
       select: { state: true, riskLevel: true, ticket: { select: { project: { select: { id: true, code: true, name: true } } } } }
+    }),
+    // Each approved ROUND's own clock: the row is created when its round opens and stamped when it
+    // is decided. See `averageApprovalHours` for why the change's own two timestamps are not it.
+    prisma.changeApproval.findMany({
+      where: { status: "APPROVED", decidedAt: { not: null }, change: where },
+      select: { createdAt: true, decidedAt: true }
     })
   ]);
 
@@ -211,13 +218,7 @@ changeRouter.get("/metrics", async (req, res) => {
   const changeFailureRate = closedRows.length === 0 ? null : Math.round((failed / closedRows.length) * 100);
   const emergencyRate = total === 0 ? null : Math.round(((kindCounts.EMERGENCY ?? 0) / total) * 100);
 
-  const approved = approvalRows.filter((c) => c.submittedAt && c.approvedAt);
-  const avgApprovalHours =
-    approved.length === 0
-      ? null
-      : Math.round(
-          (approved.reduce((sum, c) => sum + (c.approvedAt!.getTime() - c.submittedAt!.getTime()), 0) / approved.length / 3600 / 1000) * 10
-        ) / 10;
+  const avgApprovalHours = averageApprovalHours(approvedRounds);
 
   // The SLA rollup counts only clocks that are still RUNNING. A stage that finished late is already
   // recorded in the change's own history; what a dashboard tile is for is the work somebody can still

@@ -304,6 +304,60 @@ export function ticketWriteFor(state: ChangeState, now: Date): { status: ReturnT
   return { status, closedAt: null, resolvedAt: null };
 }
 
+/** The four stage timestamps a move can write — the ones the SLA clocks run between. */
+export interface ChangeStageStamps {
+  submittedAt?: Date | null;
+  approvedAt?: Date | null;
+  actualStart?: Date | null;
+  actualEnd?: Date | null;
+}
+
+/**
+ * The stage timestamps to write when a change ENTERS `to`.
+ *
+ * WHY A BACKWARD MOVE CLEARS WHAT IS DOWNSTREAM: these columns are what the stage clocks run
+ * between. Written `existing ?? now` and never cleared, the first pass through a stage was the only
+ * one that counted — after rework the implementation clock read MET while the rework ran, and after
+ * a rejection round 2's approval clock ran from round 1's submission.
+ *
+ *   - Into AWAITING_APPROVAL: a NEW round, so its clock starts now, and nothing after approval has
+ *     happened in it yet.
+ *   - Into DRAFT (reopened, withdrawn): nothing is being approved or implemented any more.
+ *   - Into IMPLEMENTING: the START is kept — the work began then — but a rework from VALIDATION
+ *     clears the hand-over, so implementation is running again and validation has not started.
+ *
+ * `closedAt` is not here: CLOSED is terminal, so it is only ever written once, by the caller.
+ */
+export function stageStampsOnEnter(to: ChangeState, current: { actualStart: Date | null }, now: Date): ChangeStageStamps {
+  switch (to) {
+    case "AWAITING_APPROVAL":
+      return { submittedAt: now, approvedAt: null, actualStart: null, actualEnd: null };
+    case "DRAFT":
+      return { submittedAt: null, approvedAt: null, actualStart: null, actualEnd: null };
+    case "IMPLEMENTING":
+      return { actualStart: current.actualStart ?? now, actualEnd: null };
+    case "VALIDATION":
+      return { actualEnd: now };
+    default:
+      return {};
+  }
+}
+
+/**
+ * Average hours from a round's submission to its approval, over approved rounds.
+ *
+ * Read off the APPROVAL ROWS, not the change: a row is created the moment its round opens and
+ * stamped when it is decided, so the pair is that round's own clock. The change's `submittedAt` and
+ * `approvedAt` span every round, and a change rejected on day 1 and approved on day 10 is 24 hours of
+ * deciding, not 240. NULL, never 0, when nothing has been approved.
+ */
+export function averageApprovalHours(rows: Array<{ createdAt: Date; decidedAt: Date | null }>): number | null {
+  const decided = rows.filter((r) => r.decidedAt);
+  if (decided.length === 0) return null;
+  const totalMs = decided.reduce((sum, r) => sum + (r.decidedAt!.getTime() - r.createdAt.getTime()), 0);
+  return Math.round((totalMs / decided.length / 3600 / 1000) * 10) / 10;
+}
+
 /* ------------------------------------------------------------------ *
  * Approval — who is asked, and who may decide
  * ------------------------------------------------------------------ */
