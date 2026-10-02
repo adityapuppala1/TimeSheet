@@ -437,7 +437,8 @@ export async function applyTicketRules(ticket: {
 /** The minimum an authorization helper needs: `assertTicketVisible` and the permission middleware
  *  both read `req.user`, and nothing here reads anything else off a request. */
 export interface TicketActorContext {
-  user: { id: string; role: string; permissions: string[] };
+  /** `name` when the caller has it (MCP does; Ask AI's context does not, and it is looked up). */
+  user: { id: string; role: string; permissions: string[]; name?: string };
 }
 
 /** Resolves a project by its human CODE, refusing one the caller cannot see. Codes are what a
@@ -543,13 +544,23 @@ export async function createTicketForActor(ctx: TicketActorContext, input: Creat
  * Posts a comment AS the acting person, on a ticket they can see. Visible to everyone who can see
  * the ticket and it notifies the ticket's participants, which is why the caller's model must be
  * told to write it as the person would — and never because some other text asked it to.
+ *
+ * The posting itself — sanitising, the `ticket.commented` audit row, @mentions, and the reporter,
+ * assignee, watchers and collaborators told — is ticket-comment.service.ts#postTicketComment, the
+ * same function the app's own comment route calls. This used to create the row and nothing else.
  */
-export async function addTicketCommentForActor(ctx: TicketActorContext, input: { ticketKey: string; body: string }) {
-  const { sanitizeRichText } = await import("../utils/sanitize.js");
+export async function addTicketCommentForActor(
+  ctx: TicketActorContext,
+  input: { ticketKey: string; body: string; via?: "mcp" | "ai_chat" }
+) {
+  // Imported at call time — see createTicketForActor's note on keeping this module's graph small.
+  const { postTicketComment } = await import("./ticket-comment.service.js");
   const ticket = await resolveVisibleTicketByKey(ctx, input.ticketKey);
-  const comment = await prisma.ticketComment.create({
-    data: { ticketId: ticket.id, authorId: ctx.user.id, body: sanitizeRichText(input.body) },
-    select: { id: true, createdAt: true }
+  const comment = await postTicketComment({
+    ticketId: ticket.id,
+    author: { id: ctx.user.id, name: ctx.user.name },
+    body: input.body,
+    via: input.via ?? "mcp"
   });
   return { ticketKey: ticket.key, commentId: comment.id, createdAt: comment.createdAt };
 }

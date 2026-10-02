@@ -74,7 +74,8 @@ beforeEach(() => {
     ticket: {
       groupBy: vi.fn().mockResolvedValue([{ sprintId: SPRINT.id, _sum: { storyPoints: 8 } }]),
       findMany: vi.fn().mockResolvedValue([]),
-      findFirst: vi.fn().mockResolvedValue({ ...TICKET, watchers: [] }),
+      // With the relations the comment path selects (ticket-comment.service.ts), as Prisma returns them.
+      findFirst: vi.fn().mockResolvedValue({ ...TICKET, watchers: [], collaborators: [] }),
       create: vi.fn().mockImplementation(async ({ data }: any) => ({ ...TICKET, ...data, id: "new", source: "MANUAL", externalReporterEmail: null, project: { id: data.projectId, code: "X", name: "P", color: null }, module: null, reporter: null, assignee: null })),
       update: vi.fn().mockImplementation(async ({ data }: any) => ({ ...TICKET, ...data, project: { id: "33333333-3333-4333-8333-333333333333", code: "X", name: "P" }, module: null, reporter: null, assignee: null, labels: [], _count: { comments: 0, attachments: 0 } }))
     },

@@ -185,7 +185,7 @@ export const AI_CHAT_ACTIONS: ReadonlyArray<AiChatToolSpec & { run: (args: Recor
       if (body.length < 2) return "body is empty — ask the person what the comment should say. Do not compose one for them unprompted.";
 
       try {
-        const posted = await addTicketCommentForActor(ctx.req, { ticketKey, body });
+        const posted = await addTicketCommentForActor(ctx.req, { ticketKey, body, via: "ai_chat" });
         return `Comment posted on ${posted.ticketKey} under the person's own name. Tell them everyone watching that ticket has been notified.`;
       } catch (error) {
         return `Refused: ${(error as Error).message.slice(0, 300)} — relay this to the person.`;

@@ -36,6 +36,7 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { emitDomainEvent } from "../services/domain-events.js";
 import { transitionTicketStatus } from "../services/ticket-transition.service.js";
+import { postTicketComment } from "../services/ticket-comment.service.js";
 import {
   assertValidTicketType,
   computeTicketDueDate,
@@ -187,20 +188,14 @@ publicApiRouter.post(
   requireWriteScope,
   validate(addCommentSchema),
   async (req: PublicApiRequest, res) => {
-    const ticket = await prisma.ticket.findFirst({ where: { key: String(req.params.key), deletedAt: null } });
+    const ticket = await prisma.ticket.findFirst({ where: { key: String(req.params.key), deletedAt: null }, select: { id: true } });
     if (!ticket) throw new AppError(404, "Ticket not found");
+    const author = await apiKeyActor(req);
 
-    const apiKey = await prisma.apiKey.findUnique({ where: { id: req.apiKey!.id } });
-    const authorId = apiKey?.createdById;
-    if (!authorId) throw new AppError(500, "This API key has no attributable creator — regenerate it from Workspace Settings.");
-
-    const cleanBody = sanitizeRichText(req.body.body);
-    const comment = await prisma.ticketComment.create({
-      data: { ticketId: ticket.id, authorId, body: cleanBody },
-      include: { author: { select: { id: true, name: true, email: true, avatarUrl: true } } }
-    });
-
-    await audit(authorId, "ticket.commented_via_api", "Ticket", ticket.id, { commentId: comment.id, apiKeyId: req.apiKey!.id });
+    // The one comment path (services/ticket-comment.service.ts): sanitised, audited as
+    // `ticket.commented` marked `via: "api"`, @mentions honoured, and the people on the ticket told.
+    // This used to write the row and a `ticket.commented_via_api` audit entry, and tell nobody.
+    const comment = await postTicketComment({ ticketId: ticket.id, author, body: req.body.body, via: "api", apiKeyId: req.apiKey!.id });
 
     res.status(201).json(comment);
   }

@@ -613,7 +613,7 @@ const TOOLS: readonly McpToolRegistration[] = [
     untrustedContent: false,
     handler: async (ctx, args) => {
       // Shared with the Ask AI chat's `comment_on_ticket` — see createTicketForActor's note above.
-      const posted = await addTicketCommentForActor(ctx, { ticketKey: args.ticketKey, body: args.body });
+      const posted = await addTicketCommentForActor(ctx, { ticketKey: args.ticketKey, body: args.body, via: "mcp" });
       return { created: true, ticket: posted.ticketKey, commentId: posted.commentId, createdAt: posted.createdAt };
     }
   },
