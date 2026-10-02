@@ -124,7 +124,7 @@ test.describe("timesheet reporting", () => {
     await rangeDialog.getByRole("button", { name: "Last year", exact: true }).click();
     await rangeDialog.getByRole("button", { name: "Apply" }).click();
     await expect(page.getByText(/no entries match these filters/i)).toBeVisible({ timeout: 15_000 });
-    await expect(hoursTile).toHaveText(/^0\.00h$/);
+    await expect(hoursTile).toHaveText(/^0\.0h$/);
 
     await page.getByRole("button", { name: /clear filters/i }).click();
     await expect(page.getByText(/no entries match these filters/i)).toBeHidden({ timeout: 15_000 });

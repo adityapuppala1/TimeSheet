@@ -129,9 +129,30 @@ export interface GroupedRow {
   cost: number | null;
   /** How many rows in the group had no rate. Surfaced so a partial cost can be read as partial. */
   unratedEntries: number;
+  /** The rated cost per currency (each entry's frozen `billedCurrency`), largest first. `cost` above
+   *  adds currencies together and is kept for the export renderers; a screen shows this. */
+  costByCurrency: CurrencyAmount[];
   people: number;
   firstDate: string | null;
   lastDate: string | null;
+}
+
+export interface CurrencyAmount {
+  currency: string | null;
+  amount: number;
+}
+
+/** Sums each currency's rated amount apart. Never one figure across currencies. */
+function addCost(costs: Map<string | null, number>, row: { billedAmount: unknown; billedCurrency?: string | null }): void {
+  if (row.billedAmount == null) return;
+  const currency = row.billedCurrency ?? null;
+  costs.set(currency, (costs.get(currency) ?? 0) + Number(row.billedAmount));
+}
+
+function currencyAmounts(costs: Map<string | null, number>): CurrencyAmount[] {
+  return [...costs.entries()]
+    .map(([currency, amount]) => ({ currency, amount: Number(amount.toFixed(2)) }))
+    .sort((a, b) => b.amount - a.amount);
 }
 
 function isoDay(date: Date): string {
@@ -253,7 +274,7 @@ function bucketOf(row: ReportRow, groupBy: GroupByKey): { key: string; label: st
 export function groupTimesheetRows(rows: ReportRow[], groupBy: GroupByKey): GroupedRow[] {
   const buckets = new Map<
     string,
-    { label: string; entries: number; hours: number; billableHours: number; cost: number; rated: number; unrated: number; people: Set<string>; first: string; last: string }
+    { label: string; entries: number; hours: number; billableHours: number; cost: number; costs: Map<string | null, number>; rated: number; unrated: number; people: Set<string>; first: string; last: string }
   >();
 
   for (const row of rows) {
@@ -266,6 +287,7 @@ export function groupTimesheetRows(rows: ReportRow[], groupBy: GroupByKey): Grou
       hours: 0,
       billableHours: 0,
       cost: 0,
+      costs: new Map<string | null, number>(),
       rated: 0,
       unrated: 0,
       people: new Set<string>(),
@@ -276,6 +298,7 @@ export function groupTimesheetRows(rows: ReportRow[], groupBy: GroupByKey): Grou
     bucket.entries += 1;
     bucket.hours += hours;
     if (row.billable) bucket.billableHours += hours;
+    addCost(bucket.costs, row);
     if (row.billedAmount != null) {
       bucket.cost += Number(row.billedAmount);
       bucket.rated += 1;
@@ -299,6 +322,7 @@ export function groupTimesheetRows(rows: ReportRow[], groupBy: GroupByKey): Grou
       billableHours: rounded(b.billableHours),
       cost: b.rated === 0 ? null : rounded(b.cost),
       unratedEntries: b.unrated,
+      costByCurrency: currencyAmounts(b.costs),
       people: b.people.size,
       firstDate: b.first,
       lastDate: b.last
@@ -365,6 +389,8 @@ export interface TimesheetTotals {
   billableHours: number;
   cost: number | null;
   unratedEntries: number;
+  /** As `GroupedRow.costByCurrency`: the rated cost per currency, never added across currencies. */
+  costByCurrency: CurrencyAmount[];
   people: number;
 }
 
@@ -372,6 +398,8 @@ export interface TimesheetTotals {
  *  covers rows the reader cannot see is the truncation bug this report already had once. */
 export function summariseTimesheetRows(rows: ReportRow[]): TimesheetTotals {
   const rated = rows.filter((r) => r.billedAmount != null);
+  const costs = new Map<string | null, number>();
+  for (const r of rated) addCost(costs, r);
   const round = (n: number) => Number(n.toFixed(2));
   return {
     entries: rows.length,
@@ -379,6 +407,7 @@ export function summariseTimesheetRows(rows: ReportRow[]): TimesheetTotals {
     billableHours: round(rows.filter((r) => r.billable).reduce((s, r) => s + entryHours(r), 0)),
     cost: rated.length === 0 ? null : round(rated.reduce((s, r) => s + Number(r.billedAmount ?? 0), 0)),
     unratedEntries: rows.length - rated.length,
+    costByCurrency: currencyAmounts(costs),
     people: new Set(rows.map((r) => r.userId)).size
   };
 }

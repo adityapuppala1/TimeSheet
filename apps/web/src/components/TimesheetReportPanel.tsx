@@ -25,6 +25,8 @@ import { Skeleton } from "./ui/skeleton";
 import { toast } from "./ui/toaster";
 import { activityTypeApi, projectApi, reportApi, userApi, type GroupByKey, type TimesheetReportFilters } from "../services/api";
 import { exportParams } from "../lib/report-export";
+import { formatHours, formatMoney, formatNumber, NO_VALUE } from "../lib/format";
+import { QueryError } from "./QueryState";
 
 const ANY = "any";
 
@@ -61,8 +63,15 @@ function toFilters(form: {
   };
 }
 
-function hours(n: number): string {
-  return `${n.toFixed(2)}h`;
+/** Hours with one decimal, en-IN grouping (lib/format.ts) — the house format on every analytics surface. */
+const hours = (n: number): string => formatHours(n);
+
+/** Cost in each currency it was billed in — "₹3,000.00 + $50.00". Never one figure across currencies,
+ *  and a dash (not 0) when nothing carries a rate: zero would claim the work was free. */
+function costText(costs: Array<{ currency: string | null; amount: number }> | undefined, legacy: number | null): string {
+  if (!costs) return legacy === null ? NO_VALUE : formatNumber(legacy, 2);
+  if (costs.length === 0) return NO_VALUE;
+  return costs.map((c) => formatMoney(c.amount, c.currency)).join(" + ");
 }
 
 export function TimesheetReportPanel() {
@@ -249,6 +258,8 @@ export function TimesheetReportPanel() {
         </div>
 
         {report.isLoading && <Skeleton className="h-40 w-full" />}
+        {/* A failed request says so — the panel used to go blank, which reads as "no entries". */}
+        {report.isError && !report.data && <QueryError what="the timesheet report" onRetry={() => report.refetch()} />}
 
         {!report.isLoading && totals && (
           <>
@@ -259,14 +270,13 @@ export function TimesheetReportPanel() {
                 { label: "Entries", value: String(totals.entries) },
                 {
                   label: "Cost",
-                  // Null means no row carried a rate. "—" is the honest rendering; £0.00 would
-                  // claim the work was free.
-                  value: totals.cost === null ? "—" : totals.cost.toFixed(2)
+                  // In each billing currency, never added across them; "—" when no row carries a rate.
+                  value: costText(totals.costByCurrency, totals.cost)
                 }
               ].map((s) => (
                 <div key={s.label} className="rounded-lg border border-border bg-muted/30 p-3">
                   <p className="text-xs uppercase text-muted-foreground">{s.label}</p>
-                  <p className="mt-1 text-xl font-black tabular-nums">{s.value}</p>
+                  <p className="mt-1 break-words text-xl font-black tabular-nums">{s.value}</p>
                 </div>
               ))}
             </div>
@@ -280,7 +290,7 @@ export function TimesheetReportPanel() {
 
             {report.data!.truncated && (
               <p className="text-xs font-medium text-destructive">
-                More than {report.data!.rowsScanned.toLocaleString()} entries match — the figures above cover only that
+                More than {formatNumber(report.data!.rowsScanned)} entries match — the figures above cover only that
                 many. Narrow the date range.
               </p>
             )}
@@ -313,7 +323,7 @@ export function TimesheetReportPanel() {
                       <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{g.entries}</td>
                       <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{g.people}</td>
                       <td className="px-3 py-2 text-right tabular-nums">
-                        {g.cost === null ? <span className="text-muted-foreground">—</span> : g.cost.toFixed(2)}
+                        {g.cost === null ? <span className="text-muted-foreground">{NO_VALUE}</span> : costText(g.costByCurrency, g.cost)}
                       </td>
                     </tr>
                   ))}

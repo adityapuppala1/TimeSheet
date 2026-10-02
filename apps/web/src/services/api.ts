@@ -1299,6 +1299,9 @@ export interface TimesheetReportGroup {
    *  was free, when the truth is that the rate was never captured. */
   cost: number | null;
   unratedEntries: number;
+  /** Rated cost per currency (each entry's frozen billing currency). A screen shows this: `cost`
+   *  adds currencies together. */
+  costByCurrency: Array<{ currency: string | null; amount: number }>;
   people: number;
   firstDate: string | null;
   lastDate: string | null;
@@ -1315,6 +1318,7 @@ export interface TimesheetReport {
     billableHours: number;
     cost: number | null;
     unratedEntries: number;
+    costByCurrency: Array<{ currency: string | null; amount: number }>;
     people: number;
   };
   groups: TimesheetReportGroup[];
