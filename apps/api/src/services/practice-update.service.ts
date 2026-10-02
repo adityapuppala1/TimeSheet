@@ -31,6 +31,7 @@ import { securityDisciplineFindingTypes } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { isChangeManagementOn } from "./change.service.js";
 import { buildPracticeAnalytics, type PracticeAnalytics } from "./practice-analytics.service.js";
+import { LOGGED_HOURS_WHERE } from "./workspace-metrics.js";
 import { htmlToText } from "../utils/sanitize.js";
 
 export type PracticeCategory = "PRODUCT" | "POC" | "BUGS" | "SECURITY" | "TRAINING";
@@ -257,6 +258,29 @@ function countMap(rows: Array<{ projectId: string | null; _count: unknown }>): M
   return new Map(rows.filter((r) => r.projectId).map((r) => [r.projectId as string, total(r._count)]));
 }
 
+/** Approval deadlines in the period that passed before a decision — `(reviewedAt ?? now) > deadline`
+ *  — read from the deadline, not from `slaBreachAt`, which only the SLA_ENABLED sweep writes. */
+async function approvalDeadlinesIn(window: { start: Date; endExclusive: Date }, projectIds?: string[]) {
+  const now = new Date();
+  const upper = window.endExclusive < now ? window.endExclusive : now;
+  const rows = await prisma.timesheet.findMany({
+    where: { deletedAt: null, approvalDeadline: { gte: window.start, lt: upper }, ...(projectIds ? { projectId: { in: projectIds } } : {}) },
+    select: { projectId: true, approvalDeadline: true, reviewedAt: true }
+  });
+  return rows.filter((r) => r.approvalDeadline !== null && (r.reviewedAt ?? now).getTime() > r.approvalDeadline.getTime());
+}
+
+async function approvalSlaBreaches(window: { start: Date; endExclusive: Date }): Promise<number> {
+  return (await approvalDeadlinesIn(window)).length;
+}
+
+/** Shaped like the `groupBy` it replaces, so `countMap` reads it unchanged. */
+async function approvalSlaBreachesByProject(ids: string[], window: { start: Date; endExclusive: Date }) {
+  const counts = new Map<string, number>();
+  for (const row of await approvalDeadlinesIn(window, ids)) counts.set(row.projectId, (counts.get(row.projectId) ?? 0) + 1);
+  return [...counts.entries()].map(([projectId, n]) => ({ projectId, _count: { _all: n } }));
+}
+
 async function metricsFor(from: Date, to: Date): Promise<PracticeMetrics> {
   const start = toUtcDay(from);
   const end = toUtcDay(to);
@@ -282,11 +306,15 @@ async function metricsFor(from: Date, to: Date): Promise<PracticeMetrics> {
   ] = await Promise.all([
     prisma.ticket.count({ where: { deletedAt: null, createdAt: { gte: start, lt: endExclusive } } }),
     prisma.ticket.count({ where: { deletedAt: null, status: { in: CLOSED_TICKET }, resolvedAt: { gte: start, lt: endExclusive } } }),
-    prisma.timesheet.aggregate({ where: { deletedAt: null, workDate: { gte: start, lte: end } }, _sum: { totalHours: true } }),
-    prisma.timesheet.aggregate({ where: { deletedAt: null, billable: true, workDate: { gte: start, lte: end } }, _sum: { totalHours: true } }),
-    prisma.timesheet.findMany({ where: { deletedAt: null, workDate: { gte: start, lte: end } }, select: { userId: true }, distinct: ["userId"] }),
-    prisma.ticket.count({ where: { deletedAt: null, status: { notIn: CLOSED_TICKET }, slaBreachAt: { not: null, lt: endExclusive } } }),
-    prisma.timesheet.count({ where: { deletedAt: null, slaBreachAt: { not: null, gte: start, lt: endExclusive } } }),
+    // LOGGED hours — submitted + approved (workspace-metrics.ts). Drafts and rejected hours were
+    // counted as work done in every hours figure of this update.
+    prisma.timesheet.aggregate({ where: { deletedAt: null, ...LOGGED_HOURS_WHERE, workDate: { gte: start, lte: end } }, _sum: { totalHours: true } }),
+    prisma.timesheet.aggregate({ where: { deletedAt: null, ...LOGGED_HOURS_WHERE, billable: true, workDate: { gte: start, lte: end } }, _sum: { totalHours: true } }),
+    prisma.timesheet.findMany({ where: { deletedAt: null, ...LOGGED_HOURS_WHERE, workDate: { gte: start, lte: end } }, select: { userId: true }, distinct: ["userId"] }),
+    // Open and past due by the end of the period — from `dueAt`, the one SLA rule. `slaBreachAt` is
+    // only written while the TICKET_SLA_ENABLED sweep runs.
+    prisma.ticket.count({ where: { deletedAt: null, status: { notIn: CLOSED_TICKET }, dueAt: { lt: endExclusive } } }),
+    approvalSlaBreaches({ start, endExclusive }),
     prisma.escalation.count({ where: { resolvedAt: null } }),
     changesOn ? prisma.changeRequest.count({ where: { createdAt: { gte: start, lt: endExclusive } } }) : Promise.resolve(0),
     changesOn ? prisma.changeRequest.count({ where: { closedAt: { gte: start, lt: endExclusive } } }) : Promise.resolve(0),
@@ -304,7 +332,7 @@ async function metricsFor(from: Date, to: Date): Promise<PracticeMetrics> {
     prisma.securityFinding.count({ where: { createdAt: { gte: start, lt: endExclusive }, ...SECURITY_DISCIPLINE } }),
     prisma.timesheet.groupBy({
       by: ["activityType"],
-      where: { deletedAt: null, workDate: { gte: start, lte: end } },
+      where: { deletedAt: null, ...LOGGED_HOURS_WHERE, workDate: { gte: start, lte: end } },
       _sum: { totalHours: true }
     })
   ]);
@@ -360,10 +388,10 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
       prisma.ticket.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, deletedAt: null, createdAt: { gte: start, lt: endExclusive } }, _count: { _all: true } }),
       prisma.ticket.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, deletedAt: null, status: { in: CLOSED_TICKET }, resolvedAt: { gte: start, lt: endExclusive } }, _count: { _all: true } }),
       prisma.ticket.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, deletedAt: null, status: { notIn: CLOSED_TICKET } }, _count: { _all: true } }),
-      prisma.ticket.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, deletedAt: null, status: { notIn: CLOSED_TICKET }, slaBreachAt: { not: null, lt: endExclusive } }, _count: { _all: true } }),
-      prisma.timesheet.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, deletedAt: null, slaBreachAt: { not: null, gte: start, lt: endExclusive } }, _count: { _all: true } }),
-      prisma.timesheet.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, deletedAt: null, workDate: { gte: start, lte: end } }, _sum: { totalHours: true } }),
-      prisma.timesheet.groupBy({ by: ["projectId", "activityType"], where: { projectId: { in: ids }, deletedAt: null, workDate: { gte: start, lte: end } }, _sum: { totalHours: true } }),
+      prisma.ticket.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, deletedAt: null, status: { notIn: CLOSED_TICKET }, dueAt: { lt: endExclusive } }, _count: { _all: true } }),
+      approvalSlaBreachesByProject(ids, { start, endExclusive }),
+      prisma.timesheet.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, deletedAt: null, ...LOGGED_HOURS_WHERE, workDate: { gte: start, lte: end } }, _sum: { totalHours: true } }),
+      prisma.timesheet.groupBy({ by: ["projectId", "activityType"], where: { projectId: { in: ids }, deletedAt: null, ...LOGGED_HOURS_WHERE, workDate: { gte: start, lte: end } }, _sum: { totalHours: true } }),
       // Bug tickets closed in the period, for the category call.
       prisma.ticket.groupBy({
         by: ["projectId"],
@@ -374,7 +402,7 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
       // adding one for a digest would be the wrong way round.
       prisma.timesheet.groupBy({
         by: ["projectId", "userId"],
-        where: { projectId: { in: ids }, deletedAt: null, workDate: { gte: start, lte: end } },
+        where: { projectId: { in: ids }, deletedAt: null, ...LOGGED_HOURS_WHERE, workDate: { gte: start, lte: end } },
         _sum: { totalHours: true }
       }),
       // The owner fallback: who holds the most OPEN tickets on it. A project can have a week with
@@ -421,7 +449,7 @@ export async function buildPracticeUpdateData(from: Date, to: Date, label: strin
         take: HIGHLIGHT_SCAN_CAP
       }),
       prisma.timesheet.findMany({
-        where: { projectId: { in: ids }, deletedAt: null, workDate: { gte: start, lte: end } },
+        where: { projectId: { in: ids }, deletedAt: null, ...LOGGED_HOURS_WHERE, workDate: { gte: start, lte: end } },
         select: { projectId: true, totalHours: true, taskDescription: true, user: { select: { name: true } } },
         orderBy: { totalHours: "desc" },
         take: HIGHLIGHT_SCAN_CAP

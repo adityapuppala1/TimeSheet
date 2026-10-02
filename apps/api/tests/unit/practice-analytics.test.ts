@@ -401,8 +401,9 @@ describe("people", () => {
 
     // Mon–Sun contains 5 working days; one person at 40h/week is 40h of capacity.
     expect(a.people.capacityHours).toBe(40);
-    // The whole team's 40 logged hours against the one visible person's capacity.
-    expect(a.people.utilisationPct).toBe(100);
+    // The SAME people on both sides (M10): Asha's 20 logged hours against Asha's 40h of capacity.
+    // It divided the whole team's 40 hours by the one visible person's capacity and read 100%.
+    expect(a.people.utilisationPct).toBe(50);
     expect(a.people.billablePct).toBe(75);
 
     // Dana is deactivated: her hours still count in the totals, her NAME does not appear.
@@ -427,5 +428,31 @@ describe("an unconfigured subsystem costs a row, never the report", () => {
     // And nothing invented a rate out of the absence.
     expect(a.quality.runPassRatePct).toBeNull();
     expect(a.change.successRatePct).toBeNull();
+  });
+});
+
+describe("people — the shared definitions (M10, M11)", () => {
+  it("does not shrink capacity by the target utilisation, and counts logged hours only", async () => {
+    state.people = [{ id: "u1", name: "Asha Rao", status: "ACTIVE", deletedAt: null, weeklyCapacityHours: 40, plannedUtilizationPct: 80 }];
+    state.hoursByUser = [{ userId: "u1", hours: 20 }];
+    state.totalHours = 20;
+    const { prisma } = await import("../../src/config/prisma.js");
+    vi.mocked(prisma.timesheet.groupBy).mockClear();
+
+    const a = await run();
+
+    // Capacity is contracted capacity — 40h — and the 80% target is not a discount on it.
+    expect(a.people.capacityHours).toBe(40);
+    expect(a.people.utilisationPct).toBe(50);
+    const hoursQuery = vi.mocked(prisma.timesheet.groupBy).mock.calls[0][0] as any;
+    expect(hoursQuery.where.status).toEqual({ in: ["SUBMITTED", "APPROVED"] });
+  });
+
+  it("does not count an AI agent with open tickets as a silent owner", async () => {
+    const { prisma } = await import("../../src/config/prisma.js");
+    vi.mocked(prisma.ticket.findMany).mockClear();
+    await run();
+    const distinctAssignees = vi.mocked(prisma.ticket.findMany).mock.calls.map((c) => c[0] as any).find((args) => args?.distinct);
+    expect(distinctAssignees.where.assignee).toEqual({ isAgent: false });
   });
 });

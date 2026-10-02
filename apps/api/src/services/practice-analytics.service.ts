@@ -34,7 +34,8 @@ import { securityDisciplineFindingTypes } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { getPlanningSettings } from "./planning.service.js";
 import { capacityForBucket } from "./workload.service.js";
-import { NOT_DEACTIVATED } from "./people-visibility.service.js";
+import { COUNTED_PEOPLE } from "./people-visibility.service.js";
+import { LOGGED_HOURS_WHERE } from "./workspace-metrics.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CLOSED: Prisma.EnumTicketStatusFilter = { in: ["RESOLVED", "CLOSED"] };
@@ -367,7 +368,9 @@ export async function buildPracticeAnalytics(input: {
       _count: { _all: true }
     }),
     prisma.ticket.count({
-      where: { deletedAt: null, status: NOT_CLOSED, priority: "CRITICAL", slaBreachAt: { not: null, lt: endExclusive } }
+      // Past its due date by the end of the period — the one SLA rule (workspace-metrics.ts); the
+      // sweep's `slaBreachAt` stamp only exists while TICKET_SLA_ENABLED is on.
+      where: { deletedAt: null, status: NOT_CLOSED, priority: "CRITICAL", dueAt: { lt: endExclusive } }
     }),
     optional(
       prisma.testRun.groupBy({ by: ["status"], where: { createdAt: inPeriod }, _count: { _all: true }, _sum: { passCount: true, failCount: true } }),
@@ -409,9 +412,10 @@ export async function buildPracticeAnalytics(input: {
       prisma.changeRequest.count({ where: { plannedStart: { gte: endExclusive, lt: nextWeekEnd } } }),
       0
     ),
+    // LOGGED hours — submitted + approved (workspace-metrics.ts) — in every hours figure below.
     prisma.timesheet.groupBy({
       by: ["userId"],
-      where: { deletedAt: null, workDate: { gte: start, lte: end } },
+      where: { deletedAt: null, ...LOGGED_HOURS_WHERE, workDate: { gte: start, lte: end } },
       _sum: { totalHours: true }
     }),
     prisma.ticket.groupBy({
@@ -419,10 +423,11 @@ export async function buildPracticeAnalytics(input: {
       where: { deletedAt: null, status: CLOSED, resolvedAt: inPeriod, assigneeId: { not: null } },
       _count: { _all: true }
     }),
-    prisma.timesheet.aggregate({ where: { deletedAt: null, billable: true, workDate: { gte: start, lte: end } }, _sum: { totalHours: true } }),
-    prisma.timesheet.aggregate({ where: { deletedAt: null, workDate: { gte: start, lte: end } }, _sum: { totalHours: true } }),
+    prisma.timesheet.aggregate({ where: { deletedAt: null, ...LOGGED_HOURS_WHERE, billable: true, workDate: { gte: start, lte: end } }, _sum: { totalHours: true } }),
+    prisma.timesheet.aggregate({ where: { deletedAt: null, ...LOGGED_HOURS_WHERE, workDate: { gte: start, lte: end } }, _sum: { totalHours: true } }),
+    // Open work held by PEOPLE. An AI agent never logs hours, so it was always a "silent owner".
     prisma.ticket.findMany({
-      where: { deletedAt: null, status: NOT_CLOSED, assigneeId: { not: null } },
+      where: { deletedAt: null, status: NOT_CLOSED, assigneeId: { not: null }, assignee: { isAgent: false } },
       select: { assigneeId: true },
       distinct: ["assigneeId"]
     }),
@@ -571,7 +576,7 @@ export async function buildPracticeAnalytics(input: {
   const contributorIds = [...hoursByUserMap.keys()];
   const visiblePeople = contributorIds.length
     ? await prisma.user.findMany({
-        where: { id: { in: contributorIds }, ...NOT_DEACTIVATED },
+        where: { id: { in: contributorIds }, ...COUNTED_PEOPLE },
         select: { id: true, name: true, weeklyCapacityHours: true, plannedUtilizationPct: true }
       })
     : [];
@@ -592,20 +597,22 @@ export async function buildPracticeAnalytics(input: {
     workingDaysPerWeek: workingDayNumbers.length || 5
   };
 
+  // Contracted capacity of the people shown — not discounted by their target utilisation, which is
+  // what they are expected to log against it (workspace-metrics.ts), not less capacity.
   const capacityHours = visiblePeople.reduce(
     (sum, person) =>
       sum +
       capacityForBucket(
-        {
-          weeklyCapacityHours: person.weeklyCapacityHours == null ? null : Number(person.weeklyCapacityHours),
-          plannedUtilizationPct: person.plannedUtilizationPct
-        },
+        { weeklyCapacityHours: person.weeklyCapacityHours == null ? null : Number(person.weeklyCapacityHours), plannedUtilizationPct: null },
         { workingDays },
         defaults
       ),
     0
   );
   const loggedHours = Number(totalAgg._sum.totalHours ?? 0);
+  // Utilisation's numerator is the SAME people's hours as its denominator's capacity. It divided
+  // everyone's hours — leavers and agents included — by the capacity of the people still shown.
+  const visibleLoggedHours = visiblePeople.reduce((sum, person) => sum + (hoursByUserMap.get(person.id) ?? 0), 0);
 
   const topContributors = visiblePeople
     .map((person) => ({
@@ -618,7 +625,7 @@ export async function buildPracticeAnalytics(input: {
 
   const people: PeopleAnalytics = {
     topContributors,
-    utilisationPct: capacityHours > 0 ? rate(loggedHours, capacityHours) : null,
+    utilisationPct: capacityHours > 0 ? rate(visibleLoggedHours, capacityHours) : null,
     capacityHours: capacityHours > 0 ? Number(capacityHours.toFixed(1)) : null,
     billablePct: rate(Number(billableAgg._sum.totalHours ?? 0), loggedHours),
     silentOwners: openAssignees.filter((row) => row.assigneeId && !hoursByUserMap.has(row.assigneeId)).length
