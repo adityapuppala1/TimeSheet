@@ -24,6 +24,7 @@ import { PLATFORM_ROLE_CAPABILITIES, platformRoleHas, type PlatformCapability, t
 import { controlPrisma } from "../config/control-prisma.js";
 import { env } from "../config/env.js";
 import { isAccountEssentialPath, mfaEnrolmentRequiredFor, platformAccountGateFor } from "../services/platform-account-gate.js";
+import { consoleSessionLapse, sessionNeedsTouch } from "../services/platform-session-policy.js";
 import { verifyPlatformAdminAccessToken } from "../utils/platform-admin-security.js";
 import { AppError } from "./error.js";
 
@@ -72,13 +73,29 @@ export async function requirePlatformAdmin(req: Request, _res: Response, next: N
   if (typeof payload.sub !== "string" || !UUID_RE.test(payload.sub)) throw new AppError(401, "Invalid session");
   if (typeof payload.sid !== "string" || !UUID_RE.test(payload.sid)) throw new AppError(401, "Invalid session");
 
-  const session = await controlPrisma.platformAdminSession.findUnique({ where: { id: payload.sid }, select: { revokedAt: true, adminUserId: true } });
+  const session = await controlPrisma.platformAdminSession.findUnique({
+    where: { id: payload.sid },
+    select: { revokedAt: true, adminUserId: true, createdAt: true, lastUsedAt: true, expiresAt: true }
+  });
   if (!session || session.revokedAt) throw new AppError(401, "Session revoked");
   // THE SESSION BELONGS TO ONE ADMIN, and the token must name that admin. Without this, anybody
   // holding the signing secret and ANY live session — a READ_ONLY one — could pair their own session
   // id with an OWNER's id and be that owner; the revocation check above would pass, because their
   // session really is live.
   if (session.adminUserId !== payload.sub) throw new AppError(401, "Invalid session");
+
+  // The console's own lifetime (M5): checked HERE as well as on refresh, so a still-valid 15-minute
+  // access token cannot carry a session past its idle or absolute limit. A lapsed session is
+  // revoked on the spot rather than left for its refresh cookie to be tried later.
+  const now = new Date();
+  const lapse = consoleSessionLapse(session, now, { ttlHours: env.PLATFORM_ADMIN_SESSION_TTL_HOURS, idleMinutes: env.PLATFORM_ADMIN_IDLE_TIMEOUT_MINUTES });
+  if (lapse) {
+    await controlPrisma.platformAdminSession.update({ where: { id: payload.sid }, data: { revokedAt: now } }).catch(() => undefined);
+    throw new AppError(401, lapse === "idle" ? "Signed out after a period of inactivity" : "Session expired");
+  }
+  if (sessionNeedsTouch(session, now)) {
+    await controlPrisma.platformAdminSession.update({ where: { id: payload.sid }, data: { lastUsedAt: now } }).catch(() => undefined);
+  }
 
   const admin = await controlPrisma.platformAdminUser.findUnique({ where: { id: payload.sub } });
   if (!admin || admin.status !== "ACTIVE") throw new AppError(401, "Invalid session");

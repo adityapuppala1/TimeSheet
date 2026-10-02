@@ -40,7 +40,7 @@ import { PRIMARY_BTN } from "../pages/platform-admin/console-ui";
 /* The console's own palette, NOT the tenant one — see its header for why the two are separate
    components rather than one parameterised over "which store". */
 import { ConsoleCommandPalette, useConsolePaletteHotkey } from "../pages/platform-admin/console-command-palette";
-import { platformAdminAuthApi, registerPlatformAccountGateHandler } from "../services/platform-admin-api";
+import { platformAdminAuthApi, registerPlatformAccountGateHandler, registerPlatformSessionEndedHandler } from "../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../store/platform-admin-auth";
 import { consoleAccountGate, shouldNagForMfa } from "../lib/platform-console";
 import { cn } from "../lib/utils";
@@ -240,7 +240,7 @@ function SeededPasswordBanner({ onChangePassword }: { onChangePassword: () => vo
  */
 function MfaNagBanner() {
   return (
-    <div role="status" className="flex flex-col gap-2 border-b border-warning/40 bg-warning/10 px-4 py-2.5 text-sm text-foreground sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:py-2">
+    <aside aria-label="Two-factor reminder" className="flex flex-col gap-2 border-b border-warning/40 bg-warning/10 px-4 py-2.5 text-sm text-foreground sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:py-2">
       <p className="flex min-w-0 items-start gap-2 sm:items-center">
         <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning sm:mt-0" />
         <span className="min-w-0">
@@ -250,7 +250,7 @@ function MfaNagBanner() {
       <Button asChild size="sm" className={cn(PRIMARY_BTN, "shrink-0 self-start sm:self-auto")}>
         <Link to="/platform-admin/settings?tab=security">Set one up</Link>
       </Button>
-    </div>
+    </aside>
   );
 }
 
@@ -412,6 +412,16 @@ export function PlatformAdminLayout() {
     });
     return () => registerPlatformAccountGateHandler(null);
   }, [setAdmin]);
+  // The console's idle and absolute limits (M5) end sessions on the server; when a refresh is
+  // refused, sign out here too so the operator lands on the sign-in page instead of a dead console.
+  useEffect(() => {
+    registerPlatformSessionEndedHandler((message) => {
+      logout();
+      toast.info(message ?? "Your console session ended. Sign in again.");
+      void navigate("/platform-admin/login");
+    });
+    return () => registerPlatformSessionEndedHandler(null);
+  }, [logout, navigate]);
 
   const openPassword = () => {
     setDrawerOpen(false);

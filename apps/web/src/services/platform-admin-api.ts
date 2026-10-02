@@ -73,6 +73,17 @@ export function registerPlatformAccountGateHandler(fn: typeof accountGateHandler
   accountGateHandler = fn;
 }
 
+/**
+ * Called when a refresh is refused — the session ended on the server (the console's idle or
+ * absolute limit, a revocation, a deactivation). Registered by the layout, which signs the operator
+ * out locally and sends them to the sign-in page; without it a lapsed session left the console on
+ * screen with every card failing until somebody reloaded.
+ */
+let sessionEndedHandler: ((message: string | null) => void) | null = null;
+export function registerPlatformSessionEndedHandler(fn: typeof sessionEndedHandler) {
+  sessionEndedHandler = fn;
+}
+
 platformAdminApi.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -93,6 +104,8 @@ platformAdminApi.interceptors.response.use(
       return platformAdminApi.request(original);
     } catch (refreshError) {
       setPlatformAdminAccessToken(null);
+      const message = (refreshError as { response?: { data?: { message?: unknown } } })?.response?.data?.message;
+      sessionEndedHandler?.(typeof message === "string" ? message : null);
       throw refreshError;
     }
   }

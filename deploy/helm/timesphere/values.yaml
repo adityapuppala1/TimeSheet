@@ -164,6 +164,10 @@ env:
   # OWNER and OPERATOR without a second factor to enrolment before the console opens; "false" opts
   # out. Leave it empty to take the default.
   platformAdminRequireMfa: ""
+  # The console's own session lifetime (it used to borrow refreshTokenTtlDays): absolute hours from
+  # sign-in, never extended by activity, and minutes of inactivity before it signs out.
+  platformAdminSessionTtlHours: 12
+  platformAdminIdleTimeoutMinutes: 30
 
 # Outbound email. This was MISSING from the chart entirely — the ConfigMap carried no SMTP keys and
 # the Secret example carried no password, so a Kubernetes install had no way to configure mail

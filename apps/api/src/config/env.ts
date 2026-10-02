@@ -164,6 +164,20 @@ const schema = z.object({
    * token already issued still lives out its own TTL (ACCESS_TOKEN_TTL above).
    */
   SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().min(0).default(0),
+  /**
+   * The platform console's OWN session lifetime — it used to borrow REFRESH_TOKEN_TTL_DAYS above,
+   * fourteen days, with no idle limit. Absolute hours from sign-in (a refresh never extends it), and
+   * minutes since the session last carried a request. Defaults are OWASP ASVS 3.3.2's L2 figures.
+   * See services/platform-session-policy.ts. Empty means unset, as for the NATIVE_AI port below.
+   */
+  PLATFORM_ADMIN_SESSION_TTL_HOURS: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.coerce.number().min(1).max(24 * 14).default(12)
+  ),
+  PLATFORM_ADMIN_IDLE_TIMEOUT_MINUTES: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.coerce.number().min(5).max(24 * 60).default(30)
+  ),
   API_PORT: z.coerce.number().default(4000),
   WEB_ORIGIN: z.string().default("http://localhost:5173"),
   APP_BASE_URL: z.string().default("http://localhost:5173"),

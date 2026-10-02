@@ -27,6 +27,8 @@ data:
   REFRESH_TOKEN_TTL_DAYS: {{ .Values.env.refreshTokenTtlDays | quote }}
   SESSION_IDLE_TIMEOUT_MINUTES: {{ .Values.env.sessionIdleTimeoutMinutes | quote }}
   PLATFORM_ADMIN_REQUIRE_MFA: {{ .Values.env.platformAdminRequireMfa | default "" | quote }}
+  PLATFORM_ADMIN_SESSION_TTL_HOURS: {{ .Values.env.platformAdminSessionTtlHours | default 12 | quote }}
+  PLATFORM_ADMIN_IDLE_TIMEOUT_MINUTES: {{ .Values.env.platformAdminIdleTimeoutMinutes | default 30 | quote }}
   {{- with .Values.mail }}
   # Outbound SMTP. GlobalMailSettings in the tenant database overrides all of this at runtime; these
   # are the deployment-level fallback. Empty SMTP_HOST = mail is written to stdout instead of sent,

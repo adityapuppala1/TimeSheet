@@ -23,16 +23,22 @@ import {
 } from "../utils/platform-admin-security.js";
 import { generateRecoveryCodes, generateTotpSecret, normalizeRecoveryCode, totpAuthUri, verifyTotp } from "../utils/totp.js";
 import { mfaEnrolmentRequiredFor } from "./platform-account-gate.js";
+import { consoleSessionLapse } from "./platform-session-policy.js";
 import { platformAudit } from "./platform-audit.service.js";
 
 const REFRESH_GRACE_PERIOD_MS = 30_000;
 
+/** The console's own session policy (M5) — see services/platform-session-policy.ts. */
+const sessionPolicy = () => ({ ttlHours: env.PLATFORM_ADMIN_SESSION_TTL_HOURS, idleMinutes: env.PLATFORM_ADMIN_IDLE_TIMEOUT_MINUTES });
+
 async function establishSession(adminUserId: string, opts: { userAgent?: string; ipAddress?: string }) {
-  const days = env.REFRESH_TOKEN_TTL_DAYS;
+  // PLATFORM_ADMIN_SESSION_TTL_HOURS, not the tenants' REFRESH_TOKEN_TTL_DAYS this used to borrow.
+  const days = env.PLATFORM_ADMIN_SESSION_TTL_HOURS / 24;
   const refreshSecret = opaqueToken();
-  const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + env.PLATFORM_ADMIN_SESSION_TTL_HOURS * 60 * 60 * 1000);
   const session = await controlPrisma.platformAdminSession.create({
-    data: { adminUserId, refreshHash: await hashToken(refreshSecret), userAgent: opts.userAgent, ipAddress: opts.ipAddress, expiresAt }
+    data: { adminUserId, refreshHash: await hashToken(refreshSecret), userAgent: opts.userAgent, ipAddress: opts.ipAddress, expiresAt, lastUsedAt: now }
   });
   return {
     accessToken: signPlatformAdminAccessToken(adminUserId, session.id),
@@ -116,7 +122,7 @@ const LOCKOUT_BASE_MS = 60_000;
 const LOCKOUT_MAX_MS = 60 * 60_000;
 
 export function lockoutDurationMs(consecutiveFailures: number): number {
-  if (!(consecutiveFailures >= LOCKOUT_THRESHOLD)) return 0;
+  if (!Number.isFinite(consecutiveFailures) || consecutiveFailures < LOCKOUT_THRESHOLD) return 0;
   return Math.min(LOCKOUT_MAX_MS, LOCKOUT_BASE_MS * 2 ** (consecutiveFailures - LOCKOUT_THRESHOLD));
 }
 
@@ -132,7 +138,7 @@ async function recordSignInFailure(adminId: string) {
     data: { failedLoginCount: { increment: 1 } },
     select: { failedLoginCount: true, email: true }
   });
-  const lockMs = lockoutDurationMs(row?.failedLoginCount);
+  const lockMs = lockoutDurationMs(Number(row?.failedLoginCount ?? 0));
   if (lockMs > 0) {
     await controlPrisma.platformAdminUser.update({ where: { id: adminId }, data: { lockedUntil: new Date(Date.now() + lockMs) } });
     // Recorded so an owner can see why a colleague cannot get in — and that somebody is trying.
@@ -425,6 +431,12 @@ export async function platformAdminRefresh(refreshToken: unknown) {
   // was created for. Checked BEFORE the secret, and nothing is rotated or minted on a mismatch —
   // the new tokens below are signed for `session.adminUserId`, never for whatever the token claimed.
   if (session.adminUserId !== payload.sub) throw new AppError(401, "Invalid refresh token");
+  // Idle and absolute limits hold here too, or the refresh cookie would be the way around them.
+  const lapse = consoleSessionLapse(session, new Date(), sessionPolicy());
+  if (lapse) {
+    await controlPrisma.platformAdminSession.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
+    throw new AppError(401, lapse === "idle" ? "Signed out after a period of inactivity" : "Refresh token expired");
+  }
 
   const matchesCurrent = await verifyTokenHash(secret, session.refreshHash);
   if (!matchesCurrent) {

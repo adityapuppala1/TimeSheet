@@ -47,6 +47,9 @@ services:
       # Second factor required for platform OWNER/OPERATOR before the console opens. Empty = the
       # code default, which is ON under NODE_ENV=production (above). Set "false" to opt out.
       PLATFORM_ADMIN_REQUIRE_MFA: ${PLATFORM_ADMIN_REQUIRE_MFA:-}
+      # The console's own session lifetime: absolute hours from sign-in, and idle minutes.
+      PLATFORM_ADMIN_SESSION_TTL_HOURS: ${PLATFORM_ADMIN_SESSION_TTL_HOURS:-12}
+      PLATFORM_ADMIN_IDLE_TIMEOUT_MINUTES: ${PLATFORM_ADMIN_IDLE_TIMEOUT_MINUTES:-30}
       API_PORT: 4000
       WEB_ORIGIN: ${WEB_ORIGIN:?WEB_ORIGIN must be set (your production domain)}
       APP_BASE_URL: ${APP_BASE_URL:?APP_BASE_URL must be set (your production domain)}
