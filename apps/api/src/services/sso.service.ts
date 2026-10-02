@@ -286,11 +286,12 @@ export async function getEnabledSamlConfig(orgId: string): Promise<SamlConfig> {
  * response to a request WE issued, and forgetting that request the moment it is answered, is the
  * control that closes it.
  *
- * WHY A SHARED MODULE-LEVEL STORE rather than node-saml's built-in InMemoryCacheProvider: this
- * file builds a FRESH `SAML` instance per call (see buildSamlClient), so the default provider —
- * which lives on the instance — would save the request id into an object that is garbage by the
- * time the ACS POST arrives, and every login would fail. The `orgId` prefix keeps two tenants'
- * ids disjoint even though the store is one map.
+ * WHY THE CONTROL PLANE (`SamlRequestId`) rather than node-saml's built-in InMemoryCacheProvider
+ * or a module-level map, which is what this was: `/saml/start` and `/saml/acs` are two requests,
+ * and the Helm chart runs 2–10 API replicas with no session affinity. A per-process store refused
+ * a genuine response as "InResponseTo is not valid" whenever the two requests reached different
+ * pods — at random, which is the worst kind of sign-in failure. SsoHandoffCode made the same move
+ * for the same reason. Rows are scoped by `organizationId`, so two tenants' ids stay disjoint.
  *
  * WHY `always` AND NOT `ifPresent`: `ifPresent` validates only when the IdP echoed an
  * InResponseTo, so stripping that one attribute from a captured response skips the check
@@ -299,71 +300,70 @@ export async function getEnabledSamlConfig(orgId: string): Promise<SamlConfig> {
  * and only buildSamlAuthorizationRedirect below ever mints one. So there is no working flow that
  * `always` breaks.
  *
- * LIMITATIONS, stated rather than implied (same shape as services/webhook-replay.ts's):
- * - PER PROCESS. A second Node process behind a load balancer has its own map, so an AuthnRequest
- *   issued by one and answered at the other fails to validate. Unlike the webhook store, that is
- *   a FAILED LOGIN rather than a missed replay catch — this is safe here only because the app
- *   runs as a single Node process (see docs/ARCHITECTURE.md § 3.1, database-per-tenant multi-tenancy),
- *   and it is the thing to revisit first if that ever stops being true.
- * - A RESTART mid-login costs the user one retry, for the same reason.
+ * A RESTART or rolling deploy no longer loses an in-flight sign-in; the row outlives the process.
  */
 const SAML_REQUEST_TTL_MS = STATE_TTL_SECONDS * 1000;
-/** `/saml/start` is unauthenticated, so the number of ids in flight is attacker-influenced.
- *  Evicting the oldest can only cost a genuine user a retry — it grants nothing — which makes a
- *  hard cap the right trade against unbounded growth. */
-const SAML_MAX_PENDING_REQUESTS = 10_000;
-const samlRequestIds = new Map<string, { value: string; expiresAt: number }>();
 
-function purgeExpiredSamlRequestIds(now: number): void {
-  // Constant TTL, so insertion order IS expiry order: the first live key means every later one is.
-  for (const [key, entry] of samlRequestIds) {
-    if (entry.expiresAt > now) break;
-    samlRequestIds.delete(key);
-  }
-}
-
-/** node-saml's CacheProvider contract, backed by the shared map above and scoped to one org —
- *  NUL separator for the same reason auth.service.ts's lockoutKey uses one: it cannot occur in
- *  either half, so no two (org, request id) pairs can collide into one key. */
-function samlRequestIdCache(orgId: string): CacheProvider {
-  const scope = (key: string | null) => `${orgId}\u0000${key ?? ""}`;
+/**
+ * node-saml's CacheProvider contract over `SamlRequestId`, scoped to one org — and to ONE
+ * validation, because buildSamlClient constructs a fresh `SAML` (and so a fresh provider) per call.
+ *
+ * THE FIRST READ OF AN ID CLAIMS IT. node-saml reads an id twice while validating one response —
+ * the Response's InResponseTo, then the SubjectConfirmationData's — and removes it only at the end.
+ * A plain read-then-remove would let two replicas accept the same response in the window between
+ * them. So `getAsync` finds the row and deletes it by primary key, and only the caller whose
+ * `deleteMany` reports a count of 1 gets the value back; that answer is remembered in `claimed`
+ * so this same validation's second read still sees it. A replay, or the loser of a race, finds
+ * nothing and is refused as "InResponseTo is not valid". Same atomic-claim shape as
+ * sso-handoff.service.ts#redeemHandoffCode.
+ */
+function samlRequestIdStore(orgId: string): CacheProvider {
+  const claimed = new Map<string, string>();
   return {
     async saveAsync(key, value) {
       const now = Date.now();
-      purgeExpiredSamlRequestIds(now);
-      if (samlRequestIds.has(scope(key))) return null;
-      samlRequestIds.set(scope(key), { value, expiresAt: now + SAML_REQUEST_TTL_MS });
-      while (samlRequestIds.size > SAML_MAX_PENDING_REQUESTS) {
-        const oldest = samlRequestIds.keys().next();
-        if (oldest.done) break;
-        samlRequestIds.delete(oldest.value);
+      // Opportunistic sweep, awaited and swallowed for the reason issueHandoffCode gives: one indexed
+      // DELETE over a table holding ten minutes of traffic, and a failed sweep must not fail a start.
+      try {
+        await controlPrisma.samlRequestId.deleteMany({ where: { expiresAt: { lt: new Date(now) } } });
+      } catch {
+        /* the rows are expired and unusable either way */
+      }
+      try {
+        await controlPrisma.samlRequestId.create({
+          data: { organizationId: orgId, requestId: key, value, expiresAt: new Date(now + SAML_REQUEST_TTL_MS) }
+        });
+      } catch (error) {
+        // node-saml's contract for "already present" is null; anything else is a real failure.
+        if ((error as { code?: string }).code === "P2002") return null;
+        throw error;
       }
       return { value, createdAt: now };
     },
     async getAsync(key) {
-      const entry = samlRequestIds.get(scope(key));
-      return entry && entry.expiresAt > Date.now() ? entry.value : null;
+      const already = claimed.get(key);
+      if (already !== undefined) return already;
+      const row = await controlPrisma.samlRequestId.findUnique({
+        where: { organizationId_requestId: { organizationId: orgId, requestId: key } }
+      });
+      if (!row) return null;
+      const won = await controlPrisma.samlRequestId.deleteMany({ where: { id: row.id } });
+      if (won.count === 0 || row.expiresAt.getTime() <= Date.now()) return null;
+      claimed.set(key, row.value);
+      return row.value;
     },
     async removeAsync(key) {
-      samlRequestIds.delete(scope(key));
+      if (key === null) return null;
+      claimed.delete(key);
+      await controlPrisma.samlRequestId.deleteMany({ where: { organizationId: orgId, requestId: key } });
       return key;
     }
   };
 }
 
-/** Test seam — the map is module state shared by every test in a file. */
-export function __resetSamlRequestIdsForTests(): void {
-  samlRequestIds.clear();
-}
-
-/** Test seam — lets a test assert that issuing an AuthnRequest actually recorded its id. */
-export function __hasSamlRequestIdForTests(orgId: string, requestId: string): boolean {
-  return samlRequestIds.has(`${orgId}\u0000${requestId}`);
-}
-
 /** Not cached across calls — same reasoning as buildOidcConfig: constructing a SAML instance
  *  is cheap (no network round-trip, unlike OIDC discovery), so there's nothing worth caching.
- *  The request-id cache it is handed deliberately IS shared across instances; see above. */
+ *  The request-id store it is handed is the shared control-plane table; see above. */
 function buildSamlClient(config: SamlConfig, orgId: string): SAML {
   return new SAML({
     callbackUrl: samlCallbackUrl(),
@@ -371,7 +371,7 @@ function buildSamlClient(config: SamlConfig, orgId: string): SAML {
     issuer: config.spEntityId || DEFAULT_SP_ENTITY_ID,
     idpCert: config.idpCertificate,
     validateInResponseTo: ValidateInResponseTo.always,
-    cacheProvider: samlRequestIdCache(orgId)
+    cacheProvider: samlRequestIdStore(orgId)
   });
 }
 

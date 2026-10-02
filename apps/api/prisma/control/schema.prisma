@@ -202,6 +202,8 @@ model Organization {
 
   /// Short-lived SSO handoff codes — see SsoHandoffCode for why they are not in memory.
   ssoHandoffCodes SsoHandoffCode[]
+  /// SAML AuthnRequest ids awaiting their answer — see SamlRequestId.
+  samlRequestIds  SamlRequestId[]
   /// The company email domains this workspace holds (signup Phase 1) — NOT custom hostnames, which
   /// are `domains` above.
   emailDomains    OrgEmailDomain[]
@@ -1345,6 +1347,33 @@ model PlatformAlertState {
   @@unique([organizationId, alertKey])
   @@index([resolvedAt, severity])
   @@index([organizationId, lastSeenAt])
+}
+
+/// A SAML AuthnRequest this deployment issued and has not yet seen answered — what makes
+/// node-saml's `validateInResponseTo: always` possible.
+///
+/// WHY THE CONTROL PLANE AND NOT MEMORY, which is where it started: the same lesson SsoHandoffCode
+/// learned. `/saml/start` and `/saml/acs` are two requests, and behind a round-robin balancer they
+/// land on different API replicas; a per-process map then refuses a genuine response as
+/// "InResponseTo is not valid", at random. Every replica reads this table.
+///
+/// SINGLE USE ACROSS REPLICAS: a response's id is CLAIMED by a `deleteMany` that reports how many
+/// rows it removed, so two pods racing to accept the same response produce exactly one winner and
+/// a replay finds nothing. `value` is the IssueInstant node-saml stored with the id, which it reads
+/// back to age the request.
+model SamlRequestId {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// The AuthnRequest `ID` node-saml generated ("_" + 40 hex characters).
+  requestId      String       @db.VarChar(128)
+  value          String       @db.VarChar(64)
+  expiresAt      DateTime
+  createdAt      DateTime     @default(now())
+
+  @@unique([organizationId, requestId])
+  /// Swept by expiry on every new request.
+  @@index([expiresAt])
 }
 
 /// A completed SSO sign-in, parked for the few seconds it takes the browser to reach the workspace
