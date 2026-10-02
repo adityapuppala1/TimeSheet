@@ -33,6 +33,11 @@ import type { PrismaClient } from "@prisma/client";
 import { runInTenant } from "../helpers/tenant-context.js";
 
 vi.mock("../../src/services/audit.service.js", () => ({ audit: vi.fn().mockResolvedValue(undefined) }));
+// Password sign-in is ON for this workspace — the SSO-only refusal has its own test
+// (auth-mail-routes.test.ts).
+vi.mock("../../src/config/control-prisma.js", () => ({
+  controlPrisma: { orgAuthMethod: { findUnique: vi.fn().mockResolvedValue(null) } }
+}));
 
 const { changePassword, resetPassword } = await import("../../src/services/auth.service.js");
 const { hashPassword } = await import("../../src/utils/security.js");

@@ -221,24 +221,55 @@ function generateCode(): string {
  */
 export type VerificationPurpose = "signup" | "discover" | "signup_cont";
 
-export async function issueVerificationCode(email: string, purpose: VerificationPurpose): Promise<{ token: string; code: string }> {
+/**
+ * How long a row outlives its expiry before the sweep removes it. An expired row redeems nothing —
+ * every check below compares `expiresAt` — but it still COUNTS: `countRecentVerificationCodes` is
+ * the per-address hourly cap on the workspace finder (security audit #5), and a row swept at its
+ * ten-minute expiry would cap nothing beyond ten minutes.
+ */
+const SWEEP_AFTER_EXPIRY_MS = 60 * 60 * 1000;
+
+/** A fresh token and code, not yet stored. Split from `storeVerificationCode` so a caller can hand
+ *  the token back BEFORE doing any work whose duration depends on the address (auth.controller.ts's
+ *  `/workspaces/start`, audit #6). */
+export function newVerificationCode(): { token: string; code: string } {
+  return { token: randomBytes(24).toString("base64url"), code: generateCode() };
+}
+
+export async function storeVerificationCode(email: string, purpose: VerificationPurpose, minted: { token: string; code: string }): Promise<void> {
   const now = new Date();
   // Opportunistic sweep, the same as SsoHandoffCode: discovery mints a token for EVERY request, miss
   // or hit (see auth.controller.ts — the response must not be the oracle), so expired rows accumulate
   // unless something removes them, and this is the one call that always runs when they would.
-  await controlPrisma.emailVerificationCode.deleteMany({ where: { expiresAt: { lt: now } } });
-  const token = randomBytes(24).toString("base64url");
-  const code = generateCode();
+  await controlPrisma.emailVerificationCode.deleteMany({ where: { expiresAt: { lt: new Date(now.getTime() - SWEEP_AFTER_EXPIRY_MS) } } });
   await controlPrisma.emailVerificationCode.create({
     data: {
-      tokenHash: codeStoreHash(token),
-      codeHash: codeStoreHash(`${code}:${token}`),
+      tokenHash: codeStoreHash(minted.token),
+      codeHash: codeStoreHash(`${minted.code}:${minted.token}`),
       email,
       purpose,
       expiresAt: new Date(now.getTime() + CODE_TTL_MS)
     }
   });
-  return { token, code };
+}
+
+export async function issueVerificationCode(email: string, purpose: VerificationPurpose): Promise<{ token: string; code: string }> {
+  const minted = newVerificationCode();
+  await storeVerificationCode(email, purpose, minted);
+  return minted;
+}
+
+/**
+ * Codes minted for one address and flow in the last hour — the per-address cap on mail this table's
+ * flows send (audit #5). Held here, in the control plane, because it is the store every replica
+ * shares. Filtered on `expiresAt` rather than `createdAt` because that is the indexed column, and
+ * every code lives exactly CODE_TTL_MS, so "created in the last hour" and "expires after an hour
+ * ago plus the TTL" are the same rows. MySQL's default collation compares `email` case-insensitively.
+ */
+export async function countRecentVerificationCodes(email: string, purpose: VerificationPurpose): Promise<number> {
+  return controlPrisma.emailVerificationCode.count({
+    where: { email, purpose, expiresAt: { gt: new Date(Date.now() - 60 * 60 * 1000 + CODE_TTL_MS) } }
+  });
 }
 
 export type CodeCheck = { ok: true; email: string } | { ok: false; reason: "expired" | "wrong" | "exhausted" };

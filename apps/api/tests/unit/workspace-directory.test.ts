@@ -53,12 +53,17 @@ const emailVerificationCode = {
       }
     }
     return { count };
-  })
+  }),
+  // The per-address hourly cap (countRecentVerificationCodes) — email, purpose and an expiry floor.
+  count: vi.fn(async ({ where }: { where: { email: string; purpose: string; expiresAt: { gt: Date } } }) =>
+    [...rows.values()].filter((row) => row.email === where.email && row.purpose === where.purpose && row.expiresAt > where.expiresAt.gt).length
+  )
 };
 vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: { emailVerificationCode } }));
 
 const {
   checkVerificationCode,
+  countRecentVerificationCodes,
   directoryHash,
   issueSignupContinuation,
   issueVerificationCode,
@@ -183,9 +188,29 @@ describe("verification codes", () => {
   it("sweeps expired rows when it issues, so discovery misses cannot pile up", async () => {
     vi.useFakeTimers({ now: new Date("2026-10-01T09:00:00Z") });
     await issueVerificationCode("old@acme.com", "discover");
+    // Expired at 09:10 but still COUNTED for an hour after that — the per-address hourly cap on the
+    // finder (audit #5) reads these rows, and a row swept at expiry would cap nothing past ten
+    // minutes. An expired row redeems nothing either way.
     vi.setSystemTime(new Date("2026-10-01T09:30:00Z"));
+    await issueVerificationCode("mid@acme.com", "discover");
+    expect([...rows.values()].map((r) => r.email)).toEqual(["old@acme.com", "mid@acme.com"]);
+    vi.setSystemTime(new Date("2026-10-01T10:15:00Z"));
     await issueVerificationCode("new@acme.com", "discover");
-    expect([...rows.values()].map((r) => r.email)).toEqual(["new@acme.com"]);
+    expect([...rows.values()].map((r) => r.email)).toEqual(["mid@acme.com", "new@acme.com"]);
+  });
+});
+
+describe("the per-address hourly count behind the finder's cap (audit #5)", () => {
+  it("counts this address's codes for this flow from the last hour, expired ones included", async () => {
+    vi.useFakeTimers({ now: new Date("2026-10-01T08:00:00Z") });
+    await issueVerificationCode("bob@acme.com", "discover"); // more than an hour ago by the end
+    vi.setSystemTime(new Date("2026-10-01T09:05:00Z"));
+    await issueVerificationCode("bob@acme.com", "discover"); // expired, still inside the hour
+    vi.setSystemTime(new Date("2026-10-01T09:40:00Z"));
+    await issueVerificationCode("bob@acme.com", "discover");
+    await issueVerificationCode("bob@acme.com", "signup"); // a different flow
+    await issueVerificationCode("eve@acme.com", "discover"); // a different address
+    expect(await countRecentVerificationCodes("bob@acme.com", "discover")).toBe(2);
   });
 });
 

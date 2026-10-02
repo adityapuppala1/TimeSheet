@@ -431,8 +431,7 @@ export async function login(
   const { orgId } = requireTenantContext();
   checkAccountLockout(orgId, email);
 
-  const authMethod = await controlPrisma.orgAuthMethod.findUnique({ where: { organizationId: orgId } });
-  if (authMethod && (authMethod.requireSsoOnly || !authMethod.passwordLoginEnabled)) {
+  if (await passwordSignInDisabled(orgId)) {
     throw new AppError(403, "Password sign-in is disabled for this workspace — use your organization's SSO login instead.");
   }
 
@@ -702,11 +701,36 @@ export async function changePassword(userId: string, currentPassword: string, ne
 /* ============================== Password reset ============================== */
 
 const RESET_TOKEN_TTL_MS = 30 * 60 * 1000;
+/**
+ * Reset links one address may be sent per hour (audit #5). Counted from `PasswordResetToken` rows —
+ * the database is the one store every API replica shares, where an in-memory counter would give
+ * each pod its own budget. Welcome links count too: they are the same rows, and a person who was
+ * just approved and also asks for three resets inside the hour is not a case worth a fourth mail.
+ */
+export const RESET_LINKS_PER_ADDRESS_PER_HOUR = 3;
+
+/**
+ * True while this workspace refuses password sign-in — "SSO only", or password login switched off.
+ * One rule for every password path: `login` refuses, forgot-password sends nothing, and a reset link
+ * is refused, because a password nobody can sign in with is not worth setting (SSO audit L3).
+ */
+async function passwordSignInDisabled(orgId: string): Promise<boolean> {
+  const authMethod = await controlPrisma.orgAuthMethod.findUnique({ where: { organizationId: orgId } });
+  return Boolean(authMethod && (authMethod.requireSsoOnly || !authMethod.passwordLoginEnabled));
+}
 
 /** Always succeeds from the caller's point of view (no user enumeration) — only actually creates a token + sends mail if the email matches a real, active account. */
 export async function requestPasswordReset(email: string): Promise<{ resetUrl: string; user: { id: string; name: string; email: string } } | null> {
+  if (await passwordSignInDisabled(requireTenantContext().orgId)) return null;
+
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user || user.deletedAt || user.status !== "ACTIVE") return null;
+
+  // Past the cap the caller still answers its usual 202 — it already has — and simply sends nothing.
+  const recent = await prisma.passwordResetToken.count({
+    where: { userId: user.id, createdAt: { gt: new Date(Date.now() - 60 * 60 * 1000) } }
+  });
+  if (recent >= RESET_LINKS_PER_ADDRESS_PER_HOUR) return null;
 
   const rawToken = await issueResetToken(user.id, RESET_TOKEN_TTL_MS);
 
@@ -718,6 +742,12 @@ const INVALID_RESET_LINK = "This reset link is invalid or has expired.";
 
 export async function resetPassword(rawToken: string, nextPassword: string): Promise<void> {
   if (!rawToken) throw new AppError(422, "Reset token is required");
+  if (await passwordSignInDisabled(requireTenantContext().orgId)) {
+    throw new AppError(
+      403,
+      "This workspace signs in through single sign-on only, so its passwords can't be reset. Use your organization's sign-in button on the sign-in page."
+    );
+  }
 
   // One indexed read for a current link, and a draining bcrypt scan only for a legacy-shaped one —
   // see reset-token.service.ts for the format and why the old 500-row scan had to go.

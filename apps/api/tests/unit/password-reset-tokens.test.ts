@@ -22,6 +22,11 @@ import type { PrismaClient } from "@prisma/client";
 import { runInTenant } from "../helpers/tenant-context.js";
 
 vi.mock("../../src/services/audit.service.js", () => ({ audit: vi.fn().mockResolvedValue(undefined) }));
+// Password sign-in is ON for this workspace — the SSO-only refusal has its own test
+// (auth-mail-routes.test.ts).
+vi.mock("../../src/config/control-prisma.js", () => ({
+  controlPrisma: { orgAuthMethod: { findUnique: vi.fn().mockResolvedValue(null) } }
+}));
 vi.mock("../../src/services/workspace-directory.service.js", () => ({
   tenantBaseUrl: () => "https://acme.timesphere.test",
   rememberWorkspaceMembership: vi.fn()

@@ -25,7 +25,13 @@ import { audit } from "../services/audit.service.js";
 import { buildProfilePayload, changePassword, completeSsoLogin, login, refresh, requestPasswordReset, resetPassword, switchActiveRole } from "../services/auth.service.js";
 import { getOnboardingStatus } from "../services/onboarding.service.js";
 import { authenticateLdap, recordSsoLoginSuccess } from "../services/sso.service.js";
-import { checkVerificationCode, findWorkspacesForEmail, issueVerificationCode } from "../services/workspace-directory.service.js";
+import {
+  checkVerificationCode,
+  countRecentVerificationCodes,
+  findWorkspacesForEmail,
+  newVerificationCode,
+  storeVerificationCode
+} from "../services/workspace-directory.service.js";
 import { withOrgTenant } from "../config/with-org-tenant.js";
 import { isRootDomainRequest } from "../middleware/tenant.js";
 import { dispatchTransactional } from "../services/notify.service.js";
@@ -38,6 +44,9 @@ import { attachDeviceId } from "../utils/device-cookie.js";
 import { redeemHandoffCode } from "../services/sso-handoff.service.js";
 
 export const authRouter = Router();
+
+/** Finder codes one address may be sent per hour (security audit #5). */
+export const DISCOVERY_CODES_PER_ADDRESS_PER_HOUR = 3;
 
 const REFRESH_COOKIE = "refreshToken";
 
@@ -250,28 +259,52 @@ authRouter.get("/onboarding-status", requireAuth, async (req, res) => {
   res.json(await getOnboardingStatus(req.user!.id));
 });
 
+/**
+ * Work an unauthenticated mail route does AFTER it has already answered.
+ *
+ * WHY REPLY FIRST (security audit #6). Both mail-sending routes below answer the same body whether
+ * or not the address matched — but they used to answer only after the lookup, the token write and
+ * the SMTP send for a real account, and after a single lookup for an unknown one. The difference
+ * was measurable from outside, so the response TIME said whether the address existed even though
+ * the body did not. Replying first leaves nothing about the address to time.
+ *
+ * Errors are caught and logged rather than passed on: the response is already on the wire, so
+ * there is nobody left to send an error to, and Express would only complain about headers.
+ */
+async function afterReply(label: string, work: () => Promise<void>): Promise<void> {
+  try {
+    await work();
+  } catch (error) {
+    console.error(`[auth] ${label} failed after replying: ${(error as Error).message}`);
+  }
+}
+
 authRouter.post(
   "/forgot-password",
   validate(z.object({ body: z.object({ email: z.string().email() }) })),
   async (req, res) => {
-    const result = await requestPasswordReset(req.body.email);
-    // Only look up / email a real match, but the response is identical either way —
-    // otherwise the response itself becomes an account-enumeration oracle.
-    if (result) {
+    // Identical whether or not the address matched, and sent before anything is looked up — see
+    // `afterReply` for why the ORDER matters as much as the wording.
+    res.status(202).json({ message: "If the account exists, reset instructions were sent." });
+
+    await afterReply("forgot-password", async () => {
+      // Null for an unknown or inactive address, for a workspace that has password sign-in switched
+      // off, and for an address already sent its hourly allowance of links (auth.service.ts).
+      const result = await requestPasswordReset(req.body.email);
+      if (!result) return;
       await dispatchTransactional({
         to: result.user.email,
         templateKey: "reset",
         vars: { resetUrl: result.resetUrl, appUrl: env.APP_BASE_URL },
         fallback: { subject: "Reset your Timesheet Portal password", html: templates.reset(result.resetUrl) },
-        // The rendered body contains the LIVE reset token. `PasswordResetToken.tokenHash` is
-        // bcrypt precisely so database access cannot yield a usable one, and the retry queue's
+        // The rendered body contains the LIVE reset token, which the database stores only as a
+        // hash precisely so database access cannot yield a usable one — and the retry queue's
         // stored body would hand that straight back. Never persisted, therefore never retried —
         // a token that expires in thirty minutes is worthless by the time a retry would run, and
         // asking for another link is one click.
         sensitive: true
       });
-    }
-    res.status(202).json({ message: "If the account exists, reset instructions were sent." });
+    });
   }
 );
 
@@ -327,36 +360,45 @@ authRouter.post(
   "/workspaces/start",
   validate(z.object({ body: z.object({ email: z.string().email() }) })),
   async (req, res) => {
-    const workspaces = await findWorkspacesForEmail(req.body.email);
+    const email: string = req.body.email;
     // The token is minted even for a miss, and is a real, unguessable token. Skipping it for
     // unknown addresses would make the RESPONSE the oracle the 202 exists to close — a client
-    // could tell a hit from a miss by whether it got one.
-    const { token, code } = await issueVerificationCode(req.body.email, "discover");
+    // could tell a hit from a miss by whether it got one. Minted in memory and handed back BEFORE
+    // anything is looked up, for the timing reason `afterReply` explains.
+    const minted = newVerificationCode();
+    res.status(202).json({ token: minted.token, message: "If that address belongs to a workspace, a code is on its way." });
 
-    if (workspaces.length > 0) {
+    await afterReply("workspaces/start", async () => {
+      // Three codes per address per hour (audit #5), counted in the control plane every replica
+      // shares. Past it nothing is stored or sent; the token already returned simply never
+      // verifies, exactly like a miss.
+      if ((await countRecentVerificationCodes(email, "discover")) >= DISCOVERY_CODES_PER_ADDRESS_PER_HOUR) return;
+      const workspaces = await findWorkspacesForEmail(email);
+      // Stored for a miss too — `/workspaces/verify` must treat both the same way.
+      await storeVerificationCode(email, "discover", minted);
+      if (workspaces.length === 0) return;
+
       // Sent through the FIRST matched workspace's own tenant context, so it uses that workspace's
       // configured SMTP and logs to its own EmailLog — a control-plane route has no mail settings
       // of its own, and attributing the send to the workspace it is about is the honest place for
       // it to appear in delivery analytics.
       await withOrgTenant(workspaces[0].slug, async () => {
         await dispatchTransactional({
-          to: req.body.email,
+          to: email,
           templateKey: "workspace.find",
-          vars: { code, appUrl: env.APP_BASE_URL },
+          vars: { code: minted.code, appUrl: env.APP_BASE_URL },
           fallback: {
             // Not in the subject — see the same note on the registered template: EmailLog stores
             // subjects even for `sensitive` mail, and workspace admins can read them.
             subject: "Your TimeSphere verification code",
-            html: templates.workspaceFind(code)
+            html: templates.workspaceFind(minted.code)
           },
           // The body contains a LIVE code. Never persisted, therefore never retried — same
           // reasoning as the password-reset mail above.
           sensitive: true
         });
       });
-    }
-
-    res.status(202).json({ token, message: "If that address belongs to a workspace, a code is on its way." });
+    });
   }
 );
 
