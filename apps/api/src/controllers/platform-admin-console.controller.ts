@@ -536,9 +536,9 @@ const retentionSettingsSchema = z.object({
 const retentionSettingsTwoPersonRoute = twoPerson(consoleTwoPersonActions.RETENTION_SETTINGS, async (ctx) => {
   const result = await updateRetentionSettings(ctx.body as Parameters<typeof updateRetentionSettings>[0], ctx.actorLabel);
   await platformAudit("PLATFORM_ADMIN", ctx.actorLabel, "retention.settings_updated_with_approval", "PlatformRetentionSettings", "global", {
-    fields: Object.keys(ctx.body),
+    change: ctx.body,
     requestedBy: ctx.requester.label
-  }, { reason: ctx.reason, ipAddress: ctx.ipAddress, after: JSON.parse(JSON.stringify(ctx.body)) });
+  }, { reason: ctx.reason, ipAddress: ctx.ipAddress });
   return result;
 });
 

@@ -56,6 +56,17 @@ export function isQueuedForApproval(result: unknown): result is { pending: true;
 }
 
 /**
+ * The temporary password an approval just issued, if it issued one — creating an operator, or
+ * reactivating one. The server returns it to the APPROVER once and keeps only a hash; the approvals
+ * page used to show a toast and throw it away, which left every new operator account unusable.
+ */
+export function issuedCredentialOf(approval: { action: string; result: unknown }): { email: string; name?: string; temporaryPassword: string } | null {
+  const result = approval.result as { email?: unknown; name?: unknown; temporaryPassword?: unknown } | null;
+  if (!result || typeof result.temporaryPassword !== "string" || typeof result.email !== "string") return null;
+  return { email: result.email, ...(typeof result.name === "string" ? { name: result.name } : {}), temporaryPassword: result.temporaryPassword };
+}
+
+/**
  * Whether the console-wide "set up two-factor" banner applies: an operator with no factor whom the
  * deployment does NOT force to enrol (a role it does not cover, or PLATFORM_ADMIN_REQUIRE_MFA off).
  * Quiet behind a gate, because the gate's own screen is already saying it.

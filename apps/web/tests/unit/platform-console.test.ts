@@ -3,7 +3,23 @@
  * is behind, and how a gated 403 is recognised so the console can route to the form that lifts it.
  */
 import { describe, expect, it } from "vitest";
-import { accountGateFromError, consoleAccountGate, isQueuedForApproval, shouldNagForMfa } from "../../src/lib/platform-console";
+import { accountGateFromError, consoleAccountGate, isQueuedForApproval, issuedCredentialOf, shouldNagForMfa } from "../../src/lib/platform-console";
+
+describe("issuedCredentialOf — the one time an approver sees a new operator's password", () => {
+  it("finds the temporary password an approved admin.create or admin.reactivate returns", () => {
+    expect(issuedCredentialOf({ action: "admin.create", result: { email: "new@x.test", name: "New", temporaryPassword: "Abc123def456!7aQ" } })).toEqual({
+      email: "new@x.test",
+      name: "New",
+      temporaryPassword: "Abc123def456!7aQ"
+    });
+    expect(issuedCredentialOf({ action: "admin.reactivate", result: { email: "back@x.test", temporaryPassword: "Zyx987wvu654!7aQ" } })?.temporaryPassword).toBe("Zyx987wvu654!7aQ");
+  });
+
+  it("is nothing for an approval that issued no credential", () => {
+    expect(issuedCredentialOf({ action: "retention.delete", result: { deleted: true } })).toBeNull();
+    expect(issuedCredentialOf({ action: "admin.create", result: null })).toBeNull();
+  });
+});
 
 describe("isQueuedForApproval — a 202 is not a success", () => {
   it("recognises the two-person queue's answer", () => {

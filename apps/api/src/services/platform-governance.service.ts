@@ -156,7 +156,7 @@ export async function queuePlatformAction(input: QueueInput) {
     message:
       approvers.length > 0
         ? `Queued for approval. ${CONSOLE_TWO_PERSON_LABEL[input.action]} needs another owner to countersign it before it runs. It expires in ${PLATFORM_APPROVAL_TTL_HOURS} hours.`
-        : `Queued, but there is no other owner who can approve it. Create a second owner account first — a two-person rule one person can satisfy alone is not one.`
+        : `Queued, but there is no other owner who can approve it. Create a second owner account first — a two-person rule one person can satisfy alone is not one. On a single-owner install that is \`npm run control:create-owner -w apps/api\` on the API host.`
   };
 }
 

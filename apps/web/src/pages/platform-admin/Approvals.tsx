@@ -15,9 +15,14 @@
  * this button safe", they are being asked "should this happen". The only input to that judgement is
  * what the requester said they were doing, so it is the largest text in the row rather than a
  * tooltip.
+ *
+ * AN APPROVAL THAT ISSUES A PASSWORD SHOWS IT HERE, ONCE (H5). Creating or reactivating an operator
+ * returns a generated temporary password to the approver and nobody else; the server keeps only a
+ * hash. This page used to show a toast and discard it, so every new operator account was unusable.
+ * It is held in component state for the dialog and nowhere else — closing the dialog is the end of it.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Clock, ShieldAlert, ThumbsDown } from "lucide-react";
+import { CheckCircle2, Clock, Copy, KeyRound, ShieldAlert, ThumbsDown } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -27,7 +32,9 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { toast } from "../../components/ui/toaster";
 import { platformAdminConsoleApi, type PendingPlatformActionRow } from "../../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../../store/platform-admin-auth";
+import { issuedCredentialOf } from "../../lib/platform-console";
 import { ConsolePage, ConsoleSection, EmptyState, PRIMARY_BTN, shortDateTime } from "./console-ui";
+import { runInBackground } from "../../lib/run-in-background";
 
 function errorMessageOf(error: unknown): string {
   return (error as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (error as Error)?.message ?? "Try again.";
@@ -50,6 +57,7 @@ export function PlatformAdminApprovals() {
   const queue = useQuery({ queryKey: ["platform-admin", "approvals"], queryFn: () => platformAdminConsoleApi.approvals(), refetchInterval: 20_000 });
   const [rejecting, setRejecting] = useState<PendingPlatformActionRow | null>(null);
   const [note, setNote] = useState("");
+  const [issued, setIssued] = useState<ReturnType<typeof issuedCredentialOf>>(null);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["platform-admin"] });
 
@@ -57,7 +65,9 @@ export function PlatformAdminApprovals() {
     mutationFn: (id: string) => platformAdminConsoleApi.approveRequest(id),
     onSuccess: (result) => {
       void invalidate();
-      toast.success("Approved and done", { description: `${result.action} ran against the platform as it is now, not as it was when it was asked.` });
+      const credential = issuedCredentialOf(result);
+      if (credential) setIssued(credential);
+      else toast.success("Approved and done", { description: `${result.action} ran against the platform as it is now, not as it was when it was asked.` });
     },
     onError: (e) => toast.error("Not approved", { description: errorMessageOf(e) })
   });
@@ -140,7 +150,7 @@ export function PlatformAdminApprovals() {
     <ConsolePage
       eyebrow="Platform"
       title="Approvals"
-      description="The console actions that cannot be undone — deleting a workspace, restoring over one, deleting a snapshot, creating an operator, changing a role. Each waits for a second owner, and runs against the platform as it is at the moment of approval, not as it was when it was asked."
+      description="The console actions one person must not take alone — deleting a workspace, restoring over one, deleting a snapshot, loosening the retention policy, creating, promoting or reactivating an operator. Each waits for a second owner, and runs against the platform as it is at the moment of approval, not as it was when it was asked."
     >
       <ConsoleSection title="Waiting" description={isOwner ? "Approve one and it runs immediately, through the same handler and the same guards as a direct request." : "Only an owner can countersign. You can still see everything that is waiting, and withdraw your own."}>
         {queue.isLoading && <Skeleton className="h-32 w-full" />}
@@ -155,6 +165,44 @@ export function PlatformAdminApprovals() {
           <ul className="grid gap-3">{settled.map(card)}</ul>
         </ConsoleSection>
       )}
+
+      <Dialog open={Boolean(issued)} onOpenChange={(open) => !open && setIssued(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="h-4 w-4 text-accent" />
+              Approved — a one-time password was issued
+            </DialogTitle>
+            <DialogDescription>
+              For <span className="font-medium text-foreground">{issued?.name ? `${issued.name} (${issued.email})` : issued?.email}</span>. This is the only time it is shown: the server keeps a
+              hash, not the password.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 select-all break-all rounded-md border border-accent/40 bg-muted px-3 py-2 font-mono text-sm">{issued?.temporaryPassword}</code>
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0 gap-1.5"
+              onClick={() => {
+                if (issued) runInBackground(navigator.clipboard?.writeText(issued.temporaryPassword) ?? Promise.resolve());
+                toast.success("Copied");
+              }}
+            >
+              <Copy className="h-3.5 w-3.5" />Copy
+            </Button>
+          </div>
+          <p className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs text-foreground">
+            Share it securely — in person, by phone, or through a password manager; never in the same channel as their email address. They will be made to choose their own password at first sign-in,
+            and the console stays closed to them until they do.
+          </p>
+          <DialogFooter>
+            <Button className={PRIMARY_BTN} onClick={() => setIssued(null)}>
+              I have passed it on
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(rejecting)} onOpenChange={(open) => !open && setRejecting(null)}>
         <DialogContent>

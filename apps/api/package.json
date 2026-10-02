@@ -16,6 +16,7 @@
     "control:migrate": "prisma migrate dev --schema=prisma/control/schema.prisma",
     "seed": "tsx prisma/seed.ts",
     "control:seed": "tsx prisma/control/seed.ts",
+    "control:create-owner": "tsx scripts/control-create-owner.ts",
     "migrate:tenants": "tsx scripts/migrate-all-tenants.ts",
     "send-test": "tsx scripts/send-test-email.ts",
     "test": "vitest run --config vitest.config.ts",
