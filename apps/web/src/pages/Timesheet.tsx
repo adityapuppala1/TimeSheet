@@ -224,6 +224,9 @@ export function Timesheet() {
   const mutationLock = useRef(false);
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const currentUser = useAuthStore((s) => s.user);
+  /** Today on the PROFILE's calendar, the day the server checks a work date against — see
+   *  lib/local-date.ts. Read at each use, so a form left open past midnight still caps correctly. */
+  const todayKey = () => localDateKey(new Date(), currentUser?.timezone);
   /**
    * The activity list, from the workspace's own catalog rather than the frozen twelve-item array
    * in `@timesheet/shared`. A super admin edits it on the Projects screen; this picker is what
@@ -244,7 +247,7 @@ export function Timesheet() {
       activityType: "Development",
       taskDescription: "",
       notes: "",
-      workDate: localDateKey(),
+      workDate: todayKey(),
       startTime: "09:30",
       endTime: "18:00"
     }
@@ -385,7 +388,7 @@ export function Timesheet() {
         activityType: "Development",
         taskDescription: "",
         notes: "",
-        workDate: localDateKey(),
+        workDate: todayKey(),
         startTime: "09:30",
         endTime: "18:00"
       });
@@ -575,7 +578,7 @@ export function Timesheet() {
                         <DatePicker
                           value={field.value ?? ""}
                           onChange={field.onChange}
-                          maxValue={localDateKey()}
+                          maxValue={todayKey()}
                           placeholder="Pick the work date"
                         />
                       </FormControl>

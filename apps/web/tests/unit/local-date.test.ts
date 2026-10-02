@@ -35,3 +35,32 @@ describe("localDateKey", () => {
     expect(localDateKey(new Date("2026-03-04T12:00:00.000Z"))).toBe("2026-03-04");
   });
 });
+
+/**
+ * "Today" is the PROFILE's day when the person has set a time zone — the day the server checks a
+ * work date against (User.timezone, services/user-clock.service.ts). THE DEFECT (audit 2026-10 R3):
+ * the form used the DEVICE's day, so a New York profile used from India between 00:00 and 09:30 IST
+ * defaulted the date to a day the server refused as "in the future".
+ */
+describe("localDateKey in the profile's time zone", () => {
+  it("is still 2 October for a New York profile on an Indian device at 08:00 IST", () => {
+    process.env.TZ = "Asia/Kolkata";
+    const eightAmIst = new Date("2026-10-03T02:30:00.000Z");
+    expect(localDateKey(eightAmIst)).toBe("2026-10-03");
+    expect(localDateKey(eightAmIst, "America/New_York")).toBe("2026-10-02");
+  });
+
+  it("is the profile's today when it is AHEAD of the device too", () => {
+    process.env.TZ = "America/New_York";
+    const ninePmFriday = new Date("2026-10-03T01:00:00.000Z");
+    expect(localDateKey(ninePmFriday, "Asia/Kolkata")).toBe("2026-10-03");
+  });
+
+  it("falls back to the device's day with no profile zone, or one the browser does not know", () => {
+    process.env.TZ = "Asia/Kolkata";
+    const eightAmIst = new Date("2026-10-03T02:30:00.000Z");
+    expect(localDateKey(eightAmIst, null)).toBe("2026-10-03");
+    expect(localDateKey(eightAmIst, "")).toBe("2026-10-03");
+    expect(localDateKey(eightAmIst, "Mars/Olympus_Mons")).toBe("2026-10-03");
+  });
+});

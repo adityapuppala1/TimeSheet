@@ -556,6 +556,7 @@ function EntryEditForm({
 }) {
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const activityTypes = useQuery({ queryKey: ["activity-types"], queryFn: () => activityTypeApi.list() });
+  const currentUser = useAuthStore((s) => s.user);
 
   const [form, setForm] = useState({
     projectId: entry.projectId,
@@ -684,7 +685,9 @@ function EntryEditForm({
           <DatePicker
             value={form.workDate}
             onChange={(v) => setForm((f) => ({ ...f, workDate: v }))}
-            maxValue={localDateKey()}
+            // The editor's profile day (lib/local-date.ts). The server checks the AUTHOR's, which
+            // this browser does not know for somebody else's entry; it still answers a refusal.
+            maxValue={localDateKey(new Date(), currentUser?.timezone)}
           />
         </div>
         <div className="grid gap-1.5">
