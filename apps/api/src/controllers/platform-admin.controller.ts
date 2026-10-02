@@ -640,7 +640,9 @@ platformAdminRouter.post("/organizations/:id/provision", requirePlatformAdmin, o
    * The admin's PASSWORD is not in the metadata and must never be. The address is, because "which
    * account did we create in there" is exactly the question this row is asked later.
    */
-  await platformAuditFor(req)("organization.provisioned", "Organization", String(req.params.id), { adminEmail: req.body.adminEmail, databaseName: result.databaseName }, { after: { schemaVersion: result.schemaVersion } });
+  // `domainClaim` too: a CONFLICT (another workspace already holds the owner's company domain) is left
+  // for an operator to settle on Company domains, and this row is where it is recorded.
+  await platformAuditFor(req)("organization.provisioned", "Organization", String(req.params.id), { adminEmail: req.body.adminEmail, databaseName: result.databaseName, domainClaim: result.domainClaim }, { after: { schemaVersion: result.schemaVersion } });
 
   /*
    * THE NEW ADMIN LEARNS WHERE TO SIGN IN FROM THE PRODUCT, NOT FROM A HANDOVER NOTE.

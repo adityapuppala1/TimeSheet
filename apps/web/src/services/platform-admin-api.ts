@@ -296,6 +296,13 @@ export interface ProvisionOrgResult {
   url: string | null;
   /** False when provisioning succeeded but the welcome mail did not send — hand the link over by hand. */
   welcomeSent: boolean;
+  /** The owner's company-domain claim. A `conflict` is not a failure: the workspace is provisioned,
+   *  and which workspace the company's people are sent to is settled on Company domains. */
+  domainClaim?:
+    | { outcome: "claimed" | "already-held"; domain: string }
+    | { outcome: "conflict"; domain: string; heldBy: { id: string; name: string; slug: string } }
+    | { outcome: "none"; domain: null }
+    | { outcome: "error"; domain: null; detail: string };
 }
 
 export interface ResetAdminPasswordResult {

@@ -206,6 +206,48 @@ export async function applyBackfill(actorLabel: string): Promise<{ claimed: numb
   return { claimed, conflicts: plan.conflicts.length };
 }
 
+export type ProvisionedClaim =
+  | { outcome: "claimed" | "already-held"; domain: string }
+  | { outcome: "conflict"; domain: string; heldBy: { id: string; name: string; slug: string } }
+  | { outcome: "none"; domain: null };
+
+/**
+ * Claims the owner's company domain for a workspace a platform admin just provisioned from the
+ * console, by the rules signup and the backfill use: a personal or throwaway provider is nobody's
+ * company, a claim held by an ARCHIVED workspace is free, and a domain another live workspace holds
+ * is NEVER taken — it comes back as a conflict naming the holder, for an operator to settle on the
+ * Company domains page.
+ *
+ * WHY IT EXISTS. Only signup, the one-off backfill and an operator's manual assignment made claims,
+ * so a company onboarded by hand had none: once the backfill had run, its people who had not signed
+ * in yet found "no workspace" at /signup and started a second, competing trial.
+ *
+ * Signup calls provisioning too, after claiming inside its own transaction — that claim is this
+ * workspace's already, which is the "already-held" answer, not a conflict.
+ */
+export async function claimDomainForProvisionedOrg(org: { id: string; ownerEmail: string | null }): Promise<ProvisionedClaim> {
+  const domain = org.ownerEmail ? companyDomainOf(org.ownerEmail) : null;
+  if (!domain || isPersonalDomain(domain)) return { outcome: "none", domain: null };
+  const holder = async () => (await findClaimForEmail(`x@${domain}`))?.organization ?? null;
+
+  const existing = await holder();
+  if (existing?.id === org.id) return { outcome: "already-held", domain };
+  if (existing) return { outcome: "conflict", domain, heldBy: { id: existing.id, name: existing.name, slug: existing.slug } };
+  try {
+    // `findClaimForEmail` reads an ARCHIVED holder as none, so its leftover row is cleared first —
+    // otherwise the create below would hit it and report a conflict with a deleted workspace.
+    await controlPrisma.orgEmailDomain.deleteMany({ where: { domain, organization: { status: "ARCHIVED" } } });
+    await controlPrisma.orgEmailDomain.create({ data: { domain, organizationId: org.id, source: "ADMIN" } });
+    return { outcome: "claimed", domain };
+  } catch (error) {
+    if ((error as { code?: string }).code !== "P2002") throw error;
+    // A signup won the domain between the read and the write. It won fairly; name it.
+    const winner = await holder();
+    if (winner?.id === org.id) return { outcome: "already-held", domain };
+    return { outcome: "conflict", domain, heldBy: winner ? { id: winner.id, name: winner.name, slug: winner.slug } : { id: "", name: "another workspace", slug: "" } };
+  }
+}
+
 /**
  * After a snapshot restore brings a deleted workspace back (platform-backup.service.ts), its claim —
  * released at deletion — is re-made if the domain is still free. NEVER taken from a workspace that

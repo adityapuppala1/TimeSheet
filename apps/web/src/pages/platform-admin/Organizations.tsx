@@ -35,6 +35,7 @@ import { cn } from "../../lib/utils";
 import { platformAdminOrgApi, type OrgListRow, type OrgStatus, type PlanTier, type ResetAdminPasswordResult } from "../../services/platform-admin-api";
 import { exportCsv, type CsvColumn } from "../../utils/console-csv";
 import { endOfDayIso, hasLiveTrial, trialEditNote } from "../../utils/org-trial";
+import { domainClaimNote } from "../../utils/domain-claim";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, FieldGrid, OrgStatusPill, PRIMARY_BTN, TierPill, Toolbar } from "./console-ui";
 import { runInBackground } from "../../lib/run-in-background";
 
@@ -403,7 +404,8 @@ function ProvisionOrgDialogInner({ org, onOpenChange, onProvisioned }: { org: Or
           // The URL and the welcome are mailed; the password never is — that still travels out-of-band.
           result.welcomeSent
             ? `${adminEmail} has been sent the welcome email with that link. Hand over the initial password separately.`
-            : `The welcome email could not be sent — check outbound mail, then give ${adminEmail} the link and initial password out-of-band.`
+            : `The welcome email could not be sent — check outbound mail, then give ${adminEmail} the link and initial password out-of-band.`,
+          domainClaimNote(result.domainClaim)
         ]
           .filter(Boolean)
           .join(" "),

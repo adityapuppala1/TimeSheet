@@ -72,6 +72,7 @@ const {
   listClaims,
   planBackfill,
   reclaimAfterRestore,
+  claimDomainForProvisionedOrg,
   releaseClaim
 } = await import("../../src/services/company-domain-claims.service.js");
 
@@ -249,5 +250,48 @@ describe("after a snapshot restore", () => {
   it("does nothing for a personal or missing owner address", async () => {
     expect(await reclaimAfterRestore({ id: "R", ownerEmail: "o@gmail.com" })).toBe("none");
     expect(await reclaimAfterRestore({ id: "R", ownerEmail: null })).toBe("none");
+  });
+});
+
+/**
+ * A workspace an operator provisions from the console claims its owner's company domain, by the same
+ * rules signup and the backfill use. Before this only signup and the one-off backfill made claims, so
+ * a company onboarded by hand had none: its people found no workspace at /signup and opened a second.
+ */
+describe("a console-provisioned workspace", () => {
+  it("claims its owner's company domain", async () => {
+    addOrg({ id: "P", name: "Acme", slug: "acme" });
+    expect(await claimDomainForProvisionedOrg({ id: "P", ownerEmail: "Admin@Eng.Acme.com" })).toEqual({ outcome: "claimed", domain: "acme.com" });
+    expect(claims.get("acme.com")).toMatchObject({ organizationId: "P", source: "ADMIN" });
+  });
+
+  it("is a no-op when the workspace already holds it — signup claims before it provisions", async () => {
+    addOrg({ id: "P", status: "PROVISIONING" });
+    claims.set("acme.com", { id: "c1", domain: "acme.com", organizationId: "P", status: "UNVERIFIED", source: "SIGNUP", createdAt: new Date() });
+    expect(await claimDomainForProvisionedOrg({ id: "P", ownerEmail: "o@acme.com" })).toEqual({ outcome: "already-held", domain: "acme.com" });
+    expect(claims.get("acme.com")?.source).toBe("SIGNUP");
+  });
+
+  it("never takes a domain another live workspace holds, and names the holder", async () => {
+    addOrg({ id: "OLD", name: "Acme (2024)", slug: "acme-old" });
+    claims.set("acme.com", { id: "c1", domain: "acme.com", organizationId: "OLD", status: "UNVERIFIED", source: "BACKFILL", createdAt: new Date() });
+
+    const result = await claimDomainForProvisionedOrg({ id: "P", ownerEmail: "o@acme.com" });
+
+    expect(result).toEqual({ outcome: "conflict", domain: "acme.com", heldBy: { id: "OLD", name: "Acme (2024)", slug: "acme-old" } });
+    expect(claims.get("acme.com")?.organizationId).toBe("OLD");
+  });
+
+  it("takes over a claim left by a deleted (ARCHIVED) workspace, as signup does", async () => {
+    addOrg({ id: "GONE", status: "ARCHIVED" });
+    claims.set("acme.com", { id: "c1", domain: "acme.com", organizationId: "GONE", status: "UNVERIFIED", source: "SIGNUP", createdAt: new Date() });
+    expect((await claimDomainForProvisionedOrg({ id: "P", ownerEmail: "o@acme.com" })).outcome).toBe("claimed");
+    expect(claims.get("acme.com")?.organizationId).toBe("P");
+  });
+
+  it("claims nothing for a personal or missing owner address", async () => {
+    expect(await claimDomainForProvisionedOrg({ id: "P", ownerEmail: "someone@gmail.com" })).toEqual({ outcome: "none", domain: null });
+    expect(await claimDomainForProvisionedOrg({ id: "P", ownerEmail: null })).toEqual({ outcome: "none", domain: null });
+    expect(claims.size).toBe(0);
   });
 });

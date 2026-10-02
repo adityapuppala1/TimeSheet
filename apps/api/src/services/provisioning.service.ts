@@ -23,6 +23,7 @@ import { tenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";
 import { encryptSecret } from "../utils/encryption.js";
 import { seedTenant } from "../../prisma/seed.js";
+import { claimDomainForProvisionedOrg, type ProvisionedClaim } from "./company-domain-claims.service.js";
 
 export interface ProvisionOrgInput {
   adminEmail: string;
@@ -34,6 +35,9 @@ export interface ProvisionOrgResult {
   organizationId: string;
   databaseName: string;
   schemaVersion: string;
+  /** What happened to the owner's company-domain claim. Never a reason the provisioning failed — see
+   *  the end of `provisionOrganization`. */
+  domainClaim: ProvisionedClaim | { outcome: "error"; domain: null; detail: string };
 }
 
 function assertSafeDatabaseName(name: string) {
@@ -145,7 +149,20 @@ export async function provisionOrganization(orgId: string, input: ProvisionOrgIn
   });
   // `ownerEmail` is where the retention programme writes once this workspace can no longer be
   // opened — recorded at the one moment the platform reliably knows it.
-  await controlPrisma.organization.update({ where: { id: org.id }, data: { status: "ACTIVE", ownerEmail: input.adminEmail.trim().toLowerCase() } });
+  const ownerEmail = input.adminEmail.trim().toLowerCase();
+  await controlPrisma.organization.update({ where: { id: org.id }, data: { status: "ACTIVE", ownerEmail } });
 
-  return { organizationId: org.id, databaseName, schemaVersion };
+  // The company's domain claim, so its people who arrive at /signup are pointed here instead of
+  // starting a second workspace. Made AFTER the status flip — a claim sends strangers to a workspace
+  // that can take them — and never allowed to fail the provisioning: the workspace exists and works
+  // by now, and a conflict is an operator's decision (Company domains), reported in the result.
+  let domainClaim: ProvisionOrgResult["domainClaim"];
+  try {
+    domainClaim = await claimDomainForProvisionedOrg({ id: org.id, ownerEmail });
+  } catch (error) {
+    console.warn(`[provisioning] ${org.slug}: could not claim the owner's company domain: ${(error as Error).message}`);
+    domainClaim = { outcome: "error", domain: null, detail: (error as Error).message };
+  }
+
+  return { organizationId: org.id, databaseName, schemaVersion, domainClaim };
 }
