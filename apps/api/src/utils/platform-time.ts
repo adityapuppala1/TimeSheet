@@ -12,11 +12,28 @@
  * implementation of "what day is it there" in the codebase, not two.
  */
 import { env } from "../config/env.js";
-import { zonedParts } from "./recipient-time.js";
+import { startOfZonedDayUtc, zonedParts } from "./recipient-time.js";
 
 /** `YYYY-MM-DD` of `instant` in the platform's zone. */
 export function platformDayKey(instant: Date): string {
   return zonedParts(instant, env.TZ).dateKey;
+}
+
+/**
+ * The last instant of the calendar day `dateKey` (`YYYY-MM-DD`) in the platform's zone — one
+ * millisecond before the next day begins there. What a "status at the end of each day" replay (the
+ * sprint burndown) compares against, so a day ends at midnight where the team is, not at UTC's.
+ *
+ * Found as the start of the NEXT local day, located from noon UTC on it: noon UTC falls inside that
+ * calendar day in every zone from UTC-12 to UTC+11, and the one correction below covers the zones
+ * further east, where noon UTC is already the day after.
+ */
+export function platformDayEnd(dateKey: string): Date {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const nextKey = new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+  let probe = new Date(Date.UTC(y, m - 1, d + 1, 12));
+  if (zonedParts(probe, env.TZ).dateKey > nextKey) probe = new Date(probe.getTime() - 86_400_000);
+  return new Date(startOfZonedDayUtc(probe, env.TZ).getTime() - 1);
 }
 
 /** `YYYY-MM-DDTHH` of `instant` in the platform's zone — the key for "once per hour". */

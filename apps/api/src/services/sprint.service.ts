@@ -24,6 +24,7 @@
  * WHO CALLS THIS: controllers/sprint.controller.ts.
  */
 import { AppError } from "../middleware/error.js";
+import { platformDayEnd, platformDayKey } from "../utils/platform-time.js";
 
 export const SPRINT_STATUSES = ["PLANNED", "ACTIVE", "COMPLETED"] as const;
 export type SprintStatusValue = (typeof SPRINT_STATUSES)[number];
@@ -109,11 +110,14 @@ export function burndown(days: string[], tickets: BurndownTicket[], today: Date 
   // event is a leave is history, not plan).
   const total = tickets.filter((t) => memberAtEndOf(t, new Date(8.64e15))).reduce((sum, t) => sum + (t.storyPoints ?? 0), 0);
   const steps = Math.max(1, days.length - 1);
-  const todayKey = today.toISOString().slice(0, 10);
+  // Day boundaries are the PLATFORM's (utils/platform-time.ts), like every other day the product
+  // draws: in UTC, work finished between midnight and 05:30 in India landed on the previous day's
+  // point, and "today" ran five and a half hours behind the people reading the chart.
+  const todayKey = platformDayKey(today);
   return days.map((date, i) => {
     const idealPoints = Math.round((total - (total * i) / steps) * 10) / 10;
     if (date > todayKey) return { date, remainingPoints: null, remainingCount: null, idealPoints };
-    const dayEnd = new Date(`${date}T23:59:59.999Z`);
+    const dayEnd = platformDayEnd(date);
     let points = 0;
     let count = 0;
     for (const t of tickets) {

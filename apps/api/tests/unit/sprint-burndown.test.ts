@@ -4,7 +4,15 @@
  * it closed and not before; a ticket without points still counts as one item; days that have not
  * happened carry null rather than a guess; the ideal line runs from the total to zero.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The platform's zone, pinned: the day-boundary cases at the bottom are written for India, and must
+// not change meaning on a machine (or CI runner) whose TZ is UTC.
+vi.mock("../../src/config/env.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/config/env.js")>();
+  return { ...actual, env: { ...actual.env, TZ: "Asia/Kolkata" } };
+});
+
 import { assertSprintTransition, burndown, memberAtEndOf, sprintDays, statusAtEndOf, type BurndownTicket } from "../../src/services/sprint.service.js";
 
 const d = (s: string) => new Date(`${s}T10:00:00.000Z`);
@@ -113,5 +121,28 @@ describe("burndown with membership", () => {
   it("a ticket planned in on the 4th appears from the 4th", () => {
     const late = t({ id: "l", storyPoints: 2, membership: [{ at: d("2026-09-04"), joined: true }] });
     expect(burndown(days, [late], today).map((p) => p.remainingCount)).toEqual([0, 0, 0, 1, 1]);
+  });
+});
+
+/**
+ * Day ends are the PLATFORM's (utils/platform-time.ts — India unless an operator chose another
+ * zone), like every other day boundary the product draws. The burndown used UTC's, so in IST work
+ * finished between midnight and 05:30 landed on the previous day's point, and "today" ran five and a
+ * half hours behind the people reading the chart. The zone is pinned for this block (see the mock at
+ * the top) so the assertion cannot depend on the machine running it.
+ */
+describe("burndown day boundaries follow the platform's zone, not UTC", () => {
+  it("work finished just after midnight IST counts on that IST day, not the UTC one before it", () => {
+    // 20:00 UTC on the 5th is 01:30 on the 6th in India.
+    const late = t({ id: "late", status: "RESOLVED", transitions: [{ at: new Date("2026-10-05T20:00:00.000Z"), to: "RESOLVED" }] });
+    const points = burndown(["2026-10-04", "2026-10-05", "2026-10-06"], [late], new Date("2026-10-07T06:00:00.000Z"));
+    expect(points.map((p) => p.remainingCount)).toEqual([1, 1, 0]);
+  });
+
+  it("'today' is the platform's today, so its point is drawn rather than left blank", () => {
+    // 20:00 UTC on the 5th is already the 6th in India: the 6th has happened.
+    const open = t({ id: "o" });
+    const points = burndown(["2026-10-05", "2026-10-06", "2026-10-07"], [open], new Date("2026-10-05T20:00:00.000Z"));
+    expect(points.map((p) => p.remainingCount)).toEqual([1, 1, null]);
   });
 });
