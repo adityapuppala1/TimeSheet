@@ -8,14 +8,16 @@ import { buildScimApp } from "../helpers/test-apps.js";
 // constructs a REAL PrismaClient for whatever DSN it gets back — both need mocking for a
 // "unit" test that never touches a real database. `prisma` (the tenant-context Proxy) is kept
 // real via importOriginal, since only `getTenantClient`'s DSN-based construction is the problem.
-const { mockResolveActiveOrgBySlug, mockGetTenantClient, mockGetEffectiveSeatLimit } = vi.hoisted(() => ({
+const { mockResolveActiveOrgBySlug, mockGetTenantClient, mockGetEffectiveSeatLimit, mockSyncSubscriptionSeats } = vi.hoisted(() => ({
   mockResolveActiveOrgBySlug: vi.fn(),
   mockGetTenantClient: vi.fn(),
-  mockGetEffectiveSeatLimit: vi.fn()
+  mockGetEffectiveSeatLimit: vi.fn(),
+  mockSyncSubscriptionSeats: vi.fn()
 }));
 
 vi.mock("../../src/middleware/tenant.js", () => ({ resolveActiveOrgBySlug: mockResolveActiveOrgBySlug }));
 vi.mock("../../src/services/plan-limits.service.js", () => ({ getEffectiveSeatLimit: mockGetEffectiveSeatLimit }));
+vi.mock("../../src/services/billing-sync.service.js", () => ({ syncSubscriptionSeats: mockSyncSubscriptionSeats }));
 vi.mock("../../src/config/prisma.js", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getTenantClient: mockGetTenantClient
@@ -44,6 +46,7 @@ beforeEach(() => {
   mockResolveActiveOrgBySlug.mockReset().mockResolvedValue(fakeOrg());
   mockGetTenantClient.mockReset().mockResolvedValue(client);
   mockGetEffectiveSeatLimit.mockReset().mockResolvedValue(10);
+  mockSyncSubscriptionSeats.mockReset().mockResolvedValue(undefined);
   vi.mocked(client.scimSettings.findUnique).mockResolvedValue({
     id: "global",
     isEnabled: true,
@@ -170,6 +173,17 @@ describe("POST /:orgSlug/v2/Users", () => {
       expect.objectContaining({ data: expect.objectContaining({ userRoles: { create: { roleId: "role-employee" } } }) })
     );
   });
+
+  it("a provisioned account brings the Stripe seat quantity along", async () => {
+    vi.mocked(client.user.findUnique).mockResolvedValue(null);
+    vi.mocked(client.user.count).mockResolvedValue(0);
+    vi.mocked(client.role.findUniqueOrThrow).mockResolvedValue({ id: "role-employee", name: "EMPLOYEE" } as never);
+    vi.mocked(client.user.create).mockResolvedValue({ id: "user-1", name: "N", email: "new.person@example.com", status: "ACTIVE", scimExternalId: null } as never);
+
+    await request(buildScimApp()).post(`/api/scim/${ORG_SLUG}/v2/Users`).set(scimAuthHeader()).send(validBody).expect(201);
+
+    expect(mockSyncSubscriptionSeats).toHaveBeenCalledWith("org-1");
+  });
 });
 
 describe("PATCH /:orgSlug/v2/Users/:id — deprovision/reactivate", () => {
@@ -191,6 +205,7 @@ describe("PATCH /:orgSlug/v2/Users/:id — deprovision/reactivate", () => {
   it("replace active:true reactivates the user", async () => {
     vi.mocked(client.user.findFirst).mockResolvedValue({ ...existingUser, status: "INACTIVE" } as never);
     vi.mocked(client.user.update).mockResolvedValue({ ...existingUser, status: "ACTIVE" } as never);
+    vi.mocked(client.user.count).mockResolvedValue(3); // seats in use, of 10
 
     const res = await request(buildScimApp())
       .patch(`/api/scim/${ORG_SLUG}/v2/Users/user-1`)
@@ -271,6 +286,51 @@ describe("PATCH /:orgSlug/v2/Users/:id — deprovision/reactivate", () => {
     expect(client.user.update).not.toHaveBeenCalled();
   });
 
+  it("reactivating on a full plan is refused like a create is, and changes nothing", async () => {
+    // The seat limit used to be checked on create only, so an IdP could deprovision and reprovision
+    // its way past it — or reactivate people an admin had deactivated to make room.
+    vi.mocked(client.user.findFirst).mockResolvedValue({ ...existingUser, status: "INACTIVE" } as never);
+    vi.mocked(client.user.update).mockResolvedValue({ ...existingUser, status: "ACTIVE" } as never);
+    mockGetEffectiveSeatLimit.mockResolvedValue(3);
+    vi.mocked(client.user.count).mockResolvedValue(3);
+
+    const res = await request(buildScimApp())
+      .patch(`/api/scim/${ORG_SLUG}/v2/Users/user-1`)
+      .set(scimAuthHeader())
+      .send({ Operations: [{ op: "replace", path: "active", value: true }] });
+
+    expect(res.status).toBe(403);
+    expect(res.body.schemas).toContain("urn:ietf:params:scim:api:messages:2.0:Error");
+    expect(res.body.detail).toMatch(/seat limit/i);
+    expect(client.user.update).not.toHaveBeenCalled();
+  });
+
+  it("a deprovision or reactivation brings the Stripe seat quantity along", async () => {
+    vi.mocked(client.user.findFirst).mockResolvedValue(existingUser as never);
+    vi.mocked(client.user.update).mockResolvedValue({ ...existingUser, status: "INACTIVE" } as never);
+
+    await request(buildScimApp())
+      .patch(`/api/scim/${ORG_SLUG}/v2/Users/user-1`)
+      .set(scimAuthHeader())
+      .send({ Operations: [{ op: "replace", path: "active", value: false }] })
+      .expect(200);
+
+    expect(mockSyncSubscriptionSeats).toHaveBeenCalledWith("org-1");
+  });
+
+  it("a PATCH that leaves the status where it was does not call Stripe", async () => {
+    vi.mocked(client.user.findFirst).mockResolvedValue(existingUser as never);
+    vi.mocked(client.user.update).mockResolvedValue(existingUser as never);
+
+    await request(buildScimApp())
+      .patch(`/api/scim/${ORG_SLUG}/v2/Users/user-1`)
+      .set(scimAuthHeader())
+      .send({ Operations: [{ op: "replace", path: "active", value: true }] })
+      .expect(200);
+
+    expect(mockSyncSubscriptionSeats).not.toHaveBeenCalled();
+  });
+
   it("404s when the target user doesn't exist", async () => {
     vi.mocked(client.user.findFirst).mockResolvedValue(null);
     const res = await request(buildScimApp())
@@ -290,6 +350,7 @@ describe("DELETE /:orgSlug/v2/Users/:id — soft-deactivate", () => {
 
     expect(res.status).toBe(204);
     expect(client.user.update).toHaveBeenCalledWith({ where: { id: "user-1" }, data: { status: "INACTIVE" } });
+    expect(mockSyncSubscriptionSeats).toHaveBeenCalledWith("org-1");
   });
 
   it("404s when the target user doesn't exist", async () => {

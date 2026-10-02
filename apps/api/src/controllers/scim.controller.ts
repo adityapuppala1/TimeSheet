@@ -24,8 +24,7 @@ import { tenantContext } from "../config/tenant-context.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
-import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
-import { countActiveSeats } from "../services/seat-count.service.js";
+import { hasRoomFor, seatHeadroom, syncSeatsAfterChange, takesASeat } from "../services/seats.service.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { constantTimeEqual, hashPassword, opaqueToken } from "../utils/security.js";
 
@@ -173,7 +172,7 @@ scimRouter.post("/:orgSlug/v2/Users", async (req, res, next) => {
   try {
     await withOrgTenant(req.params.orgSlug, async () => {
       await requireValidScimToken(req);
-      const { orgSlug, orgId } = requireTenantContext();
+      const { orgSlug } = requireTenantContext();
       const parsed = createUserSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json(scimError(400, "Invalid SCIM User payload."));
       const body = parsed.data;
@@ -181,11 +180,8 @@ scimRouter.post("/:orgSlug/v2/Users", async (req, res, next) => {
       const existing = await prisma.user.findUnique({ where: { email: body.userName } });
       if (existing) return res.status(409).json(scimError(409, "A user with this userName already exists."));
 
-      const [seatLimit, activeSeats] = await Promise.all([
-        getEffectiveSeatLimit(orgId),
-        countActiveSeats()
-      ]);
-      if (activeSeats >= seatLimit) return res.status(403).json(scimError(403, `Seat limit reached (${seatLimit} seats on the current plan).`));
+      const seats = await seatHeadroom();
+      if (!hasRoomFor(seats, 1)) return res.status(403).json(scimError(403, `Seat limit reached (${seats.limit} seats on the current plan).`));
 
       const employeeRole = await prisma.role.findUniqueOrThrow({ where: { name: "EMPLOYEE" } });
       const name = body.name?.formatted || [body.name?.givenName, body.name?.familyName].filter(Boolean).join(" ") || body.userName.split("@")[0];
@@ -205,6 +201,8 @@ scimRouter.post("/:orgSlug/v2/Users", async (req, res, next) => {
         },
         select: USER_SELECT
       });
+      // The billed seat count follows — SCIM used to move it on no route at all.
+      await syncSeatsAfterChange();
 
       res.status(201).json(toScimUser(user, orgSlug));
     });
@@ -223,39 +221,51 @@ const patchOperationSchema = z.object({
   )
 });
 
+/** The `active` a PATCH's operations leave the user with, or undefined when none of them says. Both
+ *  forms IdPs send: `{path:"active", value}` and the path-less `{value:{active}}`. The last one wins. */
+function activeFromOperations(operations: Array<{ op: string; path?: string; value?: unknown }>): boolean | undefined {
+  let nextActive: boolean | undefined;
+  for (const operation of operations) {
+    // Attribute names are case-insensitive in SCIM (RFC 7643 §2.1), so `path` is compared that way.
+    const path = operation.path?.toLowerCase();
+    if (operation.op.toLowerCase() !== "replace" || (path && path !== "active")) continue;
+    const raw = path ? operation.value : (operation.value as { active?: unknown } | undefined)?.active;
+    nextActive = readScimActive(raw) ?? nextActive;
+  }
+  return nextActive;
+}
+
 /**
  * PATCH /Users/:id — supports the one operation every IdP actually sends for lifecycle
  * management: `{"op":"replace","path":"active","value":false}` to deprovision (and the
  * `value:true` inverse to reactivate). Deprovisioning flips User.status to INACTIVE rather than
  * deleting — consistent with every other "remove" action in this app being a soft, reversible
  * state change, not a hard delete.
+ *
+ * Reactivation takes a seat exactly as provisioning does, and is refused the same way (403, the
+ * SCIM error POST already returns) when the plan is full.
  */
 scimRouter.patch("/:orgSlug/v2/Users/:id", async (req, res, next) => {
   try {
     await withOrgTenant(req.params.orgSlug, async () => {
       await requireValidScimToken(req);
       const { orgSlug } = requireTenantContext();
-      const user = await prisma.user.findFirst({ where: { id: String(req.params.id), deletedAt: null }, select: USER_SELECT });
+      const user = await prisma.user.findFirst({ where: { id: String(req.params.id), deletedAt: null }, select: { ...USER_SELECT, isAgent: true } });
       if (!user) return res.status(404).json(scimError(404, "User not found"));
 
       const parsed = patchOperationSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json(scimError(400, "Invalid SCIM PATCH payload."));
 
-      let nextActive: boolean | undefined;
-      for (const operation of parsed.data.Operations) {
-        // Attribute names are case-insensitive in SCIM (RFC 7643 §2.1), so `path` is compared that way.
-        const path = operation.path?.toLowerCase();
-        if (operation.op.toLowerCase() === "replace" && (path === "active" || !path)) {
-          const raw = path ? operation.value : (operation.value as { active?: unknown } | undefined)?.active;
-          const value = readScimActive(raw);
-          if (value !== undefined) nextActive = value;
-        }
-      }
+      const nextActive = activeFromOperations(parsed.data.Operations);
+      if (nextActive === undefined) return res.json(toScimUser(user, orgSlug));
+      const nextStatus = nextActive ? "ACTIVE" : "INACTIVE";
 
-      const updated =
-        nextActive === undefined
-          ? user
-          : await prisma.user.update({ where: { id: user.id }, data: { status: nextActive ? "ACTIVE" : "INACTIVE" }, select: USER_SELECT });
+      if (takesASeat(user, nextStatus)) {
+        const seats = await seatHeadroom();
+        if (!hasRoomFor(seats, 1)) return res.status(403).json(scimError(403, `Seat limit reached (${seats.limit} seats on the current plan).`));
+      }
+      const updated = await prisma.user.update({ where: { id: user.id }, data: { status: nextStatus }, select: USER_SELECT });
+      if (nextStatus !== user.status) await syncSeatsAfterChange();
 
       res.json(toScimUser(updated, orgSlug));
     });
@@ -274,6 +284,7 @@ scimRouter.delete("/:orgSlug/v2/Users/:id", async (req, res, next) => {
       const user = await prisma.user.findFirst({ where: { id: String(req.params.id), deletedAt: null }, select: { id: true } });
       if (!user) return res.status(404).json(scimError(404, "User not found"));
       await prisma.user.update({ where: { id: user.id }, data: { status: "INACTIVE" } });
+      await syncSeatsAfterChange();
       res.status(204).send();
     });
   } catch (error) {

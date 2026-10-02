@@ -11,7 +11,6 @@ import { Router } from "express";
 import { z } from "zod";
 import { permissions, resolveHeldRoles, roles, type RoleName } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
-import { requireTenantContext } from "../config/tenant-context.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
@@ -21,9 +20,7 @@ import { templates } from "../services/mail-templates.js";
 import { csvCell, CSV_EOL, UTF8_BOM } from "../utils/csv.js";
 import { findCoveredUnenrolledUserIds, notifyEnrollmentRequired } from "../services/face.service.js";
 import { getOnlineSeenByUser } from "../services/maintenance.service.js";
-import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
-import { countActiveSeats } from "../services/seat-count.service.js";
-import { syncSubscriptionSeats } from "../services/billing-sync.service.js";
+import { assertSeatAvailable, syncSeatsAfterChange, takesASeat } from "../services/seats.service.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
 import { tenantBaseUrl } from "../services/workspace-directory.service.js";
 import {
@@ -354,9 +351,29 @@ const bulkActionSchema = z.object({
     })
 });
 
+type BulkAction = "DEACTIVATE" | "ACTIVATE" | "RESET_PASSWORD" | "RESEND_WELCOME" | "FORCE_LOGOUT" | "DELETE";
+
+/** The bulk actions that change how many seats are in use — and so what Stripe should bill. */
+const SEAT_CHANGING_ACTIONS = new Set<BulkAction>(["ACTIVATE", "DEACTIVATE", "DELETE"]);
+
+/**
+ * Why bulk skips this target without trying, or null. The single-user routes' guards, from the same
+ * module (services/user-authority.service.ts), so bulk cannot drift from them — the whole reason bulk
+ * does not just call the database with an `in` clause. "Super admin" includes someone holding it
+ * through a UserRole grant while switched into another role: they can switch back at will.
+ */
+function bulkSkipReason(actor: { id: string; role: string }, target: Parameters<typeof toAuthorityTarget>[0], action: BulkAction): string | null {
+  const refusal = actOnRefusal(actor, toAuthorityTarget(target));
+  if (refusal) return refusal;
+  // Locking yourself out mid-bulk is unrecoverable without another admin, so it is refused rather
+  // than confirmed — there is no version of this the operator meant.
+  if (target.id === actor.id && action !== "RESEND_WELCOME") return "You can't apply this to your own account";
+  return null;
+}
+
 userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => {
   const { action, userIds, filter, password } = req.body as {
-    action: "DEACTIVATE" | "ACTIVATE" | "RESET_PASSWORD" | "RESEND_WELCOME" | "FORCE_LOGOUT" | "DELETE";
+    action: BulkAction;
     userIds?: string[];
     filter?: Record<string, unknown>;
     password?: string;
@@ -364,8 +381,16 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
 
   const targets = await prisma.user.findMany({
     where: userIds?.length ? { id: { in: userIds }, deletedAt: null } : whereFromQuery(filter ?? {}),
-    select: { ...AUTHORITY_TARGET_SELECT, name: true, email: true }
+    select: { ...AUTHORITY_TARGET_SELECT, name: true, email: true, isAgent: true }
   });
+
+  // The seat limit is a limit on the BATCH, unlike every other refusal here: activating "as many as
+  // fit" would choose who comes back by database order. So an over-limit batch is refused whole and
+  // up front — the rule the CSV import already follows. Only people who would actually take a seat
+  // count: the already-active, agent identities, and anyone skipped below do not.
+  if (action === "ACTIVATE") {
+    await assertSeatAvailable(targets.filter((t) => !bulkSkipReason(req.user!, t, action) && takesASeat(t, "ACTIVE")).length);
+  }
 
   const done: string[] = [];
   const skipped: Array<{ id: string; name: string; reason: string }> = [];
@@ -375,19 +400,9 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
   const generatedPasswords: Array<{ id: string; name: string; email: string; password: string }> = [];
 
   for (const target of targets) {
-    // The single-user routes' guards, from the same module (services/user-authority.service.ts), so
-    // bulk cannot drift from them. This is the whole reason bulk does not just call the database
-    // with an `in` clause. "Super admin" includes someone holding it through a UserRole grant while
-    // switched into another role — they can switch back at will.
-    const refusal = actOnRefusal(req.user!, toAuthorityTarget(target));
-    if (refusal) {
-      skipped.push({ id: target.id, name: target.name, reason: refusal });
-      continue;
-    }
-    // Locking yourself out mid-bulk is unrecoverable without another admin, so it is refused
-    // rather than confirmed — there is no version of this the operator meant.
-    if (target.id === req.user!.id && action !== "RESEND_WELCOME") {
-      skipped.push({ id: target.id, name: target.name, reason: "You can't apply this to your own account" });
+    const skipReason = bulkSkipReason(req.user!, target, action);
+    if (skipReason) {
+      skipped.push({ id: target.id, name: target.name, reason: skipReason });
       continue;
     }
 
@@ -467,6 +482,8 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
     selection: userIds?.length ? "explicit" : "filter",
     userIds: done
   });
+  // Once for the batch, not per person: Stripe needs the final headcount, not sixty steps to it.
+  if (SEAT_CHANGING_ACTIONS.has(action) && done.length > 0) await syncSeatsAfterChange();
 
   res.json({ applied: done.length, requested: targets.length, skipped, generatedPasswords });
 });
@@ -535,14 +552,10 @@ userRouter.post(
     // immediately rather than after some reconciliation job. Counts the same population
     // platform-admin-analytics.service.ts reports as "seats" (ACTIVE, not soft-deleted), so
     // the number an org sees in the console and the number enforced here always agree.
-    const { orgId } = requireTenantContext();
-    const [seatLimit, activeSeats] = await Promise.all([
-      getEffectiveSeatLimit(orgId),
-      countActiveSeats()
-    ]);
-    if (activeSeats >= seatLimit) {
-      throw new AppError(402, `Seat limit reached (${seatLimit} seats on the current plan). Contact your platform administrator to add more seats.`);
-    }
+    await assertSeatAvailable(
+      1,
+      ({ limit }) => `Seat limit reached (${limit} seats on the current plan). Contact your platform administrator to add more seats.`
+    );
 
     // Explicit duplicate check instead of letting the unique index throw: a P2002 here used to
     // surface as an unhandled 500, and the soft-delete case is genuinely non-obvious to the
@@ -584,10 +597,8 @@ userRouter.post(
     });
     await replaceHeldRoles(user.id, req.body.roles ?? [req.body.role as RoleName]);
     await audit(req.user!.id, "user.created", "User", user.id);
-    // The billed seat count follows the real one. Safe to await: syncSubscriptionSeats never
-    // throws and returns immediately on the common case of a workspace with no Stripe
-    // subscription at all (self-hosted, or a tier a platform admin assigned by hand).
-    await syncSubscriptionSeats(requireTenantContext().orgId);
+    // The billed seat count follows the real one (services/seats.service.ts — never throws).
+    await syncSeatsAfterChange();
 
     const welcomeResult = await sendWelcomeEmail(user);
     await audit(
@@ -652,20 +663,13 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
     githubUsername?: string;
   }>;
 
-  const { orgId } = requireTenantContext();
-  const [seatLimit, activeSeats, roles] = await Promise.all([
-    getEffectiveSeatLimit(orgId),
-    countActiveSeats(),
-    prisma.role.findMany()
-  ]);
+  await assertSeatAvailable(
+    rows.length,
+    ({ limit, used }) =>
+      `This upload would create ${rows.length} users, exceeding the seat limit (${limit} seats, ${used} already used). Reduce the file or contact your platform administrator.`
+  );
+  const roles = await prisma.role.findMany();
   const roleByName = new Map<string, (typeof roles)[number]>(roles.map((r) => [r.name, r]));
-
-  if (activeSeats + rows.length > seatLimit) {
-    throw new AppError(
-      402,
-      `This upload would create ${rows.length} users, exceeding the seat limit (${seatLimit} seats, ${activeSeats} already used). Reduce the file or contact your platform administrator.`
-    );
-  }
 
   const results: Array<{ row: number; email: string; success: boolean; error?: string; userId?: string }> = [];
   const emailToId = new Map<string, string>();
@@ -735,6 +739,8 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
     created: results.filter((r) => r.success).length,
     failed: results.filter((r) => !r.success).length
   });
+  // Once for the whole file — the import used to leave Stripe billing the pre-upload headcount.
+  if (createdUsers.length > 0) await syncSeatsAfterChange();
 
   res.status(201).json({ results });
 });
@@ -812,7 +818,7 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
 
   const row = await prisma.user.findUnique({
     where: { id: targetId },
-    select: { ...AUTHORITY_TARGET_SELECT, faceVerificationRequired: true }
+    select: { ...AUTHORITY_TARGET_SELECT, faceVerificationRequired: true, isAgent: true }
   });
   if (!row) throw new AppError(404, "User not found");
   const target = toAuthorityTarget(row);
@@ -823,6 +829,9 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
 
   const newHeldRoleNames = heldRolesAfterPatch(target.heldRoles, req.body);
   await assertPatchKeepsAccess(req.user!, target, { heldRoles: newHeldRoleNames, status: req.body.status });
+  // Reactivating somebody takes a seat exactly as creating them does — it was checked on creation
+  // only, so deactivate-then-reactivate walked straight past a full plan.
+  if (takesASeat(row, req.body.status)) await assertSeatAvailable(1);
 
   const data: {
     name?: string;
@@ -854,6 +863,7 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
   const user = await prisma.user.update({ where: { id: targetId }, data, include: { role: true } });
   if (newHeldRoleNames) await replaceHeldRoles(user.id, newHeldRoleNames);
   await audit(req.user!.id, "user.updated", "User", user.id, req.body);
+  if (req.body.status && req.body.status !== row.status) await syncSeatsAfterChange();
 
   // The person just became individually covered by the face policy — tell them now, not at
   // their next blocked submission. Compared against the row read before the write, so the prompt
@@ -878,7 +888,7 @@ userRouter.delete("/:id", async (req, res) => {
   await prisma.user.update({ where: { id }, data: { deletedAt: new Date(), status: "INACTIVE" } });
   // Removing somebody frees a seat, and a customer who is billed for people who left will
   // notice long before they mention it.
-  await syncSubscriptionSeats(requireTenantContext().orgId);
+  await syncSeatsAfterChange();
   // The bulk DELETE path (POST /bulk) already does this; the single-user route didn't, which
   // left the deleted person's Session rows alive and refreshable.
   await prisma.session.updateMany({ where: { userId: id, revokedAt: null }, data: { revokedAt: new Date() } });

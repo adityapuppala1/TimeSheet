@@ -23,12 +23,49 @@
  * or seat count, which is a handful of events a month across a whole fleet. Twenty-four sweeps a
  * day would multiply the Stripe traffic by 24 to catch those a few hours sooner, and the console's
  * "Reconcile now" button already covers the case where somebody needs it immediately.
+ *
+ * THE SEAT QUANTITY GOES FIRST. Before reading what each workspace is billed, the same pass brings
+ * every subscription's quantity to the workspace's real active-seat count
+ * (billing-sync.service.ts#reconcileSubscriptionSeats) — the backstop for any user-lifecycle path
+ * that did not sync on the spot. Doing it first means the figure recorded below is the corrected
+ * one. It is not part of the console's "Reconcile now", which stays a read: an operator refreshing a
+ * revenue screen should never be what changes a customer's subscription.
  */
 import cron from "node-cron";
+import { reconcileSubscriptionSeats } from "../services/billing-sync.service.js";
 import { reconcileBilledRevenue } from "../services/platform-billing-reconcile.service.js";
 
 let started = false;
 let running = false;
+
+/** One nightly pass: seat quantities, then billed revenue. Each half is caught on its own, so a
+ *  failed seat sweep never costs the night its revenue figures. Exported so a test can drive it
+ *  without cron. */
+export async function runNightlyBillingReconcile(): Promise<void> {
+  try {
+    const seats = await reconcileSubscriptionSeats();
+    if (seats.configured && seats.failed.length) {
+      const named = seats.failed.map((entry) => `${entry.slug} (${entry.message})`).join("; ");
+      console.warn(`[billed-seats] ${seats.attempted - seats.failed.length}/${seats.attempted} synced, ${seats.failed.length} failed: ${named}`);
+    }
+  } catch (error) {
+    console.warn(`[billed-seats] pass failed: ${(error as Error).message}`);
+  }
+
+  try {
+    const result = await reconcileBilledRevenue();
+    // A deployment with no Stripe account is the common case and says nothing at all. Logging
+    // "0 reconciled" every night for them would train an operator to ignore this line.
+    if (!result.configured) return;
+    if (result.failed.length) {
+      // Named, not counted: "3 failed" is not something anybody can act on at 04:00.
+      const named = result.failed.map((entry) => `${entry.slug} (${entry.message})`).join("; ");
+      console.warn(`[billed-revenue] ${result.reconciled}/${result.attempted} reconciled, ${result.failed.length} failed: ${named}`);
+    }
+  } catch (error) {
+    console.warn(`[billed-revenue] pass failed: ${(error as Error).message}`);
+  }
+}
 
 export function startBilledRevenueReconcileWorker(): void {
   if (started) return;
@@ -43,17 +80,7 @@ export function startBilledRevenueReconcileWorker(): void {
     if (running) return;
     running = true;
     try {
-      const result = await reconcileBilledRevenue();
-      // A deployment with no Stripe account is the common case and says nothing at all. Logging
-      // "0 reconciled" every night for them would train an operator to ignore this line.
-      if (!result.configured) return;
-      if (result.failed.length) {
-        // Named, not counted: "3 failed" is not something anybody can act on at 04:00.
-        const named = result.failed.map((entry) => `${entry.slug} (${entry.message})`).join("; ");
-        console.warn(`[billed-revenue] ${result.reconciled}/${result.attempted} reconciled, ${result.failed.length} failed: ${named}`);
-      }
-    } catch (error) {
-      console.warn(`[billed-revenue] pass failed: ${(error as Error).message}`);
+      await runNightlyBillingReconcile();
     } finally {
       running = false;
     }
