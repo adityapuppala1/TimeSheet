@@ -9,7 +9,8 @@
  *  - a tick that outlasts its period is not overlapped by another replica's next tick (what each
  *    worker's in-process `running` flag already promised, lifted to the deployment);
  *  - a lease left behind by a replica that died mid-run does not block the job forever;
- *  - the period key is the PLATFORM zone's minute, hour or day, not UTC's;
+ *  - a day is the PLATFORM zone's day, not UTC's; a minute or an hour is the UTC instant's, so the
+ *    hour a daylight-saving zone repeats in autumn is two periods, not one;
  *  - the claim rows are pruned, so a table written every minute does not grow forever.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -57,8 +58,8 @@ const platformJobClaim = {
   })
 };
 vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: { platformJobClaim } }));
-// The platform's zone, as config/env.ts defaults it: India, UTC+5:30 — a half-hour offset, which is
-// exactly what catches a minute key read in UTC.
+// The platform's zone, as config/env.ts defaults it: India, UTC+5:30 — far enough from UTC that its
+// day and UTC's disagree for five and a half hours of every day.
 vi.mock("../../src/config/env.js", () => ({ env: { TZ: "Asia/Kolkata" } }));
 
 const { claimJobPeriod, pruneJobClaims, runOncePerTick, tickPeriodKey } = await import("../../src/services/job-claim.service.js");
@@ -77,17 +78,37 @@ afterEach(() => {
 });
 
 describe("tickPeriodKey", () => {
-  it("names the tick in the platform's zone, at the cron's granularity", () => {
+  it("names a day by the platform's calendar, and a minute or an hour by the UTC instant", () => {
     expect(tickPeriodKey(tick, "day")).toBe("2026-10-02");
-    expect(tickPeriodKey(tick, "hour")).toBe("2026-10-02T09");
-    // 03:40 UTC is 09:10 in India. A key built from UTC's minute would say :40 and still be unique,
-    // but it would disagree with every hour and day key beside it about which moment this is.
-    expect(tickPeriodKey(tick, "minute")).toBe("2026-10-02T09:10");
+    // 03:40 UTC is 09:10 in India. A minute or an hour is the same length in every zone, so the
+    // instant names it — the `Z` says so, and keeps it from ever equalling a key written in the old
+    // local-time format (claims made before this changed are pruned like any other, by age).
+    expect(tickPeriodKey(tick, "hour")).toBe("2026-10-02T03Z");
+    expect(tickPeriodKey(tick, "minute")).toBe("2026-10-02T03:40Z");
   });
 
   it("rolls the day over at the platform's midnight, not UTC's", () => {
     // 19:00 UTC on the 1st is already 00:30 on the 2nd in India.
     expect(tickPeriodKey(new Date("2026-10-01T19:00:00Z"), "day")).toBe("2026-10-02");
+  });
+
+  it("gives the hour a daylight-saving zone repeats in autumn two different minute and hour keys", async () => {
+    // 25 Oct 2026, Europe/London: clocks go back at 02:00 BST, so 01:00-01:59 happens twice. Named in
+    // local time, the second pass reused the first pass's keys and every minute and hour job (the
+    // mail queue, inbound mail, SLA sweeps, backups, scheduled reports) stood down for that hour.
+    const { env } = await import("../../src/config/env.js");
+    const zone = env.TZ;
+    env.TZ = "Europe/London";
+    try {
+      const firstPass = new Date("2026-10-25T00:30:00Z"); // 01:30 BST
+      const secondPass = new Date("2026-10-25T01:30:00Z"); // 01:30 GMT
+      expect(tickPeriodKey(secondPass, "minute")).not.toBe(tickPeriodKey(firstPass, "minute"));
+      expect(tickPeriodKey(secondPass, "hour")).not.toBe(tickPeriodKey(firstPass, "hour"));
+      // One calendar day all the same, so a daily job still runs once.
+      expect(tickPeriodKey(secondPass, "day")).toBe(tickPeriodKey(firstPass, "day"));
+    } finally {
+      env.TZ = zone;
+    }
   });
 });
 

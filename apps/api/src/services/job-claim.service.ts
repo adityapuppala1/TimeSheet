@@ -11,8 +11,8 @@
  *
  * HOW. Two rows in `PlatformJobClaim`, whose primary key is (job, periodKey):
  *  - THE PERIOD CLAIM, `(tick:<job>, <minute|hour|day key>)`. The first replica whose INSERT lands
- *    runs the tick; the rest stand down. The key is the tick's period in the PLATFORM zone at the
- *    cron's granularity, so two pods whose clocks differ by a second still name the same tick.
+ *    runs the tick; the rest stand down. The key is the tick's period at the cron's granularity
+ *    (`tickPeriodKey`), so two pods whose clocks differ by a second still name the same tick.
  *  - THE LEASE, `(tick:<job>, "lease")`, held for the length of the run. It is the `running` flag
  *    lifted to the deployment: a tick that outlasts its period is not overlapped by another pod's
  *    next tick. Renewed every minute while the body runs, and taken over once it has gone
@@ -32,7 +32,7 @@
  * partial run, as each of them already did.
  */
 import { controlPrisma } from "../config/control-prisma.js";
-import { platformDayKey, platformHourKey, platformMinuteKey } from "../utils/platform-time.js";
+import { platformDayKey } from "../utils/platform-time.js";
 
 /** The granularity of a cron, which is the granularity of the period a tick claims. */
 export type TickGranularity = "minute" | "hour" | "day";
@@ -71,11 +71,23 @@ export async function claimJobPeriod(job: string, periodKey: string): Promise<bo
   return insertIgnore(job, periodKey);
 }
 
-/** The period a tick at `at` belongs to, named in the platform's zone. */
+/**
+ * The period a tick at `at` belongs to.
+ *
+ * A DAY is the platform's calendar day: "the 09:00 run" belongs to the date where the deployment is.
+ * A MINUTE OR AN HOUR is named by the UTC instant. Named in local time, as they once were, the hour a
+ * daylight-saving zone repeats each autumn produced the same keys twice, and every minute and hour
+ * job — the mail queue, inbound mail, the SLA sweeps, backups, scheduled reports — stood down for the
+ * second pass. A minute and an hour are the same length in every zone, so UTC loses nothing.
+ *
+ * The `Z` marks the format and keeps it from ever equalling a key written in the old local-time
+ * format. That changed once, at deploy: claims made before it are simply pruned by age, and the most
+ * the switch costs is one period run by an old pod and a new one during the rollout.
+ */
 export function tickPeriodKey(at: Date, granularity: TickGranularity): string {
   if (granularity === "day") return platformDayKey(at);
-  if (granularity === "hour") return platformHourKey(at);
-  return platformMinuteKey(at);
+  const iso = at.toISOString(); // YYYY-MM-DDTHH:mm:ss.sssZ
+  return granularity === "hour" ? `${iso.slice(0, 13)}Z` : `${iso.slice(0, 16)}Z`;
 }
 
 /** Takes the job's lease, or takes over one gone stale. Returns the stamp that identifies OUR lease,
