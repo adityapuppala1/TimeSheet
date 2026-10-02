@@ -8,11 +8,12 @@
  * consequential thing anybody does in this console. It earns a screen, an OWNER-only route
  * (`RequirePlatformRole` in App.tsx), and its own place in the sidebar.
  *
- * TWO ACTIONS, TWO DIFFERENT SHAPES, AND THE DIFFERENCE IS DELIBERATE:
- *  - Creating an account, and changing a role, are QUEUED. They come back as a request another
- *    owner has to countersign on the Approvals page — a single operator must not be able to mint a
- *    colleague or promote one. The temporary password for a new account goes to whoever APPROVES
- *    it, which is why nothing here shows one.
+ * TWO SHAPES OF ACTION, AND THE DIFFERENCE IS DELIBERATE:
+ *  - Creating an account, changing a role, and REACTIVATING an account are QUEUED. They come back
+ *    as a request another owner has to countersign on the Approvals page — a single operator must
+ *    not be able to mint a colleague, promote one, or wake a dormant owner account. The temporary
+ *    password for a new or reactivated account is shown to whoever APPROVES it, once, which is why
+ *    nothing here shows one.
  *  - Deactivating an account happens IMMEDIATELY. It is how a compromised credential gets cut off,
  *    and making that wait for a second person to answer their phone would mean the two-person rule
  *    was protecting the attacker.
@@ -33,6 +34,7 @@ import { platformAdminConsoleApi } from "../../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../../store/platform-admin-auth";
 import { ConsolePage, ConsoleSection, ConsoleTable, Field, FieldGrid, Num, PRIMARY_BTN, Toolbar, shortDateTime } from "./console-ui";
 import { runInBackground } from "../../lib/run-in-background";
+import { isQueuedForApproval } from "../../lib/platform-console";
 
 function errorMessageOf(error: unknown): string {
   return (error as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (error as Error)?.message ?? "Try again.";
@@ -83,9 +85,10 @@ export function PlatformAdminAccess() {
 
   const setStatus = useMutation({
     mutationFn: (args: { id: string; status: "ACTIVE" | "INACTIVE" }) => platformAdminConsoleApi.setAdminStatus(args.id, args.status),
-    onSuccess: () => {
+    onSuccess: (result) => {
       invalidate();
-      toast.success("Changed");
+      if (isQueuedForApproval(result)) toast.success("Queued for approval", { description: result.message });
+      else toast.success("Changed");
     },
     onError: (e) => toast.error("Not changed", { description: errorMessageOf(e) })
   });
@@ -98,7 +101,7 @@ export function PlatformAdminAccess() {
     >
       <ConsoleSection
         title="Platform admins"
-        description="Creating an account and changing a role are queued for a second owner to countersign. Deactivating is immediate — cutting off a leaked credential must never wait for anybody."
+        description="Creating an account, changing a role and reactivating one are queued for a second owner to countersign. Deactivating is immediate — cutting off a leaked credential must never wait for anybody."
         actions={
           <Toolbar>
             <Button size="sm" className={`gap-1.5 ${PRIMARY_BTN}`} onClick={() => setCreateOpen(true)}>

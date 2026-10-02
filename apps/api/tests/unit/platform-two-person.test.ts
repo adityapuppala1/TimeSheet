@@ -518,3 +518,50 @@ describe("loosening the retention policy is two-person (H2)", () => {
     expect(pending.size).toBe(0);
   });
 });
+
+describe("reactivating an operator is two-person, and comes back with a fresh password (M7)", () => {
+  const patch = (who: string, id: string, body: object) =>
+    request(app).patch(`/api/platform-admin/admins/${id}`).set("Authorization", `Bearer ${tokens[who]}`).set("X-Platform-Reason", REASON).send(body);
+
+  beforeEach(() => {
+    adminRows.set(SUPPORT_C, { ...adminRows.get(SUPPORT_C)!, status: "INACTIVE", role: "OWNER" });
+  });
+
+  it("queues INACTIVE to ACTIVE instead of doing it — a dormant owner account is not one person's to wake", async () => {
+    const res = await patch(OWNER_A, SUPPORT_C, { status: "ACTIVE" });
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ pending: true, action: "admin.reactivate" });
+    expect(adminRows.get(SUPPORT_C)!.status).toBe("INACTIVE");
+  });
+
+  it("on approval, reactivates behind a new temporary password the operator must replace", async () => {
+    const queued = await patch(OWNER_A, SUPPORT_C, { status: "ACTIVE" });
+    const approved = await as(OWNER_B, "post", `/governance/requests/${queued.body.requestId}/approve`);
+    expect(approved.status).toBe(200);
+    const row = adminRows.get(SUPPORT_C)!;
+    expect(row).toMatchObject({ status: "ACTIVE", mustChangePassword: true, failedLoginCount: 0, lockedUntil: null });
+    // The old password — which may be the leaked one this account was deactivated for — no longer works.
+    expect(row.passwordHash).not.toBe("x");
+    expect(approved.body.result.temporaryPassword).toMatch(/^[A-Za-z0-9]{12}!7aQ$/);
+  });
+
+  it("fails the approval if somebody reactivated the account another way in the meantime", async () => {
+    const queued = await patch(OWNER_A, SUPPORT_C, { status: "ACTIVE" });
+    adminRows.set(SUPPORT_C, { ...adminRows.get(SUPPORT_C)!, status: "ACTIVE" });
+    expect((await as(OWNER_B, "post", `/governance/requests/${queued.body.requestId}/approve`)).status).toBe(409);
+  });
+});
+
+describe("a role and a status in one PATCH (G13)", () => {
+  it("is refused with 422 rather than queueing the role and silently dropping the status", async () => {
+    const res = await request(app)
+      .patch(`/api/platform-admin/admins/${SUPPORT_C}`)
+      .set("Authorization", `Bearer ${tokens[OWNER_A]}`)
+      .set("X-Platform-Reason", REASON)
+      .send({ role: "READ_ONLY", status: "INACTIVE" });
+    expect(res.status).toBe(422);
+    expect(res.body.message).toMatch(/separately/i);
+    expect(pending.size).toBe(0);
+    expect(adminRows.get(SUPPORT_C)!.status).toBe("ACTIVE");
+  });
+});

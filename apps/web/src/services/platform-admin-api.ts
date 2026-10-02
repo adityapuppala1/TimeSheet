@@ -899,10 +899,11 @@ export const platformAdminConsoleApi = {
    *  to whoever approves it, which is why there is no password in this response type. */
   createAdmin: async (payload: { email: string; name: string; role: PlatformRole }) =>
     (await platformAdminApi.post<PlatformActionQueued>("/admins", payload)).data,
-  /** Immediate, deliberately — deactivation is how a compromised credential gets cut off, and
-   *  making that wait for a second operator would be protecting the attacker. */
+  /** DEACTIVATING is immediate — it is how a compromised credential gets cut off, and making that
+   *  wait for a second operator would be protecting the attacker. REACTIVATING is queued (202): it
+   *  hands an account its power back, and comes back with a fresh temporary password on approval. */
   setAdminStatus: async (id: string, status: "ACTIVE" | "INACTIVE") =>
-    (await platformAdminApi.patch<{ id: string; status: string; role: PlatformRole }>(`/admins/${id}`, { status })).data,
+    (await platformAdminApi.patch<{ id: string; status: string; role: PlatformRole } | PlatformActionQueued>(`/admins/${id}`, { status })).data,
   /** Two-person, unlike the status change above: a promotion to OWNER hands somebody the ability
    *  to grant themselves anything. */
   setAdminRole: async (id: string, role: PlatformRole) => (await platformAdminApi.patch<PlatformActionQueued>(`/admins/${id}`, { role })).data,

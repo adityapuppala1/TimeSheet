@@ -890,17 +890,53 @@ const adminRoleChangeRoute = twoPerson(platformTwoPersonActions.ADMIN_ROLE_CHANG
 });
 
 /**
+ * Bringing a deactivated operator back (M7). Two-person, unlike deactivation, because it is the
+ * opposite kind of act: deactivating cuts a credential off and must not wait for anybody, while
+ * reactivating hands an account — possibly a dormant OWNER — its power back, which is exactly the
+ * one-step escalation the role change below is queued to prevent.
+ *
+ * AND THE OLD PASSWORD DOES NOT COME BACK WITH IT. An account is usually deactivated because its
+ * credential leaked or its owner left; reactivating it onto the same password would hand the
+ * console to whoever holds that. A new temporary password goes to the approver, once, and the
+ * account is behind the rotation gate until its owner replaces it. Lockout state is cleared with it.
+ * Re-checked at approval: an account somebody reactivated another way in the meantime is a 409.
+ */
+const adminReactivateRoute = twoPerson(consoleTwoPersonActions.ADMIN_REACTIVATE, async (ctx) => {
+  const id = String(ctx.params.id);
+  const target = await controlPrisma.platformAdminUser.findUnique({ where: { id } });
+  if (!target) throw new AppError(404, "Not found");
+  if (target.status !== "INACTIVE") throw new AppError(409, `${target.email} is already active.`);
+
+  const password = generateTempPassword();
+  const row = await controlPrisma.platformAdminUser.update({
+    where: { id },
+    data: { status: "ACTIVE", passwordHash: await hashPassword(password), mustChangePassword: true, failedLoginCount: 0, lockedUntil: null }
+  });
+  await platformAudit("PLATFORM_ADMIN", ctx.actorLabel, "platform_admin.reactivated", "PlatformAdminUser", id, {
+    email: row.email,
+    role: row.role,
+    requestedBy: ctx.requester.label
+  }, { reason: ctx.reason, ipAddress: ctx.ipAddress, before: { status: target.status }, after: { status: row.status, mustChangePassword: true } });
+  return { id: row.id, email: row.email, name: row.name, role: row.role, status: row.status, temporaryPassword: password };
+});
+
+/**
  * Two different authorities behind one PATCH, split on purpose.
  *
  * A ROLE CHANGE IS TWO-PERSON. Promoting somebody to OWNER hands them everything including the
  * ability to promote others, and an operator who can do that alone has a one-step path from
  * READ_ONLY-for-everyone to a second account that owns the platform.
  *
- * A STATUS CHANGE IS NOT, and that is deliberate rather than an omission. Deactivating an account
- * is how a compromised credential gets cut off, and it is reversible. Making the emergency
- * response wait for a colleague to wake up would mean an attacker keeps their session for as long
- * as the second operator takes to answer their phone — the two-person rule would be protecting the
- * attacker. It stays OWNER-only and immediate.
+ * DEACTIVATING IS NOT, and that is deliberate rather than an omission. Deactivating an account
+ * is how a compromised credential gets cut off. Making the emergency response wait for a colleague
+ * to wake up would mean an attacker keeps their session for as long as the second operator takes to
+ * answer their phone — the two-person rule would be protecting the attacker. It stays OWNER-only and
+ * immediate. REACTIVATING IS two-person — see `adminReactivateRoute` above.
+ *
+ * A ROLE AND A STATUS IN ONE REQUEST ARE REFUSED (422). They follow different rules — one waits for
+ * a second owner, the other may not — and the old handling queued the role and silently dropped the
+ * status, so an operator who asked to "demote and deactivate" got neither until somebody approved,
+ * and then only half.
  */
 platformAdminConsoleRouter.patch(
   "/admins/:id",
@@ -913,17 +949,24 @@ platformAdminConsoleRouter.patch(
     })
   ),
   async (req, res, next) => {
-    // A role change (with or without a status change alongside it) goes to the queue; a
-    // status-only change runs now. Routed here rather than on two separate paths so the console
-    // keeps one endpoint and the decision lives beside the reasoning above.
+    // Routed here rather than on separate paths so the console keeps one endpoint and the decision
+    // lives beside the reasoning above.
+    if (req.body.role !== undefined && req.body.status !== undefined) {
+      throw new AppError(422, "Change the role and the status separately: a role change waits for a second owner, and a deactivation never does.");
+    }
     if (req.body.role !== undefined) return adminRoleChangeRoute(req, res, next);
 
     const id = String(req.params.id);
-    if (req.body.status === undefined) throw new AppError(422, "Nothing to change — send a status, a role, or both.");
+    if (req.body.status === undefined) throw new AppError(422, "Nothing to change — send a status or a role.");
     if (id === req.platformAdmin!.id && req.body.status === "INACTIVE") throw new AppError(409, "You cannot deactivate the account you are signed in with.");
     const active = await controlPrisma.platformAdminUser.count({ where: { status: "ACTIVE" } });
     const target = await controlPrisma.platformAdminUser.findUnique({ where: { id } });
     if (!target) throw new AppError(404, "Not found");
+    if (req.body.status === "ACTIVE" && target.status === "INACTIVE") return adminReactivateRoute(req, res, next);
+    if (req.body.status === target.status) {
+      res.json({ id: target.id, status: target.status, role: target.role });
+      return;
+    }
     if (req.body.status === "INACTIVE" && target.status === "ACTIVE" && active <= 1) throw new AppError(409, "That is the last active platform admin. Create another one first.");
     const row = await controlPrisma.platformAdminUser.update({ where: { id }, data: { status: req.body.status } });
     if (req.body.status === "INACTIVE") await controlPrisma.platformAdminSession.updateMany({ where: { adminUserId: id, revokedAt: null }, data: { revokedAt: new Date() } });
