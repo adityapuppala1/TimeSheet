@@ -267,7 +267,7 @@ describe("where the email address comes from (L1)", () => {
     expect(identity.email).toBe("sam@acme.example");
   });
 
-  it("refuses a PERSISTENT NameID as an email, even with no other source of one", async () => {
+  it("on a new configuration, refuses a PERSISTENT NameID as an email, even with no other source of one", async () => {
     const id = await startSignIn();
     const assertion = assertionFor(id, { nameId: "sam@acme.example", nameIdFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent" });
     await expect(acs(envelope(id, signAssertion(assertion)))).rejects.toThrow(/email address/i);
@@ -283,6 +283,71 @@ describe("where the email address comes from (L1)", () => {
     const id = await startSignIn();
     const { identity } = await acs(envelope(id, signAssertion(assertionFor(id))));
     expect(identity.email).toBe("sam@acme.example");
+  });
+
+  // R1-1. Entra and ADFS send NameID = the UPN (emailAddress format) AND an emailaddress claim =
+  // `mail`; where the two differ, the address a person signs in AS is whichever this app picks. It
+  // always picked `profile.email ?? nameID`, so the NameID must keep beating the Entra claim, or
+  // every such person misses their account and is JIT-created a second one (or refused).
+  it("prefers an emailAddress-format NameID over a different Entra emailaddress claim, the address it always resolved to", async () => {
+    const id = await startSignIn();
+    const assertion = assertionFor(id, {
+      nameId: "jdoe@contoso.example",
+      attributes: { "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress": "john.doe@contoso.example" }
+    });
+    const { identity } = await acs(envelope(id, signAssertion(assertion)));
+    expect(identity.email).toBe("jdoe@contoso.example");
+  });
+
+  it("on a proven configuration signing both response and assertion, a UPN NameID still wins over the Entra mail claim", async () => {
+    ssoRow.current = config({ lastSuccessfulLoginAt: new Date("2026-09-01") });
+    const id = await startSignIn();
+    const assertion = assertionFor(id, {
+      nameId: "jdoe@contoso.example",
+      attributes: { "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress": "john.doe@contoso.example" }
+    });
+    const { identity } = await acs(signResponse(envelope(id, signAssertion(assertion))));
+    expect(identity.email).toBe("jdoe@contoso.example");
+  });
+
+  it("on a proven configuration, accepts an email-shaped PERSISTENT NameID with a warning, since it signed people in by it before", async () => {
+    ssoRow.current = config({ lastSuccessfulLoginAt: new Date("2026-09-01") });
+    const id = await startSignIn();
+    const assertion = assertionFor(id, { nameId: "sam@acme.example", nameIdFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent" });
+    const { identity } = await acs(signResponse(envelope(id, signAssertion(assertion))));
+    expect(identity.email).toBe("sam@acme.example");
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/NameID/);
+  });
+
+  it("on a proven configuration, an email-shaped persistent NameID still beats the Entra claim, keeping the identity it resolved to", async () => {
+    ssoRow.current = config({ lastSuccessfulLoginAt: new Date("2026-09-01") });
+    const id = await startSignIn();
+    const assertion = assertionFor(id, {
+      nameId: "sam@acme.example",
+      nameIdFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+      attributes: { "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress": "samantha@acme.example" }
+    });
+    const { identity } = await acs(envelope(id, signAssertion(assertion)));
+    expect(identity.email).toBe("sam@acme.example");
+  });
+
+  it("on a proven configuration, still refuses an opaque NameID that is not an address", async () => {
+    ssoRow.current = config({ lastSuccessfulLoginAt: new Date("2026-09-01") });
+    const id = await startSignIn();
+    const assertion = assertionFor(id, { nameId: "_3f7b3dcf-1674-4ecd-92c8-1544f346baf8", nameIdFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:transient" });
+    await expect(acs(envelope(id, signAssertion(assertion)))).rejects.toThrow(/email address/i);
+  });
+
+  it("on a new configuration, a persistent NameID gives way to the Entra claim and nothing is warned", async () => {
+    const id = await startSignIn();
+    const assertion = assertionFor(id, {
+      nameId: "sam@acme.example",
+      nameIdFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+      attributes: { "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress": "samantha@acme.example" }
+    });
+    const { identity } = await acs(envelope(id, signAssertion(assertion)));
+    expect(identity.email).toBe("samantha@acme.example");
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("refuses an email attribute that is not syntactically an address", async () => {

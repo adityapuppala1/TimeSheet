@@ -605,17 +605,40 @@ function firstText(value: unknown): string | null {
   return typeof first === "string" && first.trim() !== "" ? first.trim() : null;
 }
 
-/** The first syntactically valid address among: the `email`/`mail` attribute (node-saml folds both,
- *  and the eduPerson OID, into `email`), Entra's emailaddress claim, then the NameID — only when its
- *  format allows an address. */
-function samlEmail(profile: Profile): string | null {
-  const nameIdMayBeEmail = !profile.nameIDFormat || EMAIL_NAMEID_FORMATS.has(profile.nameIDFormat);
-  const candidates = [profile.email, profile[ENTRA_EMAIL_CLAIM], nameIdMayBeEmail ? profile.nameID : null];
-  for (const candidate of candidates) {
-    const text = firstText(candidate);
-    if (text && EMAIL_ADDRESS.safeParse(text).success) return text;
+const isEmailAddress = (text: string | null): text is string => text !== null && EMAIL_ADDRESS.safeParse(text).success;
+
+/**
+ * The first syntactically valid address among: the `email`/`mail` attribute (node-saml folds both,
+ * and the eduPerson OID, into `email`), the NameID, then Entra's emailaddress claim.
+ *
+ * THE ORDER IS WHO A PERSON IS. Before audit L1 this was `profile.email ?? nameID`, and an account
+ * is matched by the address it resolves to — so the order keeps that one in front. Entra and ADFS
+ * send NameID = the UPN AND an emailaddress claim = `mail`; putting the claim first re-homed every
+ * person whose UPN ≠ mail onto a fresh JIT account (R1-1). The claim only fills in when the NameID
+ * is not an address, which is the case it was added for (Entra's opaque persistent NameID).
+ *
+ * The NameID counts only when its format allows an address — transient and persistent are opaque
+ * identifiers by definition. STAGED like checkSamlAddressing: a `proven` configuration (one that
+ * has signed people in, by that NameID) keeps an email-shaped NameID of any format, with an
+ * operator warning, rather than locking out a workspace that may be on "Require SSO only".
+ */
+function samlEmail(orgId: string, config: SamlConfig, profile: Profile): string | null {
+  const fromAttribute = firstText(profile.email);
+  if (isEmailAddress(fromAttribute)) return fromAttribute;
+
+  const nameId = firstText(profile.nameID);
+  if (isEmailAddress(nameId)) {
+    if (!profile.nameIDFormat || EMAIL_NAMEID_FORMATS.has(profile.nameIDFormat)) return nameId;
+    if (config.proven) {
+      console.warn(
+        `[sso] org ${orgId}: SAML NameID of format "${profile.nameIDFormat}" used as the sign-in email — allowed because this configuration has signed people in before. Map an email attribute in the SAML app so this can be enforced.`
+      );
+      return nameId;
+    }
   }
-  return null;
+
+  const fromEntraClaim = firstText(profile[ENTRA_EMAIL_CLAIM]);
+  return isEmailAddress(fromEntraClaim) ? fromEntraClaim : null;
 }
 
 export async function buildSamlAuthorizationRedirect(orgId: string): Promise<string> {
@@ -649,7 +672,7 @@ export async function completeSamlLogin(
   if (!profile) throw new AppError(400, "The identity provider's response didn't contain a sign-in.", { code: "SSO_CONFIG" });
   await checkSamlAddressing(orgId, config, profile, received.hosts);
 
-  const email = samlEmail(profile);
+  const email = samlEmail(orgId, config, profile);
   if (!email) {
     throw new AppError(
       400,
