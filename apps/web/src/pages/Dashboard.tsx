@@ -70,7 +70,7 @@ import { ProjectUtilizationChart } from "../components/ProjectUtilizationChart";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
 import { computeTrend, type Trend } from "../lib/trend";
 import { cn } from "../lib/utils";
-import { likeForLikeWindow, summarisePersonalPeriod } from "../lib/personal-period";
+import { likeForLikeWindow, periodNote, summarisePersonalPeriod } from "../lib/personal-period";
 import { isoToLocalDate, localDateKey } from "../lib/local-day";
 import { formatHours } from "../lib/format";
 import { changeApi, dashboardApi, reportApi, ticketApi, timesheetApi, type MyMonthRollup, type TicketRow } from "../services/api";
@@ -676,20 +676,6 @@ const WEEK_SEGMENTS = [
   { key: "DRAFT", label: "Draft", bar: "bg-muted-foreground/40", dot: "bg-muted-foreground/40" }
 ] as const;
 
-/**
- * One honest sentence about where the week's hours actually sit — computed, never invented, the
- * same rule the rhythm card's insight strip follows. Extracted from the component so the branching
- * lives in a plain function instead of a nested ternary inside JSX.
- */
-function weekNote(hours: number, pendingCount: number, byStatus: Record<string, number>, periodLabel: string): string {
-  if (hours === 0) return `No hours logged ${periodLabel} — your entries will show up here as you add them.`;
-  if (pendingCount > 0) return `${pendingCount} ${pendingCount === 1 ? "entry is" : "entries are"} waiting on a reviewer.`;
-  if ((byStatus.DRAFT ?? 0) === hours) return "Everything so far is still a draft — submit it to start the review clock.";
-  const approvedShare = Math.round(((byStatus.APPROVED ?? 0) / hours) * 100);
-  if (approvedShare >= 100) return `Every hour ${periodLabel} is approved. Nothing outstanding.`;
-  return `${approvedShare}% of these hours are approved.`;
-}
-
 /** Trackline's "Overall Tasks" card, for hours: headline number + a segmented STATUS bar.
  *  Every segment also gets a labeled value row below — state is never color-alone (the
  *  green↔amber pair sits in the CVD warn band, which is only acceptable with exactly this
@@ -737,7 +723,7 @@ function WeekAtAGlance({
   // tall empty gap; filling it with real facts is better than padding it with whitespace.
   const busiest = trend.reduce((best, d) => (d.hours > best.hours ? d : best), { day: "—", hours: 0 });
   const dailyAvg = daysLogged > 0 ? hours / daysLogged : 0;
-  const note = weekNote(hours, pendingCount, byStatus, periodIn);
+  const note = periodNote(hours, pendingCount, byStatus, periodIn);
 
   // Three rows keeps the card the same height as its neighbours without scrolling; anything
   // beyond that is summed into one honest "+Nh across M more" line rather than truncated silently.

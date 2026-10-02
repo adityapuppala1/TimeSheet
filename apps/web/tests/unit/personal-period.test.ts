@@ -8,7 +8,7 @@
  * These tests pin the per-person rule and the shared definitions the cards now use.
  */
 import { describe, expect, it } from "vitest";
-import { summarisePersonalPeriod, type PersonalRow } from "../../src/lib/personal-period";
+import { periodNote, summarisePersonalPeriod, type PersonalRow } from "../../src/lib/personal-period";
 
 const ME = "user-me";
 const COLLEAGUE = "user-colleague";
@@ -129,5 +129,17 @@ describe("the comparison", () => {
   it("is null — not zero — while the previous window has not been loaded", () => {
     const period = summarisePersonalPeriod({ rows: [], from: "2026-09-28", to: "2026-10-01", userId: ME, today: TODAY });
     expect(period.prevLoggedHours).toBeNull();
+  });
+});
+
+describe("the by-state card's sentence", () => {
+  it("says a period of only drafts is drafts, not that nothing was logged", () => {
+    expect(periodNote(0, 0, { DRAFT: 6, APPROVED: 0, SUBMITTED: 0, REJECTED: 0 }, "this week")).toMatch(/still a draft/);
+    expect(periodNote(0, 0, { DRAFT: 0, APPROVED: 0, SUBMITTED: 0, REJECTED: 0 }, "this week")).toMatch(/^No hours logged this week/);
+  });
+
+  it("reads the approved share against logged hours", () => {
+    expect(periodNote(8, 0, { APPROVED: 6, SUBMITTED: 2, DRAFT: 5, REJECTED: 0 }, "this week")).toBe("75% of these hours are approved.");
+    expect(periodNote(8, 0, { APPROVED: 8, SUBMITTED: 0, DRAFT: 5, REJECTED: 0 }, "this week")).toMatch(/^Every logged hour this week is approved/);
   });
 });

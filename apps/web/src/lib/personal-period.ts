@@ -105,6 +105,22 @@ export function likeForLikeWindow(from: string, to: string, today: Date): Compar
   };
 }
 
+/**
+ * One honest sentence about where the period's hours sit — computed, never invented. `hours` is
+ * LOGGED hours, so a period of nothing but drafts is called what it is rather than "nothing logged".
+ */
+export function periodNote(hours: number, pendingCount: number, byStatus: Record<string, number>, periodLabel: string): string {
+  if (hours === 0) {
+    return (byStatus.DRAFT ?? 0) > 0
+      ? "Everything so far is still a draft — submit it to start the review clock."
+      : `No hours logged ${periodLabel} — your entries will show up here as you add them.`;
+  }
+  if (pendingCount > 0) return `${pendingCount} ${pendingCount === 1 ? "entry is" : "entries are"} waiting on a reviewer.`;
+  const approvedShare = Math.round(((byStatus.APPROVED ?? 0) / hours) * 100);
+  if (approvedShare >= 100) return `Every logged hour ${periodLabel} is approved. Nothing outstanding.`;
+  return `${approvedShare}% of these hours are approved.`;
+}
+
 export interface PersonalPeriodInput<Row extends PersonalRow> {
   /** The person's rows for the range. Rows of anyone else are ignored, whatever the list held. */
   rows: Row[];
