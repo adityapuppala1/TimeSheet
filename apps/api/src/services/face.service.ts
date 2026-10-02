@@ -719,6 +719,29 @@ export async function bindVerificationToRecord(attemptId: string, record: { time
     .catch(() => undefined);
 }
 
+/**
+ * Detaches the submit-time identity check(s) from a timesheet whose substance has since changed.
+ *
+ * WHY: the "identity verified" badge joins attempt → timesheet by `timesheetId` alone, so an entry
+ * verified as three hours on project A kept its badge after being edited into twelve hours on
+ * project B. The check vouched for what was SUBMITTED; a material edit is a different claim. The
+ * attempt row itself is kept (it is the audit trail of a check that really happened) — only its
+ * link to this entry goes, and the caller records the returned ids in its own audit entry.
+ *
+ * TIMESHEET context only: an APPROVAL attempt bound to the same row records the reviewer's check,
+ * which an edit before the decision cannot have happened after.
+ */
+export async function unbindTimesheetVerification(timesheetId: string): Promise<string[]> {
+  const bound = await prisma.faceVerificationAttempt.findMany({
+    where: { timesheetId, context: "TIMESHEET" },
+    select: { id: true }
+  });
+  if (bound.length === 0) return [];
+  const ids = bound.map((attempt) => attempt.id);
+  await prisma.faceVerificationAttempt.updateMany({ where: { id: { in: ids } }, data: { timesheetId: null } });
+  return ids;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Challenge–response liveness (anti-injection)
 // ---------------------------------------------------------------------------------------------

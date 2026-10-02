@@ -29,7 +29,13 @@ import { computeApprovalDeadline, resolveEscalationsFor } from "../services/sla.
 import { emitDomainEvent } from "../services/domain-events.js";
 import { processUpload } from "../services/attachment-storage.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
-import { bindVerificationToRecord, consumeVerification, getTimesheetVerificationBadges, isFaceVerificationRequired } from "../services/face.service.js";
+import {
+  bindVerificationToRecord,
+  consumeVerification,
+  getTimesheetVerificationBadges,
+  isFaceVerificationRequired,
+  unbindTimesheetVerification
+} from "../services/face.service.js";
 import { parseDayWindow, workDateFilter } from "../utils/date-window.js";
 import {
   approvalScopeWhere,
@@ -378,6 +384,32 @@ timesheetRouter.get("/:id", async (req, res) => {
   await respondWithEntry(res, entry);
 });
 
+/**
+ * The module has to belong to the project, and the submodule to the module. Checked on CREATE as
+ * well as on PATCH: the create path used to trust the web form's cascading pickers, which an API,
+ * MCP or Ask-AI caller never sees — so project A with a module of project B was accepted.
+ */
+async function assertModuleBelongs(projectId: string, moduleId: string, submoduleId: string | null | undefined): Promise<void> {
+  const moduleRow = await prisma.projectModule.findFirst({ where: { id: moduleId } });
+  if (!moduleRow || moduleRow.projectId !== projectId) {
+    throw new AppError(422, "Selected module does not belong to this project");
+  }
+  if (submoduleId) {
+    const submoduleRow = await prisma.projectSubmodule.findFirst({ where: { id: submoduleId } });
+    if (!submoduleRow || submoduleRow.moduleId !== moduleId) {
+      throw new AppError(422, "Selected submodule does not belong to this module");
+    }
+  }
+}
+
+/** The author — not whoever is editing — must be assigned to the project the hours are logged
+ *  against, unless the author is an admin (the same exemption the create path has always had). */
+async function assertAuthorAssigned(author: { id: string; role: string | null | undefined }, projectId: string): Promise<void> {
+  if (["SUPER_ADMIN", "ADMIN"].includes(author.role ?? "")) return;
+  const assigned = await prisma.userProjectAssignment.findFirst({ where: { userId: author.id, projectId } });
+  if (!assigned) throw new AppError(403, "You are not assigned to this project");
+}
+
 /** Exported for services/mcp-tools.ts's `log_timesheet_entry`, which passes a synthetic
  *  `{ user, body, files }` rather than a real request. Every rule below — the Serializable
  *  overlap check, the project-assignment gate, the identity gate, the sanitisation — has to hold
@@ -392,6 +424,8 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
   if (workDate > todayUtc) throw new AppError(422, "Future dates are not allowed");
   if (hours <= 0) throw new AppError(422, "End time must be after start time");
   if (hours > 12) throw new AppError(422, "A single entry cannot exceed 12 hours");
+  // Before the identity gate, so a refused pairing does not spend somebody's face check.
+  await assertModuleBelongs(req.body.projectId, req.body.moduleId, req.body.submoduleId || null);
 
   // Identity gate. Only on SUBMITTED: a draft is private working state, and demanding a webcam
   // capture every time someone saves a half-finished row would be hostile without adding any
@@ -409,12 +443,7 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
   }
 
   // Enforce project-assignment scope for non-privileged users.
-  if (!["SUPER_ADMIN", "ADMIN"].includes(req.user.role)) {
-    const assigned = await prisma.userProjectAssignment.findFirst({
-      where: { userId: req.user.id, projectId: req.body.projectId }
-    });
-    if (!assigned) throw new AppError(403, "You are not assigned to this project");
-  }
+  await assertAuthorAssigned({ id: req.user.id, role: req.user.role }, req.body.projectId);
 
   const ticketId = req.body.ticketId || null;
   if (ticketId) {
@@ -1165,17 +1194,14 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
   const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
   if (workDate > todayUtc) throw new AppError(422, "Future dates are not allowed");
 
-  // The module has to belong to the project, and the ticket too — the create path gets this for
-  // free from cascading pickers, but a PATCH can name any pair.
-  const moduleRow = await prisma.projectModule.findFirst({ where: { id: next.moduleId } });
-  if (!moduleRow || moduleRow.projectId !== next.projectId) {
-    throw new AppError(422, "Selected module does not belong to this project");
-  }
-  if (next.submoduleId) {
-    const submoduleRow = await prisma.projectSubmodule.findFirst({ where: { id: next.submoduleId } });
-    if (!submoduleRow || submoduleRow.moduleId !== next.moduleId) {
-      throw new AppError(422, "Selected submodule does not belong to this module");
-    }
+  // The module has to belong to the project, and the ticket too — the same pairing check the
+  // create path runs (see assertModuleBelongs).
+  await assertModuleBelongs(next.projectId, next.moduleId, next.submoduleId);
+  // Moving the hours to another project is logging them there, so the AUTHOR must be assigned to it
+  // — the create path's rule. PATCH never checked, so an edit could put hours on any project.
+  if (next.projectId !== existing.projectId) {
+    const author = await prisma.user.findUnique({ where: { id: existing.userId }, select: { role: { select: { name: true } } } });
+    await assertAuthorAssigned({ id: existing.userId, role: author?.role?.name }, next.projectId);
   }
   if (next.ticketId) {
     const ticket = await prisma.ticket.findFirst({ where: { id: next.ticketId, deletedAt: null } });
@@ -1208,6 +1234,26 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
   // is stored, never on the way out.
   if (typeof req.body.taskDescription === "string") data.taskDescription = sanitizeRichText(req.body.taskDescription);
   if (typeof req.body.notes === "string") data.notes = req.body.notes ? sanitizeRichText(req.body.notes) : "";
+
+  /**
+   * A MATERIAL change — when, how long, or against which project/module — makes this a different
+   * claim from the one that was submitted, even though it keeps its id and its SUBMITTED status (an
+   * author fixing a typo must not have to re-submit, so status is deliberately left alone). Two
+   * things follow, and a wording fix triggers neither:
+   *  - the reviewer is deciding something new, so the approval clock restarts from now;
+   *  - the submit-time identity check vouched for the old claim, so its "verified" binding is
+   *    dropped below, after the write succeeds.
+   */
+  const materialChange =
+    next.projectId !== existing.projectId ||
+    next.moduleId !== existing.moduleId ||
+    workDate.getTime() !== existing.workDate.getTime() ||
+    next.startTime !== existing.startTime ||
+    next.endTime !== existing.endTime;
+  if (materialChange && existing.status === "SUBMITTED") {
+    const project = await prisma.project.findUnique({ where: { id: next.projectId }, select: { slaApprovalHours: true } });
+    data.approvalDeadline = computeApprovalDeadline(new Date(), project?.slaApprovalHours);
+  }
 
   // An APPROVED entry carries a frozen rate. If the hours moved, the frozen AMOUNT has to move
   // with them or the attestation would assert a total its own hours don't support. The RATE
@@ -1256,10 +1302,15 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
   ];
   for (const [field, from, to] of compare) if (from !== to) changes[field] = { from, to };
 
+  const identityVerificationDropped = materialChange ? await unbindTimesheetVerification(updated.id) : [];
+
   await audit(req.user!.id, "timesheet.updated", "Timesheet", updated.id, {
     status: updated.status,
     onBehalfOf: isOwner ? undefined : updated.userId,
-    changes
+    changes,
+    // Which identity check(s) stopped vouching for this entry, so the badge's disappearance has a
+    // recorded cause rather than looking like data loss.
+    ...(identityVerificationDropped.length > 0 ? { identityVerificationDropped } : {})
   });
 
   // Nobody learns about a change to their work from a diff they had to go looking for. Two

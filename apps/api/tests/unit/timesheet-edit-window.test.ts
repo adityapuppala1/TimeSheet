@@ -58,6 +58,7 @@ vi.mock("../../src/services/face.service.js", () => ({
   isFaceVerificationRequired: vi.fn().mockResolvedValue(false),
   consumeVerification: vi.fn().mockResolvedValue(null),
   bindVerificationToRecord: vi.fn().mockResolvedValue(undefined),
+  unbindTimesheetVerification: vi.fn().mockResolvedValue([]),
   getTimesheetVerificationBadges: vi.fn().mockResolvedValue(new Map())
 }));
 vi.mock("../../src/services/sla.service.js", () => ({
@@ -125,6 +126,7 @@ function mockClient(status: string) {
         user: { id: AUTHOR.id, name: AUTHOR.name, email: AUTHOR.email }
       }))
     },
+    project: { findUnique: vi.fn().mockResolvedValue({ id: entry.projectId, slaApprovalHours: 48 }) },
     projectModule: { findFirst: vi.fn().mockResolvedValue({ id: entry.moduleId, projectId: entry.projectId }) },
     projectSubmodule: { findFirst: vi.fn().mockResolvedValue(null) },
     ticket: { findFirst: vi.fn().mockResolvedValue(null) },
