@@ -67,6 +67,20 @@ export function classifySignupError(error: unknown, fallback = "Something went w
   return { kind: "message", message: message ?? fallback };
 }
 
+/**
+ * What the workspace finder's first step says when no code could be requested (R1-4). Only the
+ * network limiter's 429 gets the server's own words: it names the network, never the address, so it
+ * cannot turn the step into the hit-or-miss oracle it must not be — the route answers 202 for both
+ * before it looks anything up. Every apex sign-in on a multi-org deployment comes through here, so
+ * "check your connection" for a throttle sent people debugging a network that was fine.
+ */
+export function findWorkspaceStartError(error: unknown): string {
+  const response = (error as { response?: { status?: number; data?: { message?: unknown } } })?.response;
+  if (response?.status !== 429) return "Check your connection and try again.";
+  const message = response.data?.message;
+  return typeof message === "string" && message.trim() ? message : "Too many requests from this network. Wait a few minutes and try again.";
+}
+
 /** "Northwind's workspace", or "Your company's workspace" when the server did not name it — a
  *  WORKSPACE_UNAVAILABLE from /complete carries no name, and "'s workspace" is not a sentence. */
 export function companyWorkspaceLabel(companyName: string): string {

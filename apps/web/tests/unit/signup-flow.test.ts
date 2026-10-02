@@ -8,7 +8,7 @@
  *    claimed a moment ago back at the code step, an expired verification back at the start.
  */
 import { describe, expect, it } from "vitest";
-import { classifySignupError, companyWorkspaceLabel, contactPrefill, stepAfterVerify, workspaceHostSuffix } from "../../src/utils/signup-flow";
+import { classifySignupError, companyWorkspaceLabel, contactPrefill, findWorkspaceStartError, stepAfterVerify, workspaceHostSuffix } from "../../src/utils/signup-flow";
 
 const axiosError = (status: number, data: Record<string, unknown> = {}) => ({ response: { status, data } });
 
@@ -95,5 +95,24 @@ describe("contactPrefill", () => {
   it("starts nothing for an unknown or absent reason", () => {
     expect(contactPrefill(null)).toBe("");
     expect(contactPrefill("<script>")).toBe("");
+  });
+});
+
+// R1-4. Every apex sign-in on a multi-org deployment goes through the finder, so its network limiter
+// is something real people meet — and the page answered it with "Check your connection".
+describe("findWorkspaceStartError", () => {
+  it("shows the server's own words for the network limiter's 429", () => {
+    expect(findWorkspaceStartError(axiosError(429, { message: "Too many requests from this network. Wait a few minutes and try again." }))).toBe(
+      "Too many requests from this network. Wait a few minutes and try again."
+    );
+  });
+
+  it("still says it was throttled when the 429 carries no message", () => {
+    expect(findWorkspaceStartError(axiosError(429))).toMatch(/too many requests/i);
+  });
+
+  it("keeps 'check your connection' for everything else — the step must not word a hit differently from a miss", () => {
+    expect(findWorkspaceStartError(new Error("Network Error"))).toBe("Check your connection and try again.");
+    expect(findWorkspaceStartError(axiosError(500, { message: "boom" }))).toBe("Check your connection and try again.");
   });
 });

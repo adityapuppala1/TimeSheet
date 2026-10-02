@@ -31,7 +31,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { toast } from "../components/ui/toaster";
 import { authApi } from "../services/api";
-import type { SignupWorkspaceLink } from "../utils/signup-flow";
+import { findWorkspaceStartError, type SignupWorkspaceLink } from "../utils/signup-flow";
 
 const emailSchema = z.object({ email: z.string().email("Enter a valid work email") });
 const codeSchema = z.object({ code: z.string().regex(/^\d{6}$/, "Enter the 6-digit code") });
@@ -53,8 +53,8 @@ export function FindWorkspace() {
       setToken(issued);
       setSentTo(email);
       setStep("code");
-    } catch {
-      toast.error("Couldn't send the code", { description: "Check your connection and try again." });
+    } catch (err) {
+      toast.error("Couldn't send the code", { description: findWorkspaceStartError(err) });
     } finally {
       setBusy(false);
     }

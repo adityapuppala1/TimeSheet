@@ -22,15 +22,26 @@ import rateLimit from "express-rate-limit";
 export const MAIL_ROUTE_WINDOW_MS = 15 * 60_000;
 /** Ten in fifteen minutes per IP: room for an office behind one NAT where a few people forget
  *  their password the same morning, and nowhere near enough to bomb anyone. */
-export const MAIL_ROUTE_LIMIT_PER_WINDOW = 10;
+export const FORGOT_PASSWORD_LIMIT_PER_WINDOW = 10;
+/** Sixty for the finder, because on a multi-org deployment it is not an occasional route: the apex
+ *  `/login` sends everybody to `/find-workspace` (Login.tsx), so EVERY apex sign-in is one request
+ *  here, and ten throttled the eleventh person in an office behind one NAT (review R1-4). The
+ *  three-codes-an-hour cap per ADDRESS is what stops an inbox being bombed; this only bounds what
+ *  one network can make the server do. */
+export const WORKSPACE_FINDER_LIMIT_PER_WINDOW = 60;
+
+const MAIL_ROUTE_LIMITS: ReadonlyArray<[path: string, limit: number]> = [
+  ["/api/auth/forgot-password", FORGOT_PASSWORD_LIMIT_PER_WINDOW],
+  ["/api/auth/workspaces/start", WORKSPACE_FINDER_LIMIT_PER_WINDOW]
+];
 
 export function mountMailRouteLimiters(app: Express): void {
-  for (const path of ["/api/auth/forgot-password", "/api/auth/workspaces/start"]) {
+  for (const [path, limit] of MAIL_ROUTE_LIMITS) {
     app.use(
       path,
       rateLimit({
         windowMs: MAIL_ROUTE_WINDOW_MS,
-        limit: MAIL_ROUTE_LIMIT_PER_WINDOW,
+        limit,
         standardHeaders: true,
         message: { message: "Too many requests from this network. Wait a few minutes and try again." }
       })
