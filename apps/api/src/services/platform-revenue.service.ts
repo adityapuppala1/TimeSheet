@@ -35,7 +35,7 @@
  * history yet" rather than as 0%.
  */
 import { controlPrisma } from "../config/control-prisma.js";
-import { platformDate, platformMonthKey } from "../utils/platform-time.js";
+import { platformDate, platformDayKey, platformDayStart, platformMonthKey, shiftDayKey } from "../utils/platform-time.js";
 import {
   MIN_TREND_SNAPSHOTS,
   attentionExclusion,
@@ -47,7 +47,7 @@ import {
   type SeatUsageRow
 } from "./platform-account-health.js";
 import { BILLABLE_SUBSCRIPTION_STATUSES, isStripeConfigured } from "./stripe-client.service.js";
-import { isConverted } from "./trial-conversion.js";
+import { isConverted, type ConversionFields } from "./trial-conversion.js";
 
 /** Every figure this service produces is derived from an operator-editable LIST price. Carried in
  *  the payload rather than assumed by the client, so a future billed-revenue source can be added
@@ -193,8 +193,10 @@ export interface MrrBreakdown {
   unpricedSeats: number;
   billableSeats: number;
   trialingAccounts: number;
-  /** Workspaces whose latest reading could not reach their database, priced from the last reading
-   *  that could (see `RevenueAccount.unmeasured`). The console prints "N unmeasured". */
+  /** Revenue-bearing workspaces whose latest reading could not reach their database, priced from the
+   *  last reading that could (see `RevenueAccount.unmeasured`). The console prints "N unmeasured".
+   *  Suspended, archived and trialling workspaces are not in it: no figure on the tile stands for
+   *  them, and an archived one with no database is unreachable every night. */
   unmeasuredAccounts: number;
   byTier: TierRevenue[];
 }
@@ -249,7 +251,7 @@ export function computeListMrr(accounts: RevenueAccount[], prices: TierPrices): 
     unpricedSeats,
     billableSeats: seats,
     trialingAccounts: accounts.filter((account) => account.trialing).length,
-    unmeasuredAccounts: accounts.filter((account) => account.unmeasured).length,
+    unmeasuredAccounts: accounts.filter((account) => account.unmeasured && isRevenueBearing(account)).length,
     byTier: [...tiers.entries()]
       .map(([tier, bucket]) => ({ tier, ...bucket, perSeatMinor: prices[tier]?.perSeatMinor ?? null }))
       .sort((a, b) => (b.mrrMinor ?? -1) - (a.mrrMinor ?? -1))
@@ -473,10 +475,14 @@ function tallyTrials(trials: TrialLifecycle[], now: Date): TrialTally {
  * WHICH TRIALS. The headline is the trials that STARTED inside `windowDays` (the Revenue page's window
  * selector — it used to be all time whatever the selector said), and `byCohort` groups every trial by
  * its start month in the platform's zone. Days to convert is `convertedAt − trialStartedAt`.
+ *
+ * `trialStartedAt` is an INSTANT, so the window starts at the instant its first day began in the
+ * platform's zone (`platformDayStart`) — not at `windowStart`, the date-only value snapshot `day`s are
+ * compared with, which as an instant is 05:30 IST and dropped a trial started before dawn that day.
  */
 export function computeTrialConversion(lifecycles: TrialLifecycle[], now = new Date(), windowDays: number | null = null): TrialConversion {
   const trials = lifecycles.filter((row): row is TrialLifecycle & { trialStartedAt: Date } => row.trialStartedAt !== null);
-  const since = windowDays === null ? null : windowStart(windowDays, now).getTime();
+  const since = windowDays === null ? null : platformDayStart(shiftDayKey(platformDayKey(now), -windowDays)).getTime();
   const inWindow = since === null ? trials : trials.filter((row) => row.trialStartedAt.getTime() >= since);
 
   const byMonth = new Map<string, TrialLifecycle[]>();
@@ -1170,7 +1176,7 @@ export async function getFleetAccountHealth(
       emailsSent: latest.emailsSentMonthToDate,
       emailsFailed: latest.emailsFailedMonthToDate,
       backupFailures: failuresByOrg.get(org.id) ?? 0,
-      trialDaysRemaining: org.trialEndsAt ? (org.trialEndsAt.getTime() - now.getTime()) / DAY_MS : null
+      trialDaysRemaining: trialDaysRemaining(org, now)
     });
     rows.push({
       orgId: org.id,
@@ -1247,6 +1253,17 @@ export function velocityInputs(series: Array<{ day: Date; ticketsTotal: number; 
   const measured = series.filter((row) => row.reachable);
   const { recent, prior } = ticketVelocity(measured);
   return { ticketsPerDayRecent: recent, ticketsPerDayPrior: prior, snapshots: measured.length };
+}
+
+/**
+ * Days left on a trial that is still a trial — null once the workspace has converted
+ * (trial-conversion.ts), whatever its clock says. A customer converted by hand before the console
+ * cleared trial clocks kept a trial end months in the past, and was scored "Trial lapsed … no
+ * subscription followed it" (25 points, AT_RISK, on Needs attention) while paying.
+ */
+function trialDaysRemaining(org: ConversionFields & { trialEndsAt: Date | null }, now: Date): number | null {
+  if (!org.trialEndsAt || isConverted(org)) return null;
+  return (org.trialEndsAt.getTime() - now.getTime()) / DAY_MS;
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -1353,7 +1370,7 @@ export async function getOrgUsageProfile(orgId: string, windowDays = 60): Promis
   const since = windowStart(windowDays, now);
 
   const [org, series, prices, backupFailures] = await Promise.all([
-    controlPrisma.organization.findUnique({ where: { id: orgId }, select: { id: true, slug: true, name: true, trialEndsAt: true } }),
+    controlPrisma.organization.findUnique({ where: { id: orgId }, select: { id: true, slug: true, name: true, trialEndsAt: true, trialTier: true, planTier: true, stripeSubscriptionId: true } }),
     controlPrisma.orgUsageSnapshot.findMany({ where: { organizationId: orgId, day: { gte: since } }, orderBy: { day: "asc" } }),
     getTierPrices(),
     controlPrisma.backupRun.count({ where: { organizationId: orgId, status: "FAILED", startedAt: { gte: since } } })
@@ -1396,7 +1413,7 @@ export async function getOrgUsageProfile(orgId: string, windowDays = 60): Promis
           emailsSent: latest.emailsSentMonthToDate,
           emailsFailed: latest.emailsFailedMonthToDate,
           backupFailures,
-          trialDaysRemaining: org?.trialEndsAt ? (org.trialEndsAt.getTime() - now.getTime()) / DAY_MS : null
+          trialDaysRemaining: org ? trialDaysRemaining(org, now) : null
         })
       : null,
     latest: latest

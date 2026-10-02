@@ -154,6 +154,21 @@ describe("computeListMrr", () => {
     // The carried-forward seats still price: an outage is not a downgrade.
     expect(mrr.mrrMinor).toBe(16_000);
   });
+
+  it("counts as unmeasured only the workspaces whose revenue the carried figure stands in for", () => {
+    // A suspended or archived workspace with no database is unreachable every night, and a running
+    // trial bills nothing: none of them is a figure on this tile, so none is "unmeasured" on it.
+    const mrr = computeListMrr(
+      [
+        account("live", { unmeasured: true }),
+        account("suspended", { status: "SUSPENDED", unmeasured: true }),
+        account("archived", { status: "ARCHIVED", unmeasured: true }),
+        account("trial", { trialing: true, unmeasured: true })
+      ],
+      PRICES
+    );
+    expect(mrr.unmeasuredAccounts).toBe(1);
+  });
 });
 
 describe("isPayingCustomer and isFreeAccount — the two populations, defined once", () => {
@@ -371,6 +386,16 @@ describe("computeTrialConversion", () => {
     expect(windowed.trialsStarted).toBe(1);
     expect(windowed.stillTrialing).toBe(1);
     expect(windowed.windowDays).toBe(30);
+  });
+
+  it("starts the headline window at midnight in India, not at 05:30", () => {
+    // 11:30 IST on 2 Oct; thirty days back is 2 Sep, which began at 18:30 UTC on 1 Sep. The window
+    // used to start at the date-only value 2 Sep 00:00 UTC — 05:30 IST — and dropped a trial started
+    // at 01:00 IST that morning.
+    const now = at("2026-10-02T06:00:00Z");
+    const earlyOnTheFirstDay = trial("early", "2026-09-01T19:30:00Z");
+    const theNightBefore = trial("before", "2026-09-01T18:00:00Z");
+    expect(computeTrialConversion([earlyOnTheFirstDay, theNightBefore], now, 30).trialsStarted).toBe(1);
   });
 
   it("cohorts trials by the month they STARTED, in India's calendar", () => {

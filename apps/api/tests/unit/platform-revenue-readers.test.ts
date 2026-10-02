@@ -217,6 +217,34 @@ describe("getFleetAccountHealth — the Needs attention list", () => {
   });
 });
 
+describe("a converted customer whose trial clock was never cleared", () => {
+  // Converted by hand before the console cleared trial clocks: a paid plan, the trial tier still set,
+  // and a trial end months ago. isConverted says it pays; its stale clock is not a lapsed trial.
+  const legacy = () => org("paid", { planTier: "TEAM", trialTier: "TEAM", trialEndsAt: new Date("2026-06-01T00:00:00Z") });
+
+  it("is not scored 'Trial lapsed' on the health list", async () => {
+    orgs = [legacy()];
+    snaps = [snap("paid", "2026-10-02", { trialTier: "TEAM", trialEndsAt: new Date("2026-06-01T00:00:00Z"), lastActivityAt: new Date("2026-10-01T10:00:00Z") })];
+    const health = await getFleetAccountHealth(30, 90);
+    expect(health.rows[0].health.signals.map((signal) => signal.id)).not.toContain("trial-lapsed");
+    expect(health.rows[0].health.band).toBe("HEALTHY");
+  });
+
+  it("is not scored 'Trial lapsed' on Org 360", async () => {
+    orgs = [legacy()];
+    snaps = [snap("paid", "2026-10-02", { trialTier: "TEAM", trialEndsAt: new Date("2026-06-01T00:00:00Z"), lastActivityAt: new Date("2026-10-01T10:00:00Z") })];
+    const profile = await getOrgUsageProfile("paid");
+    expect(profile.health!.signals.map((signal) => signal.id)).not.toContain("trial-lapsed");
+  });
+
+  it("still warns about a real trial that is about to end", async () => {
+    orgs = [org("t", { planTier: "STARTER", trialTier: "TEAM", trialEndsAt: new Date("2026-10-05T00:00:00Z") })];
+    snaps = [snap("t", "2026-10-02", { planTier: "STARTER", trialTier: "TEAM", trialEndsAt: new Date("2026-10-05T00:00:00Z"), lastActivityAt: new Date("2026-10-01T10:00:00Z") })];
+    const health = await getFleetAccountHealth(30, 90);
+    expect(health.rows[0].health.signals.map((signal) => signal.id)).toContain("trial-ending");
+  });
+});
+
 /** Thirty-one nights, 2 Sep → 2 Oct, three tickets raised every day — a steady workspace whose
  *  FIRST night in the window could not reach its database, so that row holds a total of 0. */
 const steadyWithAnOutageFirst = (orgId: string) =>
