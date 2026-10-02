@@ -51,6 +51,13 @@ interface ChangeMailVars {
   comments?: string;
 }
 
+/**
+ * Where a change link goes: the change's own page. It used to be `/app/changes?open=<id>`, which the
+ * list never read, so an approver landed on the unfiltered list instead of the change they were asked
+ * to decide. The list now redirects that old form here, for the links already sitting in inboxes.
+ */
+export const changePath = (id: string): string => `/app/changes/${id}`;
+
 const stamp = (d: Date | null): string =>
   d ? d.toISOString().slice(0, 16).replace("T", " ") + " UTC" : "not scheduled";
 
@@ -143,7 +150,7 @@ function baseVars(change: ChangeForMail, receivedBy: string): ChangeMailVars {
     requestedBy: change.ticket.reporter.name,
     receivedBy,
     peopleInvolved: "",
-    appUrl: `${tenantBaseUrl()}/app/changes?open=${change.id}`
+    appUrl: `${tenantBaseUrl()}${changePath(change.id)}`
   };
 }
 
@@ -193,7 +200,7 @@ export async function sendChangeSubmittedMail(change: ChangeForMail, actor: { na
       category: "change.approval_requested",
       title: `Approval needed: ${change.changeKey}`,
       body: `${actor.name} submitted "${change.ticket.title}" for your approval.`,
-      link: `/app/changes?open=${change.id}`
+      link: changePath(change.id)
     }).catch(() => undefined);
   }
 }
@@ -226,7 +233,7 @@ export async function sendChangeDecisionMail(
       category: decision === "APPROVED" ? "change.approved" : "change.rejected",
       title: `${heading}: ${change.changeKey}`,
       body: `${actor.name} ${decision === "APPROVED" ? "approved" : "rejected"} "${change.ticket.title}".`,
-      link: `/app/changes?open=${change.id}`
+      link: changePath(change.id)
     }).catch(() => undefined);
   }
 }

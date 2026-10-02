@@ -64,6 +64,7 @@ import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { useCardLayout } from "../lib/use-media-query";
 import { runInBackground } from "../lib/run-in-background";
+import { changeRedirectFor } from "../utils/change-links";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -147,6 +148,14 @@ export function Changes() {
     setCreateOpen(true);
     void navigate(location.pathname, { replace: true, state: null });
   }, [location.state, location.pathname, navigate]);
+
+  // Old change links — `/app/changes?open=<id>`, in approval emails and the bell's history — open
+  // the change they name. `replace`, so Back returns to wherever the link was clicked from rather
+  // than to a list that would redirect again.
+  useEffect(() => {
+    const target = changeRedirectFor(location.search);
+    if (target) void navigate(target, { replace: true });
+  }, [location.search, navigate]);
 
   const canWrite = Boolean(user?.permissions.includes(permissions.CHANGES_WRITE));
 
