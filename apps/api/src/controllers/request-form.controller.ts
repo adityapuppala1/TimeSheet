@@ -19,6 +19,7 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { getPlanningQuota } from "../services/plan-limits.service.js";
 import { assertPlanningCapability } from "../services/planning.service.js";
+import { assertTicketVisible, CHANGE_TICKET_TYPE, ticketProjectScope } from "../services/ticket.service.js";
 import {
   hashPublicFormToken,
   issuePublicFormToken,
@@ -61,7 +62,14 @@ const bodySchema = z.object({
   description: z.string().max(2000).nullish(),
   projectId: z.string().uuid(),
   moduleId: z.string().uuid().nullish(),
-  ticketType: z.string().min(1).max(60).optional(),
+  // Not CHANGE: a form submission becomes a plain ticket, and only a change request's own ticket
+  // may carry that type (ticket.service.ts#assertValidTicketType).
+  ticketType: z
+    .string()
+    .min(1)
+    .max(60)
+    .refine((type) => type !== CHANGE_TICKET_TYPE, "A request form can't file tickets as CHANGE — changes are raised from the Changes page.")
+    .optional(),
   defaultPriority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).optional(),
   defaultAssigneeId: z.string().uuid().nullish(),
   blueprintId: z.string().uuid().nullish(),
@@ -244,13 +252,45 @@ requestFormRouter.delete(
 
 /* ---------- The inbox ---------- */
 
+/**
+ * A submission is in the caller's scope when its ticket is in a project they can see — the same
+ * question every ticket route asks — or, for the rare submission with no ticket, when its form's
+ * project is. Scoped by the TICKET first because a form can be re-pointed at another project, and
+ * its earlier submissions (and their submitters' names and emails) belong to the old one.
+ */
+function submissionScopeWhere(scope: { unrestricted: boolean; projectIds: string[] }) {
+  if (scope.unrestricted) return {};
+  return {
+    OR: [
+      { ticket: { is: { projectId: { in: scope.projectIds } } } },
+      { ticketId: null, form: { projectId: { in: scope.projectIds } } }
+    ]
+  };
+}
+
+/** Loads one submission and refuses it unless it is in the caller's project scope. */
+async function loadVisibleSubmission(req: any, id: string) {
+  const submission = await prisma.requestFormSubmission.findUnique({
+    where: { id },
+    select: { id: true, status: true, ticketId: true, ticket: { select: { projectId: true } }, form: { select: { projectId: true } } }
+  });
+  if (!submission) throw new AppError(404, "Submission not found");
+  await assertTicketVisible(req, submission.ticket?.projectId ?? submission.form.projectId);
+  return submission;
+}
+
 requestFormRouter.get("/submissions", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
   await assertFormsEnabled();
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
+  // `tickets:view` is held workspace-wide by every role, so on its own it handed every submitter's
+  // name, email and answers to anyone in the workspace. The project scope is the boundary.
+  const scope = await ticketProjectScope(req);
+  if (!scope.unrestricted && scope.projectIds.length === 0) return res.json([]);
   const submissions = await prisma.requestFormSubmission.findMany({
     where: {
       ...(status && status !== "all" ? { status } : {}),
-      ...(typeof req.query.formId === "string" && req.query.formId ? { formId: req.query.formId } : {})
+      ...(typeof req.query.formId === "string" && req.query.formId ? { formId: req.query.formId } : {}),
+      ...submissionScopeWhere(scope)
     },
     include: {
       form: { select: { id: true, name: true, slug: true, schema: true } },
@@ -269,6 +309,10 @@ requestFormRouter.get("/submissions", requirePermission(permissions.TICKETS_VIEW
  * request-form-public.controller.ts), because holding real requests in a queue nobody watches is
  * how intake systems quietly lose work. What review decides is whether the ticket that already
  * exists needs a human's attention — `needsReview` — not whether the request is allowed to exist.
+ *
+ * Rejecting soft-deletes that ticket, so it is held to what deleting a ticket needs everywhere
+ * else: the ticket's project must be one the caller can see, and only a submission still PENDING
+ * can be rejected — an accepted one is work in progress, and rejecting it would delete that work.
  */
 requestFormRouter.post(
   "/submissions/:id/reject",
@@ -277,8 +321,10 @@ requestFormRouter.post(
   async (req, res) => {
     await assertFormsEnabled();
     const id = String(req.params.id);
-    const submission = await prisma.requestFormSubmission.findUnique({ where: { id }, select: { id: true, ticketId: true } });
-    if (!submission) throw new AppError(404, "Submission not found");
+    const submission = await loadVisibleSubmission(req, id);
+    if (submission.status !== "PENDING") {
+      throw new AppError(409, `This submission was already ${submission.status.toLowerCase()} — only a pending one can be rejected.`);
+    }
 
     await prisma.$transaction(async (tx) => {
       await tx.requestFormSubmission.update({ where: { id }, data: { status: "REJECTED", needsReview: false } });
@@ -293,6 +339,11 @@ requestFormRouter.post(
   }
 );
 
+/**
+ * Accept a submission: a person has looked at it, and its ticket stands. Clears the review flag on
+ * the SUBMISSION and on its TICKET — it used to clear only the first, so the ticket's "Review" badge
+ * on the list, the Kanban and the AI activity log never went away.
+ */
 requestFormRouter.post(
   "/submissions/:id/accept",
   requirePermission(permissions.TICKETS_ASSIGN),
@@ -300,10 +351,15 @@ requestFormRouter.post(
   async (req, res) => {
     await assertFormsEnabled();
     const id = String(req.params.id);
-    const updated = await prisma.requestFormSubmission.update({
-      where: { id },
-      data: { status: "ACCEPTED", needsReview: false },
-      include: { ticket: { select: { id: true, key: true } } }
+    const submission = await loadVisibleSubmission(req, id);
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.requestFormSubmission.update({
+        where: { id },
+        data: { status: "ACCEPTED", needsReview: false },
+        include: { ticket: { select: { id: true, key: true } } }
+      });
+      if (submission.ticketId) await tx.ticket.update({ where: { id: submission.ticketId }, data: { needsReview: false } });
+      return row;
     });
     await audit(req.user!.id, "request_form.submission_accepted", "RequestFormSubmission", id);
     res.json(updated);

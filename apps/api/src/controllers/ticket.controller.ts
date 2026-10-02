@@ -929,7 +929,9 @@ ticketRouter.patch("/:id/assign", requirePermission(permissions.TICKETS_ASSIGN),
 
   const ticket = await prisma.ticket.update({
     where: { id: existing.id },
-    data: { assigneeId: req.body.assigneeId },
+    // A person handing an intake ticket to somebody IS the review it was waiting for. Unassigning
+    // is not, so it leaves the flag alone.
+    data: { assigneeId: req.body.assigneeId, ...(req.body.assigneeId && existing.needsReview ? { needsReview: false } : {}) },
     include: {
       project: { select: { id: true, code: true, name: true, color: true } },
       module: { select: { id: true, name: true } },
@@ -977,6 +979,29 @@ ticketRouter.patch("/:id/assign", requirePermission(permissions.TICKETS_ASSIGN),
   }
 
   res.json(ticket);
+});
+
+/**
+ * "Mark reviewed" — clears the intake review flag (`needsReview`) without assigning or moving the
+ * ticket, for the case where a person has checked the AI's classification and it is right as it
+ * stands. Assigning the ticket or changing its status clears the flag on its own; this is the
+ * explicit way, offered beside the "Needs review" badge in the AI activity log.
+ *
+ * Same authority as deciding who works on the ticket (`canReassignTicket`, which admits the
+ * project's managers and team leads on an intake ticket): the review the flag waits for IS a triage
+ * decision.
+ */
+ticketRouter.post("/:id/reviewed", requirePermission(permissions.TICKETS_ASSIGN), async (req, res) => {
+  const existing = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
+  if (!existing) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, existing.projectId);
+  if (!(await canReassignTicket(req, existing))) throw new AppError(403, REASSIGN_FORBIDDEN_MESSAGE);
+
+  if (existing.needsReview) {
+    await prisma.ticket.update({ where: { id: existing.id }, data: { needsReview: false } });
+    await audit(req.user!.id, "ticket.reviewed", "Ticket", existing.id);
+  }
+  res.json({ id: existing.id, needsReview: false });
 });
 
 ticketRouter.delete("/:id", requirePermission(permissions.TICKETS_MANAGE), async (req, res) => {
@@ -1113,7 +1138,7 @@ ticketRouter.post("/:id/collaborators", requirePermission(permissions.TICKETS_WR
   const ticketId = String(req.params.id);
   const ticket = await prisma.ticket.findFirst({
     where: { id: ticketId, deletedAt: null },
-    select: { id: true, key: true, title: true, projectId: true, reporterId: true, assigneeId: true }
+    select: { id: true, key: true, title: true, projectId: true, reporterId: true, assigneeId: true, needsReview: true }
   });
   if (!ticket) throw new AppError(404, "Ticket not found");
   await assertTicketVisible(req, ticket.projectId);
@@ -1162,7 +1187,7 @@ ticketRouter.delete("/:id/collaborators/:userId", requirePermission(permissions.
   const ticketId = String(req.params.id);
   const ticket = await prisma.ticket.findFirst({
     where: { id: ticketId, deletedAt: null },
-    select: { id: true, projectId: true, reporterId: true, assigneeId: true }
+    select: { id: true, projectId: true, reporterId: true, assigneeId: true, needsReview: true }
   });
   if (!ticket) throw new AppError(404, "Ticket not found");
   await assertTicketVisible(req, ticket.projectId);

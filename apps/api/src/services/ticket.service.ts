@@ -271,7 +271,7 @@ export function canModifyTicket(req: any, ticket: { reporterId: string; assignee
  */
 export async function canWorkOnTicket(
   req: any,
-  ticket: { id: string; reporterId: string; assigneeId: string | null }
+  ticket: IntakeAwareTicket & { id: string; assigneeId: string | null }
 ): Promise<boolean> {
   if (canModifyTicket(req, ticket)) return true;
   if (await isMappedManagerFor(req.user.id, ticket)) return true;
@@ -279,7 +279,47 @@ export async function canWorkOnTicket(
     where: { ticketId: ticket.id, userId: req.user.id },
     select: { id: true }
   });
-  return Boolean(collaborator);
+  if (collaborator) return true;
+  return isIntakeTriager(req, ticket);
+}
+
+/**
+ * The seeded system accounts that file tickets on an outside party's behalf: email intake (which
+ * public request forms also report as) and chat intake. Must equal `EMAIL_INTAKE_SYSTEM_EMAIL` and
+ * `CHAT_INTAKE_SYSTEM_EMAIL`; restated rather than imported because both intake services import this
+ * file, and pulling them back in would put the IMAP client in every ticket route's module graph.
+ */
+const INTAKE_SYSTEM_EMAILS = ["email-intake@system.local", "chat-intake@system.local"];
+
+/** The fields the intake-triage rule reads. Optional so the synchronous and older call sites that
+ *  hold a narrower row still type-check; without a projectId the rule simply does not apply. */
+type IntakeAwareTicket = { reporterId: string; projectId?: string; needsReview?: boolean };
+
+/**
+ * May this person TRIAGE an intake ticket — assign it, move it, edit it?
+ *
+ * WHY THIS EXISTS: a ticket that arrives by email, chat or a public request form is reported by a
+ * system account that reports to nobody and is usually unassigned, so the reporting-line rule below
+ * gives NO manager authority over it. Yet the "needs review" notice is sent precisely to the
+ * MANAGERs and TEAM_LEADs of the ticket's project, asking for "a quick human check before it's
+ * assigned". Every one of them got a 403.
+ *
+ * WHO IT ADMITS, and no wider: a holder of `tickets:assign` who is a member of the ticket's own
+ * project (the same membership the review notice is addressed by), on a ticket whose reporter is an
+ * intake system account or which is still flagged `needsReview`. A manager outside the project, a
+ * member without `tickets:assign`, and a member looking at an ordinary ticket all keep the answer
+ * they had. Cheapest checks first, so the common case costs no query at all.
+ */
+async function isIntakeTriager(req: any, ticket: IntakeAwareTicket): Promise<boolean> {
+  if (!ticket.projectId) return false;
+  if (!req.user.permissions.includes(permissions.TICKETS_ASSIGN)) return false;
+  if (!(await isProjectMember(req.user.id, ticket.projectId))) return false;
+  if (ticket.needsReview) return true;
+  const intakeReporter = await prisma.user.findFirst({
+    where: { id: ticket.reporterId, email: { in: INTAKE_SYSTEM_EMAILS } },
+    select: { id: true }
+  });
+  return Boolean(intakeReporter);
 }
 
 /**
@@ -312,10 +352,12 @@ async function isMappedManagerFor(
  */
 export async function canReassignTicket(
   req: any,
-  ticket: { reporterId: string; assigneeId: string | null }
+  ticket: IntakeAwareTicket & { assigneeId: string | null }
 ): Promise<boolean> {
   if (PRIVILEGED_ROLES.has(req.user.role)) return true;
-  return isMappedManagerFor(req.user.id, ticket);
+  if (await isMappedManagerFor(req.user.id, ticket)) return true;
+  // An intake ticket has no reporting line to follow — see `isIntakeTriager`.
+  return isIntakeTriager(req, ticket);
 }
 
 /**
@@ -324,11 +366,11 @@ export async function canReassignTicket(
  * "Forbidden" leaves them with no idea who to ask.
  */
 export const WORK_FORBIDDEN_MESSAGE =
-  "Only this ticket's reporter, its assignee, its collaborators, or their manager can work on it.";
+  "Only this ticket's reporter, its assignee, its collaborators, or their manager can work on it. Tickets that came in by email, chat or a request form can also be triaged by their project's managers and team leads.";
 
 /** The 403 both reassignment routes raise, phrased once so they cannot drift apart. */
 export const REASSIGN_FORBIDDEN_MESSAGE =
-  "Only a super admin, an admin, or the manager this ticket's reporter or assignee reports to can change who works on it.";
+  "Only a super admin, an admin, or the manager this ticket's reporter or assignee reports to can change who works on it. Tickets that came in by email, chat or a request form can also be assigned by their project's managers and team leads.";
 
 /**
  * Throws a 422 unless `type` matches an active TicketType.name row a PLAIN ticket may carry.

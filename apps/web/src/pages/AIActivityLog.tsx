@@ -10,7 +10,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { AlertTriangle, ArrowUpRight, Mail, Sparkles, ThumbsDown, ThumbsUp, User as UserIcon } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Check, Mail, Sparkles, ThumbsDown, ThumbsUp, User as UserIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { Badge, type BadgeProps } from "../components/ui/badge";
@@ -60,6 +60,14 @@ export function AIActivityLog() {
     mutationFn: ({ id, value }: { id: string; value: AiFeedbackValue }) => ticketApi.setAiFeedback(id, value),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tickets", "ai-activity"] }),
     onError: (err: any) => toast.error("Could not save feedback", { description: serverMessage(err, "Try again.") })
+  });
+
+  // "Mark reviewed": a person checked the classification and it stands, so the ticket stops waiting
+  // for review without being assigned or moved. Assigning or moving it clears the flag too.
+  const markReviewed = useMutation({
+    mutationFn: (id: string) => ticketApi.markReviewed(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tickets"] }),
+    onError: (err: any) => toast.error("Could not mark it reviewed", { description: serverMessage(err, "Try again.") })
   });
 
   function toggleFeedback(ticket: TicketRow, value: "up" | "down") {
@@ -115,7 +123,12 @@ export function AIActivityLog() {
         header: "Status",
         cell: ({ row }) =>
           row.original.needsReview ? (
-            <Badge variant="warning" className="gap-1"><AlertTriangle className="h-3 w-3" />Needs review</Badge>
+            <span className="inline-flex flex-wrap items-center gap-1.5">
+              <Badge variant="warning" className="gap-1"><AlertTriangle className="h-3 w-3" />Needs review</Badge>
+              <Button variant="ghost" size="sm" className="h-7 px-2" disabled={markReviewed.isPending} onClick={() => markReviewed.mutate(row.original.id)}>
+                <Check className="h-3.5 w-3.5" />Mark reviewed
+              </Button>
+            </span>
           ) : (
             <Badge variant="success">Auto-processed</Badge>
           )
@@ -158,7 +171,7 @@ export function AIActivityLog() {
         )
       }
     ],
-    [feedback, navigate]
+    [feedback, markReviewed, navigate]
   );
 
   return (

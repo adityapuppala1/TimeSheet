@@ -3524,6 +3524,8 @@ export const ticketApi = {
     (await api.patch<TicketDetail>(`/tickets/${id}/assign`, { assigneeId })).data,
   setAiFeedback: async (id: string, feedback: AiFeedbackValue) =>
     (await api.patch<{ id: string; aiFeedback: AiFeedbackValue }>(`/tickets/${id}/ai-feedback`, { feedback })).data,
+  /** Clears an intake ticket's "needs review" flag without assigning or moving it. */
+  markReviewed: async (id: string) => (await api.post<{ id: string; needsReview: false }>(`/tickets/${id}/reviewed`)).data,
   remove: async (id: string) => api.delete(`/tickets/${id}`),
   activity: async (id: string) => (await api.get<AuditEntry[]>(`/tickets/${id}/activity`)).data,
   comments: {
