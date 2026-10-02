@@ -503,4 +503,13 @@ describe("ticketVelocity", () => {
     const result = ticketVelocity(series([0, 10, 20, 30, 40, 5, 5, 5, 5]));
     expect(result.recent).toBe(0);
   });
+
+  it("reads a one-time drop in the total as that night's loss, not as a stalled half-window", () => {
+    // Ten a day throughout, and one night the total fell by 100: the night the snapshot stopped
+    // counting soft-deleted tickets. Comparing the half's ends read 140 → 80 as "nothing created
+    // for four days" — "Work slowing" for half a window after the deploy. Only the step is lost.
+    const result = ticketVelocity(series([100, 110, 120, 130, 140, 150, 60, 70, 80]));
+    expect(result.prior).toBeCloseTo(10, 5);
+    expect(result.recent).toBeCloseTo(7.5, 5);
+  });
 });

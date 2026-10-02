@@ -23,6 +23,9 @@ interface Snap {
   trialTier: string | null;
   stripeSubscriptionId: string | null;
   reachable: boolean;
+  /** Read only by the health scorer's ticket velocity. */
+  ticketsTotal?: number;
+  lastActivityAt?: Date | null;
 }
 
 type Where = {
@@ -211,6 +214,44 @@ describe("getFleetAccountHealth — the Needs attention list", () => {
     expect(byId.slipping.needsAttention).toBe(true);
     expect(byId.gone.needsAttention).toBe(false);
     expect(byId.stale.needsAttention).toBe(false);
+  });
+});
+
+/** Thirty-one nights, 2 Sep → 2 Oct, three tickets raised every day — a steady workspace whose
+ *  FIRST night in the window could not reach its database, so that row holds a total of 0. */
+const steadyWithAnOutageFirst = (orgId: string) =>
+  Array.from({ length: 31 }, (_, i) => {
+    const day = new Date(Date.UTC(2026, 8, 2 + i)).toISOString().slice(0, 10);
+    return i === 0
+      ? snap(orgId, day, { reachable: false, activeSeats: 0, ticketsTotal: 0, lastActivityAt: null })
+      : snap(orgId, day, { ticketsTotal: 5_000 + i * 3, lastActivityAt: new Date(date(day).getTime() - 3_600_000) });
+  });
+
+describe("ticket velocity reads only the nights that reached the database", () => {
+  it("does not call a steady workspace 'Work slowing' because one night in the window was an outage", async () => {
+    orgs = [org("a")];
+    snaps = steadyWithAnOutageFirst("a");
+    const health = await getFleetAccountHealth(30, 90);
+    const ids = health.rows[0].health.signals.map((signal) => signal.id);
+    expect(ids).not.toContain("velocity-down");
+    expect(ids).not.toContain("velocity-up");
+  });
+
+  it("does the same on the Org 360 page", async () => {
+    orgs = [org("a")];
+    snaps = steadyWithAnOutageFirst("a");
+    const profile = await getOrgUsageProfile("a");
+    expect(profile.health!.signals.map((signal) => signal.id)).not.toContain("velocity-down");
+  });
+
+  it("counts only the readable nights toward the trend's minimum", async () => {
+    // Eight nights in the window, the first unreachable: seven readings are below the eight a trend
+    // needs, so no velocity is assessed — even though the series has eight rows.
+    orgs = [org("a")];
+    snaps = steadyWithAnOutageFirst("a").slice(-8).map((row, i) => (i === 0 ? { ...row, reachable: false, ticketsTotal: 0 } : row));
+    const health = await getFleetAccountHealth(30, 90);
+    expect(health.rows[0].health.signals.map((signal) => signal.id)).toEqual(["steady"]);
+    expect(health.rows[0].health.signals[0].detail).toMatch(/only 7 daily snapshots/);
   });
 });
 

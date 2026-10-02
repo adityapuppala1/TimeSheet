@@ -1156,7 +1156,6 @@ export async function getFleetAccountHealth(
     // and inventing a HEALTHY for it would be the most misleading row on the page.
     if (!latest) continue;
 
-    const velocity = ticketVelocity(series);
     const exclusion = attentionExclusion({ status: org.status, retentionDeletedAt: org.retentionDeletedAt, trialEndsAt: org.trialEndsAt, converted: isConverted(org) }, retentionDays, now);
     const daysSinceLastActivity = latest.lastActivityAt ? Math.floor((now.getTime() - latest.lastActivityAt.getTime()) / DAY_MS) : null;
     const health = scoreAccountHealth({
@@ -1167,13 +1166,11 @@ export async function getFleetAccountHealth(
       aiSpendUsd: Number(latest.aiSpendMonthToDateUsd),
       aiBudgetCeilingUsd: Number(latest.aiBudgetCeilingUsd),
       daysSinceLastActivity,
-      ticketsPerDayRecent: velocity.recent,
-      ticketsPerDayPrior: velocity.prior,
+      ...velocityInputs(series),
       emailsSent: latest.emailsSentMonthToDate,
       emailsFailed: latest.emailsFailedMonthToDate,
       backupFailures: failuresByOrg.get(org.id) ?? 0,
-      trialDaysRemaining: org.trialEndsAt ? (org.trialEndsAt.getTime() - now.getTime()) / DAY_MS : null,
-      snapshots: series.length
+      trialDaysRemaining: org.trialEndsAt ? (org.trialEndsAt.getTime() - now.getTime()) / DAY_MS : null
     });
     rows.push({
       orgId: org.id,
@@ -1212,18 +1209,44 @@ export async function getFleetAccountHealth(
  * them — the actual velocity. A negative delta (tickets deleted, or a workspace restored from a
  * backup) is clamped to zero rather than reported as negative creation.
  *
+ * NIGHT BY NIGHT, NOT END TO END. Each half is the sum of its nightly rises. Comparing only a half's
+ * first and last totals let one downward step erase every ticket raised around it — the night the
+ * snapshot stopped counting soft-deleted tickets read as days of nothing, "Work slowing" for half a
+ * window after the deploy. Now the step costs that one night and nothing else.
+ *
  * Both halves are null under `MIN_TREND_SNAPSHOTS`, and the scorer emits no velocity signal then.
  * A trend drawn through two points is a line, not a trend.
  */
 export function ticketVelocity(series: Array<{ day: Date; ticketsTotal: number }>): { recent: number | null; prior: number | null } {
   if (series.length < MIN_TREND_SNAPSHOTS) return { recent: null, prior: null };
   const middle = Math.floor(series.length / 2);
-  const rate = (from: { day: Date; ticketsTotal: number }, to: { day: Date; ticketsTotal: number }): number | null => {
-    const days = (to.day.getTime() - from.day.getTime()) / DAY_MS;
+  const rate = (from: number, to: number): number | null => {
+    const days = (series[to].day.getTime() - series[from].day.getTime()) / DAY_MS;
     if (days <= 0) return null;
-    return Math.max(0, to.ticketsTotal - from.ticketsTotal) / days;
+    let created = 0;
+    for (let i = from + 1; i <= to; i += 1) created += Math.max(0, series[i].ticketsTotal - series[i - 1].ticketsTotal);
+    return created / days;
   };
-  return { prior: rate(series[0], series[middle]), recent: rate(series[middle], series[series.length - 1]) };
+  return { prior: rate(0, middle), recent: rate(middle, series.length - 1) };
+}
+
+/**
+ * The scorer's three trend inputs, from the readings that REACHED the workspace's database.
+ *
+ * An unreachable night's row holds a ticket total of 0 because nothing answered, not because the
+ * tickets went. Left in the series, one outage as the first reading of a 30-day window read as
+ * hundreds of tickets a day in the prior half against a handful in the recent one — "Work slowing"
+ * on a steady workspace, on Org 360 and in the AI advisor's fact sheet too. The trend's minimum
+ * counts the same readable nights the trend was drawn through.
+ */
+export function velocityInputs(series: Array<{ day: Date; ticketsTotal: number; reachable: boolean }>): {
+  ticketsPerDayRecent: number | null;
+  ticketsPerDayPrior: number | null;
+  snapshots: number;
+} {
+  const measured = series.filter((row) => row.reachable);
+  const { recent, prior } = ticketVelocity(measured);
+  return { ticketsPerDayRecent: recent, ticketsPerDayPrior: prior, snapshots: measured.length };
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -1337,7 +1360,6 @@ export async function getOrgUsageProfile(orgId: string, windowDays = 60): Promis
   ]);
 
   const latest = series.at(-1);
-  const velocity = ticketVelocity(series);
   // Priced from the carried-forward reading, through the fleet's own predicate. This tile used to
   // multiply the list price by the latest row's seats whatever the workspace's state — a running
   // trial showed list MRR the Revenue page did not count, and an unreachable night showed $0.
@@ -1370,13 +1392,11 @@ export async function getOrgUsageProfile(orgId: string, windowDays = 60): Promis
           aiSpendUsd: Number(latest.aiSpendMonthToDateUsd),
           aiBudgetCeilingUsd: Number(latest.aiBudgetCeilingUsd),
           daysSinceLastActivity,
-          ticketsPerDayRecent: velocity.recent,
-          ticketsPerDayPrior: velocity.prior,
+          ...velocityInputs(series),
           emailsSent: latest.emailsSentMonthToDate,
           emailsFailed: latest.emailsFailedMonthToDate,
           backupFailures,
-          trialDaysRemaining: org?.trialEndsAt ? (org.trialEndsAt.getTime() - now.getTime()) / DAY_MS : null,
-          snapshots: series.length
+          trialDaysRemaining: org?.trialEndsAt ? (org.trialEndsAt.getTime() - now.getTime()) / DAY_MS : null
         })
       : null,
     latest: latest
