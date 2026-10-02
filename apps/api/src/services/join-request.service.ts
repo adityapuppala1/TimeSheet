@@ -233,9 +233,22 @@ export async function approveJoinRequest(
   await audit(actor.id, "join_request.approved", "JoinRequest", id, { userId, role });
   await syncSubscriptionSeats(options.orgId);
   await rememberWorkspaceMembership(options.orgId, row.email);
-  const actionUrl = await issueSetPasswordLink(userId, SET_PASSWORD_TTL_MS);
-  await mailApproved(row, org.name, actionUrl, "Choose your password");
+  // A workspace that refuses passwords at sign-in (SSO only, or password login switched off) gets the
+  // sign-in page, where its identity provider's button is — not a link to choose a password the login
+  // form would then refuse. No link is issued at all there: an unused credential is still one.
+  if (await passwordSignInRefused(options.orgId)) {
+    await mailApproved(row, org.name, `${tenantBaseUrl()}/login`, "Sign in with your company account");
+  } else {
+    const actionUrl = await issueSetPasswordLink(userId, SET_PASSWORD_TTL_MS);
+    await mailApproved(row, org.name, actionUrl, "Choose your password");
+  }
   return { userId, linked: false };
+}
+
+/** The same test auth.service.ts#login refuses a password sign-in on — keep the two in step. */
+async function passwordSignInRefused(orgId: string): Promise<boolean> {
+  const method = await controlPrisma.orgAuthMethod.findUnique({ where: { organizationId: orgId }, select: { requireSsoOnly: true, passwordLoginEnabled: true } });
+  return Boolean(method && (method.requireSsoOnly || !method.passwordLoginEnabled));
 }
 
 async function linkExistingMember(row: { id: string; email: string; name: string }, userId: string, actorId: string, workspaceName: string, now: Date) {

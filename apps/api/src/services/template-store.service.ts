@@ -119,7 +119,7 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "workspace.join_request":
     "To the workspace's super admins when someone from the company's email domain asks to join instead of opening a second workspace.",
   "workspace.join_approved":
-    "To the person whose join request was approved — with a single-use, 72-hour link to choose a password, or a sign-in link if they already had an account.",
+    "To the person whose join request was approved — with a single-use, 72-hour link to choose a password, or a sign-in link if they already had an account or the workspace signs in through SSO only.",
   "workspace.join_declined": "To the person whose join request was declined, with the decider's note if they left one."
 };
 

@@ -111,7 +111,10 @@ vi.mock("../../src/config/tenant-context.js", () => ({ requireTenantContext: () 
 
 let orgStatus = "ACTIVE";
 const orgFindUnique = vi.fn(async () => ({ id: "org-1", name: "Acme", status: orgStatus }));
-vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: { organization: { findUnique: orgFindUnique } } }));
+/** The workspace's sign-in policy (OrgAuthMethod); null is the default — passwords allowed. */
+let authMethod: { passwordLoginEnabled: boolean; requireSsoOnly: boolean } | null = null;
+const authMethodFindUnique = vi.fn(async () => authMethod);
+vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: { organization: { findUnique: orgFindUnique }, orgAuthMethod: { findUnique: authMethodFindUnique } } }));
 
 const dispatchInAppToMany = vi.fn(async () => 1);
 const dispatchTransactional = vi.fn(async () => ({ ok: true }));
@@ -245,6 +248,58 @@ describe("approving", () => {
     const { id } = await ask();
     await declineJoinRequest(id!, "sa-1", undefined, now);
     await expect(approveJoinRequest(id!, superAdmin, { orgId: "org-1", now })).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
+/**
+ * A workspace that signs in only through its company's identity provider refuses passwords at the
+ * login form (auth.service.ts). Approval used to mail a "Choose your password" link there anyway — a
+ * password the person could set and then never use. They get the way in that works instead.
+ */
+describe("approving on a workspace that signs in through SSO only", () => {
+  const expectSsoMail = () =>
+    expect(dispatchTransactional).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "sam@acme.com",
+        templateKey: "workspace.join_approved",
+        vars: expect.objectContaining({ actionUrl: "https://acme.timesphere.test/login", actionLabel: "Sign in with your company account" })
+      })
+    );
+
+  it("mails 'sign in with your company account' and issues no password link", async () => {
+    authMethod = { passwordLoginEnabled: true, requireSsoOnly: true };
+    try {
+      const { id } = await ask();
+      await approveJoinRequest(id!, admin, { orgId: "org-1", now });
+      expect(issueSetPasswordLink).not.toHaveBeenCalled();
+      expectSsoMail();
+    } finally {
+      authMethod = null;
+    }
+  });
+
+  it("does the same when password sign-in is simply switched off", async () => {
+    authMethod = { passwordLoginEnabled: false, requireSsoOnly: false };
+    try {
+      const { id } = await ask();
+      await approveJoinRequest(id!, admin, { orgId: "org-1", now });
+      expect(issueSetPasswordLink).not.toHaveBeenCalled();
+      expectSsoMail();
+    } finally {
+      authMethod = null;
+    }
+  });
+
+  it("still mails the set-password link where passwords are allowed", async () => {
+    authMethod = { passwordLoginEnabled: true, requireSsoOnly: false };
+    try {
+      const { id } = await ask();
+      await approveJoinRequest(id!, admin, { orgId: "org-1", now });
+      expect(issueSetPasswordLink).toHaveBeenCalledTimes(1);
+      expect(dispatchTransactional).toHaveBeenCalledWith(expect.objectContaining({ vars: expect.objectContaining({ actionLabel: "Choose your password" }) }));
+    } finally {
+      authMethod = null;
+    }
   });
 });
 
