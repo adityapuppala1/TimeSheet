@@ -213,7 +213,7 @@ function PlanningTogglesCard({ readOnly, config }: { readOnly: boolean; config: 
         />
         <ToggleRow
           label="Custom workflows"
-          description="Define your own statuses and transitions per ticket type. Every custom status still maps to a built-in one, so reports, SLAs and exports keep working exactly as they do now."
+          description="Define your own statuses and transitions per ticket type, each mapped to a built-in one. Preview: workflows are saved, but tickets still move through the six built-in statuses — the board and the status menu don't use custom ones yet."
           checked={draft.enableCustomWorkflows}
           entitled={entitlements.customWorkflowsEnabled}
           disabled={readOnly || update.isPending}
@@ -636,8 +636,9 @@ function WorkflowsCard({ readOnly, config }: { readOnly: boolean; config: Planni
         </CardTitle>
         <CardDescription>
           The statuses a ticket moves through. Every custom status declares which built-in status it behaves
-          like, so your SLAs, reports, exports and integrations keep reading the same values they always have —
-          renaming "In review" to "Legal review" changes the board, not the data.
+          like, so SLAs, reports, exports and integrations would keep reading the same values. In preview: a
+          workflow you define is saved, but tickets still move through the six built-in statuses — the board and
+          the status menu don't use custom ones yet.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
