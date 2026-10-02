@@ -31,7 +31,8 @@ import {
   refresh,
   requestPasswordReset,
   resetPassword,
-  switchActiveRole
+  switchActiveRole,
+  withSignInLockout
 } from "../services/auth.service.js";
 import { getOnboardingStatus } from "../services/onboarding.service.js";
 import { authenticateLdap, recordSsoLoginSuccess } from "../services/sso.service.js";
@@ -128,7 +129,9 @@ authRouter.post(
   validate(z.object({ body: z.object({ email: z.string().email(), password: z.string().min(1) }) })),
   async (req, res) => {
     const { orgId } = requireTenantContext();
-    const identity = await authenticateLdap(orgId, req.body.email, req.body.password);
+    // The password route's per-account lockout, shared with it (security audit #12): a wrong
+    // directory password is a guess like any other, and this route used to have only the IP limiter.
+    const identity = await withSignInLockout(orgId, req.body.email, () => authenticateLdap(orgId, req.body.email, req.body.password));
     const deviceId = attachDeviceId(req, res);
     const result = await completeSsoLogin(orgId, identity, req.headers["user-agent"], req.ip, deviceId);
     // Same stamp the redirect-based providers get in sso.controller.ts#finishSsoLogin. LDAP has no

@@ -223,7 +223,7 @@ app.use("/api/billing", billingWebhookLimiter, billingWebhookRouter);
  * viewport projects (~75 successful logins). Late-suite specs then 429'd on login and failed as
  * "element not visible", which is exactly the long-standing "hamburger drawer flake" that
  * passed in isolation and failed under full-suite load. The real anti-brute-force control is
- * the per-ACCOUNT lockout in auth.service.ts (5 failures → 5-minute lock); this is the coarse
+ * the per-ACCOUNT lockout in auth.service.ts (5 failures, then escalating locks); this is the coarse
  * per-IP backstop under it.
  */
 const authLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true, skipSuccessfulRequests: true });

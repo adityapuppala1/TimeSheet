@@ -162,24 +162,36 @@ export async function switchActiveRole(userId: string, targetRole: RoleName) {
  * rate limiters allow through (app.ts: 20/min/IP on /api/auth/login, 900/min/IP overall) — tens
  * of thousands of small entries in the worst case, which costs single-digit megabytes and no
  * security.
+ *
+ * THE LOCK ESCALATES (security audit #12). Five failures arm a 5-minute lock, and the count is NOT
+ * reset when it does — it used to be, so every five minutes bought five fresh guesses, about 1,440 a
+ * day against one account, forever. Now, once an account has been locked, each further failure
+ * re-locks it, for longer each time: 5 minutes, 15, 60, 4 hours, then a day. A successful sign-in
+ * clears it; a quiet spell of FAILURE_WINDOW_MS after the last lock ends forgives it. The cost is
+ * that a stranger can keep a known address locked for longer — the (account, IP) weighting that
+ * blunts that is a proposal, alongside moving this map to a store every replica shares.
  */
 const FAILED_LOGIN_LIMIT = 5;
-const LOCKOUT_MS = 5 * 60 * 1000;
-/** Longer than LOCKOUT_MS so an entry always outlives the lock it may be holding. */
+const LOCK_STEPS_MS = [5, 15, 60, 240, 1440].map((minutes) => minutes * 60 * 1000);
+/** The decay window: how long after the last failure (or the end of the last lock) an entry lives. */
 const FAILURE_WINDOW_MS = 15 * 60 * 1000;
-const failedLogins = new Map<string, { count: number; lockedUntil: number | null; expiresAt: number }>();
+const failedLogins = new Map<string, { count: number; locks: number; lockedUntil: number | null; expiresAt: number }>();
 
 /** A NUL separator can't occur in an orgId or an email, so no (org, email) pair can collide. */
 const lockoutKey = (orgId: string, email: string) => `${orgId}\u0000${email.toLowerCase()}`;
 
 /** Swept on write, not on a timer: a per-entry `setTimeout` would mean one live timer per email
- *  an attacker types, which is the same unbounded growth wearing a different hat. Every entry is
- *  (re)inserted with the same constant TTL, so insertion order IS expiry order and the first key
- *  that is still live ends the scan. */
+ *  an attacker types, which is the same unbounded growth wearing a different hat. A full pass, at
+ *  most once a minute: an escalated lock gives its entry a longer life than its neighbours, so
+ *  insertion order is no longer expiry order and an early `break` would leave stale keys behind a
+ *  locked one for up to a day. */
+const SWEEP_INTERVAL_MS = 60 * 1000;
+let lastSweepAt = 0;
 function purgeExpiredLockouts(now: number) {
+  if (now - lastSweepAt < SWEEP_INTERVAL_MS) return;
+  lastSweepAt = now;
   for (const [key, entry] of failedLogins) {
-    if (entry.expiresAt > now) break;
-    failedLogins.delete(key);
+    if (entry.expiresAt <= now) failedLogins.delete(key);
   }
 }
 
@@ -198,17 +210,15 @@ function recordFailedLogin(orgId: string, email: string) {
   const key = lockoutKey(orgId, email);
   const existing = failedLogins.get(key);
   // Only a live entry carries its count forward; one past its window starts counting again.
-  const entry = existing && existing.expiresAt > now ? existing : { count: 0, lockedUntil: null, expiresAt: 0 };
+  const entry = existing && existing.expiresAt > now ? existing : { count: 0, locks: 0, lockedUntil: null, expiresAt: 0 };
   entry.count += 1;
+  // At the threshold and at EVERY failure after it — the count is never reset by a lock.
   if (entry.count >= FAILED_LOGIN_LIMIT) {
-    entry.lockedUntil = now + LOCKOUT_MS;
-    entry.count = 0;
+    entry.lockedUntil = now + LOCK_STEPS_MS[Math.min(entry.locks, LOCK_STEPS_MS.length - 1)];
+    entry.locks += 1;
   }
-  entry.expiresAt = now + FAILURE_WINDOW_MS;
-
-  // Delete-then-set so a refreshed key moves to the back of the insertion order and
-  // purgeExpiredLockouts' early `break` stays correct.
-  failedLogins.delete(key);
+  // The entry outlives the lock it holds, then decays a window later.
+  entry.expiresAt = Math.max(now, entry.lockedUntil ?? 0) + FAILURE_WINDOW_MS;
   failedLogins.set(key, entry);
 }
 
@@ -216,9 +226,28 @@ function clearFailedLogins(orgId: string, email: string) {
   failedLogins.delete(lockoutKey(orgId, email));
 }
 
+/**
+ * The same per-account lockout around a sign-in that is not `login()` — the LDAP bind
+ * (auth.controller.ts). Same (org, email) key, so password and directory failures count against the
+ * one account they both are. Only a 401 counts: a directory that cannot be reached (502) is not the
+ * person's failure.
+ */
+export async function withSignInLockout<T>(orgId: string, email: string, attempt: () => Promise<T>): Promise<T> {
+  checkAccountLockout(orgId, email);
+  try {
+    const result = await attempt();
+    clearFailedLogins(orgId, email);
+    return result;
+  } catch (error) {
+    if (error instanceof AppError && error.statusCode === 401) recordFailedLogin(orgId, email);
+    throw error;
+  }
+}
+
 /** Test-only: the map is module state that survives across tests in one Vitest file. */
 export function __resetLoginLockoutsForTests() {
   failedLogins.clear();
+  lastSweepAt = 0;
 }
 
 /** Test-only: the sweep leaves no trace in any response, so pin it on the size directly. */
