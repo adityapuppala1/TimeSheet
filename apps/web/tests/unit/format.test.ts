@@ -95,3 +95,9 @@ describe("dates", () => {
     expect(formatDate("not a date")).toBe(NO_VALUE);
   });
 });
+
+describe("money in whole units", () => {
+  it("drops the paise and cents where a page shows budgets in whole units", () => {
+    expect(formatMoney(1234567.5, "INR", { whole: true })).toBe("₹12,34,568");
+  });
+});

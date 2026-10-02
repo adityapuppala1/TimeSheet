@@ -4795,11 +4795,25 @@ export interface PortfolioRollupRow {
   itemCount: number;
   openCount: number;
   progressPct: number;
+  /** Budget and burn per currency, burn over budgeted projects only. */
+  money: CurrencyBurnTotal[];
+  /** Only when the portfolio's projects share one currency; null when they do not. */
   budget: number | null;
-  burn: number;
+  burn: number | null;
   slippedCount: number;
   atRiskProjects: number;
   scheduleEnd: string | null;
+}
+
+/** Budget and burn in one currency — never added to another. */
+export interface CurrencyBurnTotal {
+  currency: string;
+  budget: number;
+  burn: number;
+  burnPct: number | null;
+  budgetedProjects: number;
+  /** Burn on projects in this currency that have no budget — reported, not in the ratio. */
+  unbudgetedBurn: number;
 }
 
 export const portfolioApi = {
@@ -4815,7 +4829,7 @@ export const portfolioApi = {
     (await api.post<{ count: number }>(`/portfolios/${id}/projects`, { projectIds })).data,
   rollup: async (portfolioId?: string) =>
     (
-      await api.get<{ projects: PortfolioProjectRollup[]; portfolios: PortfolioRollupRow[] }>("/portfolios/rollup", {
+      await api.get<{ projects: PortfolioProjectRollup[]; portfolios: PortfolioRollupRow[]; totals: { money: CurrencyBurnTotal[] } }>("/portfolios/rollup", {
         params: portfolioId ? { portfolioId } : undefined
       })
     ).data

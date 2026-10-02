@@ -47,13 +47,16 @@ import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 import { copilotApi, goalApi, planningApi, portfolioApi, projectApi, type PortfolioProjectRollup } from "../services/api";
 import { runInBackground } from "../lib/run-in-background";
+import { formatMoney, formatPercent, NO_VALUE } from "../lib/format";
+import { QueryError } from "../components/QueryState";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
-const money = (value: number | null, currency: string) =>
-  value === null
-    ? "—"
-    : new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 0 }).format(value);
+/** Money in its own currency, en-IN grouping (lib/format.ts) — whole units on this page. */
+const money = (value: number | null, currency: string) => (value === null ? NO_VALUE : formatMoney(value, currency, { whole: true }));
+
+/** The words for a health band, so status is never carried by the dot's colour alone (WCAG 1.4.1). */
+const BAND_LABEL = { green: "On track", amber: "Watch", red: "At risk" } as const;
 
 /** RAG for one project row. Deterministic and stated in one place so the table, the tiles and
  *  (from phase 5) the risk agent cannot each decide "at risk" differently. */
@@ -178,9 +181,10 @@ export function PortfolioPage() {
 
   const rows = rollup.data?.projects ?? [];
   const groups = rollup.data?.portfolios ?? [];
-  const currency = rows[0]?.currency ?? "USD";
-  const totalBudget = rows.reduce((s, r) => s + (r.budget ?? 0), 0);
-  const totalBurn = rows.reduce((s, r) => s + r.burn, 0);
+  // Per currency, budgeted projects only — never one total across currencies (see the API's
+  // budget.service.ts#burnTotalsByCurrency).
+  const budgeted = (rollup.data?.totals?.money ?? []).filter((m) => m.budgetedProjects > 0);
+  const rollupFailed = rollup.isError && !rollup.data;
   const atRisk = rows.filter((r) => healthOf(r).band === "red").length;
   const weight = rows.reduce((s, r) => s + Math.max(1, r.itemCount), 0);
   const overallProgress = weight > 0 ? Math.round(rows.reduce((s, r) => s + r.progressPct * Math.max(1, r.itemCount), 0) / weight) : 0;
@@ -213,7 +217,9 @@ export function PortfolioPage() {
         </Select>
       </div>
 
-      {rollup.isLoading ? (
+      {/* A failed roll-up is a dash and a Retry — never "0 projects / 0%". */}
+      {rollupFailed && <QueryError what="the portfolio roll-up" onRetry={() => rollup.refetch()} />}
+      {!rollupFailed && (rollup.isLoading ? (
         <Skeleton className="h-64 w-full" />
       ) : (
         <>
@@ -221,16 +227,27 @@ export function PortfolioPage() {
             <StatCard label="Projects" value={String(rows.length)} icon={<Briefcase className="h-4 w-4" />} />
             <StatCard label="Overall progress" value={`${overallProgress}%`} icon={<TrendingUp className="h-4 w-4" />} />
             <StatCard
-              label="Budget committed"
+              label="Budget burned"
               value={
-                totalBudget > 0 ? (
-                  <span className="flex flex-wrap items-baseline gap-1.5">
-                    {money(totalBurn, currency)}
-                    <span className="text-xs font-normal text-muted-foreground">of {money(totalBudget, currency)}</span>
+                budgeted.length > 0 ? (
+                  <span className="grid gap-0.5">
+                    {budgeted.map((m) => (
+                      <span key={m.currency} className="flex flex-wrap items-baseline gap-1.5">
+                        {money(m.burn, m.currency)}
+                        <span className="text-xs font-normal text-muted-foreground">
+                          of {money(m.budget, m.currency)} · {formatPercent(m.burnPct)}
+                        </span>
+                      </span>
+                    ))}
                   </span>
                 ) : (
-                  "—"
+                  NO_VALUE
                 )
+              }
+              hint={
+                budgeted.length > 1
+                  ? "One line per currency — amounts in different currencies are never added together. Projects without a budget are not in the share."
+                  : "Approved, billable spend on budgeted projects. Projects without a budget are not in the share."
               }
               icon={<TrendingUp className="h-4 w-4" />}
             />
@@ -335,7 +352,11 @@ export function PortfolioPage() {
                         <TableCell>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <span className={cn("inline-block h-2.5 w-2.5 rounded-full", BAND_CLASS[health.band])} />
+                              {/* The dot plus its word: the band is never colour alone. */}
+                              <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] text-muted-foreground">
+                                <span className={cn("inline-block h-2.5 w-2.5 shrink-0 rounded-full", BAND_CLASS[health.band])} aria-hidden />
+                                {BAND_LABEL[health.band]}
+                              </span>
                             </TooltipTrigger>
                             <TooltipContent>
                               <span className="text-xs">{health.reasons.join("; ")}</span>
@@ -370,7 +391,7 @@ export function PortfolioPage() {
                         <TableCell className="text-right text-xs tabular-nums">{money(p.budget, p.currency)}</TableCell>
                         <TableCell className="text-right text-xs tabular-nums">
                           {money(p.burn, p.currency)}
-                          {p.burnPct !== null && <span className="block text-[10px] opacity-70">{p.burnPct}%</span>}
+                          {p.burnPct !== null && <span className="block text-[10px] opacity-70">{formatPercent(p.burnPct)}</span>}
                         </TableCell>
                         <TableCell className="text-right text-xs tabular-nums">
                           {p.forecastAtCompletion === null ? (
@@ -507,7 +528,7 @@ export function PortfolioPage() {
             </p>
           )}
         </>
-      )}
+      ))}
     </div>
   );
 }

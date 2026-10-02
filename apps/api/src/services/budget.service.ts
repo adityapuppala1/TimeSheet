@@ -234,3 +234,93 @@ export async function computeEffortVariance(params: {
     overrunRate: rows.length === 0 ? null : Math.round((rows.filter((r) => r.varianceHours > 0).length / rows.length) * 100)
   };
 }
+
+/* ------------------------------------------------------------------ shared roll-up helpers */
+
+interface ProgressItem {
+  id: string;
+  estimatedHours: number | null;
+  effectiveProgressPct: number;
+}
+
+/**
+ * A solved plan's items grouped by project, and each project's EFFORT-WEIGHTED progress — the figure
+ * the forecast scales burn by.
+ *
+ * ONE PASS OVER ONE MAP. The budget-burn widget and the Portfolio page each found an item's project
+ * with `plan.raw.find(...)` per item — inside a filter, inside a loop over projects for the widget —
+ * which is O(projects × tickets²) over every ticket, closed ones included. On a workspace with a few
+ * thousand tickets that is the request that stalls the API. Shared here so the two cannot drift.
+ */
+export function progressFromPlan<Item extends ProgressItem>(
+  plan: { items: Item[]; raw: Array<Record<string, unknown>> },
+  projectIds: string[]
+): { itemsByProject: Map<string, Item[]>; progressByProject: Map<string, number> } {
+  const projectOf = new Map<string, string>();
+  for (const row of plan.raw) {
+    if (typeof row.id === "string" && typeof row.projectId === "string") projectOf.set(row.id, row.projectId);
+  }
+  const itemsByProject = new Map<string, Item[]>();
+  for (const item of plan.items) {
+    const projectId = projectOf.get(item.id);
+    if (!projectId) continue;
+    const list = itemsByProject.get(projectId);
+    if (list) list.push(item);
+    else itemsByProject.set(projectId, [item]);
+  }
+  // Effort-weighted: a plain mean would make a project with many tiny finished tasks look far
+  // healthier than it is. An item with no estimate weighs as one hour.
+  const weight = (i: Item) => (i.estimatedHours && i.estimatedHours > 0 ? i.estimatedHours : 1);
+  const progressByProject = new Map<string, number>();
+  for (const id of projectIds) {
+    const items = itemsByProject.get(id) ?? [];
+    const total = items.reduce((s, i) => s + weight(i), 0);
+    progressByProject.set(id, total > 0 ? Math.round(items.reduce((s, i) => s + i.effectiveProgressPct * weight(i), 0) / total) : 0);
+  }
+  return { itemsByProject, progressByProject };
+}
+
+export interface CurrencyBurnTotal {
+  currency: string;
+  /** Summed budgets of the BUDGETED projects in this currency. */
+  budget: number;
+  /** Burn of those same budgeted projects — never of an unbudgeted one. */
+  burn: number;
+  /** burn ÷ budget, or null when the budget is zero. */
+  burnPct: number | null;
+  budgetedProjects: number;
+  /** Burn on projects in this currency that have no budget: reported, never put in the ratio. */
+  unbudgetedBurn: number;
+}
+
+/**
+ * Budget and burn totals PER CURRENCY, with burn % over budgeted projects only.
+ *
+ * Two bugs this replaces, both in every roll-up: budgets in different currencies were added together
+ * and labelled with whichever currency the first row had — the same refusal to mix currencies that
+ * attestations already make is made here — and burn from projects with no budget went into the
+ * numerator while only budgeted projects made the denominator, overstating burn %.
+ */
+export function burnTotalsByCurrency(rows: Iterable<Pick<ProjectBudget, "budget" | "burn" | "currency">>): CurrencyBurnTotal[] {
+  const totals = new Map<string, CurrencyBurnTotal>();
+  for (const row of rows) {
+    const t = totals.get(row.currency) ?? { currency: row.currency, budget: 0, burn: 0, burnPct: null, budgetedProjects: 0, unbudgetedBurn: 0 };
+    if (row.budget !== null && row.budget > 0) {
+      t.budget += row.budget;
+      t.burn += row.burn;
+      t.budgetedProjects += 1;
+    } else {
+      t.unbudgetedBurn += row.burn;
+    }
+    totals.set(row.currency, t);
+  }
+  return [...totals.values()]
+    .map((t) => ({
+      ...t,
+      budget: Number(t.budget.toFixed(2)),
+      burn: Number(t.burn.toFixed(2)),
+      unbudgetedBurn: Number(t.unbudgetedBurn.toFixed(2)),
+      burnPct: t.budget > 0 ? Math.round((t.burn / t.budget) * 100) : null
+    }))
+    .sort((a, b) => b.budget - a.budget || a.currency.localeCompare(b.currency));
+}

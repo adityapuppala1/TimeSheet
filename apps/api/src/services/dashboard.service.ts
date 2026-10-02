@@ -17,7 +17,7 @@
  * it renders a dashboard into an email.
  */
 import { prisma } from "../config/prisma.js";
-import { computeProjectBudgets } from "./budget.service.js";
+import { burnTotalsByCurrency, computeProjectBudgets, progressFromPlan } from "./budget.service.js";
 import { buildPlan, dayKey, legacyCategory } from "./plan-schedule.service.js";
 import { latestSnapshots } from "./project-risk.service.js";
 import { loadWorkload } from "./workload.service.js";
@@ -92,6 +92,21 @@ export interface WidgetResult {
 
 const DAY_MS = 86_400_000;
 
+/** "INR 42% (₹4,200 of ₹10,000)" — one currency's line of the budget-burn hint. */
+function currencyBurnLine(t: { currency: string; burnPct: number | null; burn: number; budget: number }): string {
+  return `${t.currency} ${t.burnPct ?? 0}% (${money(t.burn, t.currency)} of ${money(t.budget, t.currency)})`;
+}
+
+/** Money for a widget hint, in its own currency and the workspace's en-IN grouping. A tile used
+ *  to print `toLocaleString()` with the server's locale and no symbol at all. */
+function money(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en-IN", { style: "currency", currency, maximumFractionDigits: 0 }).format(amount);
+  } catch {
+    return `${Math.round(amount)} ${currency}`;
+  }
+}
+
 /**
  * Resolves one widget against the viewer's own project scope.
  *
@@ -148,24 +163,30 @@ export async function resolveWidget(params: {
 
     case "BUDGET_BURN": {
       const plan = await buildPlan({ projectIds: scoped, includeClosed: true });
-      const progress = new Map<string, number>();
-      for (const id of scoped) {
-        const items = plan.items.filter((i) => (plan.raw.find((r: any) => r.id === i.id) as any)?.projectId === id);
-        const weight = (i: (typeof items)[number]) => (i.estimatedHours && i.estimatedHours > 0 ? i.estimatedHours : 1);
-        const total = items.reduce((s, i) => s + weight(i), 0);
-        progress.set(id, total > 0 ? Math.round(items.reduce((s, i) => s + i.effectiveProgressPct * weight(i), 0) / total) : 0);
+      // One id → project map, built once (budget.service.ts#progressFromPlan) — not a search of
+      // every ticket for every item of every project.
+      const { progressByProject } = progressFromPlan(plan, scoped);
+      const budgets = await computeProjectBudgets(scoped, progressByProject);
+      // Per currency, budgeted projects only: budgets in two currencies are never added, and burn on
+      // a project with no budget is not a percentage of anybody's budget.
+      const totals = burnTotalsByCurrency(budgets.values()).filter((t) => t.budgetedProjects > 0);
+      if (totals.length === 0) return { type, shape, unavailable: "No budgets set" };
+      if (totals.length > 1) {
+        return {
+          type,
+          shape,
+          value: null,
+          unit: null,
+          hint: totals.map(currencyBurnLine).join(" · ") + " — currencies are reported separately, never added"
+        };
       }
-      const budgets = await computeProjectBudgets(scoped, progress);
-      const rows = Array.from(budgets.values());
-      const budget = rows.reduce((s, b) => s + (b.budget ?? 0), 0);
-      const burn = rows.reduce((s, b) => s + b.burn, 0);
-      if (budget === 0) return { type, shape, unavailable: "No budgets set" };
+      const [only] = totals;
       return {
         type,
         shape,
-        value: Math.round((burn / budget) * 100),
+        value: only.burnPct,
         unit: "%",
-        hint: `${Math.round(burn).toLocaleString()} of ${Math.round(budget).toLocaleString()} ${rows[0]?.currency ?? ""}`
+        hint: `${money(only.burn, only.currency)} of ${money(only.budget, only.currency)} across ${only.budgetedProjects} budgeted project${only.budgetedProjects === 1 ? "" : "s"}`
       };
     }
 

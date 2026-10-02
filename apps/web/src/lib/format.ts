@@ -82,15 +82,16 @@ export function formatCompact(value: number | null | undefined): string {
 export function formatMoney(
   amount: number | null | undefined,
   currency: string | null | undefined,
-  options: { compact?: boolean } = {}
+  options: { compact?: boolean; whole?: boolean } = {}
 ): string {
   if (isMissing(amount)) return NO_VALUE;
   const code = currency?.trim().toUpperCase();
-  if (!code) return formatNumber(amount, 2);
+  if (!code) return formatNumber(amount, options.whole ? 0 : 2);
   try {
     return new Intl.NumberFormat(activeLocale, {
       style: "currency",
       currency: code,
+      ...(options.whole ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {}),
       ...(options.compact ? { notation: "compact", maximumFractionDigits: 1 } : {})
     }).format(amount);
   } catch {

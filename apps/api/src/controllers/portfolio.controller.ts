@@ -24,7 +24,8 @@ import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
-import { computeProjectBudgets } from "../services/budget.service.js";
+import { burnTotalsByCurrency, computeProjectBudgets, progressFromPlan } from "../services/budget.service.js";
+import { LOGGED_TIMESHEET_STATUSES } from "../services/workspace-metrics.js";
 import { getPlanningQuota } from "../services/plan-limits.service.js";
 import { assertPlanningEnabled } from "../services/planning.service.js";
 import { buildPlan, dayKey, legacyCategory } from "../services/plan-schedule.service.js";
@@ -203,32 +204,17 @@ portfolioRouter.get("/rollup", requirePermission(permissions.REPORTS_VIEW), asyn
     })
   ]);
 
-  const itemsByProject = new Map<string, typeof plan.items>();
-  for (const item of plan.items) {
-    const raw = plan.raw.find((r: any) => r.id === item.id) as any;
-    const pid = raw?.projectId;
-    if (!pid) continue;
-    if (!itemsByProject.has(pid)) itemsByProject.set(pid, []);
-    itemsByProject.get(pid)!.push(item);
-  }
+  // Items by project and effort-weighted progress from ONE id → project map
+  // (budget.service.ts#progressFromPlan). This used `plan.raw.find` per item — O(tickets²) over
+  // every ticket, closed ones included. Progress comes before the budgets, because the forecast is
+  // burn scaled by it.
+  const { itemsByProject, progressByProject } = progressFromPlan(plan, projectIds);
 
   const openByProject = new Map<string, number>();
   const doneByProject = new Map<string, number>();
   for (const row of counts) {
     const target = legacyCategory(row.status) === "DONE" ? doneByProject : openByProject;
     target.set(row.projectId, (target.get(row.projectId) ?? 0) + row._count._all);
-  }
-
-  // Progress must be computed before the budgets, because the forecast is burn scaled by it.
-  const progressByProject = new Map<string, number>();
-  for (const p of projects) {
-    const items = itemsByProject.get(p.id) ?? [];
-    const weight = (i: (typeof items)[number]) => (i.estimatedHours && i.estimatedHours > 0 ? i.estimatedHours : 1);
-    const totalWeight = items.reduce((sum, i) => sum + weight(i), 0);
-    progressByProject.set(
-      p.id,
-      totalWeight > 0 ? Math.round(items.reduce((sum, i) => sum + i.effectiveProgressPct * weight(i), 0) / totalWeight) : 0
-    );
   }
 
   // Money comes from budget.service.ts rather than being summed here, so this page and the
@@ -238,7 +224,8 @@ portfolioRouter.get("/rollup", requirePermission(permissions.REPORTS_VIEW), asyn
     (
       await prisma.timesheet.groupBy({
         by: ["projectId"],
-        where: { projectId: { in: projectIds }, status: "APPROVED", deletedAt: null },
+        // LOGGED hours — submitted + approved (workspace-metrics.ts), the definition every other page uses.
+        where: { projectId: { in: projectIds }, status: { in: LOGGED_TIMESHEET_STATUSES }, deletedAt: null },
         _sum: { totalHours: true }
       })
     ).map((r) => [r.projectId, Number(r._sum.totalHours ?? 0)])
@@ -300,6 +287,10 @@ portfolioRouter.get("/rollup", requirePermission(permissions.REPORTS_VIEW), asyn
   const portfolioRows = portfolios.map((pf) => {
     const rows = projectRows.filter((p) => p.portfolio?.id === pf.id);
     const totalWeight = rows.reduce((sum, r) => sum + Math.max(1, r.itemCount), 0);
+    // Money per currency, burn over budgeted projects only. A single budget/burn figure is given
+    // only when there is a single currency to give it in.
+    const money = burnTotalsByCurrency(rows);
+    const single = money.length === 1 ? money[0] : null;
     return {
       id: pf.id,
       code: pf.code,
@@ -313,13 +304,15 @@ portfolioRouter.get("/rollup", requirePermission(permissions.REPORTS_VIEW), asyn
       progressPct: totalWeight > 0
         ? Math.round(rows.reduce((s, r) => s + r.progressPct * Math.max(1, r.itemCount), 0) / totalWeight)
         : 0,
-      budget: rows.reduce((s, r) => s + (r.budget ?? 0), 0) || null,
-      burn: Number(rows.reduce((s, r) => s + r.burn, 0).toFixed(2)),
+      money,
+      budget: single && single.budgetedProjects > 0 ? single.budget : null,
+      burn: single ? single.burn : null,
       slippedCount: rows.reduce((s, r) => s + r.slippedCount, 0),
       atRiskProjects: rows.filter((r) => r.overBudgetRisk || r.overrunsPlannedEnd || r.worstSlipDays > 0).length,
       scheduleEnd: rows.reduce<string | null>((max, r) => (!max || (r.scheduleEnd && r.scheduleEnd > max) ? r.scheduleEnd : max), null)
     };
   });
 
-  res.json({ projects: projectRows, portfolios: portfolioRows });
+  // The page's own totals, per currency, from the same rows — never one figure across currencies.
+  res.json({ projects: projectRows, portfolios: portfolioRows, totals: { money: burnTotalsByCurrency(projectRows) } });
 });
