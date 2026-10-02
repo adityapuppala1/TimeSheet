@@ -26,6 +26,18 @@ import { countActiveSeats } from "../services/seat-count.service.js";
 import { syncSubscriptionSeats } from "../services/billing-sync.service.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
 import { tenantBaseUrl } from "../services/workspace-directory.service.js";
+import {
+  actOnRefusal,
+  assertMayActOn,
+  assertMayGrant,
+  assertNotLastSuperAdmin,
+  assertNotSelfLockout,
+  AUTHORITY_TARGET_SELECT,
+  grantRefusal,
+  loadAuthorityTarget,
+  toAuthorityTarget,
+  type AuthorityTarget
+} from "../services/user-authority.service.js";
 
 export const userRouter = Router();
 userRouter.use(requireAuth, requirePermission(permissions.USERS_MANAGE));
@@ -47,27 +59,6 @@ async function sendWelcomeEmail(user: { id: string; name: string; email: string 
     console.warn(`[user.welcome] NOT sent to ${user.email}: ${result.errorMessage}`);
   }
   return result;
-}
-
-/**
- * True only when a role-affecting write would leave zero ACTIVE accounts holding SUPER_ADMIN.
- * Unlike a role SWITCH (always reversible — the account still holds the role), this is not: once
- * nobody holds SUPER_ADMIN, nobody can use the SUPER_ADMIN-only path to grant it back. Same
- * "refused rather than confirmed, there is no version of this the operator meant" reasoning the
- * bulk self-target guard below already uses.
- */
-async function wouldLockOutSuperAdmin(targetUserId: string, newHeldRoles: RoleName[]): Promise<boolean> {
-  if (newHeldRoles.includes("SUPER_ADMIN")) return false;
-  const superAdminRole = await prisma.role.findUniqueOrThrow({ where: { name: "SUPER_ADMIN" } });
-  // Nothing is actually being removed unless the target currently holds it — otherwise this
-  // would refuse an unrelated role change any time some OTHER account happens to be the sole
-  // super admin, which has nothing to do with the user being edited here.
-  const targetHoldsIt = await prisma.userRole.count({ where: { userId: targetUserId, roleId: superAdminRole.id } });
-  if (targetHoldsIt === 0) return false;
-  const otherHolders = await prisma.userRole.count({
-    where: { roleId: superAdminRole.id, userId: { not: targetUserId }, user: { status: "ACTIVE", deletedAt: null } }
-  });
-  return otherHolders === 0;
 }
 
 /**
@@ -373,10 +364,9 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
 
   const targets = await prisma.user.findMany({
     where: userIds?.length ? { id: { in: userIds }, deletedAt: null } : whereFromQuery(filter ?? {}),
-    select: { id: true, name: true, email: true, status: true, role: { select: { name: true } } }
+    select: { ...AUTHORITY_TARGET_SELECT, name: true, email: true }
   });
 
-  const actorIsSuperAdmin = req.user!.role === "SUPER_ADMIN";
   const done: string[] = [];
   const skipped: Array<{ id: string; name: string; reason: string }> = [];
   /** Filled only by RESET_PASSWORD with no explicit password: each person gets their OWN random
@@ -385,11 +375,13 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
   const generatedPasswords: Array<{ id: string; name: string; email: string; password: string }> = [];
 
   for (const target of targets) {
-    // Two guards, both of which exist on the single-user routes and would be trivially bypassable
-    // if bulk did not repeat them. This is the whole reason bulk does not just call the database
-    // with an `in` clause.
-    if (target.role.name === "SUPER_ADMIN" && !actorIsSuperAdmin) {
-      skipped.push({ id: target.id, name: target.name, reason: "Only a super admin can act on a super admin" });
+    // The single-user routes' guards, from the same module (services/user-authority.service.ts), so
+    // bulk cannot drift from them. This is the whole reason bulk does not just call the database
+    // with an `in` clause. "Super admin" includes someone holding it through a UserRole grant while
+    // switched into another role — they can switch back at will.
+    const refusal = actOnRefusal(req.user!, toAuthorityTarget(target));
+    if (refusal) {
+      skipped.push({ id: target.id, name: target.name, reason: refusal });
       continue;
     }
     // Locking yourself out mid-bulk is unrecoverable without another admin, so it is refused
@@ -400,6 +392,10 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
     }
 
     try {
+      // Throws (and so lands in `skipped` below, named) when this would leave no active super admin.
+      if (action === "DEACTIVATE" || action === "DELETE") {
+        await assertNotLastSuperAdmin(toAuthorityTarget(target), { status: "INACTIVE", deleted: action === "DELETE" });
+      }
       switch (action) {
         case "DEACTIVATE":
         case "ACTIVATE": {
@@ -484,11 +480,9 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
  */
 userRouter.post("/:id/force-logout", async (req, res) => {
   const id = String(req.params.id);
-  const target = await prisma.user.findUnique({ where: { id }, select: { deletedAt: true, role: { select: { name: true } } } });
-  if (!target || target.deletedAt) throw new AppError(404, "User not found");
-  if (target.role.name === "SUPER_ADMIN" && req.user!.role !== "SUPER_ADMIN") {
-    throw new AppError(403, "Only a super admin can sign out a super admin.");
-  }
+  const target = await loadAuthorityTarget(id);
+  if (target.deletedAt) throw new AppError(404, "User not found");
+  assertMayActOn(req.user!, target);
 
   const result = await prisma.session.updateMany({
     where: { userId: id, revokedAt: null },
@@ -533,6 +527,9 @@ userRouter.post(
     if (req.body.roles && !req.body.roles.includes(req.body.role)) {
       throw new AppError(422, "The active role must be one of the granted roles.");
     }
+    // `roles` is already super-admin-only above; the plain `role` field was not, so an ADMIN could
+    // create a SUPER_ADMIN — a superior it then had the password of.
+    assertMayGrant(req.user!, [req.body.role]);
     // Plan-tier seat enforcement — re-checked on every creation (not cached) so a platform
     // admin lowering a tier's seat limit, or an org outgrowing its plan, takes effect
     // immediately rather than after some reconciliation job. Counts the same population
@@ -679,6 +676,10 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
     try {
       const role = roleByName.get(row.role);
       if (!role) throw new Error(`Unknown role "${row.role}"`);
+      // Per row, like every other refusal here: one SUPER_ADMIN line from an ADMIN must not block
+      // the forty employees in the same file.
+      const refusal = grantRefusal(req.user!, [row.role]);
+      if (refusal) throw new Error(refusal);
       const existing = await prisma.user.findUnique({ where: { email: row.email } });
       if (existing) throw new Error("A user with this email already exists");
 
@@ -752,6 +753,46 @@ const patchSchema = z.object({
   })
 });
 
+/**
+ * The held-role set a PATCH leaves the account with, or null when the call does not touch roles —
+ * the held set is then left exactly as-is.
+ */
+function heldRolesAfterPatch(currentHeld: RoleName[], body: { role?: string; roles?: string[] }): RoleName[] | null {
+  // The SUPER_ADMIN-only `roles` array, already validated by the caller — a full replace.
+  if (body.roles) return body.roles as RoleName[];
+  if (!body.role) return null;
+  if (currentHeld.length > 1) {
+    // A genuinely multi-role account: the plain field can only switch which already-granted role is
+    // active — it can never silently grant or revoke a role on the side. Granting a NEW role onto a
+    // multi-role account requires the explicit, SUPER_ADMIN-only `roles` array.
+    if (!currentHeld.includes(body.role as RoleName)) {
+      throw new AppError(422, "This account holds multiple roles — use the roles field to grant a new one.");
+    }
+    return null;
+  }
+  // The common case (one held role, true for every account before this feature and for every
+  // account nobody has explicitly granted a second role to): the plain field means exactly what it
+  // always has — this is now the account's one and only role.
+  return [body.role as RoleName];
+}
+
+/**
+ * The two ways a PATCH can take access away for good: you, from yourself (deactivating your own
+ * account, or dropping a role you hold), and anyone, from the workspace's last active super admin.
+ * Echoing your own unchanged role and ACTIVE status back — which the edit dialog always does — is
+ * neither, and passes.
+ */
+async function assertPatchKeepsAccess(
+  actor: { id: string; role: string },
+  target: AuthorityTarget,
+  after: { heldRoles: RoleName[] | null; status?: string }
+): Promise<void> {
+  if (after.status && after.status !== "ACTIVE") assertNotSelfLockout(actor, target.id, "deactivate");
+  const dropsARole = after.heldRoles !== null && target.heldRoles.some((role) => !after.heldRoles!.includes(role));
+  if (dropsARole) assertNotSelfLockout(actor, target.id, "demote");
+  await assertNotLastSuperAdmin(target, after);
+}
+
 userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
   const targetId = String(req.params.id);
   const actorIsSuperAdmin = req.user!.role === "SUPER_ADMIN";
@@ -766,48 +807,19 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
     throw new AppError(422, "The active role must be one of the granted roles.");
   }
 
-  // null means this call isn't touching roles at all — the held-role set is left exactly as-is.
-  let newHeldRoleNames: RoleName[] | null = null;
+  const row = await prisma.user.findUnique({
+    where: { id: targetId },
+    select: { ...AUTHORITY_TARGET_SELECT, faceVerificationRequired: true }
+  });
+  if (!row) throw new AppError(404, "User not found");
+  const target = toAuthorityTarget(row);
+  // EVERY field, not only the role: an ADMIN who may change a super admin's email can send that
+  // address's password reset to themselves, and one who may set their status can lock them out.
+  assertMayActOn(req.user!, target);
+  if (req.body.role) assertMayGrant(req.user!, [req.body.role]);
 
-  if (req.body.role || req.body.roles) {
-    const target = await prisma.user.findUnique({
-      where: { id: targetId },
-      select: { role: { select: { name: true } }, userRoles: { select: { role: { select: { name: true } } } } }
-    });
-    if (!target) throw new AppError(404, "User not found");
-    // Adjacent to the multi-role work but not caused by it: the plain single-`role` field had no
-    // "only a super admin may act on a super admin" guard, unlike bulk-action and force-logout
-    // just above — an ADMIN could demote an existing SUPER_ADMIN unguarded. Same wording as those.
-    if (target.role.name === "SUPER_ADMIN" && !actorIsSuperAdmin) {
-      throw new AppError(403, "Only a super admin can act on a super admin");
-    }
-
-    const currentHeld = resolveHeldRoles(target.role.name as RoleName, target.userRoles.map((ur) => ur.role.name as RoleName));
-
-    if (req.body.roles) {
-      // The SUPER_ADMIN-only path above already validated this — full replace.
-      newHeldRoleNames = req.body.roles as RoleName[];
-    } else if (req.body.role) {
-      if (currentHeld.length > 1) {
-        // A genuinely multi-role account: the plain field can only switch which already-granted
-        // role is active — it can never silently grant or revoke a role on the side. Granting a
-        // NEW role onto a multi-role account requires the explicit, SUPER_ADMIN-only `roles` array.
-        if (!currentHeld.includes(req.body.role as RoleName)) {
-          throw new AppError(422, "This account holds multiple roles — use the roles field to grant a new one.");
-        }
-        // Held set untouched; newHeldRoleNames stays null.
-      } else {
-        // The common case (one held role, true for every account before this feature and for
-        // every account nobody has explicitly granted a second role to): the plain field means
-        // exactly what it always has — this is now the account's one and only role.
-        newHeldRoleNames = [req.body.role as RoleName];
-      }
-    }
-
-    if (newHeldRoleNames && (await wouldLockOutSuperAdmin(targetId, newHeldRoleNames))) {
-      throw new AppError(422, "This would leave no super admin able to manage the workspace — grant super admin to someone else first.");
-    }
-  }
+  const newHeldRoleNames = heldRolesAfterPatch(target.heldRoles, req.body);
+  await assertPatchKeepsAccess(req.user!, target, { heldRoles: newHeldRoleNames, status: req.body.status });
 
   const data: {
     name?: string;
@@ -836,21 +848,16 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
     data.managerId = req.body.managerId ?? null;
   }
 
-  // Capture the before-state of the face flag so the enrollment prompt only fires on the
-  // false→true transition — not on every unrelated PATCH that happens to echo the field back.
-  const previous =
-    data.faceVerificationRequired === true
-      ? await prisma.user.findUnique({ where: { id: targetId }, select: { faceVerificationRequired: true } })
-      : null;
-
   const user = await prisma.user.update({ where: { id: targetId }, data, include: { role: true } });
   if (newHeldRoleNames) await replaceHeldRoles(user.id, newHeldRoleNames);
   await audit(req.user!.id, "user.updated", "User", user.id, req.body);
 
   // The person just became individually covered by the face policy — tell them now, not at
-  // their next blocked submission. notifyEnrollmentRequired no-ops unless the policy is live
-  // (feature enabled + an action requires it + plan entitlement) and they're unenrolled.
-  if (previous && !previous.faceVerificationRequired) {
+  // their next blocked submission. Compared against the row read before the write, so the prompt
+  // only fires on the false→true transition, not on every PATCH that echoes the field back.
+  // notifyEnrollmentRequired no-ops unless the policy is live (feature enabled + an action
+  // requires it + plan entitlement) and they're unenrolled.
+  if (data.faceVerificationRequired === true && !row.faceVerificationRequired) {
     findCoveredUnenrolledUserIds()
       .then((ids) => (ids.includes(user.id) ? notifyEnrollmentRequired([user.id]) : 0))
       .catch(() => undefined);
@@ -861,6 +868,10 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
 
 userRouter.delete("/:id", async (req, res) => {
   const id = String(req.params.id);
+  const target = await loadAuthorityTarget(id);
+  assertMayActOn(req.user!, target);
+  assertNotSelfLockout(req.user!, id, "delete");
+  await assertNotLastSuperAdmin(target, { deleted: true });
   await prisma.user.update({ where: { id }, data: { deletedAt: new Date(), status: "INACTIVE" } });
   // Removing somebody frees a seat, and a customer who is billed for people who left will
   // notice long before they mention it.
@@ -873,6 +884,9 @@ userRouter.delete("/:id", async (req, res) => {
 });
 
 userRouter.post("/:id/reset-password", async (req, res) => {
+  // This route hands the new password back in plaintext, so it is the sharpest one to leave open:
+  // an ADMIN resetting a SUPER_ADMIN here could sign in as them. Checked before anything is written.
+  assertMayActOn(req.user!, await loadAuthorityTarget(String(req.params.id)));
   // No password supplied → generate a random one-time password and return it ONCE in this
   // response (it is stored only as a hash). The old behavior defaulted to "Admin@12345", which
   // this repo's own README documents — a default the whole internet can read is not a password.

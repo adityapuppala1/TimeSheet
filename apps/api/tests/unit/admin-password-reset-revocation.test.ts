@@ -62,10 +62,17 @@ const revocationsFor = (userId: string) =>
 beforeEach(() => {
   client = {
     user: {
+      // The authority check reads the target first (services/user-authority.service.ts): an
+      // ordinary employee here, so the reset goes ahead.
+      findUnique: vi
+        .fn()
+        .mockResolvedValue({ id: TARGET, status: "ACTIVE", deletedAt: null, role: { name: "EMPLOYEE" }, userRoles: [{ role: { name: "EMPLOYEE" } }] }),
       update: vi.fn().mockResolvedValue({ id: TARGET }),
       findMany: vi
         .fn()
-        .mockResolvedValue([{ id: TARGET, name: "Victim", email: "v@x.io", status: "ACTIVE", role: { name: "EMPLOYEE" } }])
+        .mockResolvedValue([
+          { id: TARGET, name: "Victim", email: "v@x.io", status: "ACTIVE", deletedAt: null, role: { name: "EMPLOYEE" }, userRoles: [] }
+        ])
     },
     session: { updateMany: vi.fn().mockResolvedValue({ count: 2 }) }
   } as unknown as PrismaClient;

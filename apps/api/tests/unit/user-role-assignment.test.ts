@@ -12,8 +12,9 @@ import type { PrismaClient } from "@prisma/client";
 import { runInTenant } from "../helpers/tenant-context.js";
 
 let actorRole: "SUPER_ADMIN" | "ADMIN" = "SUPER_ADMIN";
-// Controls the two userRole.count queries wouldLockOutSuperAdmin makes — see the mock below.
-let targetHoldsSuperAdmin = false;
+// How many OTHER active accounts hold SUPER_ADMIN — the holder count the last-super-admin guard
+// takes (user-authority.service.ts#countActiveSuperAdmins). Whether the TARGET holds it comes from
+// the target row itself (mockTarget below), as it does in the route.
 let otherSuperAdminHolders = 1;
 const ACTOR_ID = "actor-1";
 const TARGET = "target-1";
@@ -56,14 +57,15 @@ const ROLE_IDS: Record<string, string> = { SUPER_ADMIN: "role-sa", ADMIN: "role-
 
 beforeEach(() => {
   actorRole = "SUPER_ADMIN";
-  targetHoldsSuperAdmin = false;
   otherSuperAdminHolders = 1;
   client = {
     user: {
       findUnique: vi.fn().mockResolvedValue(null), // no email collision on create
       create: vi.fn().mockResolvedValue({ id: TARGET, name: "New", email: "new@x.io" }),
       update: vi.fn().mockResolvedValue({ id: TARGET, role: { name: "MANAGER" } }),
-      count: vi.fn().mockResolvedValue(3)
+      // Two counts share this mock: the super-admin holder query (the only one with an `OR`) and
+      // the seat count. Default: one other holder, and plenty of seats.
+      count: vi.fn((args: any) => Promise.resolve(args?.where?.OR ? otherSuperAdminHolders : 3))
     },
     role: {
       findUniqueOrThrow: vi.fn((args: any) => Promise.resolve({ id: ROLE_IDS[args.where.name], name: args.where.name })),
@@ -73,10 +75,6 @@ beforeEach(() => {
       })
     },
     userRole: {
-      // Two distinct queries share this mock: "does the target hold role X" (a plain `userId`
-      // match) and "how many OTHER active accounts hold role X" (`userId: { not: ... }`). Default:
-      // the target doesn't hold it and nobody else does either — tests override per scenario.
-      count: vi.fn((args: any) => Promise.resolve(typeof args?.where?.userId === "object" ? otherSuperAdminHolders : targetHoldsSuperAdmin ? 1 : 0)),
       deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
       createMany: vi.fn().mockResolvedValue({ count: 0 })
     }
@@ -122,6 +120,10 @@ describe("PATCH /users/:id — granting/changing roles", () => {
    *  by a prior SUPER_ADMIN grant) — omit it for the common single-held-role case. */
   function mockTarget(roleName: string, extraHeldRoleNames: string[] = []) {
     vi.mocked(client.user.findUnique).mockResolvedValue({
+      id: TARGET,
+      status: "ACTIVE",
+      deletedAt: null,
+      faceVerificationRequired: false,
       role: { name: roleName },
       userRoles: extraHeldRoleNames.map((name) => ({ role: { name } }))
     } as never);
@@ -152,7 +154,6 @@ describe("PATCH /users/:id — granting/changing roles", () => {
 
   it("a SUPER_ADMIN demoting the LAST super admin is refused — the lockout guard", async () => {
     mockTarget("SUPER_ADMIN");
-    targetHoldsSuperAdmin = true;
     otherSuperAdminHolders = 0; // nobody else holds it
     const res = await patch({ role: "EMPLOYEE" });
     expect(res.status).toBe(422);
@@ -161,18 +162,16 @@ describe("PATCH /users/:id — granting/changing roles", () => {
 
   it("a SUPER_ADMIN demoting a super admin is allowed when another active account still holds it", async () => {
     mockTarget("SUPER_ADMIN");
-    targetHoldsSuperAdmin = true;
     otherSuperAdminHolders = 1; // someone else holds it
     const res = await patch({ role: "EMPLOYEE" });
     expect(res.status).toBe(200);
   });
 
   it("an unrelated role change is never blocked just because some OTHER account is the sole super admin", async () => {
-    // Regression pin: wouldLockOutSuperAdmin must check whether THIS target holds SUPER_ADMIN
+    // Regression pin: the last-super-admin guard must check whether THIS target holds SUPER_ADMIN
     // before ever looking at "how many other accounts hold it" — an EMPLOYEE-to-TEAM_LEAD change
     // has nothing to do with who else in the org happens to be the only super admin.
     mockTarget("EMPLOYEE");
-    targetHoldsSuperAdmin = false;
     otherSuperAdminHolders = 0;
     const res = await patch({ role: "TEAM_LEAD" });
     expect(res.status).toBe(200);
