@@ -156,6 +156,20 @@ describe("POST /:orgSlug/v2/Users", () => {
       expect.objectContaining({ data: expect.objectContaining({ email: "new.person@example.com", roleId: "role-employee", status: "ACTIVE" }) })
     );
   });
+
+  it("writes the new account's UserRole row in the same create, so it holds the role it was given", async () => {
+    vi.mocked(client.user.findUnique).mockResolvedValue(null);
+    vi.mocked(client.user.count).mockResolvedValue(0);
+    vi.mocked(client.role.findUniqueOrThrow).mockResolvedValue({ id: "role-employee", name: "EMPLOYEE" } as never);
+    vi.mocked(client.user.create).mockResolvedValue({ id: "user-1", name: "N", email: "new.person@example.com", status: "ACTIVE", scimExternalId: null } as never);
+
+    const res = await request(buildScimApp()).post(`/api/scim/${ORG_SLUG}/v2/Users`).set(scimAuthHeader()).send(validBody);
+
+    expect(res.status).toBe(201);
+    expect(client.user.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ userRoles: { create: { roleId: "role-employee" } } }) })
+    );
+  });
 });
 
 describe("PATCH /:orgSlug/v2/Users/:id — deprovision/reactivate", () => {

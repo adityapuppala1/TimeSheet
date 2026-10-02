@@ -624,6 +624,17 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
     }
   });
 
+  // EVERY ACCOUNT HOLDS ITS OWN ROLE — a `UserRole` row for its primary `roleId`, written the same
+  // way migration 20260826120000_user_multi_role backfilled it. That migration runs BEFORE this
+  // seed on a fresh workspace (provisioning.service.ts migrates, then seeds), so it found no users
+  // and the founder was left without a row: invisible to `/auth/switch-role` and to anything else
+  // that reads held roles. `skipDuplicates` is the seed's INSERT IGNORE, so a re-seed adds nothing.
+  const everyone = await client.user.findMany({ select: { id: true, roleId: true } });
+  await client.userRole.createMany({
+    data: everyone.map((user) => ({ userId: user.id, roleId: user.roleId })),
+    skipDuplicates: true
+  });
+
   // Global notification settings singleton.
   await client.globalNotificationSettings.upsert({
     where: { id: "global" },

@@ -696,7 +696,10 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
           mustChangePassword: true,
           designation: row.designation || undefined,
           githubUsername: row.githubUsername || undefined,
-          notificationPreference: { create: {} }
+          notificationPreference: { create: {} },
+          // The account holds the role it was created with — see services/user-authority.service.ts
+          // for why a missing row mattered. Nested, so the user and the row land together.
+          userRoles: { create: { roleId: role.id } }
         }
       });
       emailToId.set(row.email.toLowerCase(), user.id);

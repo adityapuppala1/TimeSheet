@@ -1,0 +1,21 @@
+-- Every account holds a `UserRole` row for its own primary role — the same backfill
+-- 20260826120000_user_multi_role ran, run again for the accounts created since then without one.
+--
+-- WHY IT IS NEEDED: that backfill ran once, at upgrade. Every account created afterwards by a path
+-- that did not write the row was left without it:
+--   * the founding super admin of every workspace provisioned after it — provisioning migrates
+--     first and seeds second, so the backfill found an empty `User` table and the seed wrote none;
+--   * accounts from the CSV import, SCIM, and first sign-in through SSO.
+-- An account with no row is invisible to anything that reads held roles: `/auth/switch-role` refuses
+-- it, and the last-super-admin guard (which counted rows only until this release) saw a workspace
+-- with no super admin at all and let its only one demote themselves.
+--
+-- WHAT EXISTING ROWS DO: nothing. Data only — no table, column or index changes.
+--
+-- IDEMPOTENT for the same reason the original was: the (`userId`, `roleId`) unique index turns a
+-- second run, or an account that already holds its role, into a no-op under INSERT IGNORE. It only
+-- ever adds the row for an account's CURRENT primary role, which every code path already treats
+-- as held (shared `resolveHeldRoles` folds the primary role in), so no one gains a role they did not
+-- already have.
+INSERT IGNORE INTO `UserRole` (`id`, `userId`, `roleId`)
+SELECT UUID(), `id`, `roleId` FROM `User`;

@@ -198,7 +198,10 @@ scimRouter.post("/:orgSlug/v2/Users", async (req, res, next) => {
           roleId: employeeRole.id,
           status: body.active === false ? "INACTIVE" : "ACTIVE",
           scimExternalId: body.externalId,
-          notificationPreference: { create: {} }
+          notificationPreference: { create: {} },
+          // The account holds the role it was created with (the one-off multi-role backfill never
+          // reaches accounts created after it). Nested, so the user and the row land together.
+          userRoles: { create: { roleId: employeeRole.id } }
         },
         select: USER_SELECT
       });
