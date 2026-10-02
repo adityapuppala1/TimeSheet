@@ -13,14 +13,24 @@ export interface Trend {
    *  news nor bad, and colouring it asserts something the number does not support. Same reasoning as
    *  `PRIORITY_HIGHER_IS_BETTER` on the ticket metric cards. */
   good: boolean | null;
+  /** The baseline was zero. Any figure over nothing is an infinite increase, so there is no
+   *  percentage to print — the badge says "new" instead of a fake "+100%". */
+  isNew?: boolean;
 }
 
-/** Returns null when there's no meaningful baseline to compare against (avoids a misleading
- *  "+∞%" when yesterday was zero) — callers should simply omit the badge in that case. */
+/** Null when both sides are zero — there is nothing to compare. A zero baseline with something now is
+ *  `isNew` rather than "+100%". */
 export function computeTrend(value: number, baseline: number, higherIsBetter: boolean | null): Trend | null {
-  if (baseline <= 0) return value > 0 ? { pct: 100, direction: "up", good: higherIsBetter } : null;
+  if (baseline <= 0) return value > 0 ? { pct: 0, direction: "up", good: higherIsBetter, isNew: true } : null;
   const pct = Math.round(((value - baseline) / baseline) * 100);
   const direction = pct > 0 ? "up" : pct < 0 ? "down" : "flat";
   const good = higherIsBetter === null ? null : direction === "flat" ? true : (direction === "up") === higherIsBetter;
   return { pct, direction, good };
+}
+
+/** The badge text: "new", "flat", or a signed percentage. */
+export function trendText(trend: Trend): string {
+  if (trend.isNew) return "new";
+  if (trend.direction === "flat") return "flat";
+  return `${trend.pct > 0 ? "+" : ""}${trend.pct}%`;
 }

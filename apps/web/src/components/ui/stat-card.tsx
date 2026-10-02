@@ -11,7 +11,7 @@
  */
 import { Minus, TrendingDown, TrendingUp } from "lucide-react";
 import type { ReactNode } from "react";
-import type { Trend } from "../../lib/trend";
+import { trendText, type Trend } from "../../lib/trend";
 import { cn } from "../../lib/utils";
 
 export function TrendBadge({ trend, label }: { trend: Trend; label?: string }) {
@@ -24,7 +24,7 @@ export function TrendBadge({ trend, label }: { trend: Trend; label?: string }) {
   return (
     <span className={cn("inline-flex items-center gap-0.5 text-[10px] font-semibold sm:text-xs", colorClass)} title={label}>
       <Icon className="h-3 w-3 shrink-0" />
-      {trend.direction === "flat" ? "flat" : `${trend.pct > 0 ? "+" : ""}${trend.pct}%`}
+      {trendText(trend)}
     </span>
   );
 }
@@ -43,7 +43,9 @@ export function StatCard({
   icon?: ReactNode;
   tone?: "default" | "success" | "warning" | "destructive";
   trend?: Trend | null;
-  /** e.g. "vs yesterday" — shown as a tooltip on the badge and, space permitting, inline. */
+  /** e.g. "vs the same days last week" — printed beside the badge, because a percentage without
+   *  saying what it is measured against is not a figure anyone can act on (and a hover is not
+   *  available on a phone). */
   trendLabel?: string;
   /**
    * One sentence explaining what the number does or does not include, when that is not obvious
@@ -65,6 +67,7 @@ export function StatCard({
       <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 sm:mt-1.5">
         <p className={cn("text-lg font-black tracking-tight sm:text-2xl", toneClass)}>{value}</p>
         {trend && <TrendBadge trend={trend} label={trendLabel} />}
+        {trend && trendLabel && <span className="text-[10px] text-muted-foreground sm:text-[11px]">{trendLabel}</span>}
       </div>
       {hint && <p className="mt-1 text-[10px] leading-snug text-muted-foreground sm:text-[11px]">{hint}</p>}
     </div>

@@ -20,7 +20,7 @@
 import type { LucideIcon } from "lucide-react";
 import { Minus, TrendingDown, TrendingUp } from "lucide-react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip as ChartTip, YAxis } from "recharts";
-import { computeTrend } from "../lib/trend";
+import { computeTrend, trendText } from "../lib/trend";
 import { TONE_ACCENT_CLASS, TONE_ACTIVE_RING_CLASS, TONE_CHART_COLOR, TONE_TEXT_CLASS, type Tone } from "../lib/ticket-visuals";
 import { cn } from "../lib/utils";
 import { useCountUp, usePrefersReducedMotion } from "../lib/use-motion";
@@ -57,14 +57,13 @@ function describeMovement(value: number, series: number[], higherIsBetter: boole
 
   // Grey when the direction carries no judgement, even though we know which way it moved.
   const goodClass = trend.good ? "text-success" : "text-destructive";
-  const pctSign = trend.pct > 0 ? "+" : "";
 
   return {
     icon: trend.direction === "up" ? TrendingUp : TrendingDown,
     className: higherIsBetter === null ? "text-muted-foreground" : goodClass,
     text,
     delta,
-    title: `${pctSign}${trend.pct}% vs yesterday`
+    title: `${trendText(trend)} vs yesterday`
   };
 }
 
