@@ -23,7 +23,8 @@ import { getOnlineSeenByUser } from "../services/maintenance.service.js";
 import { assertSeatAvailable, syncSeatsAfterChange, takesASeat } from "../services/seats.service.js";
 import { assertValidManager, loadReportingRows, managerRefusal } from "../services/reporting-line.service.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
-import { tenantBaseUrl } from "../services/workspace-directory.service.js";
+import { forgetWorkspaceMembership, rememberWorkspaceMembership, tenantBaseUrl } from "../services/workspace-directory.service.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 import {
   actOnRefusal,
   assertMayActOn,
@@ -465,6 +466,8 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
         case "DELETE":
           await prisma.user.update({ where: { id: target.id }, data: { deletedAt: new Date(), status: "INACTIVE" } });
           await prisma.session.updateMany({ where: { userId: target.id, revokedAt: null }, data: { revokedAt: new Date() } });
+          // Out of the workspace finder too — see the single DELETE route below.
+          await forgetWorkspaceMembership(requireTenantContext().orgId, target.email);
           break;
       }
       done.push(target.id);
@@ -598,6 +601,9 @@ userRouter.post(
     await audit(req.user!.id, "user.created", "User", user.id);
     // The billed seat count follows the real one (services/seats.service.ts — never throws).
     await syncSeatsAfterChange();
+    // In the "find my workspace" index from today, not from their first sign-in — by which point
+    // they no longer need to find it. Best-effort; never fails the create.
+    await rememberWorkspaceMembership(requireTenantContext().orgId, user.email);
 
     const welcomeResult = await sendWelcomeEmail(user);
     await audit(
@@ -738,8 +744,11 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
   }
 
   const createdUsers = results.filter((r) => r.success).map((r) => ({ id: r.userId!, name: rows[r.row].name, email: r.email }));
+  const { orgId } = requireTenantContext();
   for (const user of createdUsers) {
     sendWelcomeEmail(user).catch(() => undefined);
+    // Findable by email from today, as POST /users does it.
+    await rememberWorkspaceMembership(orgId, user.email);
   }
 
   await audit(req.user!.id, "user.bulk_imported", "User", undefined, {
@@ -893,10 +902,14 @@ userRouter.delete("/:id", async (req, res) => {
   assertMayActOn(req.user!, target);
   assertNotSelfLockout(req.user!, id, "delete");
   await assertNotLastSuperAdmin(target, { deleted: true });
-  await prisma.user.update({ where: { id }, data: { deletedAt: new Date(), status: "INACTIVE" } });
+  const deleted = await prisma.user.update({ where: { id }, data: { deletedAt: new Date(), status: "INACTIVE" } });
   // Removing somebody frees a seat, and a customer who is billed for people who left will
   // notice long before they mention it.
   await syncSeatsAfterChange();
+  // And out of the "find my workspace" index, which is what workspace-directory.service.ts always
+  // said happened here — so a departed person's address stops naming their former employer's
+  // workspace to whoever holds that mailbox next. Deactivation keeps it: they may come back.
+  await forgetWorkspaceMembership(requireTenantContext().orgId, deleted.email);
   // The bulk DELETE path (POST /bulk) already does this; the single-user route didn't, which
   // left the deleted person's Session rows alive and refreshable.
   await prisma.session.updateMany({ where: { userId: id, revokedAt: null }, data: { revokedAt: new Date() } });

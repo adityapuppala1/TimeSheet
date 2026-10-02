@@ -25,6 +25,7 @@ import { requireTenantContext } from "../config/tenant-context.js";
 import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
 import { hasRoomFor, seatHeadroom, syncSeatsAfterChange, takesASeat } from "../services/seats.service.js";
+import { rememberWorkspaceMembership } from "../services/workspace-directory.service.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { constantTimeEqual, hashPassword, opaqueToken } from "../utils/security.js";
 
@@ -172,7 +173,7 @@ scimRouter.post("/:orgSlug/v2/Users", async (req, res, next) => {
   try {
     await withOrgTenant(req.params.orgSlug, async () => {
       await requireValidScimToken(req);
-      const { orgSlug } = requireTenantContext();
+      const { orgSlug, orgId } = requireTenantContext();
       const parsed = createUserSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json(scimError(400, "Invalid SCIM User payload."));
       const body = parsed.data;
@@ -203,6 +204,9 @@ scimRouter.post("/:orgSlug/v2/Users", async (req, res, next) => {
       });
       // The billed seat count follows — SCIM used to move it on no route at all.
       await syncSeatsAfterChange();
+      // Findable by email from today rather than from their first sign-in. Only an account that
+      // can sign in: the finder lists workspaces an address can actually get into.
+      if (user.status === "ACTIVE") await rememberWorkspaceMembership(orgId, user.email);
 
       res.status(201).json(toScimUser(user, orgSlug));
     });

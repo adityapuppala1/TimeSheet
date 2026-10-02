@@ -8,16 +8,21 @@ import { buildScimApp } from "../helpers/test-apps.js";
 // constructs a REAL PrismaClient for whatever DSN it gets back — both need mocking for a
 // "unit" test that never touches a real database. `prisma` (the tenant-context Proxy) is kept
 // real via importOriginal, since only `getTenantClient`'s DSN-based construction is the problem.
-const { mockResolveActiveOrgBySlug, mockGetTenantClient, mockGetEffectiveSeatLimit, mockSyncSubscriptionSeats } = vi.hoisted(() => ({
+const { mockResolveActiveOrgBySlug, mockGetTenantClient, mockGetEffectiveSeatLimit, mockSyncSubscriptionSeats, mockRememberWorkspaceMembership } = vi.hoisted(() => ({
   mockResolveActiveOrgBySlug: vi.fn(),
   mockGetTenantClient: vi.fn(),
   mockGetEffectiveSeatLimit: vi.fn(),
-  mockSyncSubscriptionSeats: vi.fn()
+  mockSyncSubscriptionSeats: vi.fn(),
+  mockRememberWorkspaceMembership: vi.fn()
 }));
 
 vi.mock("../../src/middleware/tenant.js", () => ({ resolveActiveOrgBySlug: mockResolveActiveOrgBySlug }));
 vi.mock("../../src/services/plan-limits.service.js", () => ({ getEffectiveSeatLimit: mockGetEffectiveSeatLimit }));
 vi.mock("../../src/services/billing-sync.service.js", () => ({ syncSubscriptionSeats: mockSyncSubscriptionSeats }));
+vi.mock("../../src/services/workspace-directory.service.js", () => ({
+  rememberWorkspaceMembership: mockRememberWorkspaceMembership,
+  tenantBaseUrl: () => "https://test-org.timesphere.test"
+}));
 vi.mock("../../src/config/prisma.js", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getTenantClient: mockGetTenantClient
@@ -47,6 +52,7 @@ beforeEach(() => {
   mockGetTenantClient.mockReset().mockResolvedValue(client);
   mockGetEffectiveSeatLimit.mockReset().mockResolvedValue(10);
   mockSyncSubscriptionSeats.mockReset().mockResolvedValue(undefined);
+  mockRememberWorkspaceMembership.mockReset().mockResolvedValue(undefined);
   vi.mocked(client.scimSettings.findUnique).mockResolvedValue({
     id: "global",
     isEnabled: true,
@@ -183,6 +189,26 @@ describe("POST /:orgSlug/v2/Users", () => {
     await request(buildScimApp()).post(`/api/scim/${ORG_SLUG}/v2/Users`).set(scimAuthHeader()).send(validBody).expect(201);
 
     expect(mockSyncSubscriptionSeats).toHaveBeenCalledWith("org-1");
+  });
+
+  it("a provisioned ACTIVE account can find its workspace by email straight away; an inactive one is not listed", async () => {
+    // The finder lists workspaces an address can sign in to. Until now it learned of a SCIM account
+    // only at that account's first sign-in — after the person had already found the workspace.
+    vi.mocked(client.user.findUnique).mockResolvedValue(null);
+    vi.mocked(client.user.count).mockResolvedValue(0);
+    vi.mocked(client.role.findUniqueOrThrow).mockResolvedValue({ id: "role-employee", name: "EMPLOYEE" } as never);
+    vi.mocked(client.user.create)
+      .mockResolvedValueOnce({ id: "user-1", name: "N", email: "new.person@example.com", status: "ACTIVE", scimExternalId: null } as never)
+      .mockResolvedValueOnce({ id: "user-2", name: "M", email: "later@example.com", status: "INACTIVE", scimExternalId: null } as never);
+
+    await request(buildScimApp()).post(`/api/scim/${ORG_SLUG}/v2/Users`).set(scimAuthHeader()).send(validBody).expect(201);
+    await request(buildScimApp())
+      .post(`/api/scim/${ORG_SLUG}/v2/Users`)
+      .set(scimAuthHeader())
+      .send({ userName: "later@example.com", active: false })
+      .expect(201);
+
+    expect(mockRememberWorkspaceMembership.mock.calls).toEqual([["org-1", "new.person@example.com"]]);
   });
 });
 
