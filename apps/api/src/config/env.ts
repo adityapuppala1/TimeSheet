@@ -129,6 +129,25 @@ const schema = z.object({
   // currently shares) — a platform-admin token must never verify successfully even if a
   // tenant secret ever leaked, since platform admins can see/administer every org.
   PLATFORM_ADMIN_JWT_SECRET: z.string().min(16),
+  /**
+   * Must an OWNER or OPERATOR have a second factor before the console admits them to anything but
+   * enrolment? Those two roles can delete workspaces, restore over them and approve each other's
+   * requests, so a password alone should not be enough to hold one.
+   *
+   * ON BY DEFAULT IN PRODUCTION, OFF ELSEWHERE — the API_TELEMETRY_ENABLED shape. A production
+   * upgrade therefore sends every unenrolled owner/operator to enrolment at their next request,
+   * which is the point; local development and CI keep signing in with a password alone, which is
+   * what the dev scripts and the e2e suite do. Explicitly setting it always wins, either way.
+   * Empty means unset (compose forwards `${PLATFORM_ADMIN_REQUIRE_MFA:-}`) — see the NATIVE_AI block
+   * below for why that has to be said out loud.
+   */
+  PLATFORM_ADMIN_REQUIRE_MFA: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z
+      .union([z.literal("true"), z.literal("false"), z.literal("1"), z.literal("0")])
+      .default(process.env.NODE_ENV === "production" ? "true" : "false")
+      .transform((value) => value === "true" || value === "1")
+  ),
   // 32 raw bytes, hex-encoded (64 hex chars) — AES-256-GCM key for utils/encryption.ts.
   // Generate one with: openssl rand -hex 32
   ENCRYPTION_KEY: z.string().regex(/^[0-9a-f]{64}$/i, "ENCRYPTION_KEY must be a 64-character hex string (32 bytes) — generate one with: openssl rand -hex 32"),

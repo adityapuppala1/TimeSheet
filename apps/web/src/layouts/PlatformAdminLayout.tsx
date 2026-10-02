@@ -23,8 +23,8 @@
  * each one is load-bearing and each one is there because something visibly broke without it.
  */
 import { Activity, AtSign, Banknote, BarChart3, BellRing, Building2, Command, DatabaseBackup, GitPullRequestArrow, Handshake, HeartHandshake, KeyRound, LayoutDashboard, LogOut, Mails, Menu, MessageSquareHeart, Radio, Settings2, ShieldAlert, ShieldCheck, SlidersHorizontal, UserPlus, UsersRound } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { Link, NavLink, Outlet, useNavigate } from "react-router";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { PlatformReasonPrompt } from "../components/PlatformReasonPrompt";
@@ -42,7 +42,7 @@ import { PRIMARY_BTN } from "../pages/platform-admin/console-ui";
 import { ConsoleCommandPalette, useConsolePaletteHotkey } from "../pages/platform-admin/console-command-palette";
 import { platformAdminAuthApi, registerPlatformAccountGateHandler } from "../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../store/platform-admin-auth";
-import { consoleAccountGate } from "../lib/platform-console";
+import { consoleAccountGate, shouldNagForMfa } from "../lib/platform-console";
 import { cn } from "../lib/utils";
 
 export interface ConsoleNavItem {
@@ -232,6 +232,55 @@ function SeededPasswordBanner({ onChangePassword }: { onChangePassword: () => vo
  * rotation gate below (an operator the server will not admit until they do). One form, so the two
  * can never disagree about the rules.
  */
+/**
+ * The nag for an operator with no second factor whom the deployment does NOT force to enrol — a
+ * role PLATFORM_ADMIN_REQUIRE_MFA does not cover, or a deployment that switched it off. The audit
+ * found the comments promising a console-wide nag while the only reminder lived on the Settings
+ * page itself, which is the one page an operator who has not thought about it never opens.
+ */
+function MfaNagBanner() {
+  return (
+    <div role="status" className="flex flex-col gap-2 border-b border-warning/40 bg-warning/10 px-4 py-2.5 text-sm text-foreground sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:py-2">
+      <p className="flex min-w-0 items-start gap-2 sm:items-center">
+        <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning sm:mt-0" />
+        <span className="min-w-0">
+          This account has <span className="font-semibold">no second factor</span>. A leaked password alone opens a console that can reach every customer.
+        </span>
+      </p>
+      <Button asChild size="sm" className={cn(PRIMARY_BTN, "shrink-0 self-start sm:self-auto")}>
+        <Link to="/platform-admin/settings?tab=security">Set one up</Link>
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * What the console shows instead of a page while PLATFORM_ADMIN_REQUIRE_MFA keeps an unenrolled
+ * OWNER/OPERATOR at the door (H4). The server already answers everything else with 403
+ * MFA_ENROLMENT_REQUIRED; this is the enrolment card itself, loaded lazily because it lives on the
+ * Settings page and the shell should not pull a whole page into its own bundle.
+ */
+const GatedSecondFactorCard = lazy(() => import("../pages/platform-admin/Settings").then((m) => ({ default: m.SecondFactorCard })));
+
+function MfaEnrolmentGate() {
+  return (
+    <div className="mx-auto grid w-full max-w-3xl gap-4">
+      <div className="grid gap-1.5 rounded-xl border border-warning/40 bg-warning/10 p-4">
+        <p className="flex items-center gap-2 font-semibold text-foreground">
+          <ShieldAlert className="h-4 w-4 shrink-0 text-warning" />
+          Set up two-factor authentication to continue
+        </p>
+        <p className="text-sm text-muted-foreground">
+          This deployment requires a second factor for owners and operators — the roles that can delete or restore a workspace. The console opens as soon as it is on.
+        </p>
+      </div>
+      <Suspense fallback={null}>
+        <GatedSecondFactorCard gate />
+      </Suspense>
+    </div>
+  );
+}
+
 function ChangePasswordForm({ onDone, onCancel }: { onDone: () => void; onCancel?: () => void }) {
   const admin = usePlatformAdminAuthStore((s) => s.admin);
   const setAdmin = usePlatformAdminAuthStore((s) => s.setAdmin);
@@ -419,12 +468,15 @@ export function PlatformAdminLayout() {
         </header>
 
         {admin?.usingSeededPassword && <SeededPasswordBanner onChangePassword={openPassword} />}
+        {shouldNagForMfa(admin) && <MfaNagBanner />}
 
         {/* One padding scale for the whole console — 1rem / 1.5rem / 2rem, tracking the same
             breakpoints the page kit uses — and one measure, so a page never sets its own. */}
         <main className="min-w-0 flex-1 px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
           <div className="mx-auto w-full min-w-0 max-w-[1400px]">
-            {gate === "password" ? <PasswordRotationGate /> : <Outlet />}
+            {gate === "password" && <PasswordRotationGate />}
+            {gate === "mfa" && <MfaEnrolmentGate />}
+            {gate === null && <Outlet />}
           </div>
         </main>
       </div>

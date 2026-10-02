@@ -160,6 +160,10 @@ env:
   # Minutes without activity before a session can no longer be refreshed; 0 = off. An open tab's
   # heartbeat counts as activity, so this ends sessions whose browser was closed or asleep that long.
   sessionIdleTimeoutMinutes: 0
+  # The platform-admin console. "true" (the code default under nodeEnv: production) sends every
+  # OWNER and OPERATOR without a second factor to enrolment before the console opens; "false" opts
+  # out. Leave it empty to take the default.
+  platformAdminRequireMfa: ""
 
 # Outbound email. This was MISSING from the chart entirely — the ConfigMap carried no SMTP keys and
 # the Secret example carried no password, so a Kubernetes install had no way to configure mail

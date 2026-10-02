@@ -8,16 +8,28 @@
 
 /** An account-level gate: something the operator must put right about their OWN account before the
  *  console admits them anywhere else. The server enforces it (middleware/platform-admin-auth.ts). */
-export type ConsoleAccountGate = "password" | null;
+export type ConsoleAccountGate = "password" | "mfa" | null;
 
 /** The 403 `code` the API answers a gated request with, mapped to the gate it means. */
 const GATE_CODES: Record<string, Exclude<ConsoleAccountGate, null>> = {
-  PASSWORD_ROTATION_REQUIRED: "password"
+  PASSWORD_ROTATION_REQUIRED: "password",
+  MFA_ENROLMENT_REQUIRED: "mfa"
 };
 
-/** Which gate the signed-in operator is behind, from what `/auth/me` and sign-in report. */
-export function consoleAccountGate(admin: { mustChangePassword?: boolean } | undefined): ConsoleAccountGate {
+interface AccountFlags {
+  mustChangePassword?: boolean;
+  mfaEnrolmentRequired?: boolean;
+  mfaEnabled?: boolean;
+}
+
+/**
+ * Which gate the signed-in operator is behind, from what `/auth/me` and sign-in report. The
+ * password comes first, exactly as on the server: a factor enrolled on top of a password somebody
+ * else issued is bound to whoever saw that password.
+ */
+export function consoleAccountGate(admin: AccountFlags | undefined): ConsoleAccountGate {
   if (admin?.mustChangePassword) return "password";
+  if (admin?.mfaEnrolmentRequired) return "mfa";
   return null;
 }
 
@@ -31,4 +43,14 @@ export function accountGateFromError(error: unknown): ConsoleAccountGate {
   if (response?.status !== 403) return null;
   const code = response.data?.code;
   return typeof code === "string" ? (GATE_CODES[code] ?? null) : null;
+}
+
+/**
+ * Whether the console-wide "set up two-factor" banner applies: an operator with no factor whom the
+ * deployment does NOT force to enrol (a role it does not cover, or PLATFORM_ADMIN_REQUIRE_MFA off).
+ * Quiet behind a gate, because the gate's own screen is already saying it.
+ */
+export function shouldNagForMfa(admin: AccountFlags | undefined): boolean {
+  if (!admin || admin.mfaEnabled) return false;
+  return consoleAccountGate(admin) === null;
 }

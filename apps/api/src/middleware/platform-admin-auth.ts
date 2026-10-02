@@ -22,7 +22,8 @@
 import type { NextFunction, Request, Response } from "express";
 import { PLATFORM_ROLE_CAPABILITIES, platformRoleHas, type PlatformCapability, type PlatformRole } from "@timesheet/shared";
 import { controlPrisma } from "../config/control-prisma.js";
-import { isAccountEssentialPath, platformAccountGateFor } from "../services/platform-account-gate.js";
+import { env } from "../config/env.js";
+import { isAccountEssentialPath, mfaEnrolmentRequiredFor, platformAccountGateFor } from "../services/platform-account-gate.js";
 import { verifyPlatformAdminAccessToken } from "../utils/platform-admin-security.js";
 import { AppError } from "./error.js";
 
@@ -36,6 +37,8 @@ export interface PlatformAdminRequestUser {
   /** While true, every console route but the caller's own `/auth/*` answers 403 — see
    *  services/platform-account-gate.ts. Reported on `/auth/me` so the console can route to the form. */
   mustChangePassword: boolean;
+  /** Same shape for PLATFORM_ADMIN_REQUIRE_MFA: an OWNER/OPERATOR with no factor enrolled. */
+  mfaEnrolmentRequired: boolean;
 }
 
 declare global {
@@ -98,13 +101,21 @@ export async function requirePlatformAdmin(req: Request, _res: Response, next: N
   const role: PlatformRole = Object.hasOwn(PLATFORM_ROLE_CAPABILITIES, admin.role) ? (admin.role as PlatformRole) : "READ_ONLY";
 
   const mustChangePassword = admin.mustChangePassword === true;
-  req.platformAdmin = { id: admin.id, name: admin.name, email: admin.email, role, mustChangePassword };
+  const subject = { mustChangePassword, role, mfaEnabled: admin.mfaEnabled === true };
+  req.platformAdmin = {
+    id: admin.id,
+    name: admin.name,
+    email: admin.email,
+    role,
+    mustChangePassword,
+    mfaEnrolmentRequired: mfaEnrolmentRequiredFor(subject, env.PLATFORM_ADMIN_REQUIRE_MFA)
+  };
   req.platformAdminSessionId = payload.sid;
 
-  // The account gates (C1): HERE, in the one function every console route passes through, rather
-  // than as a second middleware each route must remember. `req.path` is relative to the router's
-  // mount, so `/auth/...` is the same test on both console routers.
-  const gate = platformAccountGateFor({ mustChangePassword });
+  // The account gates (C1, H4): HERE, in the one function every console route passes through,
+  // rather than as a second middleware each route must remember. `req.path` is relative to the
+  // router's mount, so `/auth/...` is the same test on both console routers.
+  const gate = platformAccountGateFor(subject, { requireMfa: env.PLATFORM_ADMIN_REQUIRE_MFA });
   if (gate && !isAccountEssentialPath(req.path)) throw new AppError(403, gate.message, { code: gate.code });
   next();
 }

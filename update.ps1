@@ -194,18 +194,22 @@ function Invoke-Verification([string]$Expected) {
   # PlatformAdminUser table never got seeded, and that failure surfaces later as "nobody can
   # reach /platform-admin" long after the update was called a success.
   #
-  # ADVISORY, not a rollback trigger, for the same reason update.sh treats it that way: the
-  # seeded password is expected to be changed on any real deployment, so a failure here means
-  # "could not confirm", not "broken".
+  # ADVISORY, not a rollback trigger, for the same reason update.sh treats it that way: a failure
+  # here means "could not confirm", not "broken".
+  # Probed with an address that does not exist: a clean 401 needs the control database read and the
+  # bcrypt compare, without guessing at a real account's password - which, since the console counts
+  # failures per account, would edge the real owner toward a lockout.
+  $paStatus = 0
   try {
-    $paBody = '{"email":"platform-admin@timesphere.local","password":"PlatformAdmin@12345"}'
-    $pa = Invoke-WebRequest -Uri "http://localhost:4000/api/platform-admin/auth/login" -Method Post `
-      -ContentType "application/json" -Body $paBody -UseBasicParsing -TimeoutSec 5
-    if ($pa.Content -notmatch "accessToken") {
-      Write-Warn "Platform-admin login check inconclusive (the seeded password may have been changed - that is fine)."
-    }
+    $paBody = '{"email":"update-check@timesphere.invalid","password":"not-a-real-password"}'
+    Invoke-WebRequest -Uri "http://localhost:4000/api/platform-admin/auth/login" -Method Post `
+      -ContentType "application/json" -Body $paBody -UseBasicParsing -TimeoutSec 5 | Out-Null
+    $paStatus = 200
   } catch {
-    Write-Warn "Platform-admin login check inconclusive (the seeded password may have been changed - that is fine)."
+    if ($_.Exception.Response) { $paStatus = [int]$_.Exception.Response.StatusCode }
+  }
+  if ($paStatus -ne 401) {
+    Write-Warn "Platform-admin login check inconclusive (the sign-in route did not answer 401 for an unknown address)."
   }
   # Advisory, matching install.ps1: missing face-detection models mean no camera guidance, but
   # they must never roll back an otherwise good update.

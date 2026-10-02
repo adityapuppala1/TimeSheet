@@ -164,11 +164,13 @@ platformAdminRouter.post("/auth/change-password", requirePlatformAdmin, validate
  * in — the same rule `/auth/change-password` and the session routes already follow. A READ_ONLY
  * operator must be able to harden their own login; making that a privilege would be absurd.
  *
- * ENROLMENT IS OPT-IN, NOT FORCED, and that is a deliberate 5.0.0 decision rather than an
- * oversight. Flipping a mandatory second factor on at upgrade time locks out every existing
- * operator on the spot — the same failure mode as a restrictive role default, for the same reason:
- * nobody has enrolled yet, and the people who would fix it are the people who are locked out. The
- * console nags instead, and a later release can require it once the fleet has enrolled.
+ * ENROLMENT IS REQUIRED FOR OWNER AND OPERATOR when PLATFORM_ADMIN_REQUIRE_MFA is on (the production
+ * default). 5.0.0 made it opt-in because flipping a mandatory factor on at upgrade time looked like
+ * locking out every operator at once — but the requirement is enforced as a GATE that leaves every
+ * route on this block open, not as a refusal to sign in. An unenrolled owner signs in, is admitted
+ * to these routes and nothing else (services/platform-account-gate.ts), enrols, and carries on.
+ * Nobody is locked out; nobody keeps a destructive role on a password alone. The other roles are
+ * nagged by the console's banner rather than gated.
  */
 platformAdminRouter.get("/auth/mfa", requirePlatformAdmin, async (req, res) => {
   const admin = await controlPrisma.platformAdminUser.findUnique({
@@ -200,9 +202,11 @@ platformAdminRouter.post(
 platformAdminRouter.post(
   "/auth/mfa/disable",
   requirePlatformAdmin,
-  validate(z.object({ body: z.object({ currentPassword: z.string().min(8) }).strict() })),
+  // `code` is required: the factor has to be proved to be removed (H4). `recovery` swaps the
+  // authenticator code for a recovery code, exactly as it does at sign-in.
+  validate(z.object({ body: z.object({ currentPassword: z.string().min(8), code: z.string().min(6).max(64), recovery: z.boolean().optional() }).strict() })),
   async (req, res) => {
-    const result = await disablePlatformAdminMfa(req.platformAdmin!.id, req.body.currentPassword);
+    const result = await disablePlatformAdminMfa(req.platformAdmin!.id, req.body.currentPassword, req.body.code, { recovery: req.body.recovery === true });
     await platformAuditFor(req)("platform_admin.mfa_disabled", "PlatformAdminUser", req.platformAdmin!.id, { email: req.platformAdmin!.email });
     res.json(result);
   }

@@ -220,10 +220,13 @@ run_verification() { # run_verification <expected-version>  — mirrors install.
   curl -fsS http://localhost:4000/api/system/version | grep -q "\"version\":\"$expected\"" || return 1
   docker compose -f "$COMPOSE_FILE" exec -T api npx prisma migrate status --schema=apps/api/prisma/schema.prisma >/dev/null 2>&1 || return 1
   docker compose -f "$COMPOSE_FILE" exec -T api npx prisma migrate status --schema=apps/api/prisma/control/schema.prisma >/dev/null 2>&1 || return 1
-  curl -fsS -X POST http://localhost:4000/api/platform-admin/auth/login \
+  # The platform-admin login path, probed with an address that does not exist: a clean 401 needs the
+  # control database read and the bcrypt compare, without guessing at a real account's password —
+  # which, since the console counts failures per account, would edge the real owner toward a lockout.
+  [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:4000/api/platform-admin/auth/login \
     -H 'Content-Type: application/json' \
-    --data '{"email":"platform-admin@timesphere.local","password":"PlatformAdmin@12345"}' \
-    | grep -q accessToken || warn "Login check inconclusive (the seeded platform-admin password may have been changed — that's fine)."
+    --data '{"email":"update-check@timesphere.invalid","password":"not-a-real-password"}')" = "401" ] \
+    || warn "Platform-admin login check inconclusive (the sign-in route did not answer 401 for an unknown address)."
   # Advisory, matching install.sh's layer 6: the face-detection models are produced by the web
   # build, so an image built without that step is healthy in every other respect and silently has
   # no camera guidance. Warn rather than fail — this must never roll back an otherwise good update.

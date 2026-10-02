@@ -22,6 +22,8 @@ import {
   verifyPlatformAdminRefreshToken
 } from "../utils/platform-admin-security.js";
 import { generateRecoveryCodes, generateTotpSecret, normalizeRecoveryCode, totpAuthUri, verifyTotp } from "../utils/totp.js";
+import { mfaEnrolmentRequiredFor } from "./platform-account-gate.js";
+import { platformAudit } from "./platform-audit.service.js";
 
 const REFRESH_GRACE_PERIOD_MS = 30_000;
 
@@ -67,26 +69,79 @@ export interface PlatformAdminIdentity {
   /** The server-side gate (C1): while true, the console admits this account to nothing but its own
    *  `/auth/*` routes. Sent so the console opens the password form instead of a wall of 403s. */
   mustChangePassword: boolean;
+  /** PLATFORM_ADMIN_REQUIRE_MFA is on and this OWNER/OPERATOR has no factor: the console admits
+   *  them to enrolment and nothing else. */
+  mfaEnrolmentRequired: boolean;
 }
 
 type AdminRow = { id: string; name: string; email: string; role: string; mfaEnabled: boolean; passwordHash: string; mustChangePassword?: boolean };
 
 async function identityOf(admin: AdminRow): Promise<PlatformAdminIdentity> {
+  const role = admin.role as PlatformRole;
   return {
     id: admin.id,
     name: admin.name,
     email: admin.email,
-    role: admin.role as PlatformRole,
+    role,
     mfaEnabled: admin.mfaEnabled,
     usingSeededPassword: await usesSeededPassword(admin.passwordHash),
-    mustChangePassword: admin.mustChangePassword === true
+    mustChangePassword: admin.mustChangePassword === true,
+    mfaEnrolmentRequired: mfaEnrolmentRequiredFor({ role, mfaEnabled: admin.mfaEnabled }, env.PLATFORM_ADMIN_REQUIRE_MFA)
   };
 }
 
 async function completeLogin(admin: AdminRow, userAgent?: string, ipAddress?: string) {
   const session = await establishSession(admin.id, { userAgent, ipAddress });
-  await controlPrisma.platformAdminUser.update({ where: { id: admin.id }, data: { lastLoginAt: new Date() } });
+  // A completed sign-in is what clears the lockout counter — not a correct password on its own,
+  // which would let a password guesser reset the count before going on to guess the factor.
+  await controlPrisma.platformAdminUser.update({ where: { id: admin.id }, data: { lastLoginAt: new Date(), failedLoginCount: 0, lockedUntil: null } });
   return { mfaRequired: false as const, ...session, admin: await identityOf(admin) };
+}
+
+/* ------------------------------- Per-account lockout (H4) ------------------------------- */
+
+/**
+ * The per-IP limiters in app.ts cannot see one password being tried from a thousand addresses, so
+ * failures are also counted on the ACCOUNT. Stored on the row rather than in memory (unlike the
+ * tenant lockout in auth.service.ts) because the console is small and must hold across replicas and
+ * restarts: a lock an attacker can clear by waiting for a deploy is not one.
+ *
+ * PROGRESSIVE, NOT PERMANENT. Five consecutive failures lock the account for a minute; every
+ * further failure doubles it, up to an hour. A permanent lock would hand anybody who knows an
+ * operator's address a way to take them off the console; this caps what that costs while still
+ * putting a guess rate on the account far below what NIST 800-63B's 100-attempt ceiling allows.
+ */
+const LOCKOUT_THRESHOLD = 5;
+const LOCKOUT_BASE_MS = 60_000;
+const LOCKOUT_MAX_MS = 60 * 60_000;
+
+export function lockoutDurationMs(consecutiveFailures: number): number {
+  if (!(consecutiveFailures >= LOCKOUT_THRESHOLD)) return 0;
+  return Math.min(LOCKOUT_MAX_MS, LOCKOUT_BASE_MS * 2 ** (consecutiveFailures - LOCKOUT_THRESHOLD));
+}
+
+function lockedNow(admin: { lockedUntil?: Date | null }): boolean {
+  return Boolean(admin.lockedUntil && admin.lockedUntil.getTime() > Date.now());
+}
+
+/** Count one failure; lock from the threshold on. Incremented in the database, so two failures
+ *  racing each other both count. */
+async function recordSignInFailure(adminId: string) {
+  const row = await controlPrisma.platformAdminUser.update({
+    where: { id: adminId },
+    data: { failedLoginCount: { increment: 1 } },
+    select: { failedLoginCount: true, email: true }
+  });
+  const lockMs = lockoutDurationMs(row?.failedLoginCount);
+  if (lockMs > 0) {
+    await controlPrisma.platformAdminUser.update({ where: { id: adminId }, data: { lockedUntil: new Date(Date.now() + lockMs) } });
+    // Recorded so an owner can see why a colleague cannot get in — and that somebody is trying.
+    await platformAudit("SYSTEM", null, "platform_admin.locked", "PlatformAdminUser", adminId, {
+      email: row.email,
+      consecutiveFailures: row.failedLoginCount,
+      lockedForMinutes: Math.round(lockMs / 60_000)
+    });
+  }
 }
 
 /**
@@ -108,12 +163,21 @@ async function completeLogin(admin: AdminRow, userAgent?: string, ipAddress?: st
  * provoked without the password — which is why it is only ever reached AFTER the compare passes.
  * A wrong password produces the identical 401 whether the account is enrolled, unenrolled,
  * deactivated, or absent.
+ *
+ * A LOCKED ACCOUNT IS ONE MORE CASE OF THE SAME 401. It still pays the bcrypt round, and the right
+ * password is refused exactly like a wrong one: a distinct "locked" answer would tell a stranger
+ * which addresses are operators, and a guess that happens to land during a lock must be worth
+ * nothing. Guesses made while locked are not counted, so they cannot stretch the lock either.
  */
 export async function platformAdminLogin(email: string, password: string, userAgent?: string, ipAddress?: string) {
   const admin = await controlPrisma.platformAdminUser.findUnique({ where: { email } });
   const usable = admin && admin.status === "ACTIVE" ? admin : null;
   const passwordOk = await verifyPassword(password, usable?.passwordHash ?? DUMMY_PASSWORD_HASH);
-  if (!usable || !passwordOk) throw new AppError(401, "Invalid email or password");
+  const locked = usable ? lockedNow(usable) : false;
+  if (!usable || !passwordOk || locked) {
+    if (usable && !passwordOk && !locked) await recordSignInFailure(usable.id);
+    throw new AppError(401, "Invalid email or password");
+  }
 
   if (usable.mfaEnabled && usable.mfaSecret) {
     return {
@@ -156,19 +220,55 @@ export async function platformAdminVerifyMfa(
   const admin = await controlPrisma.platformAdminUser.findUnique({ where: { id: sub } });
   if (!admin || admin.status !== "ACTIVE" || !admin.mfaEnabled || !admin.mfaSecret) throw new AppError(401, "Start the sign-in again");
 
-  if (opts.recovery) {
-    await consumeRecoveryCode(admin.id, code);
-    return { ...(await completeLogin(admin, opts.userAgent, opts.ipAddress)), usedRecoveryCode: true };
+  // Whoever holds a challenge already proved the password, so naming the lock here discloses
+  // nothing they did not know — and they need to hear it rather than keep typing codes.
+  if (lockedNow(admin)) {
+    const minutes = Math.max(1, Math.ceil(((admin.lockedUntil as Date).getTime() - Date.now()) / 60_000));
+    throw new AppError(429, `Too many failed sign-in attempts on this account. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`);
   }
 
+  const recovery = opts.recovery === true;
+  const proof = await secondFactorProves(admin, code, recovery);
+  if (!proof.ok) {
+    // A replayed code is somebody double-submitting far more often than an attack, and the ratchet
+    // already makes it worthless — so it is refused without counting against the account.
+    if (!proof.replay) await recordSignInFailure(admin.id);
+    throw new AppError(401, proof.message);
+  }
+  if (proof.step !== undefined) {
+    await controlPrisma.platformAdminUser.update({ where: { id: admin.id }, data: { mfaLastUsedStep: BigInt(proof.step) } });
+  }
+
+  return { ...(await completeLogin(admin, opts.userAgent, opts.ipAddress)), usedRecoveryCode: recovery };
+}
+
+type SecondFactorProof = { ok: true; step?: number } | { ok: false; replay?: boolean; message: string };
+
+/**
+ * Does `code` prove the account's second factor? A TOTP code (with the replay ratchet) or, with
+ * `recovery`, one of the single-use recovery codes — which is consumed by a successful check.
+ * Shared by sign-in and by turning the factor off, so the two cannot disagree about what counts.
+ */
+async function secondFactorProves(
+  admin: { id: string; mfaSecret: string | null; mfaLastUsedStep: bigint | null },
+  code: string,
+  recovery: boolean
+): Promise<SecondFactorProof> {
+  if (!code.trim() || !admin.mfaSecret) return { ok: false, message: "That code is not right" };
+  if (recovery) {
+    try {
+      await consumeRecoveryCode(admin.id, code);
+      return { ok: true };
+    } catch {
+      return { ok: false, message: "That recovery code is not usable." };
+    }
+  }
   const result = verifyTotp(decryptSecret(admin.mfaSecret), code);
-  if (!result.ok) throw new AppError(401, "That code is not right");
+  if (!result.ok) return { ok: false, message: "That code is not right" };
   if (admin.mfaLastUsedStep !== null && BigInt(result.step) <= admin.mfaLastUsedStep) {
-    throw new AppError(401, "That code has already been used — wait for the next one.");
+    return { ok: false, replay: true, message: "That code has already been used — wait for the next one." };
   }
-  await controlPrisma.platformAdminUser.update({ where: { id: admin.id }, data: { mfaLastUsedStep: BigInt(result.step) } });
-
-  return { ...(await completeLogin(admin, opts.userAgent, opts.ipAddress)), usedRecoveryCode: false };
+  return { ok: true, step: result.step };
 }
 
 /**
@@ -240,16 +340,20 @@ export async function confirmPlatformAdminMfa(adminId: string, code: string) {
 }
 
 /**
- * Turning the factor off re-asks for the password, exactly like changing it does: a walked-away
- * console must not be enough to strip an account's second factor. Every recovery code goes with
- * it, because a code that outlives the enrolment it belonged to is a permanent bypass nobody
- * remembers granting.
+ * Turning the factor off re-asks for the password AND for the factor itself — a current code, or
+ * one of the recovery codes for the operator whose phone is gone. The password alone used to be
+ * enough, which made the factor exactly as strong as the password it was supposed to back up: a
+ * stolen password plus a walked-away (or hijacked) console session could strip it. Every recovery
+ * code goes with it, because a code that outlives the enrolment it belonged to is a permanent bypass
+ * nobody remembers granting.
  */
-export async function disablePlatformAdminMfa(adminId: string, currentPassword: string) {
+export async function disablePlatformAdminMfa(adminId: string, currentPassword: string, code: string, opts: { recovery?: boolean } = {}) {
   const admin = await controlPrisma.platformAdminUser.findUnique({ where: { id: adminId } });
   if (!admin || admin.status !== "ACTIVE") throw new AppError(401, "Invalid session");
   if (!(await verifyPassword(currentPassword, admin.passwordHash))) throw new AppError(400, "Current password is incorrect");
   if (!admin.mfaEnabled) throw new AppError(409, "Two-factor authentication is not on for this account.");
+  const proof = await secondFactorProves(admin, code ?? "", opts.recovery === true);
+  if (!proof.ok) throw new AppError(400, `${proof.message} Turning two-factor off needs a current code from your authenticator, or a recovery code.`);
 
   await controlPrisma.platformAdminRecoveryCode.deleteMany({ where: { adminUserId: adminId } });
   await controlPrisma.platformAdminUser.update({

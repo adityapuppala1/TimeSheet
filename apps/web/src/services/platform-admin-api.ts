@@ -165,6 +165,9 @@ export interface PlatformAdminUser {
   /** A server-side gate, not a nag: while true the API refuses every console route except this
    *  account's own `/auth/*`, and the console shows only the password form. */
   mustChangePassword?: boolean;
+  /** PLATFORM_ADMIN_REQUIRE_MFA is on and this OWNER/OPERATOR has no factor: the same kind of gate,
+   *  and the console shows only enrolment until it is set up. */
+  mfaEnrolmentRequired?: boolean;
 }
 
 export interface OrgListRow {
@@ -307,7 +310,9 @@ export const platformAdminAuthApi = {
    *  on until `mfaConfirm` proves a code from it. */
   mfaBegin: async () => (await platformAdminApi.post<{ secret: string; otpauthUri: string }>("/auth/mfa/begin")).data,
   mfaConfirm: async (code: string) => (await platformAdminApi.post<{ recoveryCodes: string[] }>("/auth/mfa/confirm", { code })).data,
-  mfaDisable: async (currentPassword: string) => (await platformAdminApi.post<{ mfaEnabled: false }>("/auth/mfa/disable", { currentPassword })).data
+  /** Needs the factor itself as well as the password — a current code, or a recovery code with `recovery`. */
+  mfaDisable: async (currentPassword: string, code: string, recovery = false) =>
+    (await platformAdminApi.post<{ mfaEnabled: false }>("/auth/mfa/disable", { currentPassword, code, recovery })).data
 };
 
 export interface ProvisionOrgResult {

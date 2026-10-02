@@ -46,6 +46,7 @@ import {
   TriangleAlert
 } from "lucide-react";
 import { useState } from "react";
+import { useSearchParams } from "react-router";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -361,17 +362,22 @@ function SignupSettingsCard({ view }: { view: PlatformSignupSettingsView }) {
  * WHY EVERY ROLE CAN REACH THIS, INCLUDING READ_ONLY. It is the caller's own credential, exactly
  * like the password change beside it. Making "harden your own sign-in" a privilege would be absurd.
  *
- * WHY IT IS OPT-IN AND THE CARD NAGS INSTEAD OF FORCING. Turning a mandatory second factor on at
- * upgrade time locks out every existing operator on the spot: nobody has enrolled yet, and the
- * people who would fix that are the people who are locked out. It is the same failure mode as a
- * restrictive role default, and the migration had to solve it the same way. Once the fleet has
- * enrolled, a later release can require it.
+ * REQUIRED FOR OWNER AND OPERATOR WHERE THE DEPLOYMENT SAYS SO (PLATFORM_ADMIN_REQUIRE_MFA, on by
+ * default in production). It is a gate rather than a refusal to sign in: an unenrolled owner signs
+ * in, the console layout shows THIS card in place of every page (`gate`), and the rest opens once
+ * the factor is on. Nobody is locked out at upgrade time — which was the reason 5.0.0 left it
+ * opt-in — and nobody keeps a destructive role on a password alone. Everyone else is nagged by the
+ * console-wide banner.
  *
  * THE SECRET AND THE RECOVERY CODES ARE SHOWN ONCE. The secret is encrypted at rest and the codes
  * are bcrypt-hashed, so neither can be re-displayed — losing the list means re-enrolling, which is
  * a five-minute inconvenience rather than a stored bypass of the factor.
+ *
+ * `gate` DEFERS THE IDENTITY REFRESH until "I have saved them". Re-reading the account the moment
+ * the factor is on would lift the layout's gate, unmount this card, and take the one-time recovery
+ * codes off the screen before anybody had written them down.
  */
-function SecondFactorCard() {
+export function SecondFactorCard({ gate = false }: { gate?: boolean }) {
   const queryClient = useQueryClient();
   const setAdmin = usePlatformAdminAuthStore((s) => s.setAdmin);
   const me = usePlatformAdminAuthStore((s) => s.admin);
@@ -381,10 +387,12 @@ function SecondFactorCard() {
   const [code, setCode] = useState("");
   const [codes, setCodes] = useState<string[] | null>(null);
   const [disablePassword, setDisablePassword] = useState("");
+  const [disableCode, setDisableCode] = useState("");
+  const [disableWithRecovery, setDisableWithRecovery] = useState(false);
   const [disableOpen, setDisableOpen] = useState(false);
 
-  const refresh = () => {
-    runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "mfa"] }));
+  const refreshStatus = () => runInBackground(queryClient.invalidateQueries({ queryKey: ["platform-admin", "mfa"] }));
+  const refreshIdentity = () => {
     platformAdminAuthApi.me().then(setAdmin).catch(() => undefined);
   };
 
@@ -399,16 +407,20 @@ function SecondFactorCard() {
       setCodes(r.recoveryCodes);
       setSetup(null);
       setCode("");
-      refresh();
+      refreshStatus();
+      if (!gate) refreshIdentity();
     },
     onError: (e: any) => toast.error("That code is not right", { description: e?.response?.data?.message ?? "Check your authenticator's clock." })
   });
   const disable = useMutation({
-    mutationFn: () => platformAdminAuthApi.mfaDisable(disablePassword),
+    mutationFn: () => platformAdminAuthApi.mfaDisable(disablePassword, disableCode, disableWithRecovery),
     onSuccess: () => {
       setDisableOpen(false);
       setDisablePassword("");
-      refresh();
+      setDisableCode("");
+      setDisableWithRecovery(false);
+      refreshStatus();
+      refreshIdentity();
       toast.success("Two-factor authentication is off");
     },
     onError: (e: any) => toast.error("Not turned off", { description: e?.response?.data?.message ?? "Try again." })
@@ -485,7 +497,15 @@ function SecondFactorCard() {
             <Button size="sm" variant="outline" className="gap-1.5" onClick={() => navigator.clipboard?.writeText(codes.join("\n"))}>
               <Copy className="h-3.5 w-3.5" />Copy all
             </Button>
-            <Button size="sm" className={PRIMARY_BTN} onClick={() => setCodes(null)}>
+            <Button
+              size="sm"
+              className={PRIMARY_BTN}
+              onClick={() => {
+                setCodes(null);
+                // In the gate, THIS is what opens the console — see the component's header.
+                if (gate) refreshIdentity();
+              }}
+            >
               I have saved them
             </Button>
           </Toolbar>
@@ -515,16 +535,28 @@ function SecondFactorCard() {
           <DialogHeader>
             <DialogTitle>Turn off two-factor authentication</DialogTitle>
             <DialogDescription>
-              Your password is asked for again, exactly as it is when you change it: a walked-away console must not be enough to strip an account's second factor. Every recovery code is destroyed
-              with it.
+              Your password and a current code are both asked for: a stolen password, or a walked-away console, must not be enough to strip an account's second factor. Every recovery code is
+              destroyed with it. If this deployment requires a factor for your role, you will be asked to set one up again straight away.
             </DialogDescription>
           </DialogHeader>
-          <Input type="password" autoComplete="current-password" value={disablePassword} onChange={(e) => setDisablePassword(e.target.value)} placeholder="Current password" />
+          <div className="grid gap-3">
+            <Input type="password" autoComplete="current-password" value={disablePassword} onChange={(e) => setDisablePassword(e.target.value)} placeholder="Current password" />
+            <Input
+              inputMode={disableWithRecovery ? "text" : "numeric"}
+              autoComplete="one-time-code"
+              value={disableCode}
+              onChange={(e) => setDisableCode(e.target.value)}
+              placeholder={disableWithRecovery ? "A recovery code, e.g. ABCDE-FGHJK" : "The six digits from your authenticator"}
+            />
+            <button type="button" className="justify-self-start text-xs text-muted-foreground underline-offset-2 hover:underline" onClick={() => setDisableWithRecovery((v) => !v)}>
+              {disableWithRecovery ? "Use the authenticator instead" : "Lost the authenticator? Use a recovery code"}
+            </button>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDisableOpen(false)}>
               Cancel
             </Button>
-            <Button className={PRIMARY_BTN} disabled={disablePassword.length < 8 || disable.isPending} onClick={() => disable.mutate()}>
+            <Button className={PRIMARY_BTN} disabled={disablePassword.length < 8 || disableCode.trim().length < 6 || disable.isPending} onClick={() => disable.mutate()}>
               Turn it off
             </Button>
           </DialogFooter>
@@ -834,15 +866,21 @@ function AuditCard() {
   );
 }
 
+/** The tabs a link may open directly — `?tab=security` is where the console's MFA banner points. */
+const SETTINGS_TABS = ["mail", "signup", "advisor", "security", "sessions", "audit"] as const;
+
 export function PlatformAdminSettings() {
   const mail = useQuery({ queryKey: ["platform-admin", "mail-settings"], queryFn: platformAdminConsoleApi.mailSettings });
   const signup = useQuery({ queryKey: ["platform-admin", "signup-settings"], queryFn: platformAdminConsoleApi.signupSettings });
+  const [params] = useSearchParams();
+  const requested = params.get("tab");
+  const initialTab = SETTINGS_TABS.find((tab) => tab === requested) ?? "mail";
   return (
     <ConsolePage eyebrow="Platform" title="Settings" description="The relay the platform sends from, whether strangers can sign up, the advisor's own model, your own second factor and sessions, and everything the control plane has recorded. Who can open this console moved to Access, where roles live.">
       {/* `mt-0` on every panel: `TabsContent` ships its own `mt-3`, which on top of this grid's
           `gap-4` made the gap between the tab strip and the card different from the gap the rest of
           the console uses. One gap, owned by the grid. */}
-      <Tabs defaultValue="mail" className="grid min-w-0 grid-cols-1 gap-4">
+      <Tabs defaultValue={initialTab} className="grid min-w-0 grid-cols-1 gap-4">
         <TabsList className="flex w-full min-w-0 justify-start overflow-x-auto sm:w-fit">
           <TabsTrigger value="mail" className="gap-1.5">
             <ServerCog className="h-3.5 w-3.5" />Mail server
