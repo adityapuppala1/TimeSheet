@@ -7,8 +7,10 @@
  *  1. A LOOP. Another helpdesk's acknowledgement, an out-of-office or a bounce, arriving from an
  *     auto-responding mailbox, became a ticket; our confirmation went back; their autoresponder
  *     answered it; that became a ticket… RFC 3834 says how to tell automated mail apart
- *     (Auto-Submitted, Precedence, List-Id, the null return path, the daemon senders) and how to mark
+ *     (Auto-Submitted, Precedence bulk/junk, the null return path, the daemon senders) and how to mark
  *     our own reply so the other side's guard can do the same (Auto-Submitted: auto-replied).
+ *     Mailing-list markers (List-Id, Precedence: list) are NOT among them: support@ as a Google Group
+ *     stamps both on every customer message, and dropping on them discarded real mail.
  *  2. NO THREADING. A customer's "Re: …" to their own confirmation opened a second ticket. A reply
  *     that answers our confirmation (In-Reply-To / References) or names its ticket in the subject as
  *     `[WEB-12]` is now added to that ticket as a comment instead.
@@ -33,7 +35,7 @@ vi.mock("../../src/services/notify.service.js", () => ({
 }));
 vi.mock("../../src/services/virus-scan.service.js", () => ({ assertUploadIsClean: vi.fn().mockResolvedValue({ clean: true }) }));
 
-const { processInboundEmail, ticketConfirmationMessageId } = await import("../../src/services/email-intake.service.js");
+const { automatedDropSummary, processInboundEmail, ticketConfirmationMessageId } = await import("../../src/services/email-intake.service.js");
 const { classifyTicket } = await import("../../src/services/ai.service.js");
 
 const SYSTEM_USER = { id: "intake-system-user", email: "email-intake@system.local", name: "Email Intake" };
@@ -108,30 +110,95 @@ beforeEach(() => {
 });
 
 describe("automated mail is dropped before it can start a loop", () => {
-  const cases: Array<[string, Record<string, unknown>]> = [
-    ["Auto-Submitted: auto-replied", { headers: { autoSubmitted: "auto-replied" } }],
-    ["Auto-Submitted: auto-generated", { headers: { autoSubmitted: "auto-generated" } }],
-    ["Precedence: bulk", { headers: { precedence: "bulk" } }],
-    ["Precedence: junk", { headers: { precedence: "junk" } }],
-    ["Precedence: list", { headers: { precedence: "list" } }],
-    ["a List-Id header", { headers: { listId: "<announce.lists.example.com>" } }],
-    ["a mailer-daemon sender", { from: { address: "MAILER-DAEMON@mx.example.com" } }],
-    ["a postmaster sender", { from: { address: "postmaster@example.com" } }],
-    ["a null return path", { headers: { returnPath: "<>" } }]
+  const cases: Array<[string, Record<string, unknown>, string]> = [
+    ["Auto-Submitted: auto-replied", { headers: { autoSubmitted: "auto-replied" } }, "Auto-Submitted: auto-replied"],
+    ["Auto-Submitted: auto-generated", { headers: { autoSubmitted: "auto-generated" } }, "Auto-Submitted: auto-generated"],
+    ["Precedence: bulk", { headers: { precedence: "bulk" } }, "Precedence: bulk"],
+    ["Precedence: junk", { headers: { precedence: "junk" } }, "Precedence: junk"],
+    ["a mailer-daemon sender", { from: { address: "MAILER-DAEMON@mx.example.com" } }, "a mailer-daemon sender"],
+    ["a postmaster sender", { from: { address: "postmaster@example.com" } }, "a postmaster sender"],
+    ["a null return path", { headers: { returnPath: "<>" } }, "a null return path"]
   ];
 
-  for (const [label, overrides] of cases) {
-    it(`${label}: no ticket, no confirmation`, async () => {
+  for (const [label, overrides, reason] of cases) {
+    it(`${label}: no ticket, no confirmation, and the drop is recorded with its reason`, async () => {
       const result = await run(overrides);
       expect(result).toMatchObject({ created: false, reason: "AUTOMATED_SENDER" });
       expect(ticketCreate).not.toHaveBeenCalled();
       expect(transactionalSpy).not.toHaveBeenCalled();
+      // The drop used to leave nothing but a console line. It is now on the record the intake
+      // settings read their "dropped N automated messages" status from.
+      expect(auditSpy).toHaveBeenCalledWith(
+        undefined,
+        "email_intake.automated_dropped",
+        "EmailIntakeSettings",
+        "global",
+        expect.objectContaining({ reason }),
+        expect.objectContaining({ actorType: "INTEGRATION", actorLabel: "email-intake" })
+      );
     });
   }
 
   it("Auto-Submitted: no is a person, and is processed", async () => {
     const result = await run({ headers: { autoSubmitted: "no", returnPath: "<customer@example.com>" } });
     expect(result.created).toBe(true);
+  });
+});
+
+describe("mail delivered through a mailing list is a person's mail", () => {
+  // support@ as a Google Group with the polled mailbox as a member is a common setup, and every
+  // customer message then carries List-Id and Precedence: list. Dropping on those discarded all of it.
+  it("Precedence: list becomes a ticket", async () => {
+    const result = await run({ headers: { precedence: "list" } });
+    expect(result.created).toBe(true);
+  });
+
+  it("a List-Id header becomes a ticket", async () => {
+    const result = await run({ headers: { listId: "support.acme.test" } });
+    expect(result.created).toBe(true);
+  });
+
+  it("a Google-Groups-shaped message, parsed from its raw source, becomes a ticket and is confirmed", async () => {
+    const { simpleParser } = await import("mailparser");
+    const { toParsedInboundEmail } = await import("../../src/workers/inbound-email.worker.js");
+    const raw = [
+      "Return-Path: <support+bncBXYZ@acme.test>",
+      "From: Jane Customer <jane@customer.example>",
+      "To: support@acme.test",
+      "Subject: Printer is on fire",
+      "Message-ID: <abc@customer.example>",
+      "Mailing-list: list support@acme.test; contact support+owners@acme.test",
+      "List-ID: <support.acme.test>",
+      "List-Post: <mailto:support@acme.test>",
+      "Precedence: list",
+      "Content-Type: text/plain",
+      "",
+      "Hello, my printer is on fire."
+    ].join("\r\n");
+    const parsed = toParsedInboundEmail(await simpleParser(raw));
+    const result = await runInTenant(client, () => processInboundEmail(parsed), "org-1", "acme");
+    expect(result.created).toBe(true);
+    expect(ticketCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ title: "Printer is on fire", externalReporterEmail: "jane@customer.example" }) }));
+    expect(transactionalSpy).toHaveBeenCalledWith(expect.objectContaining({ to: "jane@customer.example" }));
+  });
+});
+
+describe("the dropped-mail status", () => {
+  it("counts every recorded drop and names the most recent one's reason", async () => {
+    const lastAt = new Date("2026-10-02T09:00:00Z");
+    (client as any).auditLog = {
+      count: vi.fn().mockResolvedValue(3),
+      findFirst: vi.fn().mockResolvedValue({ createdAt: lastAt, metadata: { reason: "Auto-Submitted: auto-replied", from: "ooo@vendor.test" } })
+    };
+    const summary = await runInTenant(client, () => automatedDropSummary());
+    expect(summary).toEqual({ count: 3, lastReason: "Auto-Submitted: auto-replied", lastFrom: "ooo@vendor.test", lastAt });
+    expect((client as any).auditLog.count).toHaveBeenCalledWith({ where: expect.objectContaining({ action: "email_intake.automated_dropped" }) });
+  });
+
+  it("is zero, with no last reason, before anything was dropped", async () => {
+    (client as any).auditLog = { count: vi.fn().mockResolvedValue(0), findFirst: vi.fn().mockResolvedValue(null) };
+    const summary = await runInTenant(client, () => automatedDropSummary());
+    expect(summary).toEqual({ count: 0, lastReason: null, lastFrom: null, lastAt: null });
   });
 });
 

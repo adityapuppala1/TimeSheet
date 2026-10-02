@@ -16,7 +16,8 @@ import {
   getGlobalEmailIntakeSettings,
   processInboundEmail,
   type InboundMailHeaders,
-  type ParsedInboundEmail
+  type ParsedInboundEmail,
+  type ProcessResult
 } from "../services/email-intake.service.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
@@ -109,6 +110,21 @@ export function toParsedInboundEmail(parsed: ParsedMail): ParsedInboundEmail {
   };
 }
 
+/** One unseen message: fetched, parsed, handed to the pipeline — and flagged `\Seen` whatever
+ *  happened, so a message that fails is not retried into a ticket on every poll. */
+async function processMessage(client: ImapFlow, uid: number): Promise<ProcessResult | null> {
+  try {
+    const message = await client.fetchOne(uid, { source: true }, { uid: true });
+    if (!message || !message.source) return null;
+    return await processInboundEmail(toParsedInboundEmail(await simpleParser(message.source)));
+  } catch (error) {
+    console.error(`[email-intake] failed to process message uid=${uid}:`, (error as Error).message);
+    return null;
+  } finally {
+    await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
+  }
+}
+
 async function pollOnce() {
   const aiSettings = await getGlobalAISettings();
   if (!aiSettings.aiEnabled || !aiSettings.emailIngestionEnabled) return;
@@ -143,6 +159,7 @@ async function pollOnce() {
   });
 
   let processedCount = 0;
+  let droppedCount = 0;
   let pollError: string | null = null;
 
   try {
@@ -151,18 +168,9 @@ async function pollOnce() {
     try {
       const uids = await client.search({ seen: false }, { uid: true });
       for (const uid of uids || []) {
-        try {
-          const message = await client.fetchOne(uid, { source: true }, { uid: true });
-          if (!message || !message.source) continue;
-
-          const email = toParsedInboundEmail(await simpleParser(message.source));
-          const result = await processInboundEmail(email);
-          if (result.created) processedCount += 1;
-        } catch (error) {
-          console.error(`[email-intake] failed to process message uid=${uid}:`, (error as Error).message);
-        } finally {
-          await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
-        }
+        const result = await processMessage(client, uid);
+        if (result?.created) processedCount += 1;
+        if (result?.reason === "AUTOMATED_SENDER") droppedCount += 1;
       }
     } finally {
       lock.release();
@@ -180,7 +188,9 @@ async function pollOnce() {
     data: { lastPolledAt: new Date(), lastPollError: pollError }
   });
 
-  if (processedCount > 0) {
-    console.info(`[email-intake] poll complete: ${processedCount} ticket(s) created.`);
+  // Drops are each audited (and counted on the intake settings); the line here is for whoever is
+  // reading the server log when a mailbox seems to go quiet.
+  if (processedCount > 0 || droppedCount > 0) {
+    console.info(`[email-intake] poll complete: ${processedCount} ticket(s) created, ${droppedCount} automated message(s) dropped.`);
   }
 }

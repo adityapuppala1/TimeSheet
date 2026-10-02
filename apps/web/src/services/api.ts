@@ -1,4 +1,5 @@
 import type { ObservedDirectory } from "../lib/sso-microsoft";
+import type { EmailIntakeAutomatedDrops } from "../lib/email-intake-status";
 import axios, { type AxiosRequestConfig } from "axios";
 import type { SignupVerifyResult } from "../utils/signup-flow";
 import type { BulkUploadResult } from "../components/CsvBulkUploadDialog";
@@ -3728,7 +3729,8 @@ export const ticketTypeApi = {
 
 /** Admin-only: mailbox connection, routing rules, and module-assignee rules for email-to-ticket intake. */
 export const emailIntakeApi = {
-  getSettings: async () => (await api.get<EmailIntakeSettings>("/email-intake/settings")).data,
+  // The GET also carries the loop guard's drop tally, which the shared settings type does not name.
+  getSettings: async () => (await api.get<EmailIntakeSettings & { automatedDrops?: EmailIntakeAutomatedDrops }>("/email-intake/settings")).data,
   updateSettings: async (payload: {
     imapHost?: string | null;
     imapPort?: number;

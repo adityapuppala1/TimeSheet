@@ -111,6 +111,7 @@ import { PageHeader } from "../components/PageHeader";
 import { SectionBoard, SettingsSection, useOpenSections, type BoardEntry } from "../components/settings/settings-sections";
 import { countOf, liveOrError, liveOrOff } from "../lib/settings-state";
 import { runInBackground } from "../lib/run-in-background";
+import { automatedDropsNote } from "../lib/email-intake-status";
 
 interface ToggleRow {
   key: keyof NotificationPreferences;
@@ -1523,6 +1524,7 @@ interface ConnectionDraft {
 function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
   const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: ["settings", "email-intake"], queryFn: emailIntakeApi.getSettings });
+  const dropsNote = automatedDropsNote(settings.data?.automatedDrops);
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const users = useQuery({ queryKey: ["users"], queryFn: userApi.list });
   const routingRules = useQuery({ queryKey: ["email-intake", "routing-rules"], queryFn: emailIntakeApi.routingRules.list });
@@ -1678,6 +1680,8 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
               {settings.data?.lastPolledAt && !settings.data.lastPollError && (
                 <p className="text-xs text-muted-foreground">Last polled {new Date(settings.data.lastPolledAt).toLocaleString()}</p>
               )}
+              {/* What the loop guard dropped, so a guard that misfires is something an admin sees. */}
+              {dropsNote && <p className="text-xs text-muted-foreground">{dropsNote}</p>}
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="grid gap-1.5">
                   <Label>IMAP host</Label>

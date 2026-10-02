@@ -13,7 +13,7 @@ import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
-import { getGlobalEmailIntakeSettings, testImapConnection } from "../services/email-intake.service.js";
+import { automatedDropSummary, getGlobalEmailIntakeSettings, testImapConnection } from "../services/email-intake.service.js";
 import { decryptSecret, encryptSecret } from "../utils/encryption.js";
 
 export const emailIntakeRouter = Router();
@@ -24,8 +24,11 @@ function serializeSettings(settings: Awaited<ReturnType<typeof getGlobalEmailInt
   return { ...rest, imapPasswordSet: Boolean(imapPassword) };
 }
 
+// Carries the loop guard's running drop count beside the last-poll status, so mail the guard
+// discarded is something an admin can see rather than a console line nobody reads.
 emailIntakeRouter.get("/settings", async (_req, res) => {
-  res.json(serializeSettings(await getGlobalEmailIntakeSettings()));
+  const [settings, automatedDrops] = await Promise.all([getGlobalEmailIntakeSettings(), automatedDropSummary()]);
+  res.json({ ...serializeSettings(settings), automatedDrops });
 });
 
 const settingsSchema = z.object({

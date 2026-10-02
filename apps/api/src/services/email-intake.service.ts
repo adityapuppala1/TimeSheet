@@ -61,6 +61,7 @@ export interface ParsedInboundEmail {
 export interface InboundMailHeaders {
   autoSubmitted?: string;
   precedence?: string;
+  /** Parsed, but deliberately NOT a loop signal: a list relays real customers' mail too (see the loop guard). */
   listId?: string;
   /** Raw `Return-Path` value; `<>` is the null return path every bounce carries. */
   returnPath?: string;
@@ -178,12 +179,22 @@ export interface ProcessResult {
  * Every message used to become a ticket and earn a confirmation, whoever sent it. Point an
  * auto-responding mailbox at this one — another helpdesk's acknowledgement, an out-of-office, a
  * bounce — and each confirmation draws a reply that becomes a ticket that draws a confirmation.
- * Automated mail is recognised by the signals RFC 3834 and mailing lists use, and dropped before it
- * can create anything; our own confirmation is stamped so the far side can do the same.
+ * Automated mail is recognised by the signals RFC 3834 names, and dropped before it can create
+ * anything; our own confirmation is stamped so the far side can do the same.
+ *
+ * MAILING-LIST MARKERS ARE DELIBERATELY NOT SIGNALS. support@ as a Google Group (or any list) with
+ * the polled mailbox as a member is a common setup, and the list stamps `List-Id` and
+ * `Precedence: list` on every customer message it relays — dropping on either discarded all of that
+ * real mail. They say how a message travelled, not that a machine wrote it; an autoresponder behind
+ * a list still carries Auto-Submitted, and our confirmation's `Auto-Submitted: auto-replied` is what
+ * breaks the reply loop.
  * ------------------------------------------------------------------------------------------ */
 
-const BULK_PRECEDENCE = new Set(["bulk", "junk", "list"]);
+const BULK_PRECEDENCE = new Set(["bulk", "junk"]);
 const DAEMON_SENDERS = new Set(["mailer-daemon", "postmaster"]);
+
+/** The audit action every drop is recorded under; the intake status counts these. */
+const AUTOMATED_DROP_ACTION = "email_intake.automated_dropped";
 
 /** Why this message is automated and must not become a ticket, or null for a person. */
 export function automatedSenderReason(email: ParsedInboundEmail): string | null {
@@ -192,13 +203,36 @@ export function automatedSenderReason(email: ParsedInboundEmail): string | null 
   if (autoSubmitted && autoSubmitted !== "no") return `Auto-Submitted: ${autoSubmitted}`;
   const precedence = h.precedence?.trim().toLowerCase();
   if (precedence && BULK_PRECEDENCE.has(precedence)) return `Precedence: ${precedence}`;
-  if (h.listId?.trim()) return "a mailing-list message (List-Id)";
   const localPart = (email.from.address.split("@")[0] ?? "").toLowerCase();
   if (DAEMON_SENDERS.has(localPart)) return `a ${localPart} sender`;
   // The null return path. Only a header that is PRESENT and empty counts — a message retrieved
   // without a Return-Path at all is not thereby a bounce.
   if (h.returnPath !== undefined && h.returnPath.replace(/[<>\s]/g, "") === "") return "a null return path";
   return null;
+}
+
+/**
+ * How many messages the loop guard has dropped, and the latest one's reason — the intake settings'
+ * "skipped N automated messages" line.
+ *
+ * WHY THE AUDIT LOG: a drop used to leave only a console line, so a guard that misfired (as the
+ * mailing-list rule did) discarded real mail with nothing for an admin to see. EmailIntakeSettings
+ * has no column for a count, and every drop is already worth an audit row of its own, so the rows
+ * ARE the count rather than a second tally that could drift from them.
+ */
+export async function automatedDropSummary(): Promise<{ count: number; lastReason: string | null; lastFrom: string | null; lastAt: Date | null }> {
+  const where = { action: AUTOMATED_DROP_ACTION, actorType: "INTEGRATION" as const };
+  const [count, last] = await Promise.all([
+    prisma.auditLog.count({ where }),
+    prisma.auditLog.findFirst({ where, orderBy: { createdAt: "desc" }, select: { createdAt: true, metadata: true } })
+  ]);
+  const meta = (last?.metadata ?? {}) as { reason?: unknown; from?: unknown };
+  return {
+    count,
+    lastReason: typeof meta.reason === "string" ? meta.reason : null,
+    lastFrom: typeof meta.from === "string" ? meta.from : null,
+    lastAt: last?.createdAt ?? null
+  };
 }
 
 /* ------------------------------------------------------------------------------------------ *
@@ -292,6 +326,14 @@ export async function processInboundEmail(email: ParsedInboundEmail): Promise<Pr
   const automated = automatedSenderReason(email);
   if (automated) {
     console.info(`[email-intake] dropped "${email.subject}" from ${email.from.address} — ${automated}`);
+    await audit(
+      undefined,
+      AUTOMATED_DROP_ACTION,
+      "EmailIntakeSettings",
+      GLOBAL_ID,
+      { from: email.from.address, subject: email.subject.slice(0, 255), reason: automated },
+      { actorType: "INTEGRATION", actorLabel: "email-intake" }
+    );
     return { created: false, reason: "AUTOMATED_SENDER" };
   }
 
