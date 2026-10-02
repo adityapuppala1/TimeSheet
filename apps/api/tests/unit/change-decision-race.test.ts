@@ -102,6 +102,27 @@ describe("a decision racing another write", () => {
     expect(world.approvals.map((a) => a.status)).toEqual(["CANCELLED", "REJECTED"]);
   });
 
+  it("a withdraw that read the change before a decision committed loses: 409, and the approval stands", async () => {
+    // The reverse order of the race above: the requester's Withdraw read AWAITING_APPROVAL, the
+    // manager's approval committed, then the withdraw wrote DRAFT over an APPROVED change — leaving an
+    // APPROVED round on a draft. The state write is now conditional on the state it was read in.
+    const world = awaiting();
+    actor = ACTORS.requester;
+    const read = world.client.changeRequest.findFirst.getMockImplementation()!;
+    world.client.changeRequest.findFirst.mockImplementationOnce(async (args: unknown) => {
+      const snapshot = await read(args);
+      world.change.state = "APPROVED"; // the decision lands here
+      world.approvals[0].status = "APPROVED";
+      return snapshot;
+    });
+
+    const res = await request(buildChangeApp(changeRouter, world.client)).post(`/api/changes/${CHANGE_ID}/transition`).send({ to: "DRAFT" });
+
+    expect(res.status).toBe(409);
+    expect(world.change.state).toBe("APPROVED");
+    expect(world.approvals.map((a) => a.status)).toEqual(["APPROVED"]);
+  });
+
   it("still records an uncontested decision", async () => {
     const world = awaiting();
     const res = await request(buildChangeApp(changeRouter, world.client)).post(`/api/changes/${CHANGE_ID}/decision`).send({ decision: "APPROVED" });

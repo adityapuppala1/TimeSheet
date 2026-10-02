@@ -151,6 +151,21 @@ export async function writeChangeTransition(
   actor: ChangeMover,
   now: Date
 ): Promise<{ approverIds: string[] }> {
+  // FIRST, and conditional on the state the caller read: a move decided on a stale read writes
+  // nothing. Without it a Withdraw that read AWAITING_APPROVAL, racing an approval that committed
+  // first, wrote DRAFT over an APPROVED change and left the approved round on a draft.
+  const moved = await tx.changeRequest.updateMany({
+    where: { id: change.id, state: change.state },
+    data: {
+      state: to,
+      ...stageStampsOnEnter(to, change, now),
+      ...(to === "CLOSED" ? { closedAt: now, closedById: actor.id } : {})
+    }
+  });
+  if (moved.count !== 1) {
+    throw new AppError(409, "This change moved while you had it open — it was decided or changed by someone else. Reload it to see where it stands.");
+  }
+
   let approverIds: string[] = [];
   if (to === "AWAITING_APPROVAL") {
     const settings = await getChangeSettings();
@@ -170,14 +185,6 @@ export async function writeChangeTransition(
   // The state and the ticket half are never written apart — the compatibility hinge ~40 readers of
   // `Ticket.status` depend on.
   await tx.ticket.update({ where: { id: change.ticket.id }, data: ticketWriteFor(to, now) });
-  await tx.changeRequest.update({
-    where: { id: change.id },
-    data: {
-      state: to,
-      ...stageStampsOnEnter(to, change, now),
-      ...(to === "CLOSED" ? { closedAt: now, closedById: actor.id } : {})
-    }
-  });
   return { approverIds };
 }
 
