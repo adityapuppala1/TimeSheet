@@ -17,6 +17,7 @@ import { prisma } from "../config/prisma.js";
 import { getFaceSettings, isFaceFeatureAllowedForOrg } from "../services/face.service.js";
 import { templates } from "../services/mail-templates.js";
 import { dispatchNotification } from "../services/notify.service.js";
+import { FACE_REVIEW_LINK, identityAlertRecipients } from "../services/face-alerts.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
 import { runOncePerTick } from "../services/job-claim.service.js";
 
@@ -80,10 +81,8 @@ export async function runIdentityWeeklyDigest(now = new Date()): Promise<{ sent:
   const notes = noteParts.length > 0 ? `Worth a look: ${noteParts.join("; ")}.` : "";
 
   const weekLabel = lastWeekStart.toISOString().slice(0, 10);
-  const admins = await prisma.user.findMany({
-    where: { role: { name: { in: ["SUPER_ADMIN", "ADMIN"] } }, status: "ACTIVE", deletedAt: null },
-    select: { id: true, name: true }
-  });
+  // Super admins only, linked to the review log's tab — see services/face-alerts.service.ts.
+  const admins = await identityAlertRecipients();
 
   let sent = 0;
   for (const admin of admins) {
@@ -92,7 +91,7 @@ export async function runIdentityWeeklyDigest(now = new Date()): Promise<{ sent:
       category: "digest.identity_weekly",
       title: `Identity assurance — week of ${weekLabel}`,
       body: `${attempts.length} checks: ${passed} passed, ${failed} failed. ${flaggedPending} flagged awaiting review.${notes ? ` ${notes}` : ""}`,
-      link: "/app/settings",
+      link: FACE_REVIEW_LINK,
       email: {
         templateKey: "digest.identity_weekly",
         vars: { targetName: admin.name, weekLabel, total: attempts.length, passed, failed, flaggedPending, notes },

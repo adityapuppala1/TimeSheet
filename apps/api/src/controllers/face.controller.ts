@@ -25,6 +25,7 @@ import { FACE_ENROLL_MAX_FRAMES, FACE_VERIFY_MAX_FRAMES, faceCaptureUpload, pres
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
+import { FACE_REVIEW_LINK, identityAlertRecipients } from "../services/face-alerts.service.js";
 import { templates } from "../services/mail-templates.js";
 import { explainThresholdRecommendation, summarizeFaceReviewAttempt } from "../services/ai.service.js";
 import {
@@ -612,26 +613,21 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("captur
 });
 
 /**
- * Manager first, then this workspace's admins — the escalation audience for "someone repeatedly
- * failed to prove they're this person" (or passed through a suspected virtual camera). In-app
- * always; email per the workspace's notification toggles. Never includes scores or images.
+ * The escalation audience for "someone repeatedly failed to prove they're this person" (or passed
+ * through a suspected virtual camera): the workspace's super admins, linked straight to the review
+ * log's tab. It used to be every ADMIN plus the person's manager, linked to a bare /app/settings that
+ * neither of them can open — see services/face-alerts.service.ts for the choice. In-app always; email
+ * per the workspace's notification toggles. Never includes scores or images.
  */
 async function notifyFlagged(subjectUserId: string, outcome: FaceOutcome, failureCount: number, context: FaceContext): Promise<void> {
   const subject = await prisma.user.findUnique({
     where: { id: subjectUserId },
-    select: { name: true, managerId: true }
+    select: { name: true }
   });
   if (!subject) return;
 
-  const admins = await prisma.user.findMany({
-    where: { role: { name: { in: ["SUPER_ADMIN", "ADMIN"] } }, status: "ACTIVE", deletedAt: null },
-    select: { id: true, name: true }
-  });
+  const admins = await identityAlertRecipients();
   const recipients = new Map<string, string>(admins.map((a) => [a.id, a.name]));
-  if (subject.managerId && !recipients.has(subject.managerId)) {
-    const manager = await prisma.user.findUnique({ where: { id: subject.managerId }, select: { id: true, name: true } });
-    if (manager) recipients.set(manager.id, manager.name);
-  }
   recipients.delete(subjectUserId);
 
   const reason =
@@ -645,7 +641,7 @@ async function notifyFlagged(subjectUserId: string, outcome: FaceOutcome, failur
       category: "face.verification_flagged",
       title: "Identity check flagged for review",
       body: `${subject.name} ${reason}. The attempt is in the face verification review log.`,
-      link: "/app/settings",
+      link: FACE_REVIEW_LINK,
       email: {
         templateKey: "face.verification_flagged",
         vars: { targetName: recipientName, employeeName: subject.name, failureCount, context },

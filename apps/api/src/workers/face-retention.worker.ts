@@ -55,6 +55,7 @@ import {
   removeUserFaceDirectories
 } from "../services/face.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
+import { FACE_BILLING_LINK, FACE_REVIEW_LINK, identityAlertRecipients } from "../services/face-alerts.service.js";
 import { templates } from "../services/mail-templates.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
 import { runOncePerTick } from "../services/job-claim.service.js";
@@ -156,17 +157,16 @@ export async function sweepEntitlement(): Promise<{ state: "ok" | "grace-started
 }
 
 async function notifyAdminsEntitlementLost(): Promise<void> {
-  const admins = await prisma.user.findMany({
-    where: { role: { name: { in: ["SUPER_ADMIN", "ADMIN"] } }, status: "ACTIVE", deletedAt: null },
-    select: { id: true, name: true }
-  });
+  // Super admins only, linked to Billing — the plan is the only remedy, and Workspace Settings is
+  // theirs alone. See services/face-alerts.service.ts.
+  const admins = await identityAlertRecipients();
   for (const admin of admins) {
     await dispatchNotification({
       userId: admin.id,
       category: "face.entitlement_lost",
       title: "Face verification lost its plan entitlement",
       body: `This workspace's plan no longer includes face verification. Enforcement has stopped; stored face data will be purged in ${ENTITLEMENT_GRACE_DAYS} days unless the plan is upgraded.`,
-      link: "/app/settings",
+      link: FACE_BILLING_LINK,
       email: {
         templateKey: "face.entitlement_lost",
         vars: { targetName: admin.name, graceDays: ENTITLEMENT_GRACE_DAYS },
@@ -193,10 +193,8 @@ async function sweepOverdueReviews(): Promise<void> {
   });
   const oldestAgeHours = Math.round((Date.now() - oldest.createdAt.getTime()) / HOUR_MS);
 
-  const admins = await prisma.user.findMany({
-    where: { role: { name: { in: ["SUPER_ADMIN", "ADMIN"] } }, status: "ACTIVE", deletedAt: null },
-    select: { id: true, name: true }
-  });
+  // Super admins only, linked to the review log's tab — see services/face-alerts.service.ts.
+  const admins = await identityAlertRecipients();
   const dedupeSince = new Date(Date.now() - 24 * HOUR_MS);
 
   for (const admin of admins) {
@@ -211,7 +209,7 @@ async function sweepOverdueReviews(): Promise<void> {
       category: "face.review_overdue",
       title: "Flagged identity checks awaiting review",
       body: `${pendingCount} flagged identity ${pendingCount === 1 ? "attempt has" : "attempts have"} been waiting over ${REVIEW_OVERDUE_HOURS}h (oldest ~${oldestAgeHours}h).`,
-      link: "/app/settings",
+      link: FACE_REVIEW_LINK,
       email: {
         templateKey: "face.review_overdue",
         vars: { targetName: admin.name, pendingCount, oldestAgeHours },

@@ -910,7 +910,7 @@ export const templates = {
       heading("An identity check needs review") +
         paragraph(`${escape(params.targetName.split(" ")[0])}, ${escape(params.employeeName)} has failed ${params.failureCount} identity ${params.failureCount === 1 ? "check" : "checks"} in a row while trying to ${params.context === "TIMESHEET" ? "submit a timesheet" : params.context === "APPROVAL" ? "approve a timesheet" : "work on a ticket"}.`) +
         paragraph("Honest failures happen — bad lighting, new glasses, a dirty lens. Repeated ones are exactly what this control exists to surface. The review log shows the scores and captures behind each attempt.") +
-        paragraph(button("Open the review log", appUrl("/app/settings"), ACCENT))
+        paragraph(button("Open the review log", appUrl("/app/settings?tab=face-verification"), ACCENT))
     ),
 
   faceReviewOverdue: (params: { targetName: string; pendingCount: number | string; oldestAgeHours: number | string }) =>
@@ -918,7 +918,7 @@ export const templates = {
       { title: "Flagged identity checks awaiting review", preheader: "Flagged attempts have sat unreviewed.", accentColor: ACCENT },
       heading("Flagged identity checks are waiting") +
         paragraph(`${escape(params.targetName.split(" ")[0])}, ${params.pendingCount} flagged identity ${params.pendingCount === 1 ? "attempt has" : "attempts have"} been waiting for review — the oldest for about ${params.oldestAgeHours} hours. A flag nobody reads is not a control.`) +
-        paragraph(button("Review them now", appUrl("/app/settings"), ACCENT))
+        paragraph(button("Review them now", appUrl("/app/settings?tab=face-verification"), ACCENT))
     ),
 
   faceDataDeleted: (params: { name: string; byAdmin: boolean }) =>
@@ -938,7 +938,7 @@ export const templates = {
       heading("Face verification lost its plan entitlement") +
         paragraph(`${escape(params.targetName.split(" ")[0])}, this workspace's current plan no longer includes face verification. Identity checks have stopped being enforced as of now — nobody is locked out.`) +
         paragraph(`Stored face templates and captures will be kept for ${params.graceDays} days so an upgrade can restore the feature without re-enrolling everyone. After that they are permanently purged — retaining biometric data for a feature you can't use isn't defensible under data-protection rules.`) +
-        paragraph(button("Review plan & billing", appUrl("/app/settings"), ACCENT))
+        paragraph(button("Review plan & billing", appUrl("/app/settings?tab=billing"), ACCENT))
     ),
 
   identityWeeklyDigest: (params: { targetName: string; weekLabel: string; total: number | string; passed: number | string; failed: number | string; flaggedPending: number | string; notes: string }) =>
@@ -955,7 +955,7 @@ export const templates = {
           Number(params.flaggedPending) > 0 ? ACCENT : SUCCESS
         ) +
         (params.notes ? paragraph(escape(params.notes)) : "") +
-        paragraph(button("Open the review log", appUrl("/app/settings"))) +
+        paragraph(button("Open the review log", appUrl("/app/settings?tab=face-verification"))) +
         paragraph(`<span style="color:${MUTED};">Computed directly from this week's verification attempts — no AI involved. Turn it off in Workspace Settings → Email channels.</span>`)
     ),
 
