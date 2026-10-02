@@ -88,8 +88,10 @@ describe("GET /timesheets/approval-queue", () => {
     const where = listWhere();
     expect(where.status).toBe("SUBMITTED");
     expect(where.deletedAt).toBeNull();
-    // Yourself and everyone above you — but NOT your reports, and no one else.
-    expect([...where.userId.notIn].sort()).toEqual([LEAD.id, "mgr-1", "top-1"].sort());
+    // Yourself and everyone above you who has a manager — but NOT your reports, and no one else.
+    // top-1 heads the tree with no manager, so anyone but top-1 may decide their hours (audit
+    // 2026-10 R3, finding 1).
+    expect([...where.userId.notIn].sort()).toEqual([LEAD.id, "mgr-1"].sort());
   });
 
   it("pages for real, and reports the full total rather than the page length", async () => {

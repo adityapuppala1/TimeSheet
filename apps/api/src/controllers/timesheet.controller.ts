@@ -175,8 +175,9 @@ timesheetRouter.get("/", async (req, res) => {
  * the page by Thursday — while its SLA escalation mail linked here to find it. Filtering one capped
  * page client-side is the exact under-reporting PAGE_LIMIT's comment warns about.
  *
- * THE SCOPE is `approvalScopeWhere`: never your own entries and never your managers', in every
- * status, because this is the page of decisions you can make (or made). `awaitingReview` is the
+ * THE SCOPE is `approvalScopeWhere`: never your own entries and never your managers' (with the two
+ * top-of-tree exceptions that service explains), in every status, because this is the page of
+ * decisions you can make (or made). `awaitingReview` is the
  * same count the Inbox brief and the reports summary show, so the page's badge agrees with both.
  *
  * SEARCH matches the author's name and email and the task/notes text in SQL. The text columns hold
@@ -664,7 +665,8 @@ timesheetRouter.post("/submit-with-files", requirePermission(permissions.TIMESHE
  * as a failed batch.
  *
  * WHO MAY DECIDE is `assertMayDecide` (services/timesheet-approval-scope.service.ts): never your own
- * entry, never one by somebody above you in your reporting line. The authority is loaded once per
+ * entry (unless you are the workspace's sole approver, audited as such), never one by somebody above
+ * you in your reporting line who has a manager of their own. The authority is loaded once per
  * request and passed in, so a hundred-row bulk decision walks the reporting line once.
  *
  * A DECISION LANDS ONCE. The status read above each write is advice, not a lock: two reviewers (or
@@ -696,6 +698,9 @@ async function writeDecision(id: string, data: Prisma.TimesheetUncheckedUpdateMa
   if (claimed.count === 0) throw new AppError(409, ALREADY_DECIDED);
   return prisma.timesheet.findUniqueOrThrow({ where: { id }, include: DECISION_INCLUDE });
 }
+
+/** The one self-decision the rule allows is a sole approver's, and its audit row says so. */
+const selfDecision = (authorId: string, reviewerId: string) => (authorId === reviewerId ? { soleApprover: true } : undefined);
 
 async function approveCore(id: string, reviewerUser: Reviewer, authority: ApprovalAuthority) {
   const existing = await loadUndecided(id, "approve", authority);
@@ -763,7 +768,7 @@ async function approveCore(id: string, reviewerUser: Reviewer, authority: Approv
     }
   });
 
-  await audit(reviewerUser.id, "timesheet.approved", "Timesheet", item.id);
+  await audit(reviewerUser.id, "timesheet.approved", "Timesheet", item.id, selfDecision(item.userId, reviewerUser.id));
   return item;
 }
 
@@ -824,7 +829,7 @@ async function rejectCore(id: string, reason: string, reviewerUser: Reviewer, au
     }
   });
 
-  await audit(reviewerUser.id, "timesheet.rejected", "Timesheet", item.id, { reason: cleanReason });
+  await audit(reviewerUser.id, "timesheet.rejected", "Timesheet", item.id, { reason: cleanReason, ...selfDecision(item.userId, reviewerUser.id) });
   return item;
 }
 
@@ -922,8 +927,9 @@ timesheetRouter.patch("/:id/reject", requirePermission(permissions.TIMESHEETS_AP
  * "overdue". Once back in SUBMITTED the author may correct it, and a reviewer decides it again —
  * which freezes a fresh rate. Attestations already issued keep their frozen payload by design.
  *
- * WHO: a `timesheets:approve` holder, under the same rule as deciding — never the author, never an
- * entry by someone above you in your reporting line. Fully audited, with what the approval had
+ * WHO: a `timesheets:approve` holder, under the same rule as deciding — never the author (unless the
+ * workspace's sole approver), never an entry by someone above you in your reporting line who has a
+ * manager of their own. Fully audited, with what the approval had
  * frozen, and the author is told why. Conditional on the row still being APPROVED, so a double
  * click lands once.
  */
@@ -963,7 +969,8 @@ timesheetRouter.post("/:id/reopen", requirePermission(permissions.TIMESHEETS_APP
       billedRate: existing.billedRate == null ? null : Number(existing.billedRate),
       billedAmount: existing.billedAmount == null ? null : Number(existing.billedAmount),
       billedCurrency: existing.billedCurrency
-    }
+    },
+    ...selfDecision(item.userId, req.user!.id)
   });
 
   const dateLabel = item.workDate.toISOString().slice(0, 10);

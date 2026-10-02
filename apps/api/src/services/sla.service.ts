@@ -5,8 +5,8 @@
  * (`resolveEscalationsFor`). This is the timesheet-side SLA system — the ticket-side equivalent
  * lives separately in `ticket-sla.service.ts`.
  * WHY: an approval that nobody acts on shouldn't just sit silently — this is what notices a
- * breach and routes it up the reporting chain (manager's manager, then any ADMIN/SUPER_ADMIN)
- * automatically.
+ * breach and routes it up the reporting chain (manager's manager, then an ADMIN/SUPER_ADMIN, then
+ * any other approver — always somebody who may decide the entry) automatically.
  * HOW: `processSlaSweep` is idempotent per breach — `Timesheet.slaBreachAt` is the marker, so
  * re-running the sweep never double-escalates the same overdue entry.
  * WHO calls this: `workers/escalation.worker.ts` (the cron entry point), `controllers/timesheet.controller.ts`
@@ -17,6 +17,8 @@ import { env } from "../config/env.js";
 import { dispatchNotification } from "./notify.service.js";
 import { templates } from "./mail-templates.js";
 import { audit } from "./audit.service.js";
+import { loadReportingRows } from "./reporting-line.service.js";
+import { loadApprovers, othersWhoMayDecide } from "./timesheet-approval-scope.service.js";
 
 /**
  * Compute the approval deadline for a timesheet at submit time.
@@ -27,35 +29,41 @@ export function computeApprovalDeadline(submittedAt: Date, slaHours: number | nu
   return new Date(submittedAt.getTime() + hours * 60 * 60 * 1000);
 }
 
+/** The reporting links and the current approvers — read once per sweep, not once per overdue row. */
+interface EscalationDirectory {
+  rows: Awaited<ReturnType<typeof loadReportingRows>>;
+  approvers: Awaited<ReturnType<typeof loadApprovers>>;
+}
+
 /**
- * Find the escalation target for a given user. Preference order:
- * 1. User's manager's manager
- * 2. Any ADMIN / SUPER_ADMIN
- * Returns null if nothing reasonable is available.
+ * Who an overdue entry by `authorId` escalates to — only ever somebody who may DECIDE it, by the
+ * rule in timesheet-approval-scope.service.ts: never the author, never someone the decision route
+ * would refuse, and only an active, non-agent approver. Preference order among those:
+ * 1. the author's manager's manager;
+ * 2. an ADMIN / SUPER_ADMIN;
+ * 3. any other eligible approver.
+ * Null when nobody but the author could decide it.
+ *
+ * WHY THE ELIGIBILITY FILTER (audit 2026-10 R3, finding 1): the fallback used to be the first
+ * ADMIN/SUPER_ADMIN with no exclusions. For the top of a reporting tree that was often the author
+ * themselves, or a subordinate the approve route then refused — and since an escalation resolves
+ * only when the entry is decided, that Escalation row could never resolve.
  */
-async function findEscalationTarget(userId: string, alreadyEscalatedTo?: Set<string>): Promise<{ id: string; name: string; email: string } | null> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: {
-      manager: {
-        include: { manager: true }
-      }
-    }
-  });
-  const candidate = user?.manager?.manager;
-  if (candidate && candidate.status === "ACTIVE" && !alreadyEscalatedTo?.has(candidate.id)) {
-    return { id: candidate.id, name: candidate.name, email: candidate.email };
-  }
-  const admin = await prisma.user.findFirst({
-    where: {
-      status: "ACTIVE",
-      deletedAt: null,
-      role: { name: { in: ["ADMIN", "SUPER_ADMIN"] } },
-      id: alreadyEscalatedTo ? { notIn: Array.from(alreadyEscalatedTo) } : undefined
-    },
-    select: { id: true, name: true, email: true }
-  });
-  return admin;
+function findEscalationTarget(directory: EscalationDirectory, authorId: string): { id: string; name: string; email: string } | null {
+  const eligible = othersWhoMayDecide(
+    directory.rows,
+    directory.approvers.map((a) => a.id),
+    authorId
+  );
+  const byId = new Map(directory.approvers.map((a) => [a.id, a]));
+  const managerId = directory.rows.get(authorId)?.managerId;
+  const grandManagerId = managerId ? directory.rows.get(managerId)?.managerId : null;
+  const pick =
+    (grandManagerId && eligible.includes(grandManagerId) ? grandManagerId : undefined) ??
+    eligible.find((id) => ["ADMIN", "SUPER_ADMIN"].includes(byId.get(id)?.role.name ?? "")) ??
+    eligible[0];
+  const target = pick ? byId.get(pick) : undefined;
+  return target ? { id: target.id, name: target.name, email: target.email } : null;
 }
 
 /**
@@ -82,11 +90,15 @@ export async function processSlaSweep(now: Date = new Date()) {
   });
 
   let escalations = 0;
+  if (overdue.length === 0) return { breaches: 0, escalations };
+  const [rows, approvers] = await Promise.all([loadReportingRows(), loadApprovers()]);
+  const directory: EscalationDirectory = { rows, approvers };
+
   for (const ts of overdue) {
     const hoursOverdue = ts.approvalDeadline ? (now.getTime() - ts.approvalDeadline.getTime()) / (1000 * 60 * 60) : 0;
     const dateLabel = ts.workDate.toISOString().slice(0, 10);
 
-    const escalationTarget = await findEscalationTarget(ts.userId);
+    const escalationTarget = findEscalationTarget(directory, ts.userId);
     const fromUser = ts.user.manager ?? ts.user;
 
     // slaBreachAt (the idempotency marker that keeps a re-run of this sweep from

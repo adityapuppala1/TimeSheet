@@ -19,15 +19,19 @@ import request from "supertest";
 import type { PrismaClient } from "@prisma/client";
 import { runInTenant } from "../helpers/tenant-context.js";
 
-/** M manages L, L manages E. A is an admin outside the line. */
+/** M manages L, L manages E, and M reports to a director D — M needs a manager of their own for
+ *  "never someone above you" to apply to them; the top of a tree is anyone's but their own to
+ *  decide (timesheet-approval-root.test.ts). A is an admin outside the line. */
 const ADMIN = { id: "admin-1", name: "Ada Admin", email: "ada@x.io", role: "ADMIN", permissions: ["timesheets:write", "timesheets:approve", "users:manage"] };
 const MANAGER = { id: "mgr-1", name: "Mo Manager", email: "mo@x.io", role: "MANAGER", permissions: ["timesheets:write", "timesheets:approve", "reports:view"] };
 const LEAD = { id: "lead-1", name: "Lee Lead", email: "lee@x.io", role: "TEAM_LEAD", permissions: ["timesheets:write", "timesheets:approve", "reports:view"] };
 const EMPLOYEE = { id: "emp-1", name: "Eve Employee", email: "eve@x.io", role: "EMPLOYEE", permissions: ["timesheets:write"] };
+const DIRECTOR = { id: "dir-1", name: "Dee Director", email: "dee@x.io", role: "EMPLOYEE", permissions: ["timesheets:write"] };
 
 const PEOPLE = [
   { ...ADMIN, managerId: null },
-  { ...MANAGER, managerId: null },
+  { ...DIRECTOR, managerId: null },
+  { ...MANAGER, managerId: DIRECTOR.id },
   { ...LEAD, managerId: MANAGER.id },
   { ...EMPLOYEE, managerId: LEAD.id }
 ];

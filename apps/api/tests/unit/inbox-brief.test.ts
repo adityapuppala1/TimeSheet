@@ -109,8 +109,10 @@ describe("what the brief shows whom", () => {
   });
 
   it("counts awaiting review exactly as the approvals queue scopes it — not yours, not your managers'", async () => {
-    // u-1 reports to m-1, who reports to m-0. Their entries are not u-1's to decide, so counting
-    // them sent u-1 to a queue that (correctly) does not list them.
+    // u-1 reports to m-1, who reports to m-0. m-1's entries are not u-1's to decide, so counting
+    // them sent u-1 to a queue that (correctly) does not list them. m-0 is the top of the tree with
+    // no manager of their own — anyone but m-0 may decide theirs (audit 2026-10 R3, finding 1), so
+    // they ARE in u-1's count.
     userFindMany.mockResolvedValue([
       { id: "m-0", email: "m0@x.io", managerId: null, status: "ACTIVE", deletedAt: null },
       { id: "m-1", email: "m1@x.io", managerId: "m-0", status: "ACTIVE", deletedAt: null },
@@ -118,7 +120,7 @@ describe("what the brief shows whom", () => {
     ]);
     await buildDailyBrief({ id: "u-1", permissions: ["timesheets:approve"] }, NOW);
     const pendingCall = timesheetCount.mock.calls.find((c) => (c[0] as any).where.status === "SUBMITTED");
-    expect([...(pendingCall![0] as any).where.userId.notIn].sort()).toEqual(["m-0", "m-1", "u-1"]);
+    expect([...(pendingCall![0] as any).where.userId.notIn].sort()).toEqual(["m-1", "u-1"]);
   });
 
   it("omits project risk from somebody without reports:view, and never queries it", async () => {

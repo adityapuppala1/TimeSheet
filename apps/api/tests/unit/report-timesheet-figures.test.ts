@@ -15,8 +15,11 @@ import request from "supertest";
 
 const calls = vi.hoisted(() => [] as Array<{ model: string; method: string; args: any }>);
 const viewer = vi.hoisted(() => ({ timezone: "Asia/Kolkata" as string | null }));
+/** boss-1 reports to ceo-1: a manager with a manager of their own is not the viewer's to decide,
+ *  while ceo-1, at the top with nobody above, is (timesheet-approval-root.test.ts). */
 const people = vi.hoisted(() => [
-  { id: "boss-1", email: "boss@x.io", managerId: null, status: "ACTIVE", deletedAt: null },
+  { id: "ceo-1", email: "ceo@x.io", managerId: null, status: "ACTIVE", deletedAt: null },
+  { id: "boss-1", email: "boss@x.io", managerId: "ceo-1", status: "ACTIVE", deletedAt: null },
   { id: "viewer-1", email: "viewer@x.io", managerId: "boss-1", status: "ACTIVE", deletedAt: null }
 ]);
 

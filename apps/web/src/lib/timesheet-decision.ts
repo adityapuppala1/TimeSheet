@@ -10,6 +10,12 @@
  * The client knows your DIRECT manager (`AuthUser.managerId`), not the whole chain above them, so it
  * hides the common case and leaves the rest to the server's 403 — which says why in plain words. The
  * approvals queue itself is already scoped server-side and never lists either kind of entry.
+ *
+ * Two exceptions exist on the server and are deliberately NOT mirrored here, because the client
+ * cannot see what they turn on: a manager at the top of the tree (no manager of their own) may be
+ * decided by the people below them, and a workspace's sole approver may decide their own entries.
+ * Both are listed, with their buttons, in the approvals queue; this only ever hides a button the
+ * server would have allowed, never offers one it refuses.
  */
 export interface DecidingUser {
   id: string;
