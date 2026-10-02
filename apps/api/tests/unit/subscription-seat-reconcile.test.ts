@@ -36,7 +36,9 @@ const { control, retrieve, update, getTenantClient, stripe } = vi.hoisted(() => 
 
 vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: control }));
 vi.mock("../../src/services/stripe-client.service.js", () => ({
-  resolveStripeClient: vi.fn(async () => (stripe.configured ? { stripe: { subscriptions: { retrieve, update } }, settings: {} } : null))
+  resolveStripeClient: vi.fn(async () =>
+    stripe.configured ? { stripe: { subscriptions: { retrieve, update } }, settings: { priceIdTeam: "price_team", priceIdEnterprise: "price_enterprise" } } : null
+  )
 }));
 vi.mock("../../src/config/prisma.js", async (importOriginal) => ({
   ...(await importOriginal<object>()),
@@ -66,7 +68,8 @@ beforeEach(() => {
   getTenantClient.mockReset().mockImplementation(async (orgId: string) => ({ user: { count: vi.fn(async () => activeSeatsByOrg[orgId]) } }) as unknown as PrismaClient);
   retrieve.mockReset().mockImplementation(async (id: string) => {
     if (!(id in quantityBySubscription)) throw new Error(`No such subscription: ${id}`);
-    return { items: { data: [{ id: `item-${id}`, quantity: quantityBySubscription[id] }] } };
+    // One line, at the Team price — the shape Checkout creates.
+    return { items: { data: [{ id: `item-${id}`, quantity: quantityBySubscription[id], price: { id: "price_team" } }] } };
   });
   update.mockReset().mockResolvedValue({});
 });
@@ -135,6 +138,53 @@ describe("reconcileSubscriptionSeats", () => {
     const result = await reconcileSubscriptionSeats();
     expect(result.configured).toBe(false);
     expect(control.organization.findMany).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * WHICH LINE IS THE SEAT LINE. Checkout creates one line, but an operator can build a subscription
+ * by hand in the Stripe dashboard — an add-on, a setup fee, committed seats — and Stripe lists lines
+ * in no promised order. Writing `items.data[0]` set whatever line came first to the headcount, every
+ * night. The seat line is the one priced at this deployment's Team or Enterprise price; with none, or
+ * more than one, there is no right answer to write, so the workspace is skipped and named.
+ */
+describe("the subscription line the seat count is written to", () => {
+  const acme = { id: "acme", slug: "acme", stripeSubscriptionId: "sub_acme", status: "ACTIVE", database: db() };
+  const lines = (...items: Array<{ id: string; quantity: number; price: string }>) =>
+    retrieve.mockResolvedValue({ items: { data: items.map((item) => ({ id: item.id, quantity: item.quantity, price: { id: item.price } })) } });
+
+  it("is the line priced at a tier price, wherever Stripe lists it", async () => {
+    setUp([acme]);
+    activeSeatsByOrg.acme = 30;
+    lines({ id: "si_setup_fee", quantity: 1, price: "price_onboarding" }, { id: "si_seats", quantity: 50, price: "price_enterprise" });
+
+    await reconcileSubscriptionSeats();
+
+    expect(update).toHaveBeenCalledWith("sub_acme", { items: [{ id: "si_seats", quantity: 30 }], proration_behavior: "none" });
+  });
+
+  it("skips and names a workspace whose subscription has no line at a tier price", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    setUp([acme]);
+    activeSeatsByOrg.acme = 30;
+    lines({ id: "si_committed", quantity: 100, price: "price_committed_seats" });
+
+    await reconcileSubscriptionSeats();
+
+    expect(update).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/acme.*no line/));
+  });
+
+  it("skips and names a workspace whose subscription has more than one line at a tier price", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    setUp([acme]);
+    activeSeatsByOrg.acme = 30;
+    lines({ id: "si_team", quantity: 10, price: "price_team" }, { id: "si_enterprise", quantity: 20, price: "price_enterprise" });
+
+    await reconcileSubscriptionSeats();
+
+    expect(update).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/acme.*2 lines/));
   });
 });
 

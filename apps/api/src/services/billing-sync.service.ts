@@ -21,12 +21,30 @@ import { decryptSecret } from "../utils/encryption.js";
 import { countActiveSeats } from "./seat-count.service.js";
 import { resolveStripeClient } from "./stripe-client.service.js";
 
+/**
+ * The line of a subscription that bills seats: the ONE priced at this deployment's Team or Enterprise
+ * price. Never simply the first — Checkout creates a single line, but an operator can build a
+ * subscription by hand in the Stripe dashboard (an add-on, a setup fee, committed seats), and Stripe
+ * promises no order. Writing `items.data[0]` set whichever line came first to the headcount, every
+ * night. With no tier-priced line, or more than one, there is no right line to write: the reason comes
+ * back instead, and the caller skips the workspace and names it.
+ */
+function seatLine<T extends { price?: { id: string } | null }>(
+  lines: readonly T[],
+  settings: { priceIdTeam: string | null; priceIdEnterprise: string | null }
+): { line: T } | { skip: string } {
+  const tierPrices = new Set([settings.priceIdTeam, settings.priceIdEnterprise].filter(Boolean));
+  const matching = lines.filter((line) => line.price && tierPrices.has(line.price.id));
+  if (matching.length === 1) return { line: matching[0] };
+  return { skip: matching.length === 0 ? "no line at the Team or Enterprise price" : `${matching.length} lines at the Team or Enterprise price` };
+}
+
 /** The sync itself, THROWING — for the nightly sweep, which names what failed. Must run inside the
  *  workspace's tenant context (`countActiveSeats` reads its database). True when it wrote. */
 async function bringQuantityToSeatCount(orgId: string): Promise<boolean> {
   const org = await controlPrisma.organization.findUnique({
     where: { id: orgId },
-    select: { stripeSubscriptionId: true }
+    select: { slug: true, stripeSubscriptionId: true }
   });
   if (!org?.stripeSubscriptionId) return false; // Never bought through Stripe — nothing to keep in step.
 
@@ -34,10 +52,15 @@ async function bringQuantityToSeatCount(orgId: string): Promise<boolean> {
   if (!context) return false; // Billing isn't configured on this deployment.
 
   const seats = Math.max(1, await countActiveSeats());
-  const { stripe } = context;
+  const { stripe, settings } = context;
   const subscription = await stripe.subscriptions.retrieve(org.stripeSubscriptionId);
-  const item = subscription.items.data[0];
-  if (!item || item.quantity === seats) return false; // Already right — do not spend a write saying so.
+  const found = seatLine(subscription.items.data, settings);
+  if ("skip" in found) {
+    console.warn(`[billing] seat sync skipped for ${org.slug}: subscription ${org.stripeSubscriptionId} has ${found.skip} — its quantity is left for an operator to set in Stripe.`);
+    return false;
+  }
+  const item = found.line;
+  if (item.quantity === seats) return false; // Already right — do not spend a write saying so.
 
   await stripe.subscriptions.update(org.stripeSubscriptionId, {
     items: [{ id: item.id, quantity: seats }],
