@@ -279,9 +279,20 @@ describe("overviewSignups — the Overview's tile and chart", () => {
     expect(result.signupsByWeek[0].week < result.signupsByWeek[11].week).toBe(true);
   });
 
-  it("labels each week by the day it starts in India", () => {
-    // 19:00 UTC on 1 Oct is 00:30 IST on the 2nd, so the last week starts on India's 25 Sept.
-    const result = overviewSignups([], new Date("2026-10-01T19:00:00Z"));
-    expect(result.signupsByWeek.at(-1)?.week).toBe("2026-09-25");
+  it("buckets CALENDAR weeks, Monday to Sunday in India, labelled by their Monday", () => {
+    // Fri 2 Oct 2026: this week began Mon 28 Sept; twelve of them go back to Mon 13 July.
+    const result = overviewSignups([], new Date("2026-10-02T12:00:00Z"));
+    expect(result.signupsByWeek.at(-1)?.week).toBe("2026-09-28");
+    expect(result.signupsByWeek[0].week).toBe("2026-07-13");
+  });
+
+  it("puts a workspace in the week India was in when it was made, and the buckets do not move on a refetch", () => {
+    // 20:00 UTC on Sun 27 Sept is 01:30 IST on Mon 28 Sept: this week, not last.
+    const orgsMade = [{ createdVia: "SELF_SERVE", createdAt: new Date("2026-09-27T20:00:00Z") }];
+    const morning = overviewSignups(orgsMade, new Date("2026-10-02T03:00:00Z"));
+    const evening = overviewSignups(orgsMade, new Date("2026-10-02T15:00:00Z"));
+    expect(morning.signupsByWeek.at(-1)).toMatchObject({ week: "2026-09-28", selfServe: 1 });
+    // Rolling 168-hour windows shifted with every refetch; calendar weeks do not.
+    expect(evening.signupsByWeek).toEqual(morning.signupsByWeek);
   });
 });

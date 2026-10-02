@@ -32,3 +32,42 @@ export function consoleRangeForDays(days: number, now = new Date()): { from: str
   const to = consoleDayKey(now);
   return { from: shiftConsoleDay(to, -(Math.max(1, days) - 1)), to };
 }
+
+/* ------------------------------------------------------------------------------------------ */
+/* Dates as people read them                                                                    */
+/* ------------------------------------------------------------------------------------------ */
+
+let dayMonthFormatter: Intl.DateTimeFormat | null = null;
+
+/**
+ * A `YYYY-MM-DD` key as "13 Jul" — the console's axis and label format, never "07-13".
+ *
+ * A date-only key HAS no zone, so it is formatted in UTC on purpose: formatting it in the browser's
+ * zone would turn 13 July into 12 July for anybody west of Greenwich.
+ */
+export function dayMonth(dayKey: string): string {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  dayMonthFormatter ??= new Intl.DateTimeFormat("en-IN", { timeZone: "UTC", day: "numeric", month: "short" });
+  return dayMonthFormatter.format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* A chart's words                                                                              */
+/* ------------------------------------------------------------------------------------------ */
+
+/**
+ * The sentence printed under a count chart — its text alternative (WCAG 1.1.1) and the figure anyone
+ * can check the bars against: the total, the peak and the latest point. Written from the same series
+ * the chart draws, so the words cannot disagree with the picture.
+ */
+export function summariseCounts(points: Array<{ label: string; total: number }>, options: { noun: string; span: string }): string {
+  const total = points.reduce((sum, point) => sum + point.total, 0);
+  const plural = (n: number) => `${options.noun}${n === 1 ? "" : "s"}`;
+  if (total === 0) return `No ${plural(0)} in the last ${options.span}.`;
+  const peak = points.reduce((best, point) => (point.total > best.total ? point : best), points[0]);
+  const latest = points[points.length - 1];
+  return `${total.toLocaleString(CONSOLE_LOCALE)} ${plural(total)} in the last ${options.span}. The most, ${peak.total}, in ${peak.label}; ${latest.total} in ${latest.label}.`;
+}
+
+/** The console's number locale: Indian digit grouping (12,34,567) unless a page has a reason not to. */
+export const CONSOLE_LOCALE = "en-IN";

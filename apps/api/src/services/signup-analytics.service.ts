@@ -23,7 +23,7 @@
  */
 import { controlPrisma } from "../config/control-prisma.js";
 import { companyDomainOf } from "../utils/company-domain.js";
-import { platformDayKey } from "../utils/platform-time.js";
+import { platformDayKey, platformWeekStartKey, shiftDayKey } from "../utils/platform-time.js";
 import { isConverted } from "./trial-conversion.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -193,6 +193,10 @@ function topDomainsFrom(domainStages: DomainStageCount[]): SignupAnalytics["topD
  * into customers who signed themselves up and workspaces an operator made. Before this the two were
  * one number, so a week of console provisioning read as demand. A null createdVia (a row from before
  * the column, not backfilled) counts as console — self-serve is only what the signup route recorded.
+ *
+ * THE WEEKS ARE CALENDAR WEEKS, Monday to Sunday in the platform's zone, each labelled by its Monday;
+ * the last is this week so far. They were rolling 168-hour windows counted back from "now", so every
+ * bucket shifted on every refetch and none of them was a week anybody could name.
  */
 export function overviewSignups(orgs: Array<{ createdVia: string | null; createdAt: Date }>, now: Date) {
   const split = (from: Date, to: Date) => {
@@ -200,16 +204,17 @@ export function overviewSignups(orgs: Array<{ createdVia: string | null; created
     const selfServe = inRange.filter((o) => o.createdVia === "SELF_SERVE").length;
     return { selfServe, console: inRange.length - selfServe };
   };
-  const end = new Date(now.getTime() + 1);
-  return {
-    signups30: split(new Date(now.getTime() - 30 * DAY_MS), end),
-    // Twelve weekly buckets — enough to see a trend, not so many the chart is noise.
-    signupsByWeek: Array.from({ length: 12 }, (_, i) => {
-      const start = new Date(now.getTime() - (11 - i + 1) * 7 * DAY_MS + 1);
-      const stop = new Date(start.getTime() + 7 * DAY_MS);
-      return { week: dayKey(start), ...split(start, i === 11 ? end : stop) };
-    })
-  };
+  const thisWeek = platformWeekStartKey(now);
+  // Twelve weeks — enough to see a trend, not so many the chart is noise.
+  const signupsByWeek = Array.from({ length: 12 }, (_, i) => ({ week: shiftDayKey(thisWeek, (i - 11) * 7), selfServe: 0, console: 0 }));
+  const byWeek = new Map(signupsByWeek.map((bucket) => [bucket.week, bucket]));
+  for (const o of orgs) {
+    const bucket = byWeek.get(platformWeekStartKey(o.createdAt));
+    if (!bucket) continue;
+    if (o.createdVia === "SELF_SERVE") bucket.selfServe += 1;
+    else bucket.console += 1;
+  }
+  return { signups30: split(new Date(now.getTime() - 30 * DAY_MS), new Date(now.getTime() + 1)), signupsByWeek };
 }
 
 export async function getSignupAnalytics(requestedDays: number, now = new Date()): Promise<SignupAnalytics> {
