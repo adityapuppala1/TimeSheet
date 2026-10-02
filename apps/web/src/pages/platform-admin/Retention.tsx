@@ -139,7 +139,11 @@ function PolicyCard({ settings }: { settings: RetentionSettings }) {
         <Field label="Retention window (days)" htmlFor="rp-retention" hint="Deletion runs on the tick after the final notice, once this many days have passed.">
           <Input id="rp-retention" type="number" min={7} value={form.retentionDays} onChange={(e) => setForm((f) => ({ ...f, retentionDays: e.target.value }))} />
         </Field>
-        <Field label="Snapshot directory (optional)" htmlFor="rp-snapshot" hint="A best-effort mysqldump before every drop. Needs mysqldump on the API host.">
+        <Field
+          label="Snapshot directory (optional)"
+          htmlFor="rp-snapshot"
+          hint="A best-effort mysqldump before every drop. Must be inside the API host's SNAPSHOT_ROOT (default /var/backups/timesphere-retention); a relative name is taken inside it. Needs mysqldump on the API host."
+        >
           <Input id="rp-snapshot" value={form.snapshotDir} onChange={(e) => setForm((f) => ({ ...f, snapshotDir: e.target.value }))} placeholder="/var/backups/timesphere-retention" />
         </Field>
       </FieldGrid>

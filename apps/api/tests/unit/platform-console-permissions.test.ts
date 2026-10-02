@@ -588,6 +588,12 @@ describe("reason-for-access is enforced at the door", () => {
     expect((await noReason("delete", "/company-domains/acme.com")).body.code).toBe("REASON_REQUIRED");
   });
 
+  it("refuses a retention-policy change with no reason — it decides when customers' workspaces are deleted, and where their snapshots go", async () => {
+    const res = await request(app).put("/api/platform-admin/retention/settings").set("Authorization", `Bearer ${tokenFor.OWNER}`).send({ snapshotDir: "retention" });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("REASON_REQUIRED");
+  });
+
   it("refuses a reason that is too short to mean anything", async () => {
     const res = await request(app).get(`/api/platform-admin/backups/snap-1/download`).set("Authorization", `Bearer ${tokenFor.OWNER}`).set("X-Platform-Reason", "because");
     expect(res.status).toBe(400);

@@ -33,6 +33,10 @@ services:
       # console -> Trial retention). Point it at a mysqldump binary if one is not on PATH inside the
       # container; without it a snapshot is recorded as "not taken", which never blocks the deletion.
       MYSQLDUMP_PATH: ${MYSQLDUMP_PATH:-}
+      # The only directory the console's "Snapshot directory" may point into (checked by realpath).
+      # Empty = /var/backups/timesphere-retention. Mount a volume there to keep snapshots across
+      # container rebuilds.
+      SNAPSHOT_ROOT: ${SNAPSHOT_ROOT:-}
       # Tenant-database provisioning target — see docker-compose.yml's block of the same name.
       # Unset disables the /platform-admin console's Provision button rather than guessing a server.
       TENANT_DB_PROVISION_BASE_URL: ${TENANT_DB_PROVISION_BASE_URL:-}

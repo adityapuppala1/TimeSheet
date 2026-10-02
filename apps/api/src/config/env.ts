@@ -254,6 +254,14 @@ const schema = z.object({
   STORAGE_DOCUMENTS_DIR: absoluteDirectory("STORAGE_DOCUMENTS_DIR"),
   STORAGE_AVATARS_DIR: absoluteDirectory("STORAGE_AVATARS_DIR"),
   STORAGE_FACE_DIR: absoluteDirectory("STORAGE_FACE_DIR"),
+  /**
+   * The only directory the trial-retention snapshots may live in: the console's "Snapshot
+   * directory" must be this or somewhere beneath it, checked by realpath (services/snapshot-root.ts).
+   * Empty = /var/backups/timesphere-retention, the location the console has always suggested. It is
+   * an environment variable on purpose — where the API may read and serve whole files from is a
+   * decision for whoever runs the host, not for a console user with a text box.
+   */
+  SNAPSHOT_ROOT: absoluteDirectory("SNAPSHOT_ROOT"),
 
   /**
    * Rotating file logs (config/logger.ts). Empty LOG_DIR = OFF, which is today's behaviour

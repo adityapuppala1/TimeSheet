@@ -10,10 +10,11 @@
  *
  * THE SAFETY RULES, because this module can both read and write whole databases:
  *
- * 1. THE DIRECTORY IS THE BOUNDARY. Every path is resolved and then checked to be INSIDE the
- *    configured `snapshotDir`. A request naming `../../etc/passwd` resolves outside it and is
- *    refused — the id in the API is a file NAME, never a path, and it is matched against the
- *    listing rather than concatenated.
+ * 1. THE DIRECTORY IS THE BOUNDARY, AND THE ROOT BOUNDS THE DIRECTORY. The configured `snapshotDir`
+ *    must resolve (by realpath) inside SNAPSHOT_ROOT — see snapshot-root.ts for why a console user
+ *    could otherwise point it at the uploads volume or an `.env`. Within it, the id in the API is a
+ *    file NAME, never a path; it must have the snapshot writer's `<slug>-<timestamp>.sql` shape, be
+ *    an entry of the listing, and be a regular file that really lives there.
  * 2. RESTORE NEVER OVERWRITES A LIVE WORKSPACE. It refuses unless the target organisation has no
  *    `OrgDatabase` row — i.e. it was deleted under the policy, or never provisioned. Restoring on
  *    top of a running tenant is the one mistake nobody recovers from, so it is not reachable.
@@ -40,10 +41,11 @@ import { encryptSecret } from "../utils/encryption.js";
 import { reclaimAfterRestore } from "./company-domain-claims.service.js";
 import { getRetentionSettings } from "./retention.service.js";
 import { platformAudit } from "./platform-audit.service.js";
+import { isRegularFileInside, resolveSnapshotDir } from "./snapshot-root.js";
 
 const SAFE_DB_NAME = /^\w{1,64}$/;
 /** `<slug>-<iso timestamp>.sql`, which is what `snapshotDatabase` writes. */
-const SNAPSHOT_NAME = /^(?<slug>[a-z0-9][a-z0-9-]*)-(?<stamp>\d{4}-\d{2}-\d{2}T[\d-]+Z?)\.sql$/i;
+export const SNAPSHOT_NAME = /^(?<slug>[a-z0-9][a-z0-9-]*)-(?<stamp>\d{4}-\d{2}-\d{2}T[\d-]+Z?)\.sql$/i;
 
 export interface SnapshotFile {
   /** The file name. The API's id — never a path. */
@@ -86,24 +88,37 @@ function probe(binary: string): Promise<boolean> {
 async function resolveDirectory(): Promise<{ dir: string | null; problem: string | null }> {
   const settings = await getRetentionSettings();
   if (!settings.snapshotDir) return { dir: null, problem: "No snapshot directory is configured — set one under Trial retention → The policy." };
-  const dir = path.resolve(settings.snapshotDir);
+  let dir: string;
+  try {
+    // RULE 1 is re-checked on every read, not only when the setting is saved: a value saved before
+    // SNAPSHOT_ROOT existed, or a root that has since moved, must not keep serving files.
+    dir = await resolveSnapshotDir(settings.snapshotDir);
+  } catch (error) {
+    return { dir: null, problem: (error as Error).message };
+  }
   if (!fs.existsSync(dir)) return { dir, problem: `${dir} does not exist yet. It is created the first time a snapshot is taken.` };
   return { dir, problem: null };
 }
 
-/** Resolve a caller-supplied file NAME inside the snapshot directory, refusing anything that
- *  escapes it. The name is matched against the directory listing, so traversal cannot survive. */
+/**
+ * Resolve a caller-supplied file NAME inside the snapshot directory, refusing anything that is not a
+ * snapshot. Three conditions, all required:
+ *  - the name has the `<slug>-<timestamp>.sql` shape `snapshotDatabase` writes — so a `.env`, a key
+ *    or an attachment sitting in the same directory is not a "snapshot" whatever the listing says;
+ *  - it is an entry of the directory, so a path cannot be smuggled in as a name;
+ *  - it is a REGULAR file whose real location is inside the directory — not a symlink to elsewhere.
+ * Every refusal is the same 404, so the endpoint does not confirm which other files exist.
+ */
 async function resolveFile(id: string): Promise<{ dir: string; full: string }> {
   const { dir, problem } = await resolveDirectory();
   if (!dir) throw new AppError(409, problem ?? "No snapshot directory is configured.");
   if (problem) throw new AppError(404, problem);
+  const notFound = () => new AppError(404, "No snapshot by that name.");
+  if (!SNAPSHOT_NAME.test(id)) throw notFound();
   const entries = await fsp.readdir(dir);
-  if (!entries.includes(id)) throw new AppError(404, "No snapshot by that name.");
+  if (!entries.includes(id)) throw notFound();
   const full = path.resolve(dir, id);
-  // Belt and braces: even after the listing match, prove the resolved path is inside the directory.
-  if (path.relative(dir, full).startsWith("..") || path.isAbsolute(path.relative(dir, full))) {
-    throw new AppError(400, "That name does not resolve inside the snapshot directory.");
-  }
+  if (!(await isRegularFileInside(dir, full))) throw notFound();
   return { dir, full };
 }
 
@@ -112,7 +127,8 @@ export async function listSnapshots(): Promise<SnapshotListing> {
   const tools = { mysqldump, mysql, mysqldumpPath: mysqldumpBinary(), mysqlPath: mysqlBinary() };
   if (!dir || problem) return { configured: Boolean(dir), directory: dir, problem, totalBytes: 0, files: [], tools };
 
-  const entries = (await fsp.readdir(dir, { withFileTypes: true })).filter((e) => e.isFile() && e.name.toLowerCase().endsWith(".sql"));
+  // Only what `resolveFile` would serve: a regular file with the snapshot writer's name shape.
+  const entries = (await fsp.readdir(dir, { withFileTypes: true })).filter((e) => e.isFile() && SNAPSHOT_NAME.test(e.name));
   const slugs = new Set<string>();
   const parsed = entries.map((e) => {
     const slug = SNAPSHOT_NAME.exec(e.name)?.groups?.slug?.toLowerCase() ?? null;

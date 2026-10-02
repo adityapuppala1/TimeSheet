@@ -31,6 +31,7 @@ const REASON_ROUTES: { method: string; pattern: RegExp; label: string; snapshotO
   { method: "POST", pattern: /^\/organizations\/[^/]+\/restore-password-login$/, label: "Turn password sign-in back on for this workspace" },
   { method: "POST", pattern: /^\/organizations\/[^/]+\/reset-admin-password$/, label: "Reset this workspace's super admin password" },
   { method: "POST", pattern: /^\/email-log\/[^/]+\/resend$/, label: "Resend this email to the customer" },
+  { method: "PUT", pattern: /^\/retention\/settings$/, label: "Change the retention policy — when lapsed workspaces are deleted, and where their snapshots go" },
   { method: "POST", pattern: /^\/retention\/run$/, label: "Run the retention programme now" },
   { method: "POST", pattern: /^\/retention\/[^/]+\/hold$/, label: "Change this workspace's retention hold" },
   { method: "POST", pattern: /^\/retention\/[^/]+\/send\//, label: "Send this retention email to the customer" },

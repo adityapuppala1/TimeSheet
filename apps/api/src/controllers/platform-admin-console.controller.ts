@@ -530,7 +530,12 @@ const retentionSettingsSchema = z.object({
     .strict()
 });
 
-platformAdminConsoleRouter.put("/retention/settings", operate, validate(retentionSettingsSchema), async (req, res) => {
+/**
+ * The retention policy decides when customers' workspaces are deleted and where their last copy is
+ * kept, so a change to it now carries a reason like every other action that reaches a customer —
+ * in particular the snapshot directory (H1), which decides what the snapshot routes will read.
+ */
+platformAdminConsoleRouter.put("/retention/settings", operate, requirePlatformReason, validate(retentionSettingsSchema), async (req, res) => {
   res.json(await updateRetentionSettings(req.body, actorLabel(req)));
 });
 

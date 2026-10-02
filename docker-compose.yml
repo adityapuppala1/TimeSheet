@@ -42,6 +42,10 @@ services:
       # console -> Trial retention). Point it at a mysqldump binary if one is not on PATH inside the
       # container; without it a snapshot is recorded as "not taken", which never blocks the deletion.
       MYSQLDUMP_PATH: ${MYSQLDUMP_PATH:-}
+      # The only directory the console's "Snapshot directory" may point into (checked by realpath).
+      # Empty = /var/backups/timesphere-retention. Mount a volume there to keep snapshots across
+      # container rebuilds.
+      SNAPSHOT_ROOT: ${SNAPSHOT_ROOT:-}
       # The MySQL server that new tenant databases get CREATED on when a platform admin provisions
       # an org from the /platform-admin console — a DSN with credentials but no database name.
       # Unset (the default) disables in-app provisioning, and the endpoint says so plainly rather

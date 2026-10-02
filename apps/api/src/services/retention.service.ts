@@ -41,6 +41,7 @@ import { forgetOrgStatus } from "./org-status.service.js";
 import { platformAudit } from "./platform-audit.service.js";
 import { RETENTION_MARKER_TEMPLATE } from "./platform-mail-templates.js";
 import { sendPlatformTemplate } from "./platform-mail.service.js";
+import { resolveSnapshotDir } from "./snapshot-root.js";
 import { workspaceUrlForSlug } from "./workspace-directory.service.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -124,9 +125,14 @@ export async function updateRetentionSettings(patch: Partial<Omit<RetentionSetti
   if (reminderDays[reminderDays.length - 1] > next.retentionDays) {
     throw new AppError(422, `The last reminder (day ${reminderDays[reminderDays.length - 1]}) must not be after the retention window (${next.retentionDays} days).`);
   }
+  // The snapshot directory must sit inside SNAPSHOT_ROOT (snapshot-root.ts, H1), and is stored as the
+  // absolute path the check resolved — the deletion-time dump writes to it as-is. Validated only
+  // when this save names one, so an older out-of-root value does not block saving anything else
+  // (the snapshot routes refuse to serve from it regardless).
+  const snapshotDir = patch.snapshotDir !== undefined && next.snapshotDir?.trim() ? await resolveSnapshotDir(next.snapshotDir) : next.snapshotDir?.trim() || null;
   const row = await controlPrisma.platformRetentionSettings.update({
     where: { id: "global" },
-    data: { enabled: next.enabled, feedbackDay: next.feedbackDay, reminderDays, retentionDays: next.retentionDays, autoDeleteEnabled: next.autoDeleteEnabled, snapshotDir: next.snapshotDir?.trim() || null }
+    data: { enabled: next.enabled, feedbackDay: next.feedbackDay, reminderDays, retentionDays: next.retentionDays, autoDeleteEnabled: next.autoDeleteEnabled, snapshotDir }
   });
   await platformAudit("PLATFORM_ADMIN", actorLabel, "retention.settings_updated", "PlatformRetentionSettings", "global", { ...patch });
   return toSettings(row);

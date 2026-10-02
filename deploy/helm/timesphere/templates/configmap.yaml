@@ -10,6 +10,7 @@ data:
   DEFAULT_ORG_SLUG: {{ .Values.env.defaultOrgSlug | quote }}
   ROOT_DOMAIN: {{ .Values.env.rootDomain | quote }}
   MYSQLDUMP_PATH: {{ .Values.env.mysqldumpPath | quote }}
+  SNAPSHOT_ROOT: {{ .Values.env.snapshotRoot | default "" | quote }}
   WEB_ORIGIN: {{ .Values.env.webOrigin | quote }}
   APP_BASE_URL: {{ .Values.env.appBaseUrl | quote }}
   API_PORT: "4000"
