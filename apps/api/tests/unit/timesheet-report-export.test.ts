@@ -12,6 +12,8 @@ import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import {
   buildTimesheetExportDocument,
+  TIMESHEET_CSV_HEADER,
+  timesheetCsvValues,
   type ReportRow,
   type TimesheetExportDocument
 } from "../../src/services/timesheet-report.service.js";
@@ -162,6 +164,74 @@ describe("buildTimesheetReportWorkbook", () => {
     expect(labels.at(-1)).toBe("GRAND TOTAL");
   });
 
+  describe("money in more than one currency", () => {
+    // Each entry's cost is frozen at approval in its project's billing currency. A workspace with an
+    // INR project and a USD project used to get one "Cost" column adding rupees to dollars — on the
+    // document people forward to clients.
+    const ANA = { userId: "u2", user: { id: "u2", name: "Ana", email: "a@x.com" } };
+    const mixed = () => [
+      row({ id: "a", billedRate: 1000, billedAmount: 2000, billedCurrency: "INR" }),
+      row({ id: "b", billedRate: 1000, billedAmount: 1000, billedCurrency: "INR" }),
+      row({ id: "c", billedRate: 25, billedAmount: 50, billedCurrency: "USD", ...ANA })
+    ];
+
+    /** The summary sheet's rows as arrays of cell values (1-based, as ExcelJS hands them back). */
+    function summaryRows(wb: ExcelJS.Workbook): unknown[][] {
+      const out: unknown[][] = [];
+      wb.getWorksheet("Summary")!.eachRow((r) => out.push(r.values as unknown[]));
+      return out;
+    }
+
+    it("gives each currency its own Cost column on the summary sheet, for totals, groups and the grand total", async () => {
+      const rows = summaryRows(await reload(documentWith(mixed())));
+      const totalsHead = rows.find((r) => r[1] === "Entries")!;
+      const breakdownHead = rows.find((r) => r[1] === "Group")!;
+      for (const head of [totalsHead, breakdownHead]) {
+        expect(head).toContain("Cost (INR)");
+        expect(head).toContain("Cost (USD)");
+        expect(head).not.toContain("Cost");
+      }
+      const at = (r: unknown[], head: unknown[], label: string) => r[head.indexOf(label)] ?? null;
+
+      const totals = rows[rows.indexOf(totalsHead) + 1];
+      expect([at(totals, totalsHead, "Cost (INR)"), at(totals, totalsHead, "Cost (USD)")]).toEqual([3000, 50]);
+      const dev = rows.find((r) => r[1] === "Dev Patel")!;
+      expect([at(dev, breakdownHead, "Cost (INR)"), at(dev, breakdownHead, "Cost (USD)")]).toEqual([3000, null]);
+      const grand = rows.find((r) => r[1] === "GRAND TOTAL")!;
+      expect([at(grand, breakdownHead, "Cost (INR)"), at(grand, breakdownHead, "Cost (USD)")]).toEqual([3000, 50]);
+      // The cross-currency sum appears nowhere.
+      expect(rows.flat()).not.toContain(3050);
+    });
+
+    it("keeps a single Cost column when there is one currency", async () => {
+      const rows = summaryRows(await reload(documentWith(mixed().slice(0, 2))));
+      const totalsHead = rows.find((r) => r[1] === "Entries")!;
+      expect(totalsHead.filter((v) => String(v).startsWith("Cost"))).toEqual(["Cost (INR)"]);
+      expect(rows[rows.indexOf(totalsHead) + 1][totalsHead.indexOf("Cost (INR)")]).toBe(3000);
+    });
+
+    it("labels every entry with its currency and subtotals each currency on its own line", async () => {
+      const wb = await reload(documentWith(mixed()));
+      const entries = wb.getWorksheet("Entries")!;
+      const [employee, amount, currency] = ["Employee", "Amount", "Currency"].map((h) => columnIndex(entries, h));
+      // Currency sits immediately after Amount, so the figure and its unit read together.
+      expect(currency).toBe(amount + 1);
+
+      const lines: Array<{ who: string; amount: unknown; currency: unknown }> = [];
+      entries.eachRow((r, n) => {
+        if (n > 1) lines.push({ who: String(r.getCell(employee).value ?? ""), amount: r.getCell(amount).value, currency: r.getCell(currency).value });
+      });
+      expect(lines.filter((l) => l.who === "Dev Patel").map((l) => l.currency)).toEqual(["INR", "INR"]);
+      const devSubtotal = lines.find((l) => l.who === "Subtotal — Dev Patel")!;
+      expect([devSubtotal.amount, devSubtotal.currency]).toEqual([3000, "INR"]);
+
+      // The grand total is one line per currency: its own line, then a continuation line.
+      const grandAt = lines.findIndex((l) => l.who === "GRAND TOTAL");
+      expect(lines.slice(grandAt).map((l) => [l.amount, l.currency])).toEqual([[3000, "INR"], [50, "USD"]]);
+      expect(lines.map((l) => l.amount)).not.toContain(3050);
+    });
+  });
+
   it("an empty result is a valid workbook that says so, not a zero-byte file", async () => {
     const buffer = await toBuffer(buildTimesheetReportWorkbook(documentWith([])));
     expect(buffer.byteLength).toBeGreaterThan(1000);
@@ -169,6 +239,19 @@ describe("buildTimesheetReportWorkbook", () => {
     await wb.xlsx.load(buffer);
     const text = wb.getWorksheet("Summary")!.getSheetValues().flat().filter(Boolean).map(String).join(" | ");
     expect(text).toContain("No entries match this report's filters.");
+  });
+});
+
+describe("the CSV export", () => {
+  it("states each entry's currency right after its amount", () => {
+    const amountAt = TIMESHEET_CSV_HEADER.indexOf("Amount");
+    expect(TIMESHEET_CSV_HEADER[amountAt + 1]).toBe("Currency");
+    const values = timesheetCsvValues(row({ billedRate: 25, billedAmount: 62.5, billedCurrency: "USD" }), "");
+    expect(values).toHaveLength(TIMESHEET_CSV_HEADER.length);
+    expect([values[amountAt], values[amountAt + 1]]).toEqual(["62.50", "USD"]);
+    // Unrated: no amount and no currency, never "0.00".
+    const unrated = timesheetCsvValues(row(), "");
+    expect([unrated[amountAt], unrated[amountAt + 1]]).toEqual(["", ""]);
   });
 });
 

@@ -130,7 +130,8 @@ export interface GroupedRow {
   /** How many rows in the group had no rate. Surfaced so a partial cost can be read as partial. */
   unratedEntries: number;
   /** The rated cost per currency (each entry's frozen `billedCurrency`), largest first. `cost` above
-   *  adds currencies together and is kept for the export renderers; a screen shows this. */
+   *  adds currencies together and is only meaningful with one currency; every screen and export
+   *  renders this instead. */
   costByCurrency: CurrencyAmount[];
   people: number;
   firstDate: string | null;
@@ -200,7 +201,7 @@ export function entryHours(row: {
  */
 export const TIMESHEET_CSV_HEADER = [
   "User", "Email", "Date", "Project", "Project code", "Module", "Submodule", "Ticket",
-  "Activity", "Start", "End", "Hours", "Billable", "Rate", "Amount", "Status",
+  "Activity", "Start", "End", "Hours", "Billable", "Rate", "Amount", "Currency", "Status",
   "Reviewed by", "Reviewed at", "Approval deadline", "SLA breached at", "Task", "Notes",
   "Submitted at", "Last updated"
 ] as const;
@@ -218,6 +219,9 @@ export function timesheetCsvValues(row: ReportRow, reviewerName: string): Array<
     // these rows are deliberately never backfilled (see the schema comment on billedRate).
     row.billedRate == null ? "" : Number(row.billedRate).toFixed(2),
     row.billedAmount == null ? "" : Number(row.billedAmount).toFixed(2),
+    // The currency the rate was frozen in. Without it a workspace billing two currencies exports
+    // amounts that cannot be told apart, and a spreadsheet SUM over the column mixes them.
+    row.billedCurrency ?? "",
     row.status,
     reviewerName,
     iso(row.reviewedAt), iso(row.approvalDeadline), iso(row.slaBreachAt),

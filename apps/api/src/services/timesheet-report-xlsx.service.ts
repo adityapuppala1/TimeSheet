@@ -26,6 +26,7 @@ import { htmlToText } from "../utils/sanitize.js";
 import {
   entryHours,
   reviewerNameFor,
+  type CurrencyAmount,
   type ReportRow,
   type TimesheetExportDocument
 } from "./timesheet-report.service.js";
@@ -56,6 +57,7 @@ const DETAIL_COLUMNS = [
   { header: "Billable", key: "billable", width: 10 },
   { header: "Rate", key: "rate", width: 10 },
   { header: "Amount", key: "amount", width: 12 },
+  { header: "Currency", key: "currency", width: 10 },
   { header: "Status", key: "status", width: 12 },
   { header: "Submitted at", key: "submittedAt", width: 18 },
   { header: "Reviewed by", key: "reviewedBy", width: 20 },
@@ -66,8 +68,39 @@ const DETAIL_COLUMNS = [
   { header: "Notes", key: "notes", width: 40 }
 ] as const;
 
-/** Group label + the six figures beside it on the summary sheet. */
-const SUMMARY_COLUMNS = 7;
+/**
+ * The summary sheet's cost columns: one "Cost (XXX)" per currency the document holds, or a single
+ * blank "Cost" when nothing in it is rated.
+ *
+ * WHY NOT ONE COST COLUMN: each entry's amount is frozen in its own project's billing currency, so
+ * a workspace billing an INR project and a USD project used to get one figure adding rupees to
+ * dollars — on the document people forward to clients. The grand totals cover every row, so their
+ * currencies are every currency any group can hold, and one column list fits every row.
+ */
+function costColumnsOf(doc: TimesheetExportDocument): { headers: string[]; cells: (costs: CurrencyAmount[]) => Array<number | null> } {
+  const currencies = doc.totals.costByCurrency.map((c) => c.currency);
+  if (currencies.length === 0) return { headers: ["Cost"], cells: () => [null] };
+  return {
+    headers: currencies.map((c) => `Cost (${c ?? "no currency"})`),
+    // Blank, not 0, for a currency this group has none of — the same "not a claim" rule as unrated.
+    cells: (costs) => currencies.map((c) => costs.find((x) => x.currency === c)?.amount ?? null)
+  };
+}
+
+/**
+ * A subtotal (or the grand total) on the Entries sheet, one line per currency.
+ *
+ * The first line carries the label, hours and entry count with the first currency's amount; each
+ * further currency gets its own continuation line in the same group, its amount in Amount and its
+ * code in Currency. The sheet keeps ONE Amount column, so a SUM over it stays per currency when
+ * filtered by Currency — and no line ever holds two currencies added together.
+ */
+function addTotalLines(sheet: ExcelJS.Worksheet, first: Record<string, unknown>, costs: CurrencyAmount[]): ExcelJS.Row[] {
+  const [head, ...rest] = costs;
+  const lines = [sheet.addRow({ ...first, amount: head?.amount ?? null, currency: head?.currency ?? "" })];
+  for (const c of rest) lines.push(sheet.addRow({ group: first.group, amount: c.amount, currency: c.currency ?? "" }));
+  return lines;
+}
 
 /**
  * "09:30" as Excel's own time value — a fraction of a day, displayed by the `hh:mm` format.
@@ -112,6 +145,7 @@ function detailValues(doc: TimesheetExportDocument, groupLabel: string, row: Rep
     // never backfilled (see the schema comment on billedRate).
     rate: row.billedRate == null ? null : Number(row.billedRate),
     amount: row.billedAmount == null ? null : Number(row.billedAmount),
+    currency: row.billedCurrency ?? "",
     status: row.status,
     submittedAt: row.submittedAt,
     reviewedBy: reviewerNameFor(doc, row),
@@ -126,8 +160,12 @@ function detailValues(doc: TimesheetExportDocument, groupLabel: string, row: Rep
 /** Sheet 1 — what the report SAYS, before anyone scrolls a single row. */
 function addSummarySheet(wb: ExcelJS.Workbook, doc: TimesheetExportDocument) {
   const sheet = wb.addWorksheet("Summary", { views: [{ showGridLines: false }] });
+  const cost = costColumnsOf(doc);
+  // Group label + four figures, the cost columns, then the unrated count.
+  const columns = 6 + cost.headers.length;
+  const costCells = cost.headers.map((_, i) => 6 + i);
   sheet.getColumn(1).width = 46;
-  for (let c = 2; c <= 7; c += 1) sheet.getColumn(c).width = 16;
+  for (let c = 2; c <= columns; c += 1) sheet.getColumn(c).width = 16;
 
   const brandRow = sheet.addRow([doc.workspace]);
   brandRow.font = { bold: true, size: 16, color: { argb: BRAND } };
@@ -159,34 +197,34 @@ function addSummarySheet(wb: ExcelJS.Workbook, doc: TimesheetExportDocument) {
 
   sheet.addRow([]);
   sheet.addRow(["Totals"]).font = { bold: true, size: 12, color: { argb: INK } };
-  const totalsHead = sheet.addRow(["Entries", "Hours", "Billable hours", "Approved hours", "People", "Cost", "Unrated entries"]);
+  const totalsHead = sheet.addRow(["Entries", "Hours", "Billable hours", "Approved hours", "People", ...cost.headers, "Unrated entries"]);
   totalsHead.font = { bold: true, color: { argb: PAPER } };
-  fill(totalsHead, BRAND, SUMMARY_COLUMNS);
+  fill(totalsHead, BRAND, columns);
   const totalsRow = sheet.addRow([
     doc.totals.entries,
     doc.totals.hours,
     doc.totals.billableHours,
     doc.approvedHours,
     doc.totals.people,
-    doc.totals.cost,
+    ...cost.cells(doc.totals.costByCurrency),
     doc.totals.unratedEntries
   ]);
   totalsRow.font = { bold: true };
-  for (const c of [2, 3, 4, 6]) totalsRow.getCell(c).numFmt = "#,##0.00";
+  for (const c of [2, 3, 4, ...costCells]) totalsRow.getCell(c).numFmt = "#,##0.00";
 
   sheet.addRow([]);
   sheet.addRow([`Breakdown by ${doc.groupBy}`]).font = { bold: true, size: 12, color: { argb: INK } };
-  const head = sheet.addRow(["Group", "Hours", "Billable hours", "Entries", "People", "Cost", "Unrated entries"]);
+  const head = sheet.addRow(["Group", "Hours", "Billable hours", "Entries", "People", ...cost.headers, "Unrated entries"]);
   head.font = { bold: true, color: { argb: PAPER } };
-  fill(head, BRAND, SUMMARY_COLUMNS);
+  fill(head, BRAND, columns);
 
   if (doc.sections.length === 0) {
     sheet.addRow(["No entries match this report's filters."]).font = { italic: true, color: { argb: MUTED } };
   }
   for (const section of doc.sections) {
     const g = section.summary;
-    const row = sheet.addRow([g.label, g.hours, g.billableHours, g.entries, g.people, g.cost, g.unratedEntries]);
-    for (const c of [2, 3, 6]) row.getCell(c).numFmt = "#,##0.00";
+    const row = sheet.addRow([g.label, g.hours, g.billableHours, g.entries, g.people, ...cost.cells(g.costByCurrency), g.unratedEntries]);
+    for (const c of [2, 3, ...costCells]) row.getCell(c).numFmt = "#,##0.00";
   }
 
   const grand = sheet.addRow([
@@ -195,16 +233,19 @@ function addSummarySheet(wb: ExcelJS.Workbook, doc: TimesheetExportDocument) {
     doc.totals.billableHours,
     doc.totals.entries,
     doc.totals.people,
-    doc.totals.cost,
+    ...cost.cells(doc.totals.costByCurrency),
     doc.totals.unratedEntries
   ]);
   grand.font = { bold: true, color: { argb: INK } };
-  fill(grand, BRAND_TINT, SUMMARY_COLUMNS);
-  for (const c of [2, 3, 6]) grand.getCell(c).numFmt = "#,##0.00";
+  fill(grand, BRAND_TINT, columns);
+  for (const c of [2, 3, ...costCells]) grand.getCell(c).numFmt = "#,##0.00";
 
   sheet.addRow([]);
   sheet.addRow([
     "Cost is blank where no rate was on record at approval — blank means \"not known\", never \"free\". Unrated entries counts those rows."
+  ]).font = { italic: true, size: 9, color: { argb: MUTED } };
+  sheet.addRow([
+    "Each currency has its own Cost column, in the currency each entry was approved in. Amounts in different currencies are never added together."
   ]).font = { italic: true, size: 9, color: { argb: MUTED } };
 }
 
@@ -227,15 +268,20 @@ function addEntriesSheet(wb: ExcelJS.Workbook, doc: TimesheetExportDocument) {
     // The subtotal repeats the group label in the Group column ON PURPOSE: filter the sheet down
     // to one person and their subtotal stays visible with them, instead of being hidden by the
     // filter that was supposed to isolate them.
-    const subtotal = sheet.addRow({
-      group: section.summary.label,
-      user: `Subtotal — ${section.summary.label}`,
-      hours: section.summary.hours,
-      amount: section.summary.cost,
-      status: `${section.summary.entries} entr${section.summary.entries === 1 ? "y" : "ies"}`
-    });
-    subtotal.font = { bold: true, color: { argb: BRAND_DEEP } };
-    fill(subtotal, BRAND_TINT, DETAIL_COLUMNS.length);
+    const subtotal = addTotalLines(
+      sheet,
+      {
+        group: section.summary.label,
+        user: `Subtotal — ${section.summary.label}`,
+        hours: section.summary.hours,
+        status: `${section.summary.entries} entr${section.summary.entries === 1 ? "y" : "ies"}`
+      },
+      section.summary.costByCurrency
+    );
+    for (const line of subtotal) {
+      line.font = { bold: true, color: { argb: BRAND_DEEP } };
+      fill(line, BRAND_TINT, DETAIL_COLUMNS.length);
+    }
   }
 
   if (doc.sections.length === 0) {
@@ -245,15 +291,20 @@ function addEntriesSheet(wb: ExcelJS.Workbook, doc: TimesheetExportDocument) {
     };
   }
 
-  const grand = sheet.addRow({
-    user: "GRAND TOTAL",
-    hours: doc.totals.hours,
-    amount: doc.totals.cost,
-    status: `${doc.totals.entries} entr${doc.totals.entries === 1 ? "y" : "ies"}`
-  });
-  grand.font = { bold: true, color: { argb: INK } };
-  fill(grand, BRAND_TINT, DETAIL_COLUMNS.length);
-  grand.getCell("hours").border = { top: { style: "thin", color: { argb: BRAND } } };
+  const grand = addTotalLines(
+    sheet,
+    {
+      user: "GRAND TOTAL",
+      hours: doc.totals.hours,
+      status: `${doc.totals.entries} entr${doc.totals.entries === 1 ? "y" : "ies"}`
+    },
+    doc.totals.costByCurrency
+  );
+  for (const line of grand) {
+    line.font = { bold: true, color: { argb: INK } };
+    fill(line, BRAND_TINT, DETAIL_COLUMNS.length);
+  }
+  grand[0].getCell("hours").border = { top: { style: "thin", color: { argb: BRAND } } };
 
   // Types, not text: dates sort as dates and hours sum as numbers, which is the entire reason
   // this export exists alongside the CSV.

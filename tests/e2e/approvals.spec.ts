@@ -155,7 +155,7 @@ test.describe("approvals queue", () => {
     expect(text.split("\n")[0]).toBe(
       [
         "User", "Email", "Date", "Project", "Project code", "Module", "Submodule", "Ticket",
-        "Activity", "Start", "End", "Hours", "Billable", "Rate", "Amount", "Status",
+        "Activity", "Start", "End", "Hours", "Billable", "Rate", "Amount", "Currency", "Status",
         "Reviewed by", "Reviewed at", "Approval deadline", "SLA breached at", "Task", "Notes",
         "Submitted at", "Last updated"
       ]
