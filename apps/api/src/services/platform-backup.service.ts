@@ -231,6 +231,19 @@ export async function restoreSnapshot(id: string, orgId: string, confirmSlug: st
   const org = await controlPrisma.organization.findUnique({ where: { id: orgId }, include: { database: { select: { id: true, databaseName: true } } } });
   if (!org) throw new AppError(404, "Organization not found");
   if (org.slug !== confirmSlug.trim().toLowerCase()) throw new AppError(422, "The slug you typed does not match this workspace.");
+  // The snapshot must be THIS workspace's (M8). The typed slug above only proves the operator named
+  // the target; nothing compared it with whose data the file holds, so workspace A's snapshot could be
+  // restored into workspace B. The name is the writer's `<slug>-<timestamp>.sql`, and the regex's
+  // timestamp anchor is what stops "acme" matching a file of "acme-corp".
+  const snapshotSlug = SNAPSHOT_NAME.exec(id)?.groups?.slug?.toLowerCase() ?? null;
+  if (snapshotSlug !== org.slug) {
+    throw new AppError(
+      422,
+      snapshotSlug
+        ? `That snapshot is of "${snapshotSlug}", not "${org.slug}". A snapshot can only be restored into the workspace it was taken from.`
+        : "That file is not named like a snapshot of any workspace, so it cannot be restored."
+    );
+  }
   // RULE 2. A live workspace is never restored over.
   if (org.database) {
     throw new AppError(409, `"${org.slug}" already has a database (${org.database.databaseName}). Restoring would overwrite live data, so it is refused — archive or delete it first if that is really what you want.`);

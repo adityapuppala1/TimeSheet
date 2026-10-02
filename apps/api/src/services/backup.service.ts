@@ -353,6 +353,13 @@ export async function runBackup(orgId: string, opts: { kind: RunKind; actorLabel
   const destination = (opts.destinationId
     ? await controlPrisma.backupDestination.findUnique({ where: { id: opts.destinationId } })
     : policy?.destination) as DestinationRecord | null;
+  // The rule the policy route applies (M8), here too, because a manual run can name any destination:
+  // a workspace-owned destination belongs to that workspace alone, or one customer's database lands
+  // in another customer's bucket. Platform-owned destinations (no organizationId) are for everyone.
+  const owner = (destination as { organizationId?: string | null } | null)?.organizationId ?? null;
+  if (destination && owner && owner !== orgId) {
+    throw new AppError(403, `"${destination.name}" belongs to a different workspace.`);
+  }
 
   const skip = async (message: string) => {
     const row = await controlPrisma.backupRun.create({
