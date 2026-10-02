@@ -28,7 +28,7 @@ import { emailShell, templates } from "../services/mail-templates.js";
 import { computeApprovalDeadline, resolveEscalationsFor } from "../services/sla.service.js";
 import { emitDomainEvent } from "../services/domain-events.js";
 import { processUpload } from "../services/attachment-storage.service.js";
-import { sanitizeRichText } from "../utils/sanitize.js";
+import { htmlToPlainText, sanitizeRichText } from "../utils/sanitize.js";
 import {
   bindVerificationToRecord,
   consumeVerification,
@@ -67,13 +67,31 @@ const inputSchema = z.object({
 });
 
 /**
- * The words somebody wrote on an entry: the task, then the note when there is one.
+ * The words somebody wrote on an entry: the task, then the note when there is one — as PLAIN TEXT.
  *
  * Shared by the submit and both decision emails so all three quote the same thing — three copies of
  * this join is how one of them ends up omitting the note nobody remembers is optional.
+ *
+ * Both fields are rich text (sanitised HTML from the editor), and the emails escape what they quote,
+ * so quoting them as stored showed every recipient literal `<p>` tags. Paragraphs and list items
+ * become lines here, every other tag goes, and entities are decoded — so the result is text that
+ * MUST be escaped wherever it lands in HTML: the code default's `quoted()` does, and the override
+ * var goes through `quotedVar`.
  */
 function entryText(entry: { taskDescription?: string | null; notes?: string | null }): string {
-  return [entry.taskDescription, entry.notes].filter((t) => t && t.trim().length > 0).join("\n\n");
+  return [entry.taskDescription, entry.notes]
+    .map((field) => htmlToPlainText(field))
+    .filter((text) => text.length > 0)
+    .join("\n\n");
+}
+
+/**
+ * Plain text for an administrator's override template, which substitutes `{{description}}` verbatim
+ * (template-store.service.ts#applyVars): escaped, with its lines kept as `<br />` — exactly what the
+ * code default's `quoted()` does with the same text.
+ */
+function quotedVar(text: string): string {
+  return emailShell.escape(text).replaceAll(/\r?\n/g, "<br />");
 }
 
 export const timesheetRouter = Router();
@@ -470,7 +488,7 @@ async function announceSubmission(
     link: "/app/history",
     email: {
       templateKey: "timesheet.submitted",
-      vars: { name: author.name, hours: hours.toFixed(2), date: dateLabel, project, managerName: manager?.name ?? "", ...detailVars },
+      vars: { name: author.name, hours: hours.toFixed(2), date: dateLabel, project, managerName: manager?.name ?? "", ...detailVars, description: quotedVar(detailVars.description) },
       fallback: {
         subject: `Timesheet submitted — ${dateLabel}`,
         html: templates.timesheetSubmitted({ name: author.name, hours, date: dateLabel, project, managerName: manager?.name ?? null, ...entryDetail })
@@ -507,7 +525,7 @@ async function announceSubmission(
           module: escape(detailVars.module),
           submodule: escape(detailVars.submodule),
           activity: escape(detailVars.activity),
-          description: escape(detailVars.description).replaceAll(/\r?\n/g, "<br />"),
+          description: quotedVar(detailVars.description),
           ticketRef: escape(detailVars.ticketRef)
         },
         fallback: {
@@ -802,7 +820,7 @@ async function approveCore(id: string, reviewerUser: Reviewer, authority: Approv
         module: item.module?.name ?? "",
         submodule: item.submodule?.name ?? "",
         activity: item.activityType ?? "",
-        description: entryText(item)
+        description: quotedVar(entryText(item))
       },
       fallback: {
         subject: "Your timesheet was approved",
@@ -862,7 +880,7 @@ async function rejectCore(id: string, reason: string, reviewerUser: Reviewer, au
         module: item.module?.name ?? "",
         submodule: item.submodule?.name ?? "",
         activity: item.activityType ?? "",
-        description: entryText(item)
+        description: quotedVar(entryText(item))
       },
       fallback: {
         subject: "Timesheet rejected — action required",
