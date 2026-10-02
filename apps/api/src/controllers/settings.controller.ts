@@ -1117,6 +1117,37 @@ function missingSsoFields(providerType: SsoProviderKey, merged: Record<string, u
     .map(([, label]) => label);
 }
 
+/**
+ * THE OTHER HALF OF THE LOCKOUT GATE (audit M6).
+ *
+ * Turning `requireSsoOnly` ON is gated on a provider somebody has actually signed in through (see
+ * PATCH /auth-method below). Nothing stopped what came next: switch that provider OFF, or clear one of
+ * its credentials, and password sign-in stays refused for everyone while the only SSO way in is gone —
+ * the workspace, its super admin included, is locked out until a platform operator intervenes.
+ *
+ * So while SSO-only is on, an edit that would leave NO enabled, complete provider with a recorded
+ * sign-in is refused with 409 and the way out. Ordinary edits to a proven provider are untouched, and
+ * turning SSO-only off is never gated, so this can never trap anybody — it only puts the steps in an
+ * order that keeps a door open.
+ */
+async function assertKeepsAProvenProvider(orgId: string, providerType: SsoProviderKey, data: Record<string, unknown>): Promise<void> {
+  const authMethod = await controlPrisma.orgAuthMethod.findUnique({ where: { organizationId: orgId } });
+  if (!authMethod?.requireSsoOnly) return;
+
+  const configs = await controlPrisma.orgSsoConfig.findMany({ where: { organizationId: orgId } });
+  const usable = (row: Record<string, unknown> & { providerType: string }) =>
+    row.isEnabled === true && Boolean(row.lastSuccessfulLoginAt) && missingSsoFields(row.providerType as SsoProviderKey, row).length === 0;
+
+  const target = configs.find((row) => row.providerType === providerType);
+  if (!target || !usable(target) || usable({ ...target, ...data })) return;
+  if (configs.some((row) => row.providerType !== providerType && usable(row))) return;
+
+  throw new AppError(
+    409,
+    `${SSO_PROVIDER_LABEL[providerType]} is the only sign-in method anyone has used while "Require SSO only" is on — switching it off or removing its credentials would lock everyone out, you included. Turn off "Require SSO only" first, or sign in once through another provider.`
+  );
+}
+
 settingsRouter.patch("/sso/:provider", requireSuperAdmin, validate(ssoConfigSchema), async (req, res) => {
   const { orgId } = requireTenantContext();
   const providerType = String(req.params.provider).toUpperCase() as SsoProviderKey;
@@ -1161,6 +1192,8 @@ settingsRouter.patch("/sso/:provider", requireSuperAdmin, validate(ssoConfigSche
       );
     }
   }
+
+  await assertKeepsAProvenProvider(orgId, providerType, data);
 
   // A PASS DOES NOT SURVIVE AN EDIT TO WHAT IT TESTED.
   //
