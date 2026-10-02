@@ -27,11 +27,30 @@ import { prisma } from "../config/prisma.js";
 import { templates } from "../services/mail-templates.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { forgetOrgStatus } from "../services/org-status.service.js";
-import { isRetentionProgrammeEnabled } from "../services/retention.service.js";
+import { isConverted, isRetentionProgrammeEnabled } from "../services/retention.service.js";
 import { runOncePerTick } from "../services/job-claim.service.js";
 
 let started = false;
 let running = false;
+
+/**
+ * What `isConverted` reads. A trial an operator converted from the console by raising `planTier`
+ * kept its trial clock until the console started clearing it, and this worker selected on `status` +
+ * `trialEndsAt` alone — so a customer who had just signed a contract was warned, lapsed to GRACE and
+ * then suspended. The rule for "somebody is paying" is retention.service.ts#isConverted, the one the
+ * retention programme already uses; it is asked here rather than restated, so the two can never
+ * disagree about the same workspace.
+ */
+const CONVERSION_FIELDS = { planTier: true, trialTier: true, stripeSubscriptionId: true } as const;
+type ConversionFields = Parameters<typeof isConverted>[0];
+
+/** A trial nobody has paid for — the only kind this worker warns about or lapses. */
+const unpaidTrial = (org: ConversionFields) => !isConverted(org);
+
+/** In GRACE for a reason this worker may suspend over: a failed renewal (checkout cleared its trial
+ *  clock — that is dunning, and `invoice.paid` brings it back), or a lapsed trial still unpaid. A
+ *  lapsed trial that has since been converted is not suspended for that lapse. */
+const suspendable = (org: ConversionFields & { trialEndsAt: Date | null }) => !org.trialEndsAt || unpaidTrial(org);
 
 /**
  * Warnings go out this many days before the trial ends. Three is a deliberate ceiling: a fourth
@@ -119,10 +138,12 @@ export async function runTrialLifecycleTick(now = Date.now()): Promise<{ warned:
   let suspended = 0;
 
   // ── Warnings, for trials still running ──────────────────────────────────────────────────────
-  const upcoming = await controlPrisma.organization.findMany({
-    where: { status: "ACTIVE", trialEndsAt: { gt: new Date(now) } },
-    select: { id: true, slug: true, name: true, trialEndsAt: true, trialNoticesSent: true }
-  });
+  const upcoming = (
+    await controlPrisma.organization.findMany({
+      where: { status: "ACTIVE", trialEndsAt: { gt: new Date(now) } },
+      select: { id: true, slug: true, name: true, trialEndsAt: true, trialNoticesSent: true, ...CONVERSION_FIELDS }
+    })
+  ).filter(unpaidTrial);
 
   for (const org of upcoming) {
     if (!org.trialEndsAt) continue;
@@ -146,10 +167,12 @@ export async function runTrialLifecycleTick(now = Date.now()): Promise<{ warned:
   }
 
   // ── Expiry: ACTIVE → GRACE ──────────────────────────────────────────────────────────────────
-  const expired = await controlPrisma.organization.findMany({
-    where: { status: "ACTIVE", trialEndsAt: { lte: new Date(now) } },
-    select: { id: true, slug: true, name: true }
-  });
+  const expired = (
+    await controlPrisma.organization.findMany({
+      where: { status: "ACTIVE", trialEndsAt: { lte: new Date(now) } },
+      select: { id: true, slug: true, name: true, ...CONVERSION_FIELDS }
+    })
+  ).filter(unpaidTrial);
 
   // When the platform's retention programme is on, ITS "your trial has ended" message goes out
   // instead of this one — same day, half an hour later, from the platform's own relay, and it
@@ -176,10 +199,12 @@ export async function runTrialLifecycleTick(now = Date.now()): Promise<{ warned:
 
   // ── Suspension: GRACE → SUSPENDED, once the window is up ────────────────────────────────────
   const graceDeadline = new Date(now - GRACE_DAYS * DAY_MS);
-  const overdue = await controlPrisma.organization.findMany({
-    where: { status: "GRACE", graceStartedAt: { lte: graceDeadline } },
-    select: { id: true, slug: true }
-  });
+  const overdue = (
+    await controlPrisma.organization.findMany({
+      where: { status: "GRACE", graceStartedAt: { lte: graceDeadline } },
+      select: { id: true, slug: true, trialEndsAt: true, ...CONVERSION_FIELDS }
+    })
+  ).filter(suspendable);
 
   for (const org of overdue) {
     // `suspendedReason` and `nonPaymentSubscriptionId` are deliberately left as GRACE set them. The

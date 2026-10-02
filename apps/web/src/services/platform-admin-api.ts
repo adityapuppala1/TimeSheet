@@ -161,6 +161,11 @@ export interface OrgListRow {
   aiMonthlyBudgetCeilingOverride: string | null;
   suspendedAt: string | null;
   suspendedReason: string | null;
+  /** The trial clock and what decides whether it still counts (utils/org-trial.ts). The list route
+   *  returns the whole row, so these were always on the wire; only the type is new. */
+  trialEndsAt: string | null;
+  trialTier: PlanTier | null;
+  stripeSubscriptionId: string | null;
   createdAt: string;
   database: { host: string; databaseName: string; migratedAt: string | null; schemaVersion: string | null } | null;
 }
@@ -324,6 +329,9 @@ export const platformAdminOrgApi = {
       suspendedReason: string | null;
       seatLimitOverride: number | null;
       aiMonthlyBudgetCeilingOverride: number | null;
+      /** Extends a trial that is still a trial, to this ISO moment. Setting a paid `planTier` instead
+       *  ENDS the trial — the API refuses both in one edit. */
+      trialEndsAt: string;
     }>
   ) => (await platformAdminApi.patch<OrgListRow>(`/organizations/${id}`, payload)).data,
 

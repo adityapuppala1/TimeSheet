@@ -5,6 +5,12 @@
  *  - An operator who moves the STATUS of a workspace lapsed for non-payment has taken the decision
  *    over: the webhook's "suspended for not paying sub_X" marker goes, so a later payment cannot undo
  *    an operator's suspension. Re-saving the dialog with the status unchanged is not that decision.
+ *  - SETTING A PLAN ON A TRIALLING WORKSPACE CONVERTS IT. The PATCH used to write `planTier` and
+ *    nothing else, so the trial clock kept running: the customer who had just signed a contract got
+ *    "your trial ends in 3 days", then GRACE (a 402 for everyone) the day after `trialEndsAt`, then
+ *    SUSPENDED fourteen days later. Now the trial fields are cleared, a trial that had already lapsed
+ *    is back to ACTIVE, and the audit trail says it was a conversion.
+ *  - An operator can instead EXTEND a trial to a date — the other thing a sales conversation needs.
  */
 import express from "express";
 import request from "supertest";
@@ -101,5 +107,134 @@ describe("an operator's status change and the non-payment marker", () => {
 
     expect(written()).not.toHaveProperty("nonPaymentSubscriptionId");
     expect(auditActions()).toContain("organization.updated");
+  });
+});
+
+/** A self-serve workspace mid-trial: entitled to TEAM until `trialEndsAt`, paying for nothing yet. */
+const trialling = (overrides: Record<string, unknown> = {}) =>
+  org({ planTier: "STARTER", trialTier: "TEAM", trialEndsAt: new Date(Date.now() + 5 * DAY), ...overrides });
+/** The same workspace the day after its trial ended without a subscription. */
+const lapsedTrial = (overrides: Record<string, unknown> = {}) =>
+  trialling({
+    status: "GRACE",
+    trialEndsAt: new Date(Date.now() - DAY),
+    graceStartedAt: new Date(Date.now() - DAY + 60_000),
+    suspendedReason: "Free trial ended without a subscription.",
+    ...overrides
+  });
+
+describe("setting a plan on a trialling workspace ends the trial", () => {
+  it("clears the trial clock, so no more trial warnings and no lapse", async () => {
+    control.organization.findUnique.mockResolvedValue(trialling());
+
+    const res = await patch({ planTier: "TEAM" });
+
+    expect(res.status).toBe(200);
+    expect(written()).toMatchObject({ planTier: "TEAM", trialEndsAt: null, trialTier: null });
+    // Still running, so nothing about its status changes.
+    expect(written()).not.toHaveProperty("status");
+  });
+
+  it("brings a lapsed trial back to ACTIVE — the console dialog re-sends the unchanged GRACE status", async () => {
+    control.organization.findUnique.mockResolvedValue(lapsedTrial());
+
+    // Exactly what the edit dialog sends: every field, including the status it was opened with.
+    await patch({ status: "GRACE", planTier: "TEAM", suspendedReason: null, seatLimitOverride: null, aiMonthlyBudgetCeilingOverride: null });
+
+    expect(written()).toMatchObject({ planTier: "TEAM", trialEndsAt: null, trialTier: null, status: "ACTIVE", graceStartedAt: null, suspendedReason: null });
+    // Unlocked now, not when the 10-second status cache expires.
+    expect(forgetOrgStatus).toHaveBeenCalledWith("org-1");
+  });
+
+  it("respects a different status the operator chose in the same edit", async () => {
+    control.organization.findUnique.mockResolvedValue(lapsedTrial());
+
+    await patch({ status: "SUSPENDED", planTier: "TEAM", suspendedReason: "Contract signed, awaiting PO" });
+
+    expect(written()).toMatchObject({ status: "SUSPENDED", trialEndsAt: null, trialTier: null });
+  });
+
+  it("writes an audit row that names the conversion", async () => {
+    control.organization.findUnique.mockResolvedValue(lapsedTrial());
+
+    await patch({ planTier: "ENTERPRISE" });
+
+    const row = control.platformAuditLog.create.mock.calls.map((call) => call[0].data).find((data) => data.action === "organization.trial_converted");
+    expect(row).toBeDefined();
+    expect(row.metadata).toMatchObject({ slug: "acme", planTier: "ENTERPRISE", trialTier: "TEAM", restoredFromGrace: true });
+    expect(row.reason).toBe(REASON);
+  });
+
+  it("is not a conversion to leave the plan on the free tier", async () => {
+    control.organization.findUnique.mockResolvedValue(trialling());
+
+    await patch({ planTier: "STARTER", seatLimitOverride: 25 });
+
+    expect(written()).not.toHaveProperty("trialEndsAt");
+    expect(auditActions()).not.toContain("organization.trial_converted");
+  });
+
+  it("leaves a workspace that never had a trial exactly as it was", async () => {
+    control.organization.findUnique.mockResolvedValue(org({ planTier: "TEAM" }));
+
+    await patch({ planTier: "ENTERPRISE" });
+
+    expect(written()).toEqual({ planTier: "ENTERPRISE" });
+    expect(auditActions()).toEqual(["organization.updated"]);
+  });
+});
+
+describe("extending a trial", () => {
+  const until = new Date(Date.now() + 14 * DAY);
+
+  it("moves the end date and re-arms the 7/3/1-day warnings for it", async () => {
+    control.organization.findUnique.mockResolvedValue(trialling({ trialNoticesSent: [7, 3] }));
+
+    const res = await patch({ trialEndsAt: until.toISOString() });
+
+    expect(res.status).toBe(200);
+    expect(written()).toMatchObject({ trialNoticesSent: [] });
+    expect((written().trialEndsAt as Date).toISOString()).toBe(until.toISOString());
+    expect(auditActions()).toContain("organization.trial_extended");
+  });
+
+  it("re-opens a trial that had already lapsed", async () => {
+    control.organization.findUnique.mockResolvedValue(lapsedTrial());
+
+    await patch({ trialEndsAt: until.toISOString() });
+
+    expect(written()).toMatchObject({ status: "ACTIVE", graceStartedAt: null, suspendedReason: null });
+    expect(forgetOrgStatus).toHaveBeenCalledWith("org-1");
+  });
+
+  it("is a billing decision, so a billing-only role may make it", async () => {
+    ACTOR.role = "BILLING" as never;
+    try {
+      control.organization.findUnique.mockResolvedValue(trialling());
+      expect((await patch({ trialEndsAt: until.toISOString() })).status).toBe(200);
+    } finally {
+      ACTOR.role = "OWNER";
+    }
+  });
+
+  it("refuses a date in the past", async () => {
+    control.organization.findUnique.mockResolvedValue(trialling());
+    const res = await patch({ trialEndsAt: new Date(Date.now() - DAY).toISOString() });
+    expect(res.status).toBe(422);
+    expect(control.organization.update).not.toHaveBeenCalled();
+  });
+
+  it("refuses a workspace with no trial to extend", async () => {
+    control.organization.findUnique.mockResolvedValue(org({ planTier: "TEAM" }));
+    const res = await patch({ trialEndsAt: until.toISOString() });
+    expect(res.status).toBe(409);
+    expect(control.organization.update).not.toHaveBeenCalled();
+  });
+
+  it("refuses extending and converting in one edit — they are opposite decisions", async () => {
+    control.organization.findUnique.mockResolvedValue(trialling());
+    const res = await patch({ planTier: "TEAM", trialEndsAt: until.toISOString() });
+    expect(res.status).toBe(422);
+    expect(control.organization.update).not.toHaveBeenCalled();
   });
 });

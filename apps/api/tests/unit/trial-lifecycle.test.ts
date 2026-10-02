@@ -70,6 +70,11 @@ function seed(overrides: Partial<Record<string, unknown>> = {}) {
     slug: "acme",
     name: "Acme",
     status: "ACTIVE",
+    // What signup writes: paying for STARTER, entitled to TEAM while the trial runs. Without these the
+    // row reads as converted (retention.service#isConverted) and the worker rightly leaves it alone.
+    planTier: "STARTER",
+    trialTier: "TEAM",
+    stripeSubscriptionId: null,
     trialEndsAt: null,
     graceStartedAt: null,
     trialNoticesSent: null,
@@ -157,6 +162,32 @@ describe("expiry and suspension", () => {
     expect((await runTrialLifecycleTick(NOW)).suspended).toBe(1);
     expect(org.status).toBe("SUSPENDED");
     expect(org.suspendedAt).toBeInstanceOf(Date);
+  });
+
+  it("leaves a workspace whose trial an operator converted by hand alone — no warning, no lapse, no suspension", async () => {
+    // planTier raised from the console while the trial fields were still set: the shape every
+    // manually-converted trial had before the console started clearing them, and still the shape
+    // retention.service#isConverted calls "somebody is paying".
+    const converted = { planTier: "TEAM", trialTier: "TEAM", stripeSubscriptionId: null };
+
+    const warned = seed({ ...converted, trialEndsAt: new Date(NOW + 3 * DAY) });
+    await runTrialLifecycleTick(NOW);
+    expect(mailed).toEqual([]);
+    expect(warned.trialNoticesSent).toBeNull();
+
+    const expired = seed({ ...converted, trialEndsAt: new Date(NOW - 1000) });
+    expect((await runTrialLifecycleTick(NOW)).lapsed).toBe(0);
+    expect(expired.status).toBe("ACTIVE");
+
+    const stuck = seed({ ...converted, status: "GRACE", trialEndsAt: new Date(NOW - 20 * DAY), graceStartedAt: new Date(NOW - 19 * DAY) });
+    expect((await runTrialLifecycleTick(NOW)).suspended).toBe(0);
+    expect(stuck.status).toBe("GRACE");
+  });
+
+  it("still suspends a lapsed trial nobody paid for", async () => {
+    const org = seed({ planTier: "STARTER", trialTier: "TEAM", stripeSubscriptionId: null, status: "GRACE", trialEndsAt: new Date(NOW - 16 * DAY), graceStartedAt: new Date(NOW - 15 * DAY) });
+    expect((await runTrialLifecycleTick(NOW)).suspended).toBe(1);
+    expect(org.status).toBe("SUSPENDED");
   });
 
   it("suspends a workspace lapsed for non-payment without forgetting which subscription it owes", async () => {

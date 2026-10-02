@@ -34,6 +34,8 @@ import { withOrgTenant } from "../config/with-org-tenant.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { encryptSecret } from "../utils/encryption.js";
+import { forgetOrgStatus } from "../services/org-status.service.js";
+import { isConverted } from "../services/retention.service.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { audit } from "../services/audit.service.js";
@@ -284,7 +286,10 @@ const updateOrgSchema = z.object({
       status: z.enum(["PROVISIONING", "ACTIVE", "GRACE", "SUSPENDED", "ARCHIVED"]).optional(),
       suspendedReason: z.string().max(500).optional().nullable(),
       seatLimitOverride: z.number().int().positive().optional().nullable(),
-      aiMonthlyBudgetCeilingOverride: z.number().nonnegative().optional().nullable()
+      aiMonthlyBudgetCeilingOverride: z.number().nonnegative().optional().nullable(),
+      // "Extend the trial to this moment" — see trialEffects below. An ISO string, parsed by the
+      // handler: validate() checks the shape but hands the handler the raw body.
+      trialEndsAt: z.string().datetime({ offset: true }).optional()
     })
     .strict()
 });
@@ -300,7 +305,76 @@ const updateOrgSchema = z.object({
  * caller; splitting the FIELDS keeps the contract and puts the check where the authority actually
  * differs.
  */
-const BILLING_ORG_FIELDS = new Set(["planTier", "seatLimitOverride", "aiMonthlyBudgetCeilingOverride"]);
+const BILLING_ORG_FIELDS = new Set(["planTier", "seatLimitOverride", "aiMonthlyBudgetCeilingOverride", "trialEndsAt"]);
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** A trial extended further than this is a free plan, and should be set as one. */
+const MAX_TRIAL_EXTENSION_DAYS = 365;
+
+type OrgRow = NonNullable<Awaited<ReturnType<typeof controlPrisma.organization.findUnique>>>;
+
+/** The columns a STATUS change writes beside the status itself. */
+function statusEffects(before: OrgRow, body: { status?: string; suspendedReason?: string | null }): Record<string, unknown> {
+  if (!body.status) return {};
+  const data: Record<string, unknown> = { suspendedAt: body.status === "SUSPENDED" ? new Date() : null };
+  if (body.status !== "SUSPENDED" && !("suspendedReason" in body)) data.suspendedReason = null;
+  // An operator who MOVES the status has made the lifecycle decision their own, so the webhook's
+  // "lapsed for not paying sub_X" marker goes: `invoice.paid` restores only what non-payment caused,
+  // never an operator's suspension. Re-saving the dialog with the status unchanged is not a decision.
+  if (body.status !== before.status) data.nonPaymentSubscriptionId = null;
+  return data;
+}
+
+/**
+ * What an edit does to a TRIAL, beyond the columns it names — the two things a sales conversation
+ * with a trialling customer ends in.
+ *
+ * CONVERSION. Setting a paid plan on a workspace that still has a trial clock converts it: the trial
+ * fields are cleared, exactly as a Stripe checkout clears them. The PATCH used to write `planTier`
+ * alone, so the clock kept running — the customer who had just signed was warned "your trial ends
+ * in 3 days", lapsed to GRACE (a 402 for everyone) the day after `trialEndsAt`, and was suspended
+ * fourteen days later. "Paid" is retention.service.ts#isConverted, the same rule the lifecycle worker
+ * and the retention programme read, so the console cannot convert a workspace those two still treat
+ * as a trial. A row converted before this existed (paid plan, clock still set) is tidied up by the
+ * next edit of any kind.
+ *
+ * EXTENSION. `trialEndsAt` moves the end of a trial that is still a trial, and re-arms the 7/3/1-day
+ * warnings for the new date.
+ *
+ * Either way, a workspace in GRACE because its trial lapsed goes back to ACTIVE — unless the same edit
+ * chose a different status, which wins. The console's dialog always re-sends the status it opened
+ * with, so "unchanged" counts as not choosing.
+ */
+function trialEffects(before: OrgRow, body: { planTier?: OrgRow["planTier"]; status?: string; trialEndsAt?: string }, now: Date) {
+  const after = { ...before, ...(body.planTier ? { planTier: body.planTier } : {}) };
+  const reopen = before.status === "GRACE" && Boolean(before.trialEndsAt) && (body.status === undefined || body.status === before.status);
+  const reopened = reopen ? { status: "ACTIVE", graceStartedAt: null, suspendedAt: null, suspendedReason: null } : {};
+
+  if (body.trialEndsAt !== undefined) {
+    if (!before.trialEndsAt || isConverted(before)) throw new AppError(409, "This workspace has no trial to extend — it never had one, or it is already on a paid plan.");
+    if (isConverted(after)) throw new AppError(422, "Choose one: setting a paid plan ends the trial, so it cannot also be extended in the same change.");
+    const until = new Date(body.trialEndsAt);
+    if (until.getTime() <= now.getTime()) throw new AppError(422, "A trial can only be extended to a moment in the future.");
+    if (until.getTime() > now.getTime() + MAX_TRIAL_EXTENSION_DAYS * DAY_MS) {
+      throw new AppError(422, `A trial can be extended by at most ${MAX_TRIAL_EXTENSION_DAYS} days — beyond that, set a plan instead.`);
+    }
+    return {
+      data: { trialEndsAt: until, trialNoticesSent: [], ...reopened },
+      audit: { action: "organization.trial_extended", metadata: { slug: before.slug, from: before.trialEndsAt?.toISOString() ?? null, to: until.toISOString(), restoredFromGrace: reopen } }
+    };
+  }
+
+  if (before.trialEndsAt && isConverted(after)) {
+    return {
+      data: { trialEndsAt: null, trialTier: null, ...reopened },
+      audit: {
+        action: "organization.trial_converted",
+        metadata: { slug: before.slug, planTier: after.planTier, trialTier: before.trialTier, trialEndsAt: before.trialEndsAt.toISOString(), restoredFromGrace: reopen }
+      }
+    };
+  }
+  return null;
+}
 
 platformAdminRouter.patch("/organizations/:id", requirePlatformAdmin, requirePlatformReason, validate(updateOrgSchema), async (req, res) => {
   const admin = req.platformAdmin!;
@@ -311,26 +385,20 @@ platformAdminRouter.patch("/organizations/:id", requirePlatformAdmin, requirePla
     throw new AppError(
       403,
       commercialOnly
-        ? `Changing a workspace's plan, seats or AI budget needs "${capability}". You are ${admin.role}.`
-        : `Changing a workspace's name or lifecycle status needs "${capability}" — a billing role may only move plan, seats and AI budget. You are ${admin.role}.`
+        ? `Changing a workspace's plan, trial end, seats or AI budget needs "${capability}". You are ${admin.role}.`
+        : `Changing a workspace's name or lifecycle status needs "${capability}" — a billing role may only move plan, trial end, seats and AI budget. You are ${admin.role}.`
     );
   }
 
   const before = await controlPrisma.organization.findUnique({ where: { id: String(req.params.id) } });
   if (!before) throw new AppError(404, "Organization not found");
 
-  const data: Record<string, unknown> = { ...req.body };
-  if (req.body.status === "SUSPENDED") data.suspendedAt = new Date();
-  if (req.body.status && req.body.status !== "SUSPENDED") {
-    data.suspendedAt = null;
-    if (!("suspendedReason" in req.body)) data.suspendedReason = null;
-  }
-  // An operator who MOVES the status has made the lifecycle decision their own, so the webhook's
-  // "lapsed for not paying sub_X" marker goes: `invoice.paid` restores only what non-payment caused,
-  // never an operator's suspension. Re-saving the dialog with the status unchanged is not a decision.
-  if (req.body.status && req.body.status !== before.status) data.nonPaymentSubscriptionId = null;
+  const trial = trialEffects(before, req.body, new Date());
+  const data: Record<string, unknown> = { ...req.body, ...statusEffects(before, req.body), ...trial?.data };
   const org = await controlPrisma.organization.update({ where: { id: String(req.params.id) }, data }).catch(() => null);
   if (!org) throw new AppError(404, "Organization not found");
+  // Unlocked or locked now, not when middleware/auth.ts's 10-second status cache next expires.
+  if (org.status !== before.status) forgetOrgStatus(org.id);
 
   // No audit row existed for this until 5.0.0 — a workspace could be suspended, moved to a
   // different tier or archived and the control plane's own trail said nothing about it.
@@ -338,6 +406,9 @@ platformAdminRouter.patch("/organizations/:id", requirePlatformAdmin, requirePla
     before: { planTier: before.planTier, status: before.status, name: before.name, seatLimitOverride: before.seatLimitOverride, aiMonthlyBudgetCeilingOverride: before.aiMonthlyBudgetCeilingOverride?.toString() ?? null },
     after: { planTier: org.planTier, status: org.status, name: org.name, seatLimitOverride: org.seatLimitOverride, aiMonthlyBudgetCeilingOverride: org.aiMonthlyBudgetCeilingOverride?.toString() ?? null }
   });
+  // Its own row, because "ended the trial" / "extended the trial" is the sentence somebody searches
+  // the trail for when a customer asks why their trial emails stopped or their workspace reopened.
+  if (trial) await platformAuditFor(req)(trial.audit.action, "Organization", org.id, trial.audit.metadata);
   res.json(org);
 });
 

@@ -34,6 +34,7 @@ import { toast } from "../../components/ui/toaster";
 import { cn } from "../../lib/utils";
 import { platformAdminOrgApi, type OrgListRow, type OrgStatus, type PlanTier, type ResetAdminPasswordResult } from "../../services/platform-admin-api";
 import { exportCsv, type CsvColumn } from "../../utils/console-csv";
+import { endOfDayIso, hasLiveTrial, trialEditNote } from "../../utils/org-trial";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, FieldGrid, OrgStatusPill, PRIMARY_BTN, TierPill, Toolbar } from "./console-ui";
 import { runInBackground } from "../../lib/run-in-background";
 
@@ -643,6 +644,12 @@ function EditOrgDialogInner({ org, onOpenChange, onSaved }: { org: OrgListRow; o
   const [suspendedReason, setSuspendedReason] = useState(org.suspendedReason ?? "");
   const [seatLimitOverride, setSeatLimitOverride] = useState(org.seatLimitOverride?.toString() ?? "");
   const [aiBudgetOverride, setAiBudgetOverride] = useState(org.aiMonthlyBudgetCeilingOverride ?? "");
+  const [extendTrialTo, setExtendTrialTo] = useState("");
+  // Extending is offered only while the plan stays free: a paid plan ENDS the trial, and the API
+  // refuses both in one edit.
+  const canExtendTrial = hasLiveTrial(org) && planTier === "STARTER";
+  const trialNote = trialEditNote(org, planTier);
+  const extendIso = canExtendTrial ? endOfDayIso(extendTrialTo) : null;
 
   const save = useMutation({
     mutationFn: () =>
@@ -651,7 +658,8 @@ function EditOrgDialogInner({ org, onOpenChange, onSaved }: { org: OrgListRow; o
         planTier,
         suspendedReason: status === "SUSPENDED" ? suspendedReason || null : null,
         seatLimitOverride: seatLimitOverride ? Number(seatLimitOverride) : null,
-        aiMonthlyBudgetCeilingOverride: aiBudgetOverride ? Number(aiBudgetOverride) : null
+        aiMonthlyBudgetCeilingOverride: aiBudgetOverride ? Number(aiBudgetOverride) : null,
+        ...(extendIso ? { trialEndsAt: extendIso } : {})
       }),
     onSuccess: () => {
       toast.success("Saved");
@@ -692,7 +700,7 @@ function EditOrgDialogInner({ org, onOpenChange, onSaved }: { org: OrgListRow; o
               </Select>
             </Field>
 
-            <Field label="Plan tier" htmlFor="edit-org-tier">
+            <Field label="Plan tier" htmlFor="edit-org-tier" hint={trialNote}>
               <Select value={planTier} onValueChange={(v) => setPlanTier(v as PlanTier)}>
                 <SelectTrigger id="edit-org-tier"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -706,6 +714,17 @@ function EditOrgDialogInner({ org, onOpenChange, onSaved }: { org: OrgListRow; o
             {status === "SUSPENDED" && (
               <Field label="Suspension reason" htmlFor="edit-org-reason" className="sm:col-span-2">
                 <Textarea id="edit-org-reason" rows={2} value={suspendedReason} onChange={(e) => setSuspendedReason(e.target.value)} />
+              </Field>
+            )}
+
+            {canExtendTrial && (
+              <Field
+                label="Extend trial to"
+                htmlFor="edit-org-trial"
+                className="sm:col-span-2"
+                hint="Through the end of that day. The trial warnings start again for the new date, and a lapsed trial reopens."
+              >
+                <Input id="edit-org-trial" type="date" value={extendTrialTo} onChange={(e) => setExtendTrialTo(e.target.value)} />
               </Field>
             )}
 
