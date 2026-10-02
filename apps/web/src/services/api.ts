@@ -6091,7 +6091,10 @@ export const dashboardApi = {
   }) => (await api.post<ReportSubscriptionRow>("/dashboards/subscriptions", payload)).data,
   removeSubscription: async (id: string) => {
     await api.delete(`/dashboards/subscriptions/${id}`);
-  }
+  },
+  /** Pause or resume your own delivery. Resuming needs reports:view and clears the pause note. */
+  setSubscriptionActive: async (id: string, isActive: boolean) =>
+    (await api.patch<ReportSubscriptionRow>(`/dashboards/subscriptions/${id}`, { isActive })).data
 };
 
 /* ---- Workflow Studio (V8 phase 4) --------------------------------------------------------- */

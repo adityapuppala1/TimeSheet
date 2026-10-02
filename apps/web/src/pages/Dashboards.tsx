@@ -21,6 +21,8 @@ import {
   LayoutDashboard,
   Loader2,
   Mail,
+  Pause,
+  Play,
   Plus,
   Save,
   Trash2
@@ -480,6 +482,17 @@ function Deliveries({ dashboards }: { dashboards: DashboardRow[] }) {
     onError: (err: any) => toast.error("Could not remove", { description: serverMessage(err, "Try again.") })
   });
 
+  // Pause and resume. A delivery the system paused (the owner lost reports:view, or an upgrade
+  // widened what it reports) used to have no way back but delete-and-recreate.
+  const setActive = useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) => dashboardApi.setSubscriptionActive(id, isActive),
+    onSuccess: (_row, { isActive }) => {
+      toast.success(isActive ? "Delivery resumed" : "Delivery paused");
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["dashboards", "subscriptions"] }));
+    },
+    onError: (err: any) => toast.error("Could not change it", { description: serverMessage(err, "Try again.") })
+  });
+
   const recipients = form.recipients.split(",").map((r) => r.trim()).filter(Boolean);
   const invalid = !form.name.trim() || !form.dashboardId || recipients.length === 0;
 
@@ -507,7 +520,9 @@ function Deliveries({ dashboards }: { dashboards: DashboardRow[] }) {
                 <span className="text-muted-foreground">
                   {sub.cadence.toLowerCase()} at {String(sub.hourUtc).padStart(2, "0")}:00 UTC
                 </span>
-                <Badge variant="secondary">{(sub.recipients ?? []).length} recipient(s)</Badge>
+                <Badge variant="secondary" title={(sub.recipients ?? []).join(", ")}>
+                  {(sub.recipients ?? []).length} recipient(s)
+                </Badge>
                 {!sub.isActive && <Badge variant="destructive">Paused</Badge>}
                 {sub.lastSendError && (
                   <span className="inline-flex items-center gap-1 text-warning">
@@ -516,9 +531,32 @@ function Deliveries({ dashboards }: { dashboards: DashboardRow[] }) {
                   </span>
                 )}
                 {sub.lastSentAt && <span className="text-muted-foreground">last sent {new Date(sub.lastSentAt).toLocaleDateString()}</span>}
-                <Button size="sm" variant="ghost" className="ml-auto h-6 px-1.5" disabled={remove.isPending} onClick={() => remove.mutate(sub.id)}>
-                  <Trash2 className="h-3 w-3" />
-                </Button>
+                <div className="ml-auto flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 gap-1 px-1.5"
+                    disabled={setActive.isPending}
+                    onClick={() => setActive.mutate({ id: sub.id, isActive: !sub.isActive })}
+                  >
+                    {sub.isActive ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+                    {sub.isActive ? "Pause" : "Resume"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-1.5"
+                    aria-label={`Remove ${sub.name}`}
+                    disabled={remove.isPending}
+                    onClick={() => remove.mutate(sub.id)}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+                {/* A paused delivery says "check the recipients" — so show them, not just a count. */}
+                {!sub.isActive && (sub.recipients ?? []).length > 0 && (
+                  <p className="w-full break-all text-muted-foreground">To: {(sub.recipients ?? []).join(", ")}</p>
+                )}
               </div>
             ))}
           </div>

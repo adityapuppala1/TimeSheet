@@ -243,6 +243,40 @@ dashboardRouter.delete(
   }
 );
 
+/**
+ * PATCH /subscriptions/:id — pause or resume your own delivery. `isActive` and nothing else.
+ *
+ * WHY IT EXISTS (audit 2026-10 R3, finding 4): the worker pauses a delivery whose owner lost
+ * `reports:view`, and the upgrade that widened a manager's emailed report to their team's projects
+ * paused those with outside recipients so somebody looks before it sends again. Neither had a way
+ * back short of deleting it and setting it up again.
+ *
+ * Owner-only, like delete. PAUSING needs nothing more — stopping your own mail is always allowed.
+ * RESUMING needs `reports:view`, the right the report is built with: the worker would only pause it
+ * again on its next run, with the owner told it worked. Resuming clears the note that explained the
+ * pause, so the row stops saying something that is no longer true.
+ */
+dashboardRouter.patch(
+  "/subscriptions/:id",
+  validate(z.object({ params: z.object({ id: z.string().uuid() }), body: z.object({ isActive: z.boolean() }).strict() })),
+  async (req, res) => {
+    const existing = await prisma.reportSubscription.findUnique({ where: { id: String(req.params.id) } });
+    if (!existing) throw new AppError(404, "Subscription not found");
+    if (existing.createdById !== req.user!.id) throw new AppError(403, "Only the person who set up a delivery can pause or resume it.");
+    const resume = req.body.isActive === true;
+    if (resume && !req.user!.permissions.includes(permissions.REPORTS_VIEW)) {
+      throw new AppError(403, "You no longer have permission to view reports (reports:view), so this delivery can't run. Ask an admin for it, or remove the delivery.");
+    }
+    const updated = await prisma.reportSubscription.update({
+      where: { id: existing.id },
+      data: resume ? { isActive: true, lastSendError: null } : { isActive: false },
+      include: { dashboard: { select: { id: true, name: true } } }
+    });
+    await audit(req.user!.id, resume ? "report_subscription.resumed" : "report_subscription.paused", "ReportSubscription", existing.id);
+    res.json(updated);
+  }
+);
+
 /* ------------------------------------------------------------------ *
  * The home page's month rollup
  * ------------------------------------------------------------------ *

@@ -121,15 +121,16 @@ function ownerRefusal(owner: RequestUser | null): string | null {
 }
 
 /**
- * The recipients to actually mail. An address belonging to a workspace account that is no longer
- * ACTIVE is dropped — a colleague who left kept receiving the report, because recipients are bare
- * addresses. Addresses that match no account at all (the external stakeholders this feature is for)
- * are kept. Compared case-insensitively, as MySQL compares the `email` column.
+ * The recipients to actually mail. An address belonging to a workspace account that has been
+ * deactivated or deleted is dropped — a colleague who left kept receiving the report, because
+ * recipients are bare addresses. Addresses that match no account at all (the external stakeholders
+ * this feature is for) are kept, and so is an account still PENDING_VERIFICATION: that is somebody
+ * on their way in, not on their way out. Compared case-insensitively, as MySQL compares `email`.
  */
 async function deliverableRecipients(addresses: string[]): Promise<{ kept: string[]; dropped: string[] }> {
   if (addresses.length === 0) return { kept: [], dropped: [] };
   const departed = await prisma.user.findMany({
-    where: { email: { in: addresses }, OR: [{ status: { not: "ACTIVE" } }, { deletedAt: { not: null } }] },
+    where: { email: { in: addresses }, OR: [{ status: "INACTIVE" }, { deletedAt: { not: null } }] },
     select: { email: true }
   });
   const blocked = new Set(departed.map((u) => u.email.toLowerCase()));
@@ -137,6 +138,16 @@ async function deliverableRecipients(addresses: string[]): Promise<{ kept: strin
     kept: addresses.filter((a) => !blocked.has(a.toLowerCase())),
     dropped: addresses.filter((a) => blocked.has(a.toLowerCase()))
   };
+}
+
+/**
+ * `lastSendError` is VarChar(500). The skipped-recipients note was written unclipped, so a list of
+ * enough departed addresses made the status write throw AFTER the mail had gone out — `lastSentAt`
+ * was never stamped and the next tick sent the report again.
+ */
+const SEND_ERROR_MAX = 500;
+function clipSendError(note: string | null): string | null {
+  return note && note.length > SEND_ERROR_MAX ? `${note.slice(0, SEND_ERROR_MAX - 1)}…` : note;
 }
 
 /** One org's tick. Exported (with `now`) so the delivery rules can be driven directly in tests. */
@@ -169,7 +180,7 @@ export async function tickForOneOrg(now: Date = new Date()) {
       // failed without reading server logs they have no access to.
       await prisma.reportSubscription.update({
         where: { id: sub.id },
-        data: { lastSendError: (error as Error).message.slice(0, 500) }
+        data: { lastSendError: clipSendError((error as Error).message) }
       });
       console.error(`[reports] "${sub.name}" failed:`, (error as Error).message);
     }
@@ -209,7 +220,9 @@ async function deliver(
 
   // A skipped address is said on the row, so the owner can tidy the list rather than wonder why
   // somebody stopped getting it.
-  const skippedNote = dropped.length > 0 ? `Not sent to ${dropped.join(", ")}: no longer an active account in this workspace.` : null;
+  const skippedNote = clipSendError(
+    dropped.length > 0 ? `Not sent to ${dropped.join(", ")}: no longer an active account in this workspace.` : null
+  );
   await prisma.reportSubscription.update({
     where: { id: sub.id },
     data: recipients.length > 0 ? { lastSentAt: now, lastSendError: skippedNote } : { lastSendError: skippedNote }

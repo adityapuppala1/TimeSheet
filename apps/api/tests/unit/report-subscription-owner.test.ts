@@ -14,10 +14,14 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import request from "supertest";
 
 const state = vi.hoisted(() => ({
   owner: null as null | { id: string; name: string; email: string; role: string; permissions: string[] },
+  /** Who is calling the routes — by default the owner after losing reports:view. */
+  requester: null as null | { id: string; name: string; email: string; role: string; permissions: string[] },
   subscription: {} as Record<string, any>,
   directory: [] as Array<{ id: string; email: string; managerId: string | null; status: string; deletedAt: Date | null }>,
   assignments: [] as Array<{ userId: string; projectId: string }>,
@@ -30,8 +34,11 @@ vi.mock("../../src/config/prisma.js", () => {
     if (where.managerId !== undefined && u.managerId !== where.managerId) return false;
     if (where.email?.in && !where.email.in.map((e: string) => e.toLowerCase()).includes(u.email.toLowerCase())) return false;
     if (where.OR) {
-      const anyMatch = where.OR.some((c: any) =>
-        (c.status?.not !== undefined && u.status !== c.status.not) || (c.deletedAt?.not === null && u.deletedAt !== null)
+      const anyMatch = where.OR.some(
+        (c: any) =>
+          (typeof c.status === "string" && u.status === c.status) ||
+          (c.status?.not !== undefined && u.status !== c.status.not) ||
+          (c.deletedAt?.not === null && u.deletedAt !== null)
       );
       if (!anyMatch) return false;
     }
@@ -71,7 +78,7 @@ vi.mock("../../src/middleware/auth.js", async () => {
     // The REAL requirePermission stays in place — whether the owner's routes still demand
     // reports:view is exactly what is being pinned.
     requireAuth: (req: any, _res: unknown, next: () => void) => {
-      req.user = { id: "lead-1", name: "Lee Lead", email: "lee@x.io", role: "EMPLOYEE", permissions: ["timesheets:write"] };
+      req.user = { ...state.requester! };
       next();
     }
   };
@@ -90,6 +97,7 @@ beforeEach(() => {
   vi.mocked(sendMail).mockClear();
   vi.mocked(resolveDashboard).mockClear();
   state.owner = { id: "lead-1", name: "Lee Lead", email: "lee@x.io", role: "TEAM_LEAD", permissions: ["reports:view"] };
+  state.requester = { id: "lead-1", name: "Lee Lead", email: "lee@x.io", role: "EMPLOYEE", permissions: ["timesheets:write"] };
   state.subscription = {
     id: "sub-1",
     name: "Monday update",
@@ -150,6 +158,28 @@ describe("the worker, each run", () => {
     expect(to).toEqual(["client@example.com"]);
     expect(state.subscription.lastSendError).toMatch(/gone@acme\.test/);
   });
+
+  it("keeps an invited colleague who has not finished signing up — only a deactivated or deleted account is dropped", async () => {
+    // PENDING_VERIFICATION is somebody on their way IN. `status: { not: "ACTIVE" }` dropped them with
+    // the leavers, so a report addressed to a new joiner silently never reached them.
+    state.directory.push({ id: "new-1", email: "new@acme.test", managerId: null, status: "PENDING_VERIFICATION", deletedAt: null });
+    state.subscription.recipients = ["client@example.com", "new@acme.test", "gone@acme.test"];
+    await tickForOneOrg(NOW);
+    expect(vi.mocked(sendMail).mock.calls.map((c) => c[0].to)).toEqual(["client@example.com", "new@acme.test"]);
+  });
+
+  it("fits a long skipped-recipients note into its 500-character column, so the send is still recorded", async () => {
+    // The note went into VarChar(500) unclipped. With enough departed addresses the write threw
+    // AFTER the mail had gone out — so lastSentAt was never stamped and the next tick sent again.
+    const leavers = Array.from({ length: 30 }, (_, i) => `departed.colleague.number.${i}@acme.test`);
+    state.directory.push(...leavers.map((email, i) => ({ id: `left-${i}`, email, managerId: null, status: "INACTIVE", deletedAt: null })));
+    state.subscription.recipients = ["client@example.com", ...leavers];
+    await tickForOneOrg(NOW);
+    expect(sendMail).toHaveBeenCalledTimes(1);
+    expect(state.subscription.lastSentAt).toEqual(NOW);
+    expect(state.subscription.lastSendError.length).toBeLessThanOrEqual(500);
+    expect(state.subscription.lastSendError).toMatch(/^Not sent to departed\.colleague\.number\.0@acme\.test/);
+  });
 });
 
 describe("the owner's own deliveries", () => {
@@ -171,10 +201,97 @@ describe("the owner's own deliveries", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(204);
   });
 
+  /**
+   * Pause and resume (audit 2026-10 R3, finding 4). A delivery the worker paused — the owner lost
+   * reports:view, or the upgrade paused it because a manager's report widened to their team's
+   * projects — had no way back but delete-and-recreate. The owner can now switch it off and on.
+   */
+  const toggle = (isActive: unknown, id = "11111111-1111-4111-8111-111111111111") =>
+    request(buildApp()).patch(`/api/dashboards/subscriptions/${id}`).send({ isActive });
+
+  it("lets the owner resume a paused delivery, clearing the note that paused it", async () => {
+    state.requester = { ...state.requester!, permissions: ["reports:view"] };
+    Object.assign(state.subscription, { isActive: false, lastSendError: "Paused after an update: check the recipients, then resume." });
+    const res = await toggle(true);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(state.subscription.isActive).toBe(true);
+    expect(state.subscription.lastSendError).toBeNull();
+    expect(res.body).toMatchObject({ id: "sub-1", isActive: true, lastSendError: null });
+  });
+
+  it("refuses to resume while the owner still lacks reports:view — the worker would only pause it again", async () => {
+    Object.assign(state.subscription, { isActive: false, lastSendError: "Paused: no reports:view." });
+    const res = await toggle(true);
+    expect(res.status).toBe(403);
+    expect(res.body.message).toMatch(/reports:view/);
+    expect(state.subscription.isActive).toBe(false);
+  });
+
+  it("lets the owner pause their own delivery, whatever their permissions", async () => {
+    const res = await toggle(false);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(state.subscription.isActive).toBe(false);
+  });
+
+  it("is the owner's alone", async () => {
+    state.requester = { id: "someone-else", name: "Sam", email: "sam@x.io", role: "SUPER_ADMIN", permissions: ["reports:view", "users:manage"] };
+    Object.assign(state.subscription, { isActive: false });
+    const res = await toggle(true);
+    expect(res.status).toBe(403);
+    expect(state.subscription.isActive).toBe(false);
+  });
+
+  it("changes nothing but isActive", async () => {
+    const res = await request(buildApp())
+      .patch("/api/dashboards/subscriptions/11111111-1111-4111-8111-111111111111")
+      .send({ isActive: true, recipients: ["attacker@evil.test"] });
+    expect(res.status).toBe(422);
+    expect(state.subscription.recipients).toEqual(["client@example.com", "gone@acme.test"]);
+  });
+
   it("still needs reports:view to CREATE one", async () => {
     const res = await request(buildApp())
       .post("/api/dashboards/subscriptions")
       .send({ name: "x", dashboardId: "11111111-1111-4111-8111-111111111111", recipients: ["a@b.co"] });
     expect(res.status).toBe(403);
+  });
+});
+
+/**
+ * The upgrade's pause (audit 2026-10 R3, finding 4). A manager's or team lead's emailed dashboard
+ * now covers their reports' projects too, so a weekly report to a client could start naming another
+ * client's projects. The data-only migration pauses exactly those deliveries that reach an address
+ * outside the workspace, with a note saying why, until the owner checks and resumes. It cannot be run
+ * here (no database in unit tests), so its decisions are pinned in its text.
+ */
+describe("the migration that pauses widened manager reports", () => {
+  const sql = readFileSync(
+    fileURLToPath(new URL("../../prisma/migrations/20261002141000_pause_widened_manager_report_deliveries/migration.sql", import.meta.url)),
+    "utf8"
+  );
+  const code = sql
+    .split(/\r?\n/)
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n");
+
+  it("pauses only ACTIVE deliveries of MANAGER and TEAM_LEAD owners, with the agreed note", () => {
+    expect(code).toMatch(/UPDATE `ReportSubscription`/);
+    expect(code).toMatch(/SET `rs`\.`isActive` = FALSE/);
+    expect(code).toMatch(/WHERE `rs`\.`isActive` = TRUE/);
+    expect(code).toMatch(/`role`\.`name` IN \('MANAGER', 'TEAM_LEAD'\)/);
+    const note = /`lastSendError` = '((?:[^']|'')*)'/.exec(code)?.[1].replaceAll("''", "'");
+    expect(note).toBe(
+      "Paused after an update: scheduled reports now cover the same projects as your live dashboard, including your team's. Check the recipients, then resume."
+    );
+    expect(note!.length).toBeLessThanOrEqual(500);
+  });
+
+  it("pauses only a delivery with a recipient who is not a workspace account", () => {
+    expect(code).toMatch(/NOT EXISTS \(\s*SELECT 1\s+FROM `User` AS `u`\s+WHERE `u`\.`email` = /);
+  });
+
+  it("is data-only, and avoids JSON_TABLE, which MariaDB 10.4 (the local XAMPP engine) does not have", () => {
+    expect(code).not.toMatch(/\b(ALTER|CREATE|DROP)\b/i);
+    expect(code).not.toMatch(/JSON_TABLE/i);
   });
 });
