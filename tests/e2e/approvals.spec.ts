@@ -45,6 +45,14 @@ async function statusCounts(): Promise<Record<string, number>> {
   });
 }
 
+async function chooseStatus(page: Page, label: string, status: string): Promise<void> {
+  await page.locator("#approval-status").click();
+  const answered = page.waitForResponse((r) => r.url().includes("/approval-queue") && r.url().includes(`status=${status}`));
+  await page.getByRole("option", { name: label }).click();
+  await answered;
+  await expect(page.getByText(/^\d+–\d+ of \d+$|^No /).first()).toBeVisible();
+}
+
 async function openApprovals(page: Page): Promise<void> {
   await signIn(page, "superadmin");
   await page.goto("/app/approvals");
@@ -73,15 +81,15 @@ test.describe("approvals queue", () => {
     // And the decision buttons only exist on rows that are still awaiting one.
     await expect(page.getByRole("button", { name: "Approve" }).first()).toBeVisible();
 
-    await page.locator("#approval-status").click();
-    await page.getByRole("option", { name: "Approved" }).click();
+    // The table keeps the previous page on screen until the new one arrives (placeholderData), so the
+    // footer is read only after the response for the newly chosen status has landed.
+    await chooseStatus(page, "Approved", "APPROVED");
     expect(await shownTotal(page)).toBe(counts.APPROVED ?? 0);
     // An already-approved row must not offer Approve — the API refuses anything but SUBMITTED, so
     // the button could only ever fail.
     await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
 
-    await page.locator("#approval-status").click();
-    await page.getByRole("option", { name: "All statuses" }).click();
+    await chooseStatus(page, "All statuses", "ALL");
     expect(await shownTotal(page)).toBe(Object.values(counts).reduce((a, b) => a + b, 0));
   });
 
