@@ -283,6 +283,45 @@ describe("computeChurn", () => {
     expect(churn.netRevenueRetentionPercent).toBe(100);
     expect(churn.unmeasuredAccounts).toBe(1);
   });
+
+  it("keeps a customer who moves UP to unpriced Enterprise as a retained logo, out of the revenue ratios", () => {
+    // Two $400 Team customers; one signs an Enterprise contract. Its Team MRR is not lost — its new
+    // MRR is unknown — so it leaves both sides of NRR/GRR rather than booking $400 of contraction.
+    const start = [account("up", { activeSeats: 50 }), account("stay", { activeSeats: 50 })];
+    const end = [account("up", { planTier: "ENTERPRISE", activeSeats: 60 }), account("stay", { activeSeats: 50 })];
+    const churn = computeChurn(start, end, PRICES, 30);
+    expect(churn.startAccounts).toBe(2);
+    expect(churn.churnedAccounts).toBe(0);
+    expect(churn.logoChurnPercent).toBe(0);
+    expect(churn.startMrrMinor).toBe(40_000);
+    expect(churn.retainedMrrMinor).toBe(40_000);
+    expect(churn.contractionMinor).toBe(0);
+    expect(churn.expansionMinor).toBe(0);
+    expect(churn.netRevenueRetentionPercent).toBe(100);
+    expect(churn.grossRevenueRetentionPercent).toBe(100);
+  });
+
+  it("does not book an Enterprise customer who moves to a priced tier as expansion out of nothing", () => {
+    const start = [account("down", { planTier: "ENTERPRISE", activeSeats: 50 }), account("stay", { activeSeats: 50 })];
+    const end = [account("down", { activeSeats: 50 }), account("stay", { activeSeats: 50 })];
+    const churn = computeChurn(start, end, PRICES, 30);
+    expect(churn.startAccounts).toBe(2);
+    expect(churn.churnedAccounts).toBe(0);
+    expect(churn.newAccounts).toBe(0);
+    expect(churn.startMrrMinor).toBe(40_000);
+    expect(churn.retainedMrrMinor).toBe(40_000);
+    expect(churn.expansionMinor).toBe(0);
+    expect(churn.netRevenueRetentionPercent).toBe(100);
+  });
+
+  it("still counts an Enterprise customer who stops paying as a churned logo", () => {
+    const churn = computeChurn([account("ent", { planTier: "ENTERPRISE" }), account("t")], [account("ent", { planTier: "ENTERPRISE", status: "SUSPENDED" }), account("t")], PRICES, 30);
+    expect(churn.churnedAccounts).toBe(1);
+    expect(churn.logoChurnPercent).toBe(50);
+    // Its revenue was never on either side, so the revenue ratios describe the priced customer alone.
+    expect(churn.churnedMrrMinor).toBe(0);
+    expect(churn.netRevenueRetentionPercent).toBe(100);
+  });
 });
 
 /* ------------------------------------------------------------------------------------------ */

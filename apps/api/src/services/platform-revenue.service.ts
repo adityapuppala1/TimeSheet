@@ -314,14 +314,19 @@ const percent = (numerator: number, denominator: number): number | null =>
  * they contribute nothing to either side of the revenue ratios. That is stated in the console
  * beside the number, because a deployment whose largest customers are all Enterprise has a revenue
  * churn figure that describes a minority of its business.
+ *
+ * "Unpriced" ON EITHER SIDE OF THE WINDOW. A Team customer who signs an Enterprise contract has an
+ * unknown MRR at the end, not a zero one: read as zero it booked the platform's best upsell as 100%
+ * contraction and halved NRR, and the move back booked expansion out of nothing. So a customer
+ * unpriced at the start OR the end is a logo only — out of start MRR, retained, expansion and
+ * contraction — and, still paying at the end, a retained logo. One that stops paying is churned
+ * whatever its tier, with whatever priced MRR it started with.
  */
 export function computeChurn(start: RevenueAccount[], end: RevenueAccount[], prices: TierPrices, windowDays: number): ChurnWindow {
   const startBearing = start.filter((account) => isPayingCustomer(account, prices));
   const endBearing = end.filter((account) => isPayingCustomer(account, prices));
   const endById = new Map(endBearing.map((account) => [account.orgId, account]));
   const startIds = new Set(startBearing.map((account) => account.orgId));
-
-  const mrrOf = (account: RevenueAccount) => accountMrrMinor(account, prices) ?? 0;
 
   let startMrrMinor = 0;
   let retainedMrrMinor = 0;
@@ -332,16 +337,18 @@ export function computeChurn(start: RevenueAccount[], end: RevenueAccount[], pri
   let unmeasuredAccounts = 0;
 
   for (const account of startBearing) {
-    const before = mrrOf(account);
-    startMrrMinor += before;
+    const before = accountMrrMinor(account, prices);
     const after = endById.get(account.orgId);
     if (!after) {
       churnedAccounts += 1;
-      churnedMrrMinor += before;
+      startMrrMinor += before ?? 0;
+      churnedMrrMinor += before ?? 0;
       continue;
     }
     if (after.unmeasured) unmeasuredAccounts += 1;
-    const now = mrrOf(after);
+    const now = accountMrrMinor(after, prices);
+    if (before === null || now === null) continue;
+    startMrrMinor += before;
     retainedMrrMinor += now;
     if (now > before) expansionMinor += now - before;
     else if (now < before) contractionMinor += before - now;
