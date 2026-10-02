@@ -827,10 +827,17 @@ export function judgeChangeSlas(
   config: Record<string, { hours: number; warnAtPct: number }>,
   now: Date
 ): Record<string, SlaVerdict> {
+  // A change that ENDED without finishing (cancelled, or rejected and left there) stops every clock
+  // that was still running: its deadline was for work or a decision nobody is going to deliver, and
+  // counting against `now` reported it as a breach for ever. A stage that had already finished keeps
+  // its verdict. (A rejected change normally returns to DRAFT, which clears its stamps anyway.)
+  const ended = change.state === "CANCELLED" || change.state === "REJECTED";
+  const clock = (startedAt: Date | null, stoppedAt: Date | null, stage: { hours: number; warnAtPct: number } | undefined) =>
+    ended && !stoppedAt ? judgeSla(null, null, stage, now) : judgeSla(startedAt, stoppedAt, stage, now);
   return {
-    APPROVAL: judgeSla(change.submittedAt, change.approvedAt, config.APPROVAL, now),
-    IMPLEMENTATION: judgeSla(change.actualStart, change.actualEnd, config.IMPLEMENTATION, now),
-    VALIDATION: judgeSla(change.actualEnd, change.state === "PIR" || change.state === "CLOSED" ? change.closedAt ?? now : null, config.VALIDATION, now),
-    CLOSURE: judgeSla(change.approvedAt, change.closedAt, config.CLOSURE, now)
+    APPROVAL: clock(change.submittedAt, change.approvedAt, config.APPROVAL),
+    IMPLEMENTATION: clock(change.actualStart, change.actualEnd, config.IMPLEMENTATION),
+    VALIDATION: clock(change.actualEnd, change.state === "PIR" || change.state === "CLOSED" ? change.closedAt ?? now : null, config.VALIDATION),
+    CLOSURE: clock(change.approvedAt, change.closedAt, config.CLOSURE)
   };
 }

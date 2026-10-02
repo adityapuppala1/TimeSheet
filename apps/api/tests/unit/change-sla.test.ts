@@ -101,4 +101,26 @@ describe("judgeChangeSlas", () => {
     expect(verdicts.CLOSURE.state).toBe("MET");
     expect(verdicts.IMPLEMENTATION.state).toBe("MET");
   });
+
+  it.each(["CANCELLED", "REJECTED"])("stops every clock that was still running when the change ended %s", (state) => {
+    // Audit 2026-10: a change cancelled while it waited for approval kept its approval clock running
+    // against "now" for ever, so the metrics' SLA roll-up counted it as a breach weeks later — a
+    // deadline for a decision nobody was ever going to make.
+    const verdicts = judgeChangeSlas(
+      { state, submittedAt: at(0), approvedAt: null, actualStart: null, actualEnd: null, closedAt: null },
+      config,
+      at(9999)
+    );
+    expect(verdicts.APPROVAL.state).toBe("NOT_STARTED");
+    expect(Object.values(verdicts).some((v) => v.state === "BREACHED" || v.state === "ON_TRACK" || v.state === "WARNING")).toBe(false);
+  });
+
+  it("keeps the verdict of a stage that finished before the change was cancelled", () => {
+    const verdicts = judgeChangeSlas(
+      { state: "CANCELLED", submittedAt: at(0), approvedAt: at(10), actualStart: null, actualEnd: null, closedAt: null },
+      config,
+      at(9999)
+    );
+    expect(verdicts.APPROVAL.state).toBe("MET");
+  });
 });
