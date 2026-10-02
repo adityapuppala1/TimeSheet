@@ -360,6 +360,7 @@ export async function sendTicketClosedDigest(
       riskVerdict: report.riskVerdict,
       findingsText: renderFindingsHtml(report),
       testStatus: report.latestTestRun?.status ?? "No test runs recorded",
+      ticketId: ticket.id,
       orgSlug
     },
     fallback: {
@@ -370,7 +371,8 @@ export async function sendTicketClosedDigest(
         closedBy: closer.name,
         riskVerdict: report.riskVerdict,
         findingsText: renderFindingsText(report),
-        testStatus: report.latestTestRun?.status ?? "No test runs recorded"
+        testStatus: report.latestTestRun?.status ?? "No test runs recorded",
+        ticketId: ticket.id
       })
     }
   });

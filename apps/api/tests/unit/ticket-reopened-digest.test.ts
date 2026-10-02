@@ -93,7 +93,8 @@ vi.mock("../../src/services/ticket.service.js", () => ({
 }));
 vi.mock("../../src/utils/encryption.js", () => ({ decryptSecret: (v: string) => v }));
 
-const { sendTicketReopenedDigest } = await import("../../src/services/security-report.service.js");
+const { sendTicketReopenedDigest, sendTicketClosedDigest } = await import("../../src/services/security-report.service.js");
+const { prisma } = await import("../../src/config/prisma.js");
 const { TEMPLATE_VARIABLES, TEMPLATE_DESCRIPTIONS, TEMPLATE_DEFAULTS, sampleVariables } = await import(
   "../../src/services/template-store.service.js"
 );
@@ -220,6 +221,16 @@ describe("the recipient set", () => {
     notificationSettings = { emailTicketReopenedDigest: false, emailTicketClosedDigest: true };
     await send();
     expect(dispatchTransactional).not.toHaveBeenCalled();
+  });
+});
+
+describe("the close digest", () => {
+  it("carries the ticket's id, so its button opens that ticket rather than the whole list", async () => {
+    // A latest test run is enough for the digest to have something to say.
+    vi.mocked(prisma.testRun.findFirst).mockResolvedValueOnce({ status: "PASSED", provider: "github-actions", createdAt: new Date() } as never);
+    await sendTicketClosedDigest({ id: "ticket-1", key: "HICS-OPS-1", title: "SQL injection in the login handler" }, { id: "u-closer", name: "Avery Stone", email: "avery@example.com" });
+    const call = dispatchTransactional.mock.calls.find((c) => c[0].templateKey === "ticket.closed_digest");
+    expect(call?.[0].vars.ticketId).toBe("ticket-1");
   });
 });
 

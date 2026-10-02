@@ -590,7 +590,15 @@ export const templates = {
    *  not this template). `findingsText` is pre-rendered plain text turned into <br>-joined HTML
    *  here rather than re-deriving structure, so the PDF export and this email can never disagree
    *  on what counts as "the findings" — both read from the same buildTicketSecurityReport call. */
-  ticketClosedDigest: (params: { ticketKey: string; title: string; closedBy: string; riskVerdict: string; findingsText: string; testStatus: string }) =>
+  ticketClosedDigest: (params: {
+    ticketKey: string;
+    title: string;
+    closedBy: string;
+    riskVerdict: string;
+    findingsText: string;
+    testStatus: string;
+    ticketId?: string | null;
+  }) =>
     shell(
       {
         title: `Security digest — ${params.ticketKey}`,
@@ -604,7 +612,7 @@ export const templates = {
           ["Latest test run", escape(params.testStatus)]
         ], params.riskVerdict.startsWith("Needs attention") ? DESTRUCTIVE : SUCCESS) +
         paragraph(`<strong>Findings</strong><br />${escape(params.findingsText).replace(/\n/g, "<br />")}`) +
-        paragraph(button("Open ticket", appUrl("/app/tickets")))
+        paragraph(button("Open ticket", ticketUrl(params.ticketId)))
     ),
 
   /**
@@ -625,9 +633,9 @@ export const templates = {
    * inferred which from a boolean would eventually tell somebody their clock restarted when it did
    * not.
    *
-   * NOTE THE LINK: `ticketUrl(params.ticketId)`, not the bare list `ticketClosedDigest` still uses.
-   * A digest about ONE ticket that lands the reader on a page of seventeen hundred is a digest they
-   * open the app to escape.
+   * NOTE THE LINK: `ticketUrl(params.ticketId)`, as the close digest and the needs-review email now
+   * use too. A digest about ONE ticket that lands the reader on a page of seventeen hundred is a
+   * digest they open the app to escape.
    */
   ticketReopenedDigest: (params: {
     ticketKey: string;
@@ -841,7 +849,14 @@ export const templates = {
         paragraph(`<span style="color:${MUTED};">AI-generated from this period's recurring test-run failures and security findings — turn it off anytime in Workspace Settings → AI.</span>`)
     ),
 
-  ticketNeedsReview: (params: { targetName: string; ticketKey: string; title: string; senderEmail: string; confidence: number | string }) =>
+  ticketNeedsReview: (params: {
+    targetName: string;
+    ticketKey: string;
+    title: string;
+    senderEmail: string;
+    confidence: number | string;
+    ticketId?: string | null;
+  }) =>
     shell(
       { title: `Needs review: ${params.ticketKey}`, preheader: "An email-sourced ticket needs a human check.", accentColor: ACCENT },
       heading("An inbound ticket needs review") +
@@ -854,7 +869,8 @@ export const templates = {
           ],
           ACCENT
         ) +
-        paragraph(button("Review ticket", appUrl("/app/tickets"), ACCENT))
+        // The ticket itself, where the reviewer can assign it, move it or mark it reviewed.
+        paragraph(button("Review ticket", ticketUrl(params.ticketId), ACCENT))
     ),
 
   /* ---- Face (identity) verification lifecycle. Deliberately data-light: none of these ever

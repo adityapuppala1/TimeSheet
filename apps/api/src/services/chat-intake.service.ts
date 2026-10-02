@@ -202,10 +202,10 @@ export async function processInboundChatMessage(message: ParsedInboundChatMessag
         link: `/app/tickets?open=${ticket.id}`,
         email: {
           templateKey: "ticket.needs_review",
-          vars: { targetName: reviewer.name, ticketKey: ticket.key, title: ticket.title, senderEmail: message.externalUserName, confidence: confidence ?? 0 },
+          vars: { targetName: reviewer.name, ticketKey: ticket.key, title: ticket.title, senderEmail: message.externalUserName, confidence: confidence ?? 0, ticketId: ticket.id },
           fallback: {
             subject: `Needs review: ${ticket.key}`,
-            html: templates.ticketNeedsReview({ targetName: reviewer.name, ticketKey: ticket.key, title: ticket.title, senderEmail: message.externalUserName, confidence: confidence ?? 0 })
+            html: templates.ticketNeedsReview({ targetName: reviewer.name, ticketKey: ticket.key, title: ticket.title, senderEmail: message.externalUserName, confidence: confidence ?? 0, ticketId: ticket.id })
           }
         }
       });

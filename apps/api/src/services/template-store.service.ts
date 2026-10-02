@@ -37,10 +37,10 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "ticket.sla_breach": ["assigneeName", "ticketKey", "title", "priority", "hoursOverdue", "appUrl"],
   "ticket.escalation": ["targetName", "ticketKey", "title", "assigneeName", "appUrl"],
   "ticket.received_via_email": ["senderName", "ticketKey", "title", "priority", "appUrl"],
-  "ticket.needs_review": ["targetName", "ticketKey", "title", "senderEmail", "confidence", "appUrl"],
+  "ticket.needs_review": ["targetName", "ticketKey", "title", "senderEmail", "confidence", "ticketId", "appUrl"],
   "digest.weekly": ["name", "weekLabel", "summary", "tablesHtml", "appUrl"],
   "digest.practice_update": ["periodLabel", "headline", "sectionsHtml", "appUrl"],
-  "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "appUrl"],
+  "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "ticketId", "appUrl"],
   "ticket.reopened_digest": ["ticketKey", "title", "closedBy", "scanSummary", "riskVerdict", "survivedText", "fixedText", "slaText", "ticketId", "appUrl"],
   "digest.security_weekly": ["weekLabel", "summary", "riskScore", "appUrl"],
   // Both of these were being SENT and were missing from this registry, so the editor did not list
@@ -244,7 +244,8 @@ export function sampleVariables(key: string): Record<string, string> {
     },
     "ticket.needs_review": {
       targetName: "Avery Stone", ticketKey: "HICS-OPS-1", title: "Checkout page throws a 500 error",
-      senderEmail: "priya@example.com", confidence: "0.42", appUrl: "https://timesphere.local"
+      senderEmail: "priya@example.com", confidence: "0.42",
+      ticketId: "6f1f0b4e-8d2a-4d55-9b1e-0f2c7a5d31aa", appUrl: "https://timesphere.local"
     },
     "goal.digest": {
       name: "Priya Raman", weekLabel: "Aug 17 - Aug 23",
@@ -283,7 +284,7 @@ export function sampleVariables(key: string): Record<string, string> {
       ticketKey: "HICS-OPS-140", title: "Security ingestion test ticket", closedBy: "Avery Stone",
       riskVerdict: "Needs attention — 1 open CRITICAL finding, 1 open HIGH finding, latest test run FAILED.",
       findingsText: "Static analysis (SAST):<br />  - [CRITICAL] SQL injection in login handler (semgrep)<br /><br />Secrets scanning (SSAT):<br />  - [HIGH] Hardcoded AWS key (gitleaks)",
-      testStatus: "FAILED", appUrl: "https://timesphere.local"
+      testStatus: "FAILED", ticketId: "6f1f0b4e-8d2a-4d55-9b1e-0f2c7a5d31aa", appUrl: "https://timesphere.local"
     },
     "ticket.reopened_digest": {
       ticketKey: "HICS-OPS-140", title: "SQL injection in the login handler", closedBy: "Avery Stone",
@@ -545,7 +546,8 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
   "ticket.needs_review": {
     subject: "{{ticketKey}} needs a human look",
     html: compiledTemplates.ticketNeedsReview({
-      targetName: V("targetName"), ticketKey: V("ticketKey"), title: V("title"), senderEmail: V("senderEmail"), confidence: V("confidence")
+      targetName: V("targetName"), ticketKey: V("ticketKey"), title: V("title"), senderEmail: V("senderEmail"), confidence: V("confidence"),
+      ticketId: V("ticketId")
     })
   },
   "ticket.stale_nudge": {
@@ -558,7 +560,7 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
     subject: "{{ticketKey}} closed - security summary",
     html: compiledTemplates.ticketClosedDigest({
       ticketKey: V("ticketKey"), title: V("title"), closedBy: V("closedBy"), riskVerdict: V("riskVerdict"),
-      findingsText: V("findingsText"), testStatus: V("testStatus")
+      findingsText: V("findingsText"), testStatus: V("testStatus"), ticketId: V("ticketId")
     })
   },
   "ticket.reopened_digest": {

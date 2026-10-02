@@ -34,6 +34,7 @@ vi.mock("../../src/services/notify.service.js", () => ({
 vi.mock("../../src/services/virus-scan.service.js", () => ({ assertUploadIsClean: vi.fn().mockResolvedValue({ clean: true }) }));
 
 const { processInboundEmail, ticketConfirmationMessageId } = await import("../../src/services/email-intake.service.js");
+const { classifyTicket } = await import("../../src/services/ai.service.js");
 
 const SYSTEM_USER = { id: "intake-system-user", email: "email-intake@system.local", name: "Email Intake" };
 const EXISTING = {
@@ -151,6 +152,16 @@ describe("the confirmation", () => {
     const call = transactionalSpy.mock.calls[0][0] as { messageId: string };
     // The ticket id in the local part is what a reply is matched on; the host is the workspace's.
     expect(call.messageId).toMatch(/^<ticket-new-ticket\.confirmation@[^>]+>$/);
+  });
+});
+
+describe("the needs-review email", () => {
+  it("links the reviewer to the ticket itself, by id", async () => {
+    vi.mocked(classifyTicket).mockResolvedValueOnce({ type: "BUG", priority: "MEDIUM", moduleId: null, confidence: 0.2, reasoning: "unsure" } as never);
+    vi.mocked(client.user.findMany).mockResolvedValueOnce([{ id: "lead-1", name: "Lena Lead" }] as never);
+    await run();
+    const review = notifySpy.mock.calls.map((c) => c[0] as { category: string; email: { vars: Record<string, unknown> } }).find((n) => n.category === "ticket.needs_review");
+    expect(review?.email.vars.ticketId).toBe("new-ticket");
   });
 });
 

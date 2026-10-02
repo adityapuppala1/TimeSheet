@@ -592,7 +592,7 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
           ],
           COLORS.accent
         ),
-        button("Review ticket", "{{appUrl}}/app/ai-activity", COLORS.accent)
+        button("Review ticket", "{{appUrl}}/app/tickets?open={{ticketId}}", COLORS.accent)
       ].join("\n")
     })
   },
@@ -627,7 +627,7 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
           COLORS.destructive
         ),
         calloutBox("Findings", "{{findingsText}}", COLORS.destructive),
-        button("Open ticket", "{{appUrl}}/app/tickets", COLORS.destructive)
+        button("Open ticket", "{{appUrl}}/app/tickets?open={{ticketId}}", COLORS.destructive)
       ].join("\n"),
       footerNote: "Ingest-only — findings reflect whatever CI/security tools this workspace has connected. See Workspace Settings → Security & DevOps."
     })
