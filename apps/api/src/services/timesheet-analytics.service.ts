@@ -142,10 +142,11 @@ export interface TimesheetAnalytics {
     entries: number;
     /** Distinct people with logged hours in the range. */
     people: number;
-    /** Hours in the range that are NOT logged and therefore in no figure above, so a reader can see
-     *  what was left out rather than wonder why a total is lower than the timesheet screen. Zero
-     *  when the caller filtered on a status of its own. */
-    excluded: { draftHours: number; rejectedHours: number };
+    /** Hours (and the entries carrying them) in the range that are NOT logged and therefore in no
+     *  figure above, so a reader can see what was left out rather than wonder why a total is lower
+     *  than the grouped report beside it, which lists every status. `hours + draft + rejected` IS
+     *  that report's total over the same range. Zero when the caller filtered on a status of its own. */
+    excluded: { draftHours: number; rejectedHours: number; draftEntries: number; rejectedEntries: number };
   };
   /** People who logged hours in this window but are no longer shown (deactivated, or an AI agent),
    *  so have no `utilisation` row. `totals.people` still counts them — it answers "how many people's
@@ -307,7 +308,7 @@ export async function buildTimesheetAnalytics(
 
   const [byPerson, byStatus, byActivity, latencyRows, settings] = await Promise.all([
     prisma.timesheet.groupBy({ by: ["userId", "billable"], where: loggedWhere, _sum: { totalHours: true }, _count: { _all: true } }),
-    prisma.timesheet.groupBy({ by: ["status"], where: base, _sum: { totalHours: true } }),
+    prisma.timesheet.groupBy({ by: ["status"], where: base, _sum: { totalHours: true }, _count: { _all: true } }),
     prisma.timesheet.groupBy({
       by: ["activityType", "billedCurrency"],
       where: loggedWhere,
@@ -383,8 +384,9 @@ export async function buildTimesheetAnalytics(
 
   // ---------------------------------------------------------------- activity mix
   const mix = activityMixOf(byActivity as unknown as ActivityGroup[]);
-  const excluded = (status: "DRAFT" | "REJECTED") =>
-    filters.status ? 0 : round2(Number(byStatus.find((g) => g.status === status)?._sum.totalHours ?? 0));
+  const excludedGroup = (status: "DRAFT" | "REJECTED") => (filters.status ? undefined : byStatus.find((g) => g.status === status));
+  const excluded = (status: "DRAFT" | "REJECTED") => round2(Number(excludedGroup(status)?._sum.totalHours ?? 0));
+  const excludedEntries = (status: "DRAFT" | "REJECTED") => excludedGroup(status)?._count._all ?? 0;
 
   return {
     range: {
@@ -402,7 +404,12 @@ export async function buildTimesheetAnalytics(
       billableHours: round2([...hoursByPerson.values()].reduce((s, h) => s + h.billable, 0)),
       entries: byPerson.reduce((s, g) => s + g._count._all, 0),
       people: loggedIds.length,
-      excluded: { draftHours: excluded("DRAFT"), rejectedHours: excluded("REJECTED") }
+      excluded: {
+        draftHours: excluded("DRAFT"),
+        rejectedHours: excluded("REJECTED"),
+        draftEntries: excludedEntries("DRAFT"),
+        rejectedEntries: excludedEntries("REJECTED")
+      }
     },
     hiddenInactivePeople: loggedIds.filter((id) => !shownIds.has(id)).length,
     truncated

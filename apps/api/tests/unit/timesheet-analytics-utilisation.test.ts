@@ -159,6 +159,7 @@ function row(userId: string, iso: string, hours: number, over: Record<string, an
 }
 
 const { buildTimesheetAnalytics } = await import("../../src/services/timesheet-analytics.service.js");
+const { buildTimesheetReport } = await import("../../src/services/timesheet-report.service.js");
 
 beforeAll(() => {
   // Friday 2 October 2026, 10:00 IST.
@@ -234,7 +235,23 @@ describe("which hours count", () => {
     const result = await buildTimesheetAnalytics(october);
     expect(rowFor(result, "asha").loggedHours).toBe(19);
     expect(result.totals.hours).toBe(19);
-    expect(result.totals.excluded).toEqual({ draftHours: 4, rejectedHours: 2 });
+    expect(result.totals.excluded).toEqual({ draftHours: 4, rejectedHours: 2, draftEntries: 1, rejectedEntries: 1 });
+  });
+
+  it("plus what it excludes, adds up to the grouped report beside it, which lists every status", async () => {
+    // The Reports page shows both: the grouped report (status filter defaults to any status) and
+    // this panel (logged hours only). They are different definitions on purpose; what must hold is
+    // that the difference is exactly the hours and entries the panel says it left out.
+    state.rows.push(
+      row("asha", "2026-10-02", 3, { status: "SUBMITTED" }),
+      row("ben", "2026-10-02", 4, { status: "DRAFT" }),
+      row("asha", "2026-10-02", 2, { status: "REJECTED" })
+    );
+    const analytics = await buildTimesheetAnalytics(october);
+    const grouped = await buildTimesheetReport(october, "status");
+    const { draftHours, rejectedHours, draftEntries, rejectedEntries } = analytics.totals.excluded;
+    expect(analytics.totals.hours + draftHours + rejectedHours).toBeCloseTo(grouped.totals.hours, 2);
+    expect(analytics.totals.entries + draftEntries + rejectedEntries).toBe(grouped.totals.entries);
   });
 });
 

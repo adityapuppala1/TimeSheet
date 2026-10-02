@@ -1258,8 +1258,9 @@ export interface TimesheetAnalytics {
     billableHours: number;
     entries: number;
     people: number;
-    /** Hours in the range that are not LOGGED (drafts, rejected) and so in no figure here. */
-    excluded: { draftHours: number; rejectedHours: number };
+    /** Hours (and their entries) in the range that are not LOGGED (drafts, rejected) and so in no
+     *  figure here. `hours` plus these is the grouped report's any-status total for the same range. */
+    excluded: { draftHours: number; rejectedHours: number; draftEntries: number; rejectedEntries: number };
   };
   /** People whose hours are in `totals` but who have no `utilisation` row, because they are no
    *  longer active. Without this the two would look like they disagreed. */

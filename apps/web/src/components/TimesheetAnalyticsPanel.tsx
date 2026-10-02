@@ -31,6 +31,7 @@ import { DateRangePicker } from "./ui/date-range-picker";
 import { reportApi, type TimesheetAnalytics } from "../services/api";
 import { formatDate, formatHours, formatMoney, formatNumber, formatPercent } from "../lib/format";
 import { localDateKey } from "../lib/local-day";
+import { loggedHoursCaption } from "../lib/logged-hours";
 import { cn } from "../lib/utils";
 import { EmptyState } from "./ui/empty-state";
 
@@ -152,7 +153,10 @@ function AnalyticsBody({ data }: { data: TimesheetAnalytics }) {
 
   return (
     <>
+      {/* The rule goes first, with the hours it leaves out: the grouped report directly above lists
+          every status by default, so its total is higher by exactly this much. */}
       <p className="text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">{loggedHoursCaption(excluded)}</span>{" "}
         {capacityScope(data.range)} {formatNumber(data.totals.entries)} logged {data.totals.entries === 1 ? "entry" : "entries"} ·{" "}
         {data.totals.people} {data.totals.people === 1 ? "person" : "people"} logged time.
       </p>

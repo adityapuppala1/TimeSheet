@@ -262,10 +262,13 @@ test.describe("timesheet analytics", () => {
     await withAdminRequest(async (ctx, headers) => {
       const analytics = await (await ctx.get(`/api/reports/analytics?${RANGE}`, { headers })).json();
       const grouped = await (await ctx.get(`/api/reports/timesheets?groupBy=user&${RANGE}`, { headers })).json();
-      // Two surfaces over the same filtered rows. If these ever diverge, one of them is lying and
-      // the reader has no way to tell which.
-      expect(analytics.totals.hours).toBeCloseTo(grouped.totals.hours, 2);
-      expect(analytics.totals.entries).toBe(grouped.totals.entries);
+      // Two surfaces over the same range with different definitions: the grouped report lists every
+      // status (its filter defaults to any status), analytics counts logged hours only (submitted +
+      // approved) and reports the drafts and rejected hours it left out. The seed holds a DRAFT
+      // entry, so the plain totals differ; logged plus excluded must equal the listing exactly.
+      const { draftHours, rejectedHours, draftEntries, rejectedEntries } = analytics.totals.excluded;
+      expect(analytics.totals.hours + draftHours + rejectedHours).toBeCloseTo(grouped.totals.hours, 2);
+      expect(analytics.totals.entries + draftEntries + rejectedEntries).toBe(grouped.totals.entries);
     });
   });
 
