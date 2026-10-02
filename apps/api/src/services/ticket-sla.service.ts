@@ -14,26 +14,62 @@ import { suggestStaleTicketNextAction } from "./ai.service.js";
 import { dispatchNotification } from "./notify.service.js";
 import { templates } from "./mail-templates.js";
 import { audit } from "./audit.service.js";
+import { SYSTEM_ACCOUNT_DOMAIN } from "./workspace-metrics.js";
+
+/** One account as the escalation rule reads it. */
+interface DirectoryEntry {
+  id: string;
+  name: string;
+  email: string;
+  managerId: string | null;
+  status: string;
+  deletedAt: Date | null;
+  isAgent: boolean;
+  role: { name: string };
+}
+
+/** Everyone, oldest account first so "the first admin" is a stable answer — read once per sweep,
+ *  not twice per overdue ticket. Inactive and deleted accounts included: the owner's manager chain
+ *  is walked through them, and eligibility is decided below. */
+async function loadEscalationDirectory(): Promise<DirectoryEntry[]> {
+  return prisma.user.findMany({
+    select: { id: true, name: true, email: true, managerId: true, status: true, deletedAt: true, isAgent: true, role: { select: { name: true } } },
+    orderBy: { createdAt: "asc" }
+  });
+}
 
 /**
- * Find the escalation target for a given user. Mirrors sla.service.ts's findEscalationTarget:
- * 1. User's manager's manager
- * 2. Any ADMIN / SUPER_ADMIN
+ * Who an overdue ticket escalates to — somebody who can chase it and is not already on it. Mirrors
+ * sla.service.ts#findEscalationTarget. Preference order:
+ * 1. the owner's (the assignee's; the reporter's while it is unassigned) manager's manager;
+ * 2. an ADMIN / SUPER_ADMIN, oldest account first.
+ * Only an ACTIVE, undeleted person — never an agent identity or an intake/integration system account
+ * — and never the assignee or the reporter (a system reporter is never a candidate anyway). So the
+ * target is never the owner it escalates from. Null when nobody qualifies.
+ *
+ * WHY THE EXCLUSIONS: this was the timesheet sweep's old fallback — the first ADMIN/SUPER_ADMIN, with
+ * no exclusions — and the manager's manager whoever they were. When that admin was the assignee the
+ * ticket escalated to nobody although other admins existed, and a director who filed a ticket two
+ * levels down had it escalated back to them: the one person already waiting on it.
  */
-async function findEscalationTarget(userId: string): Promise<{ id: string; name: string; email: string } | null> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: { manager: { include: { manager: true } } }
-  });
-  const candidate = user?.manager?.manager;
-  if (candidate && candidate.status === "ACTIVE") {
-    return { id: candidate.id, name: candidate.name, email: candidate.email };
-  }
-  const admin = await prisma.user.findFirst({
-    where: { status: "ACTIVE", deletedAt: null, role: { name: { in: ["ADMIN", "SUPER_ADMIN"] } } },
-    select: { id: true, name: true, email: true }
-  });
-  return admin;
+function findEscalationTarget(
+  directory: readonly DirectoryEntry[],
+  ticket: { assignee: { id: string } | null; reporter: { id: string } }
+): { id: string; name: string; email: string } | null {
+  const byId = new Map(directory.map((entry) => [entry.id, entry]));
+  const excludedIds = new Set([ticket.reporter.id, ticket.assignee?.id]);
+  const eligible = (entry: DirectoryEntry | undefined): entry is DirectoryEntry =>
+    entry?.status === "ACTIVE" &&
+    !entry.deletedAt &&
+    !entry.isAgent &&
+    !entry.email.toLowerCase().endsWith(SYSTEM_ACCOUNT_DOMAIN) &&
+    !excludedIds.has(entry.id);
+  const managerId = byId.get((ticket.assignee ?? ticket.reporter).id)?.managerId;
+  const grandManager = managerId ? byId.get(byId.get(managerId)?.managerId ?? "") : undefined;
+  const pick = eligible(grandManager)
+    ? grandManager
+    : directory.find((entry) => eligible(entry) && ["ADMIN", "SUPER_ADMIN"].includes(entry.role.name));
+  return pick ? { id: pick.id, name: pick.name, email: pick.email } : null;
 }
 
 /**
@@ -62,6 +98,9 @@ export async function processTicketSlaSweep(now: Date = new Date()) {
   });
 
   let escalations = 0;
+  if (overdue.length === 0) return { breaches: 0, escalations };
+  const directory = await loadEscalationDirectory();
+
   for (const ticket of overdue) {
     const hoursOverdue = ticket.dueAt ? (now.getTime() - ticket.dueAt.getTime()) / (1000 * 60 * 60) : 0;
     const owner = ticket.assignee ?? ticket.reporter;
@@ -72,10 +111,9 @@ export async function processTicketSlaSweep(now: Date = new Date()) {
     // was set unconditionally before the escalation was even computed; a crash in between
     // permanently skipped that ticket's escalation on every future sweep with no way to
     // detect the miss. Notifications stay outside the transaction — best-effort external I/O.
-    const target = await findEscalationTarget(owner.id);
-    const willEscalate = target && target.id !== owner.id;
+    const target = findEscalationTarget(directory, ticket);
 
-    if (willEscalate) {
+    if (target) {
       await prisma.$transaction([
         prisma.ticketEscalation.create({
           data: {
@@ -157,7 +195,7 @@ export async function processTicketSlaSweep(now: Date = new Date()) {
       }
     }
 
-    if (willEscalate && target) {
+    if (target) {
       await dispatchNotification({
         userId: target.id,
         category: "ticket.escalation",
