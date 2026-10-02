@@ -38,6 +38,27 @@ docker compose version >/dev/null 2>&1 || fail "Docker Compose isn't available â
 
 # Same detection install.sh uses: MYSQL_ROOT_PASSWORD only ever exists for the bundled-MySQL path.
 if grep -qE "^MYSQL_ROOT_PASSWORD=" .env; then COMPOSE_FILE="docker-compose.yml"; else COMPOSE_FILE="docker-compose.external-db.yml"; fi
+
+# --- The console signing secret (2026-10 audit) -----------------------------------------------
+# Since the 2026-10 audit fixes, a production API REFUSES TO BOOT when PLATFORM_ADMIN_JWT_SECRET is
+# short, a placeholder, or the same as JWT_ACCESS_SECRET / JWT_REFRESH_SECRET. Installs made before
+# that check could carry such a value, and would update straight into a crash loop. Replacing it here
+# is safe: it only signs platform-console operators out once; workspace users are unaffected.
+pa_val="$(grep -E '^PLATFORM_ADMIN_JWT_SECRET=' .env | head -n1 | cut -d= -f2- | tr -d '"'"'"'' || true)"
+acc_val="$(grep -E '^JWT_ACCESS_SECRET=' .env | head -n1 | cut -d= -f2- | tr -d '"'"'"'' || true)"
+ref_val="$(grep -E '^JWT_REFRESH_SECRET=' .env | head -n1 | cut -d= -f2- | tr -d '"'"'"'' || true)"
+if [ "${#pa_val}" -lt 32 ] || [ "$pa_val" = "$acc_val" ] || [ "$pa_val" = "$ref_val" ] \
+   || printf '%s' "$pa_val" | grep -qiE 'replace|change_?me|example|placeholder|secret'; then
+  new_pa="$(openssl rand -base64 48 2>/dev/null | tr -d '\n/+=' || head -c 48 /dev/urandom | base64 | tr -d '\n/+=')"
+  cp .env ".env.bak.$(date +%Y%m%d%H%M%S)"
+  if grep -qE '^PLATFORM_ADMIN_JWT_SECRET=' .env; then
+    sed -i.tmp "s|^PLATFORM_ADMIN_JWT_SECRET=.*|PLATFORM_ADMIN_JWT_SECRET=${new_pa}|" .env && rm -f .env.tmp
+  else
+    printf '\nPLATFORM_ADMIN_JWT_SECRET=%s\n' "$new_pa" >> .env
+  fi
+  warn "PLATFORM_ADMIN_JWT_SECRET was weak or shared with a workspace secret â€” replaced (a backup of .env was kept)."
+  warn "  Platform-console operators sign in again once. Workspace users are unaffected."
+fi
 log "Deployment shape: $COMPOSE_FILE"
 
 if [ -n "$(git status --porcelain)" ]; then

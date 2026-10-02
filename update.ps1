@@ -32,6 +32,34 @@ try { git rev-parse --git-dir | Out-Null } catch { Write-Fail "This directory is
 try { docker compose version | Out-Null } catch { Write-Fail "Docker Compose isn't available - is Docker Desktop running?" }
 
 $ComposeFile = if (Select-String -Path ".env" -Pattern "^MYSQL_ROOT_PASSWORD=" -Quiet) { "docker-compose.yml" } else { "docker-compose.external-db.yml" }
+
+# --- The console signing secret (2026-10 audit) -----------------------------------------------
+# Since the 2026-10 audit fixes, a production API REFUSES TO BOOT when PLATFORM_ADMIN_JWT_SECRET is
+# short, a placeholder, or the same as JWT_ACCESS_SECRET / JWT_REFRESH_SECRET. Installs made before
+# that check could carry such a value and would update straight into a crash loop. Replacing it here
+# is safe: it only signs platform-console operators out once; workspace users are unaffected.
+$envText = Get-Content ".env" -Raw
+function Get-EnvValue([string]$name) {
+  $m = [regex]::Match($envText, "(?m)^$name=(.*)$")
+  if ($m.Success) { return $m.Groups[1].Value.Trim().Trim('"').Trim("'") } else { return "" }
+}
+$paVal = Get-EnvValue "PLATFORM_ADMIN_JWT_SECRET"
+$accVal = Get-EnvValue "JWT_ACCESS_SECRET"
+$refVal = Get-EnvValue "JWT_REFRESH_SECRET"
+if ($paVal.Length -lt 32 -or $paVal -eq $accVal -or $paVal -eq $refVal -or $paVal -match '(?i)replace|change_?me|example|placeholder|secret') {
+  $bytes = New-Object byte[] 48
+  [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+  $newPa = ([Convert]::ToBase64String($bytes)) -replace '[/+=]', ''
+  Copy-Item ".env" (".env.bak." + (Get-Date -Format "yyyyMMddHHmmss"))
+  if ($envText -match '(?m)^PLATFORM_ADMIN_JWT_SECRET=') {
+    $envText = [regex]::Replace($envText, '(?m)^PLATFORM_ADMIN_JWT_SECRET=.*$', "PLATFORM_ADMIN_JWT_SECRET=$newPa")
+  } else {
+    $envText = $envText.TrimEnd() + "`nPLATFORM_ADMIN_JWT_SECRET=$newPa`n"
+  }
+  [System.IO.File]::WriteAllText((Resolve-Path ".env").Path, $envText, (New-Object System.Text.UTF8Encoding $false))
+  Write-Warn "PLATFORM_ADMIN_JWT_SECRET was weak or shared with a workspace secret - replaced (a backup of .env was kept)."
+  Write-Warn "  Platform-console operators sign in again once. Workspace users are unaffected."
+}
 Write-Step "Deployment shape: $ComposeFile"
 
 if ((git status --porcelain | Measure-Object).Count -gt 0) {

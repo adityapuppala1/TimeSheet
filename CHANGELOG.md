@@ -10,6 +10,14 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 6.0.0 — every workflow traced end to end, and fixed where it broke — 2026-10-02
+
+A major version because upgrading asks something of operators: in production the API now refuses to
+start with a weak `PLATFORM_ADMIN_JWT_SECRET` (the update scripts replace one for you), console owners
+and operators must set up a second factor, and several sign-in behaviours change for users. What was
+found, decided and why: [docs/AUDIT_2026-10.md](docs/AUDIT_2026-10.md). Upgrade steps:
+[DEPLOYMENT.md § Version-specific upgrade notes](docs/DEPLOYMENT.md#version-specific-upgrade-notes).
+
 ### 📊 Workspace analytics: your numbers, India's day, and one definition for each
 
 - **"Your hours" are yours.** A manager's, team lead's or admin's home page summed the whole
