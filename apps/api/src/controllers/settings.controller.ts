@@ -68,7 +68,15 @@ import {
 import { getAIQualitySummary } from "../services/ai-quality.service.js";
 import { loadFindingRoutingRules, resolveFindingLocation } from "../services/finding-routing.service.js";
 import { testVirusScanner } from "../services/virus-scan.service.js";
-import { describeCertificate, testLdapConnection, testOidcConnection, testSamlConnection, type SsoTestResult } from "../services/sso-validation.service.js";
+import {
+  certificatePems,
+  describeCertificate,
+  testLdapConnection,
+  testOidcConnection,
+  testSamlConnection,
+  testStatusFor,
+  type SsoTestResult
+} from "../services/sso-validation.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
 import { describeMcpCatalogue, generateMcpToken, getGlobalMcpSettings, updateGlobalMcpSettings } from "../services/mcp.service.js";
@@ -991,8 +999,10 @@ settingsRouter.get("/sso", requireSuperAdmin, async (_req, res) => {
       lastTestMessage: c.lastTestMessage,
       lastSuccessfulLoginAt: c.lastSuccessfulLoginAt,
       // The certificate is public, so its facts can be read back in full — and an expiry an admin
-      // cannot see is an outage with a date on it. Null for every non-SAML provider.
-      certificate: describeCertificate(c.idpCertificate)
+      // cannot see is an outage with a date on it. Null for every non-SAML provider. For a rollover
+      // bundle, the certificate that expires LAST — that is when sign-in actually stops.
+      certificate: describeCertificate(c.idpCertificate),
+      certificateCount: certificatePems(c.idpCertificate).length
     })),
     passwordLoginEnabled: authMethod?.passwordLoginEnabled ?? true,
     requireSsoOnly: authMethod?.requireSsoOnly ?? false
@@ -1194,7 +1204,8 @@ settingsRouter.patch("/sso/:provider", requireSuperAdmin, validate(ssoConfigSche
     lastTestStatus: updated.lastTestStatus,
     lastTestMessage: updated.lastTestMessage,
     lastSuccessfulLoginAt: updated.lastSuccessfulLoginAt,
-    certificate: describeCertificate(updated.idpCertificate)
+    certificate: describeCertificate(updated.idpCertificate),
+    certificateCount: certificatePems(updated.idpCertificate).length
   });
 });
 
@@ -1226,6 +1237,14 @@ const ssoTestSchema = z.object({
 settingsRouter.post("/sso/:provider/test-connection", requireSuperAdmin, validate(ssoTestSchema), async (req, res) => {
   const { orgId } = requireTenantContext();
   const providerType = String(req.params.provider).toUpperCase() as SsoProviderKey;
+
+  // Gated on the plan exactly as ENABLING is (PATCH above). A test makes this server open a
+  // connection to an address the admin typed; a workspace whose plan has no use for the provider has
+  // no reason to be able to do that (audit M8).
+  const allowed = await getAllowedSsoProviders(orgId);
+  if (!allowed.includes(providerType)) {
+    throw new AppError(403, `${SSO_PROVIDER_LABEL[providerType]} sign-in isn't available on this workspace's current plan.`);
+  }
 
   const config = await controlPrisma.orgSsoConfig.findUnique({
     where: { organizationId_providerType: { organizationId: orgId, providerType } }
@@ -1262,23 +1281,28 @@ settingsRouter.post("/sso/:provider/test-connection", requireSuperAdmin, validat
       searchBase: config.ldapSearchBase!,
       userFilter: config.ldapUserFilter || "(mail={{email}})",
       tlsRejectUnauthorized: config.ldapTlsRejectUnauthorized,
-      probeEmail: req.body.probeEmail
+      probeEmail: req.body.probeEmail,
+      // Multi-org = ROOT_DOMAIN set (the same test workspaceUrlForSlug and the console's routing
+      // readout use): the admin is a customer, so raw socket errors about this network stay hidden.
+      revealErrors: !env.ROOT_DOMAIN
     });
   }
 
+  // PASS / FAIL / UNVERIFIED — see testStatusFor. A Microsoft test is never stored as a pass.
+  const status = testStatusFor(result);
   await controlPrisma.orgSsoConfig.update({
     where: { id: config.id },
     data: {
       lastTestedAt: new Date(),
-      lastTestStatus: result.ok ? "PASS" : "FAIL",
+      lastTestStatus: status,
       // Truncated: a bind failure from some directory servers carries a wall of LDAP result codes,
       // and this column is read back onto a settings card, not into a log aggregator.
       lastTestMessage: result.message.slice(0, 2000)
     }
   });
-  await audit(req.user!.id, "settings.sso_tested", "OrgSsoConfig", config.id, { provider: providerType, ok: result.ok });
+  await audit(req.user!.id, "settings.sso_tested", "OrgSsoConfig", config.id, { provider: providerType, ok: result.ok, status });
 
-  res.json({ ...result, testedAt: new Date().toISOString() });
+  res.json({ ...result, status, testedAt: new Date().toISOString() });
 });
 
 const authMethodSchema = z.object({

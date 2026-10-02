@@ -55,6 +55,9 @@ import { Client as LdapClient } from "ldapts";
 import { assertPublicEgressTarget } from "../utils/egress.js";
 import { buildLdapUserFilter } from "../utils/ldap-filter.js";
 
+/** What a Microsoft test can honestly claim. Also the stored status's meaning: see testStatusFor. */
+export const MICROSOFT_UNVERIFIED_VERDICT = "Configuration looks valid — credentials are verified on first sign-in";
+
 export interface SsoTestResult {
   ok: boolean;
   /** Shown verbatim to the admin, so it names the next action wherever one exists. */
@@ -63,15 +66,45 @@ export interface SsoTestResult {
   detail?: Record<string, string | number | boolean>;
 }
 
+/**
+ * The status a test result is RECORDED as. "PASS" only when the test proved the credentials;
+ * "UNVERIFIED" when it reached the provider but could not check them (Microsoft, always — see
+ * testOidcConnection), so the card can never show a tick for a check that did not happen.
+ */
+export function testStatusFor(result: SsoTestResult): "PASS" | "FAIL" | "UNVERIFIED" {
+  if (!result.ok) return "FAIL";
+  return result.detail?.credentialsVerified === false ? "UNVERIFIED" : "PASS";
+}
+
 /** How long any single probe may take. An IdP that needs longer than this to answer a metadata
  *  request is not going to serve a login either, and an admin staring at a spinner learns nothing. */
 const PROBE_TIMEOUT_MS = 8000;
 
-async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+/** No real IdP endpoint redirects more than a couple of times; a longer chain is a loop or a probe. */
+const MAX_REDIRECTS = 5;
+
+/**
+ * Every probe request, through the egress guard — EVERY HOP of it.
+ *
+ * This used `redirect: "follow"`, after the caller had guarded only the first URL. A sign-on URL on
+ * the public internet that answered `302 Location: http://169.254.169.254/latest/meta-data/` walked
+ * the probe straight into cloud metadata, and the status code came back to the admin (audit M8). So
+ * redirects are followed here, by hand, and each Location is resolved and guarded before it is
+ * fetched. Same timeout for the whole chain.
+ */
+async function guardedFetch(url: string, label: string, init: RequestInit = {}): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   try {
-    return await fetch(url, { ...init, signal: controller.signal, redirect: "follow" });
+    let current = url;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      await assertPublicEgressTarget(current, label);
+      const res = await fetch(current, { ...init, signal: controller.signal, redirect: "manual" });
+      const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+      if (!location) return res;
+      current = new URL(location, current).href;
+    }
+    throw new Error(`it redirected more than ${MAX_REDIRECTS} times`);
   } finally {
     clearTimeout(timer);
   }
@@ -217,8 +250,7 @@ export async function testOidcConnection(input: {
 
   let tokenEndpoint: string;
   try {
-    await assertPublicEgressTarget(wellKnown, "The identity provider's discovery URL");
-    const res = await fetchWithTimeout(wellKnown);
+    const res = await guardedFetch(wellKnown, "The identity provider's discovery URL");
     if (!res.ok) {
       // A wrong Azure tenant ID lands here rather than at the token endpoint — the tenant is part
       // of the discovery path, so an unknown one 400s before any credential is involved.
@@ -256,9 +288,12 @@ export async function testOidcConnection(input: {
   // assurance this whole file was written to remove. `requireSsoOnly` is gated on a completed
   // sign-in for exactly this reason (see OrgSsoConfig.lastSuccessfulLoginAt).
   if (input.provider === "MICROSOFT") {
+    // The message LEADS with the verdict the card shows (audit L6): this was recorded and displayed as
+    // "Last test passed" with a tick, which is the false assurance described above in a smaller font.
+    const endpoint = input.tenantHint ? `tenant "${input.tenantHint}"` : "multi-tenant (common)";
     return {
       ok: true,
-      message: `Microsoft's ${input.tenantHint ? `tenant "${input.tenantHint}"` : "multi-tenant (common)"} endpoint resolved. Azure doesn't let anyone verify a client ID or secret without a real sign-in, so this can't confirm those — sign in once through the Microsoft button to prove them, and check ${input.redirectUri} is registered as a redirect URI.`,
+      message: `${MICROSOFT_UNVERIFIED_VERDICT}. Microsoft's ${endpoint} endpoint resolved; Azure doesn't let anyone verify a client ID or secret without a real sign-in, so sign in once through the Microsoft button to prove them, and check ${input.redirectUri} is registered as a redirect URI.`,
       detail: { issuer: new URL(wellKnown).origin, redirectUri: input.redirectUri, credentialsVerified: false }
     };
   }
@@ -268,8 +303,7 @@ export async function testOidcConnection(input: {
   // was bad, which we made it. A complaint about the CLIENT (`invalid_client`, or a 401) means the
   // id/secret pair is wrong, which is the thing being tested. One request, no user interaction.
   try {
-    await assertPublicEgressTarget(tokenEndpoint, "The identity provider's token endpoint");
-    const res = await fetchWithTimeout(tokenEndpoint, {
+    const res = await guardedFetch(tokenEndpoint, "The identity provider's token endpoint", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -341,8 +375,7 @@ export async function testSamlConnection(input: {
   // endpoint exists and answers, which is the failure an admin is most likely to have caused by
   // pasting the wrong one of the several URLs an IdP console shows.
   try {
-    await assertPublicEgressTarget(input.idpSsoUrl, "The IdP sign-on URL");
-    const res = await fetchWithTimeout(input.idpSsoUrl, { method: "GET" });
+    const res = await guardedFetch(input.idpSsoUrl, "The IdP sign-on URL", { method: "GET" });
     // Any HTTP answer at all means the endpoint is live. IdPs answer a bare GET with anything from
     // 200 to 405 depending on binding, and none of those is a configuration problem.
     const soon = cert.expiringSoon ? ` The certificate expires on ${cert.validTo.slice(0, 10)} — schedule the rollover.` : "";
@@ -376,7 +409,17 @@ export async function testLdapConnection(input: {
   /** Optional address to run the real user filter against, so an admin can check the filter finds
    *  a specific person rather than only that the directory answers. */
   probeEmail?: string;
+  /**
+   * Whether a connection or bind failure may say WHY. True on a single-org install, where the admin
+   * reading it is the operator of the network it describes. False on a multi-org deployment (the
+   * caller passes `!env.ROOT_DOMAIN`): there a tenant admin can aim this at any host:port the API
+   * can reach, and "ECONNREFUSED" versus a timeout versus "invalid credentials" is a port scanner's
+   * answer about the platform's own network (audit M8).
+   */
+  revealErrors?: boolean;
 }): Promise<SsoTestResult> {
+  const reveal = input.revealErrors ?? true;
+  const why = (error: unknown, hint: string) => (reveal ? `: ${(error as Error).message}` : `. ${hint}`);
   // A directory is normally on a private network, so this cannot use `assertPublicEgressTarget` —
   // that guard exists to stop a customer URL reaching THIS deployment's internals, and an LDAP
   // host legitimately is internal. The scheme check below is the guard that applies here.
@@ -395,7 +438,7 @@ export async function testLdapConnection(input: {
     try {
       await client.bind(input.bindDn, input.bindCredential);
     } catch (error) {
-      return { ok: false, message: `The directory refused the service account bind: ${(error as Error).message}` };
+      return { ok: false, message: `Couldn't bind to the directory as the service account${why(error, "Check the URL, the bind DN and the bind password")}.` };
     }
 
     // The filter is only exercised when an address is supplied. Built by the SAME function
@@ -432,7 +475,7 @@ export async function testLdapConnection(input: {
       detail: { entriesRead: searchEntries.length, searchBase: input.searchBase }
     };
   } catch (error) {
-    return { ok: false, message: `Couldn't search the directory: ${(error as Error).message}` };
+    return { ok: false, message: `Couldn't search the directory${why(error, "Check the search base and the user filter")}.` };
   } finally {
     await client.unbind().catch(() => undefined);
   }

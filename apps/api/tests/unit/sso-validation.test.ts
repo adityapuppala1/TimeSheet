@@ -173,7 +173,9 @@ describe("testOidcConnection", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toContain("login.microsoftonline.com/tid/v2.0/.well-known/openid-configuration");
     expect(result.detail?.credentialsVerified).toBe(false);
-    expect(result.message).toMatch(/can't confirm those/i);
+    // Leads with the verdict the card shows (audit L6) — never "passed".
+    expect(result.message).toMatch(/^Configuration looks valid — credentials are verified on first sign-in/);
+    expect(result.message).toMatch(/doesn't let anyone verify a client ID or secret/i);
   });
 
   it("blames the tenant ID, not the credentials, when Azure rejects discovery", async () => {

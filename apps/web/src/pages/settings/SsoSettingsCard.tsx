@@ -48,6 +48,7 @@ import { GoogleMark, LdapMark, MicrosoftMark, SamlMark, ScimMark } from "../../c
 import { copyText } from "../../lib/clipboard";
 import { apiUrl, SERVER_ORIGIN, settingsApi, type SsoProviderConfig, type SsoTestResult } from "../../services/api";
 import { runInBackground } from "../../lib/run-in-background";
+import { SSO_TEST_OUTCOME_LABEL, ssoTestOutcome, type SsoTestOutcome } from "../../lib/sso-test-status";
 
 const SSO_PROVIDER_LABEL: Record<"GOOGLE" | "MICROSOFT", string> = { GOOGLE: "Google", MICROSOFT: "Microsoft / Azure AD" };
 
@@ -97,6 +98,45 @@ function ProviderShell({
   );
 }
 
+/** The fresh result if there is one, else the recorded one — read through ssoTestOutcome either way,
+ *  so a Microsoft test shows "configuration looks valid", never a tick (lib/sso-test-status.ts). */
+function shownTestResult(provider: "google" | "microsoft" | "saml" | "ldap", result: SsoTestResult | null, config: SsoProviderConfig | undefined) {
+  if (result) {
+    return { outcome: ssoTestOutcome(provider, result.status ?? (result.ok ? "PASS" : "FAIL")), message: result.message, testedAt: result.testedAt };
+  }
+  return { outcome: ssoTestOutcome(provider, config?.lastTestStatus), message: config?.lastTestMessage ?? "", testedAt: config?.lastTestedAt ?? "" };
+}
+
+/**
+ * The SAML signing certificate's facts. An expiry an admin cannot see is an outage with a date on it —
+ * which is why this is rendered even when everything is fine, and coloured only when it is not. For a
+ * rollover bundle the API describes the certificate that expires LAST (when sign-in actually stops).
+ */
+function SigningCertificate({ cert, count }: { cert: NonNullable<SsoProviderConfig["certificate"]>; count: number }) {
+  let tone = "";
+  if (cert.expired) tone = "font-semibold text-destructive";
+  else if (cert.expiringSoon) tone = "font-semibold text-warning";
+  return (
+    <div className="grid gap-0.5 rounded-md bg-muted/50 p-2.5 text-xs text-muted-foreground">
+      <span className="font-medium text-foreground">
+        Signing certificate{count > 1 ? ` (${count} in this bundle — the latest-expiring is shown)` : ""}
+      </span>
+      <span className="break-all">{cert.subject}</span>
+      <span className={tone}>
+        {cert.expired ? "Expired" : "Valid until"} {new Date(cert.validTo).toLocaleDateString()}
+        {cert.expiringSoon && !cert.expired ? " — renew this soon" : ""}
+      </span>
+    </div>
+  );
+}
+
+/** A tick only for a test that proved something; a hollow circle for "reachable, not verified". */
+function TestOutcomeIcon({ outcome }: { outcome: SsoTestOutcome }) {
+  if (outcome === "passed") return <Check className="h-3.5 w-3.5" />;
+  if (outcome === "unverified") return <Circle className="h-3 w-3" />;
+  return <AlertTriangle className="h-3.5 w-3.5" />;
+}
+
 /**
  * IT SHOWS TWO DIFFERENT THINGS AND KEEPS THEM APART, which is the entire point.
  *
@@ -136,7 +176,7 @@ function SsoVerification({
     }
   });
 
-  const shown = result ?? (config?.lastTestStatus ? { ok: config.lastTestStatus === "PASS", message: config.lastTestMessage ?? "", testedAt: config.lastTestedAt ?? "" } : null);
+  const shown = shownTestResult(provider, result, config);
   const signedIn = config?.lastSuccessfulLoginAt ?? null;
   const cert = config?.certificate ?? null;
 
@@ -150,10 +190,10 @@ function SsoVerification({
               {signedIn ? <Check className="h-3.5 w-3.5" /> : <Circle className="h-3 w-3" />}
               {signedIn ? `Someone signed in ${new Date(signedIn).toLocaleDateString()}` : "Nobody has signed in with this yet"}
             </span>
-            {shown && (
-              <span className={`inline-flex items-center gap-1.5 ${shown.ok ? "text-muted-foreground" : "text-destructive"}`}>
-                {shown.ok ? <Check className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
-                Last test {shown.ok ? "passed" : "failed"}
+            {shown.outcome && (
+              <span className={`inline-flex items-center gap-1.5 ${shown.outcome === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
+                <TestOutcomeIcon outcome={shown.outcome} />
+                {SSO_TEST_OUTCOME_LABEL[shown.outcome]}
                 {shown.testedAt ? ` · ${new Date(shown.testedAt).toLocaleDateString()}` : ""}
               </span>
             )}
@@ -179,22 +219,11 @@ function SsoVerification({
         </div>
       )}
 
-      {shown?.message && (
-        <p className={`text-xs leading-5 ${shown.ok ? "text-muted-foreground" : "text-destructive"}`}>{shown.message}</p>
+      {shown.outcome && shown.message && (
+        <p className={`text-xs leading-5 ${shown.outcome === "failed" ? "text-destructive" : "text-muted-foreground"}`}>{shown.message}</p>
       )}
 
-      {cert && (
-        <div className="grid gap-0.5 rounded-md bg-muted/50 p-2.5 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">Signing certificate</span>
-          <span className="break-all">{cert.subject}</span>
-          {/* An expiry an admin cannot see is an outage with a date on it — which is why this is
-              rendered even when everything is fine, and coloured only when it is not. */}
-          <span className={cert.expired ? "font-semibold text-destructive" : cert.expiringSoon ? "font-semibold text-warning" : ""}>
-            {cert.expired ? "Expired" : "Valid until"} {new Date(cert.validTo).toLocaleDateString()}
-            {cert.expiringSoon && !cert.expired ? " — renew this soon" : ""}
-          </span>
-        </div>
-      )}
+      {cert && <SigningCertificate cert={cert} count={config?.certificateCount ?? 1} />}
 
       {!signedIn && config?.isEnabled && (
         <p className="text-xs leading-5 text-muted-foreground">

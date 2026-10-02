@@ -2632,7 +2632,8 @@ export interface SsoProviderConfig {
   /* --- Proof that this configuration works (3.6.0) --------------------------------------- */
   /** Last connection test: a DIAGNOSTIC. Green here does not mean sign-in works — see below. */
   lastTestedAt: string | null;
-  lastTestStatus: "PASS" | "FAIL" | null;
+  /** UNVERIFIED: the test reached the provider but could not check the credentials (Microsoft, always). */
+  lastTestStatus: "PASS" | "FAIL" | "UNVERIFIED" | null;
   lastTestMessage: string | null;
   /**
    * When a real person last completed a sign-in through this provider, and the ONLY thing that
@@ -2641,7 +2642,9 @@ export interface SsoProviderConfig {
    * junk strings tests green.
    */
   lastSuccessfulLoginAt: string | null;
-  /** Parsed facts about the SAML signing certificate. Null for every other provider. */
+  /** How many certificates the SAML field holds — more than one is a rollover bundle. 0 for other providers. */
+  certificateCount?: number;
+  /** Parsed facts about the SAML signing certificate (the latest-expiring one, for a bundle). Null for every other provider. */
   certificate: {
     subject: string;
     issuer: string;
@@ -2655,6 +2658,8 @@ export interface SsoProviderConfig {
 
 export interface SsoTestResult {
   ok: boolean;
+  /** What the result was RECORDED as — see lastTestStatus. */
+  status?: "PASS" | "FAIL" | "UNVERIFIED";
   message: string;
   detail?: Record<string, string | number | boolean>;
   testedAt: string;
