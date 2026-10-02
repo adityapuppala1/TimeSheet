@@ -24,12 +24,15 @@ type Person = {
   weeklyCapacityHours: number | null;
   plannedUtilizationPct: number | null;
   projects: string[];
+  createdAt: Date;
 };
 
-const ASHA: Person = { id: "asha", name: "Asha", status: "ACTIVE", deletedAt: null, isAgent: false, weeklyCapacityHours: 40, plannedUtilizationPct: 80, projects: ["p1"] };
-const BEN: Person = { id: "ben", name: "Ben", status: "ACTIVE", deletedAt: null, isAgent: false, weeklyCapacityHours: null, plannedUtilizationPct: null, projects: ["p2"] };
-const BOT: Person = { id: "bot", name: "Triage bot", status: "ACTIVE", deletedAt: null, isAgent: true, weeklyCapacityHours: null, plannedUtilizationPct: null, projects: ["p1"] };
-const DANA: Person = { id: "dana", name: "Dana", status: "INACTIVE", deletedAt: null, isAgent: false, weeklyCapacityHours: 40, plannedUtilizationPct: null, projects: ["p1"] };
+const LONG_AGO = new Date("2025-01-06T04:30:00.000Z");
+
+const ASHA: Person = { id: "asha", name: "Asha", status: "ACTIVE", deletedAt: null, isAgent: false, weeklyCapacityHours: 40, plannedUtilizationPct: 80, projects: ["p1"], createdAt: LONG_AGO };
+const BEN: Person = { id: "ben", name: "Ben", status: "ACTIVE", deletedAt: null, isAgent: false, weeklyCapacityHours: null, plannedUtilizationPct: null, projects: ["p2"], createdAt: LONG_AGO };
+const BOT: Person = { id: "bot", name: "Triage bot", status: "ACTIVE", deletedAt: null, isAgent: true, weeklyCapacityHours: null, plannedUtilizationPct: null, projects: ["p1"], createdAt: LONG_AGO };
+const DANA: Person = { id: "dana", name: "Dana", status: "INACTIVE", deletedAt: null, isAgent: false, weeklyCapacityHours: 40, plannedUtilizationPct: null, projects: ["p1"], createdAt: LONG_AGO };
 
 const state = vi.hoisted(() => ({
   people: [] as any[],
@@ -222,6 +225,30 @@ describe("who is in the table", () => {
   it("limits the idle people to the project being reported on", async () => {
     const result = await buildTimesheetAnalytics({ ...october, projectId: "p1" });
     expect(result.utilisation.map((r: any) => r.userId)).toEqual(["asha"]);
+  });
+
+  it("lists only the people who logged in scope when filtered to a ticket, module or activity", async () => {
+    // A ticket, a module or an activity has no members. Falling back to "everybody" listed every
+    // person in the workspace at full capacity and a near-0% figure for one ticket's hours.
+    state.rows = [row("asha", "2026-10-01", 3, { ticketId: "tk1", moduleId: "m2", activityType: "TESTING" })];
+    for (const filter of [{ ticketId: "tk1" }, { moduleId: "m2" }, { activityType: "TESTING" }]) {
+      const result = await buildTimesheetAnalytics({ ...october, ...filter });
+      expect(result.utilisation.map((r: any) => r.userId), JSON.stringify(filter)).toEqual(["asha"]);
+    }
+  });
+
+  it("never lists an invitee who has not verified yet as an idle row", async () => {
+    state.people = [ASHA, BEN, { ...BEN, id: "eve", name: "Eve", status: "PENDING_VERIFICATION" }];
+    const result = await buildTimesheetAnalytics(october);
+    expect(result.utilisation.map((r: any) => r.userId).sort()).toEqual(["asha", "ben"]);
+  });
+
+  it("counts a mid-range joiner's capacity from the day they joined", async () => {
+    // Joined 08:30 IST on Friday the 2nd: one working day of capacity, not two.
+    state.people = [ASHA, { ...BEN, id: "faye", name: "Faye", createdAt: new Date("2026-10-02T03:00:00.000Z") }];
+    const result = await buildTimesheetAnalytics(october);
+    expect(rowFor(result, "faye")).toMatchObject({ capacityHours: 8, utilisationPct: 0 });
+    expect(rowFor(result, "asha").capacityHours).toBe(16);
   });
 });
 

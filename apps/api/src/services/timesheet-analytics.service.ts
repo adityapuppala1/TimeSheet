@@ -75,9 +75,10 @@ export interface UtilisationRow {
   /** LOGGED hours — submitted + approved — in the range. */
   loggedHours: number;
   billableHours: number;
-  /** Working days in the range UP TO TODAY, minus time off, times the person's daily capacity.
-   *  Null when there is nothing to divide by — no capacity on file and no workspace default, a
-   *  range wholly in the future, or a range wholly on leave. */
+  /** Working days in the range UP TO TODAY — from the day the person joined, when that is later
+   *  than the range's start — minus time off, times the person's daily capacity. Null when there
+   *  is nothing to divide by — no capacity on file and no workspace default, a range wholly in the
+   *  future or before they joined, or a range wholly on leave. */
   capacityHours: number | null;
   /** Leave booked inside the counted days, already taken off `capacityHours`. */
   timeOffHours: number;
@@ -172,20 +173,26 @@ const LATENCY_SELECT = {
 
 type LatencyRow = Prisma.TimesheetGetPayload<{ select: typeof LATENCY_SELECT }>;
 
-const PERSON_SELECT = { id: true, name: true, weeklyCapacityHours: true, plannedUtilizationPct: true } as const;
+const PERSON_SELECT = { id: true, name: true, weeklyCapacityHours: true, plannedUtilizationPct: true, createdAt: true } as const;
 
 /**
  * The people a utilisation table covers: everyone in scope who is still counted (not deactivated,
  * not an AI agent), whether or not they logged anything — the 0% row is the one a manager most
  * needs, and it used to be the one that never appeared. Scope follows the filters: one person, the
  * members of one project, or everybody.
+ *
+ * A ticket, module or activity filter has no membership to list idle people from, so it lists only
+ * the people who logged in scope — "everybody" put the whole workspace at full capacity against one
+ * ticket's hours. The idle rows are ACTIVE people only: an invitee who has not verified yet has no
+ * capacity to be idle in.
  */
 async function peopleInScope(filters: TimesheetReportFilters, loggedIds: string[]) {
+  const loggersOnly = Boolean(!filters.userId && (filters.ticketId || filters.moduleId || filters.activityType));
   let scope: Prisma.UserWhereInput = {};
   if (filters.userId) scope = { id: filters.userId };
   else if (filters.projectId) scope = { projectAssignments: { some: { projectId: filters.projectId } } };
   const [inScope, loggers] = await Promise.all([
-    prisma.user.findMany({ where: { ...scope, ...COUNTED_PEOPLE }, select: PERSON_SELECT }),
+    loggersOnly ? Promise.resolve([]) : prisma.user.findMany({ where: { ...scope, ...COUNTED_PEOPLE, status: "ACTIVE" }, select: PERSON_SELECT }),
     // Somebody who logged against the project without being assigned to it is still in its numbers.
     loggedIds.length
       ? prisma.user.findMany({ where: { id: { in: loggedIds }, ...COUNTED_PEOPLE }, select: PERSON_SELECT })
@@ -348,11 +355,16 @@ export async function buildTimesheetAnalytics(
   const utilisation: UtilisationRow[] = people
     .map((person) => {
       const hours = hoursByPerson.get(person.id) ?? { logged: 0, billable: 0 };
+      // Capacity starts the day the person joined (platform calendar) when that is inside the range:
+      // somebody who joined on the 20th had no capacity on the 1st.
+      const joined = platformToday(person.createdAt);
+      const start = joined > from ? joined : from;
+      const workingDays = through < start ? 0 : workingDaysBetween(start, through, workingDayNumbers);
       // The workload board's own per-day capacity, WITHOUT the target-utilisation scale: capacity
       // is what the person has; the target is what they are expected to log against it.
       const contracted = capacityForBucket(
         { weeklyCapacityHours: person.weeklyCapacityHours == null ? null : Number(person.weeklyCapacityHours), plannedUtilizationPct: null },
-        { workingDays: workingDaysToDate },
+        { workingDays },
         defaults
       );
       const timeOffHours = round2(leave.get(person.id) ?? 0);
