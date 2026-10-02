@@ -5,9 +5,13 @@
  * WHERE EACH NUMBER COMES FROM, because each has a trap:
  *  - The funnel is the SignupAttempt rows (signup-funnel.service.ts). They carry a domain and a keyed
  *    hash, never an address, so this page can be read by any console role without exposing people.
- *  - "Converted" is paying for real: ACTIVE, no trial still running, and either a paid tier or a live
- *    subscription. A trial grants Team on top of STARTER, so "planTier is TEAM" alone would count a
- *    workspace that has never paid.
+ *  - "Converted" is trial-conversion.ts#isConverted — the rule Revenue, retention and the lifecycle
+ *    worker use: a checkout (which clears the trial tier), a subscription, or a paid tier set by hand.
+ *    A trial grants Team through `trialTier` on top of STARTER, so a running trial is never converted.
+ *    The page used to have its own rule (ACTIVE, no trial running, a paid tier or a subscription),
+ *    which disagreed with Revenue about every converted workspace that later lapsed to grace.
+ *  - "Converted of N" is counted here over EVERY self-serve workspace in the period. The page used to
+ *    count it in the browser from the hundred rows listed, so past a hundred signups it was wrong.
  *  - Seats are the LATEST usage snapshot (org-usage-snapshot.worker.ts) and null before the first —
  *    a workspace created this morning has not been measured, which is not the same as zero people.
  *  - Self-serve vs console is Organization.createdVia; anything not SELF_SERVE (including rows from
@@ -16,6 +20,7 @@
 import { controlPrisma } from "../config/control-prisma.js";
 import { companyDomainOf } from "../utils/company-domain.js";
 import { platformDayKey } from "../utils/platform-time.js";
+import { isConverted } from "./trial-conversion.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PERIODS = [7, 30, 90] as const;
@@ -25,6 +30,10 @@ export interface SignupAnalytics {
   days: SignupPeriod;
   funnel: { codeSent: number; verified: number; created: number; joinRequested: number; unavailable: number; refused: number; failed: number };
   byDay: Array<{ day: string; selfServe: number; console: number }>;
+  /** Every self-serve workspace created in the period, and how many of them have converted. */
+  selfServe: { total: number; converted: number };
+  /** The newest self-serve workspaces, at most `RECENT_LIMIT`. A list, not the population: counts
+   *  come from `selfServe`. */
   recent: Array<{
     orgId: string;
     name: string;
@@ -73,9 +82,13 @@ type CreatedOrg = {
   createdAt: Date;
   status: string;
   planTier: string;
+  trialTier: string | null;
   trialEndsAt: Date | null;
   stripeSubscriptionId: string | null;
 };
+
+/** How many self-serve workspaces the page lists. The counts above it are over all of them. */
+const RECENT_LIMIT = 100;
 
 function funnelFrom(stageCounts: StageCount[]): SignupAnalytics["funnel"] {
   const funnel: SignupAnalytics["funnel"] = { codeSent: 0, verified: 0, created: 0, joinRequested: 0, unavailable: 0, refused: 0, failed: 0 };
@@ -125,7 +138,7 @@ function recentRow(o: CreatedOrg, seats: Map<string, number>, now: Date): Signup
     planTier: o.planTier,
     trialEndsAt: o.trialEndsAt?.toISOString() ?? null,
     trialDaysLeft: trialRunning ? Math.ceil((o.trialEndsAt!.getTime() - now.getTime()) / DAY_MS) : null,
-    converted: o.status === "ACTIVE" && !trialRunning && (o.planTier !== "STARTER" || Boolean(o.stripeSubscriptionId)),
+    converted: isConverted(o),
     activeSeats: seats.get(o.id) ?? null
   };
 }
@@ -183,19 +196,21 @@ export async function getSignupAnalytics(requestedDays: number, now = new Date()
     }),
     controlPrisma.organization.findMany({
       where: { createdAt: { gte } },
-      select: { id: true, name: true, slug: true, ownerEmail: true, createdVia: true, createdAt: true, status: true, planTier: true, trialEndsAt: true, stripeSubscriptionId: true },
+      select: { id: true, name: true, slug: true, ownerEmail: true, createdVia: true, createdAt: true, status: true, planTier: true, trialTier: true, trialEndsAt: true, stripeSubscriptionId: true },
       orderBy: { createdAt: "desc" }
     }),
     controlPrisma.signupAttempt.groupBy({ by: ["domain", "stage"], where: { createdAt: { gte }, domain: { not: null } }, _count: { _all: true } })
   ]);
 
-  const selfServe = created.filter((o) => o.createdVia === "SELF_SERVE").slice(0, 100);
-  const seats = await latestSeatsFor(selfServe.map((o) => o.id));
+  const selfServe = created.filter((o) => o.createdVia === "SELF_SERVE");
+  const listed = selfServe.slice(0, RECENT_LIMIT);
+  const seats = await latestSeatsFor(listed.map((o) => o.id));
   return {
     days,
     funnel: funnelFrom(stageCounts),
     byDay: byDayFrom(created, days, now),
-    recent: selfServe.map((o) => recentRow(o, seats, now)),
+    selfServe: { total: selfServe.length, converted: selfServe.filter(isConverted).length },
+    recent: listed.map((o) => recentRow(o, seats, now)),
     failures: failures.map((f) => ({ at: f.createdAt.toISOString(), domain: f.domain, detail: f.detail })),
     topDomains: topDomainsFrom(domainStages)
   };

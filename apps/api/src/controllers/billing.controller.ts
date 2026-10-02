@@ -414,6 +414,10 @@ billingWebhookRouter.post("/webhook", express.raw({ type: "application/json" }),
           }
         });
         forgetOrgStatus(organizationId);
+        // WHEN IT BECAME A CUSTOMER, for the console's trial→paid metrics — a second write rather than
+        // a field above, because only the FIRST conversion counts and the guard is the WHERE: a
+        // re-subscribe after a cancellation must not move the date. Changes nothing about billing.
+        await controlPrisma.organization.updateMany({ where: { id: organizationId, convertedAt: null }, data: { convertedAt: new Date() } });
         // THE RECEIPT. `update` returns the row it just wrote, so the slug and name this needs cost
         // no second query. Awaited rather than fired-and-forgotten so an unhandled rejection can't
         // outlive the response — and it never throws (see billing-notify.service.ts), because a

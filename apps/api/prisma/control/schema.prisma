@@ -139,6 +139,14 @@ model Organization {
   /// the effective tier from both, so every existing entitlement check inherits trials with no
   /// caller changes at all.
   trialTier      PlanTier?
+  /// When this workspace FIRST became a paying customer — written at the moment of conversion by the
+  /// two routes that convert: a completed Stripe checkout and a platform admin setting a paid plan on
+  /// a trial (the console clears the trial clock in the same write). Never overwritten, so a
+  /// re-subscribe after a cancellation keeps the first date. The console's "median days to convert"
+  /// is `convertedAt − trialStartedAt`; nothing recorded the moment before, so it could never render.
+  /// Backfilled by 20261002134000 from the control-plane audit trail where a conversion is on record;
+  /// NULL for a Stripe conversion that predates it — unknown, not "never".
+  convertedAt    DateTime?
 
   /// Which lifecycle warnings have already gone out, as days-before-expiry (`[7, 3, 1]`).
   /// The worker runs daily and must be idempotent: without this it re-sends every warning on every

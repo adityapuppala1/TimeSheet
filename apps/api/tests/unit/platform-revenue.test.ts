@@ -18,6 +18,8 @@ import { describe, expect, it, vi } from "vitest";
 // The service imports the control client for its readers. The pure functions below never touch it,
 // and the empty mock proves that: if one of them grew a query, this file would fail immediately.
 vi.mock("../../src/config/control-prisma.js", () => ({ controlPrisma: {} }));
+// The platform's zone, as config/env.ts defaults it: cohort months are India's.
+vi.mock("../../src/config/env.js", () => ({ env: { TZ: "Asia/Kolkata" } }));
 
 const {
   REVENUE_BASIS,
@@ -291,18 +293,62 @@ const NOW = new Date("2026-08-31T00:00:00Z");
 const at = (iso: string) => new Date(iso);
 
 describe("computeTrialConversion", () => {
-  const lifecycles = [
-    // Converted through Stripe.
-    { orgId: "s", trialStartedAt: at("2026-06-01T00:00:00Z"), trialEndsAt: at("2026-06-15T00:00:00Z"), status: "ACTIVE", subscribed: true, convertedAt: at("2026-06-11T00:00:00Z") },
-    // Converted by hand: no Stripe anywhere in this deployment, still ACTIVE after the trial ended.
-    { orgId: "h", trialStartedAt: at("2026-06-01T00:00:00Z"), trialEndsAt: at("2026-06-15T00:00:00Z"), status: "ACTIVE", subscribed: false, convertedAt: at("2026-06-21T00:00:00Z") },
-    // Lapsed.
-    { orgId: "l", trialStartedAt: at("2026-07-01T00:00:00Z"), trialEndsAt: at("2026-07-15T00:00:00Z"), status: "SUSPENDED", subscribed: false, convertedAt: null },
+  type Lifecycle = Parameters<typeof computeTrialConversion>[0][number];
+  const trial = (orgId: string, startedIso: string, patch: Partial<Lifecycle> = {}): Lifecycle => {
+    const started = at(startedIso);
+    return { orgId, trialStartedAt: started, trialEndsAt: new Date(started.getTime() + 14 * 86_400_000), trialTier: "TEAM", planTier: "STARTER", stripeSubscriptionId: null, convertedAt: null, ...patch };
+  };
+  const lifecycles: Lifecycle[] = [
+    // Converted through Stripe: the checkout cleared the trial fields and attached a subscription.
+    trial("s", "2026-06-01T00:00:00Z", { trialEndsAt: null, trialTier: null, planTier: "TEAM", stripeSubscriptionId: "sub_1", convertedAt: at("2026-06-11T00:00:00Z") }),
+    // Converted by hand in the console: clock and trial tier cleared, a paid plan, NO Stripe at all.
+    trial("h", "2026-06-01T00:00:00Z", { trialEndsAt: null, trialTier: null, planTier: "TEAM", convertedAt: at("2026-06-21T00:00:00Z") }),
+    // Lapsed: the clock ran out on Starter with the trial tier still set.
+    trial("l", "2026-07-01T00:00:00Z"),
     // Still running.
-    { orgId: "r", trialStartedAt: at("2026-08-25T00:00:00Z"), trialEndsAt: at("2026-09-08T00:00:00Z"), status: "ACTIVE", subscribed: false, convertedAt: null },
+    trial("r", "2026-08-25T00:00:00Z"),
     // Never on a trial at all — a hand-provisioned workspace, and not part of this question.
-    { orgId: "n", trialStartedAt: null, trialEndsAt: null, status: "ACTIVE", subscribed: false, convertedAt: null }
+    { orgId: "n", trialStartedAt: null, trialEndsAt: null, trialTier: null, planTier: "TEAM", stripeSubscriptionId: null, convertedAt: null }
   ];
+
+  it("classifies a hand-converted trial — clock and trial tier cleared, no Stripe — as converted, with its date", () => {
+    const result = computeTrialConversion([trial("h", "2026-06-01T00:00:00Z", { trialEndsAt: null, trialTier: null, planTier: "TEAM", convertedAt: at("2026-06-08T00:00:00Z") })], NOW);
+    expect(result.converted).toBe(1);
+    expect(result.lapsed).toBe(0);
+    expect(result.medianDaysToConvert).toBe(7);
+  });
+
+  it("does not call a trial converted because its workspace is still ACTIVE", () => {
+    // The old rule: "ACTIVE after the trial ended" was a customer. A trial whose lapse has not been
+    // processed yet is ACTIVE on Starter with its trial tier set — it has paid for nothing.
+    const result = computeTrialConversion([trial("x", "2026-07-01T00:00:00Z")], NOW);
+    expect(result.converted).toBe(0);
+    expect(result.lapsed).toBe(1);
+  });
+
+  it("measures the headline over trials that STARTED inside the selected window", () => {
+    // A 30-day window ending 31 Aug holds only the trial started on 25 Aug.
+    const windowed = computeTrialConversion(lifecycles, NOW, 30);
+    expect(windowed.trialsStarted).toBe(1);
+    expect(windowed.stillTrialing).toBe(1);
+    expect(windowed.windowDays).toBe(30);
+  });
+
+  it("cohorts trials by the month they STARTED, in India's calendar", () => {
+    // 20:00 UTC on 30 June is 01:30 IST on 1 July.
+    const result = computeTrialConversion([...lifecycles, trial("j", "2026-06-30T20:00:00Z", { trialEndsAt: null, trialTier: null, planTier: "TEAM", convertedAt: at("2026-07-05T00:00:00Z") })], NOW);
+    expect(result.byCohort.map((row) => row.cohort)).toEqual(["2026-08", "2026-07", "2026-06"]);
+    expect(result.byCohort.find((row) => row.cohort === "2026-06")).toMatchObject({ trialsStarted: 2, converted: 2, lapsed: 0, conversionPercent: 100, medianDaysToConvert: 15 });
+    expect(result.byCohort.find((row) => row.cohort === "2026-07")).toMatchObject({ trialsStarted: 2, converted: 1, lapsed: 1, conversionPercent: 50 });
+    expect(result.byCohort.find((row) => row.cohort === "2026-08")).toMatchObject({ trialsStarted: 1, stillTrialing: 1, conversionPercent: null });
+  });
+
+  it("states how many conversions have no recorded date instead of guessing one", () => {
+    const undated = computeTrialConversion([trial("old", "2026-05-01T00:00:00Z", { trialEndsAt: null, trialTier: null, stripeSubscriptionId: "sub_9", planTier: "TEAM" })], NOW);
+    expect(undated.converted).toBe(1);
+    expect(undated.convertedUndated).toBe(1);
+    expect(undated.medianDaysToConvert).toBeNull();
+  });
 
   it("counts both routes to becoming a customer", () => {
     const result = computeTrialConversion(lifecycles, NOW);
@@ -325,7 +371,7 @@ describe("computeTrialConversion", () => {
   });
 
   it("returns null rather than 0% when nothing has been decided yet", () => {
-    const running = [{ orgId: "r", trialStartedAt: at("2026-08-25T00:00:00Z"), trialEndsAt: at("2026-09-08T00:00:00Z"), status: "ACTIVE", subscribed: false, convertedAt: null }];
+    const running = [trial("r", "2026-08-25T00:00:00Z")];
     expect(computeTrialConversion(running, NOW).conversionPercent).toBeNull();
     expect(computeTrialConversion([], NOW).conversionPercent).toBeNull();
   });
@@ -343,13 +389,19 @@ describe("buildSignupCohorts", () => {
   ];
   const observed = { from: "2026-06", to: "2026-08" };
 
-  it("buckets by signup MONTH, in UTC, newest cohort first", () => {
+  it("buckets by signup MONTH, newest cohort first", () => {
     const table = buildSignupCohorts(orgs, observed, 3);
     expect(table.rows.map((row) => row.cohort)).toEqual(["2026-07", "2026-06"]);
     expect(table.rows.find((row) => row.cohort === "2026-06")!.signedUp).toBe(2);
-    // Both June workspaces land in the same bucket regardless of the day of the month.
+    // A snapshot `day` is a date-only value, so its month is read straight off it.
     expect(monthKey(at("2026-06-04T00:00:00Z"))).toBe("2026-06");
-    expect(monthKey(at("2026-06-30T23:59:59Z"))).toBe("2026-06");
+    expect(monthKey(at("2026-06-30T00:00:00Z"))).toBe("2026-06");
+  });
+
+  it("puts a workspace in the month it signed up in India, not UTC's", () => {
+    // 20:00 UTC on 30 June is 01:30 IST on 1 July: a July customer, not a June one.
+    const table = buildSignupCohorts([{ orgId: "late", createdAt: at("2026-06-30T20:00:00Z"), activeMonths: new Set(["2026-07"]) }], observed, 1);
+    expect(table.rows.map((row) => row.cohort)).toEqual(["2026-07"]);
   });
 
   it("computes survival per offset month", () => {

@@ -154,6 +154,27 @@ describe("setting a plan on a trialling workspace ends the trial", () => {
     expect(written()).toMatchObject({ status: "SUSPENDED", trialEndsAt: null, trialTier: null });
   });
 
+  it("records WHEN the trial converted, so the console can measure days to convert", async () => {
+    control.organization.findUnique.mockResolvedValue(trialling());
+    const before = Date.now();
+
+    await patch({ planTier: "TEAM" });
+
+    // Nothing recorded the moment of conversion, so "median days to convert" could never render.
+    const at = written().convertedAt as Date;
+    expect(at).toBeInstanceOf(Date);
+    expect(at.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("keeps the FIRST conversion moment when a converted workspace is edited again", async () => {
+    const first = new Date("2026-09-01T10:00:00Z");
+    control.organization.findUnique.mockResolvedValue(trialling({ planTier: "TEAM", convertedAt: first }));
+
+    await patch({ planTier: "ENTERPRISE" });
+
+    expect(written().convertedAt).toEqual(first);
+  });
+
   it("writes an audit row that names the conversion", async () => {
     control.organization.findUnique.mockResolvedValue(lapsedTrial());
 

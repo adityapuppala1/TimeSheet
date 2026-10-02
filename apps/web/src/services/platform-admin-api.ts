@@ -117,6 +117,8 @@ export interface SignupAnalytics {
   days: 7 | 30 | 90;
   funnel: { codeSent: number; verified: number; created: number; joinRequested: number; unavailable: number; refused: number; failed: number };
   byDay: Array<{ day: string; selfServe: number; console: number }>;
+  /** Over EVERY self-serve workspace in the period — `recent` is capped, these counts are not. */
+  selfServe: { total: number; converted: number };
   recent: Array<{
     orgId: string;
     name: string;
@@ -128,6 +130,7 @@ export interface SignupAnalytics {
     planTier: string;
     trialEndsAt: string | null;
     trialDaysLeft: number | null;
+    /** trial-conversion.ts#isConverted on the server — the same rule Revenue and retention use. */
     converted: boolean;
     activeSeats: number | null;
   }>;
@@ -1522,7 +1525,7 @@ export interface ChurnWindow {
   unmeasuredAccounts: number;
 }
 
-export interface TrialConversion {
+export interface TrialTally {
   trialsStarted: number;
   converted: number;
   lapsed: number;
@@ -1530,6 +1533,15 @@ export interface TrialConversion {
   /** Over DECIDED trials only, so a running trial does not count as a failure. */
   conversionPercent: number | null;
   medianDaysToConvert: number | null;
+  /** Conversions with no recorded moment — left out of the median, not guessed. */
+  convertedUndated: number;
+}
+
+export interface TrialConversion extends TrialTally {
+  /** The headline covers trials that STARTED in the last `windowDays` days. */
+  windowDays: number | null;
+  /** By trial-start month (platform zone), newest first. */
+  byCohort: Array<TrialTally & { cohort: string }>;
 }
 
 export interface CohortCell {

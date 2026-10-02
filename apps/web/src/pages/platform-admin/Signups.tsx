@@ -58,7 +58,6 @@ export function PlatformAdminSignups() {
   const days = Number(period) as 7 | 30 | 90;
   const signups = useQuery({ queryKey: ["platform-admin", "signups", days], queryFn: () => platformAdminConsoleApi.signups(days), placeholderData: (previous) => previous });
   const d = signups.data;
-  const converted = d?.recent.filter((r) => r.converted).length ?? 0;
 
   return (
     <ConsolePage
@@ -88,7 +87,16 @@ export function PlatformAdminSignups() {
             <KpiCard label="Verified their address" value={d.funnel.verified} icon={MailCheck} hint={d.funnel.codeSent ? `of ${d.funnel.codeSent} codes sent (${pct(d.funnel.verified, d.funnel.codeSent)})` : "no codes sent yet"} />
             <KpiCard label="New workspaces" value={d.funnel.created} icon={Building2} tone="accent" hint={d.funnel.verified ? `${pct(d.funnel.created, d.funnel.verified)} of the verified` : "nobody verified yet"} delay={0.05} />
             <KpiCard label="Asked to join" value={d.funnel.joinRequested} icon={UserPlus} hint="their company already had a workspace" delay={0.1} />
-            <KpiCard label="Paying" value={converted} icon={BadgeCheck} tone="success" hint={d.recent.length ? `of ${d.recent.length} self-serve workspaces` : "no self-serve workspaces yet"} delay={0.15} />
+            {/* Counted on the server over every self-serve workspace in the period — the list below
+                stops at a hundred, and a figure counted from it stopped there too. */}
+            <KpiCard
+              label="Converted to paid"
+              value={d.selfServe.converted}
+              icon={BadgeCheck}
+              tone="success"
+              hint={d.selfServe.total ? `of ${d.selfServe.total} self-serve workspaces (${pct(d.selfServe.converted, d.selfServe.total)})` : "no self-serve workspaces yet"}
+              delay={0.15}
+            />
             <KpiCard
               label="Failed"
               value={d.funnel.failed}
@@ -148,7 +156,7 @@ export function PlatformAdminSignups() {
                       <TableCell>
                         <span className="inline-flex flex-wrap items-center gap-1.5">
                           <OrgStatusPill status={r.status} />
-                          {r.converted && <Badge variant="success">paying</Badge>}
+                          {r.converted && <Badge variant="success">converted</Badge>}
                         </span>
                       </TableCell>
                       <TableCell>

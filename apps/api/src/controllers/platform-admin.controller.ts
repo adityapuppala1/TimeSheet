@@ -375,7 +375,9 @@ function trialEffects(before: OrgRow, body: { planTier?: OrgRow["planTier"]; sta
 
   if (before.trialEndsAt && isConverted(after)) {
     return {
-      data: { trialEndsAt: null, trialTier: null, ...reopened },
+      // `convertedAt` is when it became a customer — the console's days-to-convert — and keeps the
+      // first one if an earlier conversion was already recorded.
+      data: { trialEndsAt: null, trialTier: null, convertedAt: before.convertedAt ?? now, ...reopened },
       audit: {
         action: "organization.trial_converted",
         metadata: { slug: before.slug, planTier: after.planTier, trialTier: before.trialTier, trialEndsAt: before.trialEndsAt.toISOString(), restoredFromGrace: reopen }

@@ -8,10 +8,11 @@ import { buildBillingWebhookApp } from "../helpers/test-apps.js";
 // happens one level down: the control-plane settings lookup that supplies its constructor args.
 // `stripe.webhooks.constructEvent` itself is real, local HMAC verification — no network call —
 // so it's exercised for real via signWebhookPayload rather than mocked.
-const { mockFindUniquePlatformBillingSettings, mockOrganizationUpdate, mockOrganizationFindUnique, mockNotifyPlanChanged, mockNotifyPaymentFailed } =
+const { mockFindUniquePlatformBillingSettings, mockOrganizationUpdate, mockOrganizationUpdateMany, mockOrganizationFindUnique, mockNotifyPlanChanged, mockNotifyPaymentFailed } =
   vi.hoisted(() => ({
     mockFindUniquePlatformBillingSettings: vi.fn(),
     mockOrganizationUpdate: vi.fn(),
+    mockOrganizationUpdateMany: vi.fn(),
     mockOrganizationFindUnique: vi.fn(),
     mockNotifyPlanChanged: vi.fn(),
     mockNotifyPaymentFailed: vi.fn()
@@ -20,7 +21,7 @@ const { mockFindUniquePlatformBillingSettings, mockOrganizationUpdate, mockOrgan
 vi.mock("../../src/config/control-prisma.js", () => ({
   controlPrisma: {
     platformBillingSettings: { findUnique: mockFindUniquePlatformBillingSettings },
-    organization: { update: mockOrganizationUpdate, findUnique: mockOrganizationFindUnique }
+    organization: { update: mockOrganizationUpdate, updateMany: mockOrganizationUpdateMany, findUnique: mockOrganizationFindUnique }
   }
 }));
 
@@ -54,6 +55,8 @@ async function postWebhook(app: ReturnType<typeof buildBillingWebhookApp>, paylo
 beforeEach(() => {
   mockFindUniquePlatformBillingSettings.mockReset();
   mockOrganizationUpdate.mockReset();
+  mockOrganizationUpdateMany.mockReset();
+  mockOrganizationUpdateMany.mockResolvedValue({ count: 1 });
   mockOrganizationFindUnique.mockReset();
   mockNotifyPlanChanged.mockReset();
   mockNotifyPaymentFailed.mockReset();
@@ -94,6 +97,23 @@ describe("POST /billing/webhook — signature verification", () => {
 });
 
 describe("POST /billing/webhook — event handling", () => {
+  it("checkout.session.completed: records the moment the workspace became a customer, and only the first one", async () => {
+    mockFindUniquePlatformBillingSettings.mockResolvedValue(fakeBillingSettings());
+    mockOrganizationUpdate.mockResolvedValue({});
+    const payload = JSON.stringify({
+      id: "evt_1",
+      type: "checkout.session.completed",
+      data: { object: { metadata: { organizationId: "org-1", tier: "TEAM" }, subscription: "sub_123" } }
+    });
+
+    const res = await postWebhook(buildBillingWebhookApp(), payload, signWebhookPayload(payload, WEBHOOK_SECRET));
+
+    expect(res.status).toBe(200);
+    // Guarded on `convertedAt: null`: a re-subscribe after a cancellation is not a new conversion,
+    // and the console's "days to convert" is about the first one.
+    expect(mockOrganizationUpdateMany).toHaveBeenCalledWith({ where: { id: "org-1", convertedAt: null }, data: { convertedAt: expect.any(Date) } });
+  });
+
   it("checkout.session.completed: sets Organization.planTier + stripeSubscriptionId", async () => {
     mockFindUniquePlatformBillingSettings.mockResolvedValue(fakeBillingSettings());
     mockOrganizationUpdate.mockResolvedValue({});

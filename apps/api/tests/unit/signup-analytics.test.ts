@@ -2,7 +2,10 @@
  * The console's Signups page (signup Phase 1): what the operators read to answer "is self-serve
  * working, and are the people it brings in staying?". Pinned:
  *  - the funnel counts each stage inside the period, from the funnel rows;
- *  - `converted` means paying for real: ACTIVE, no trial running, and a paid tier or a subscription;
+ *  - `converted` is the shared trial-conversion rule (trial-conversion.ts#isConverted): a checkout,
+ *    a subscription or a paid tier set by hand — the same answer Revenue and retention give;
+ *  - the "converted of N self-serve" figure is counted on the server over EVERY self-serve workspace
+ *    in the period, not over the hundred listed;
  *  - seats come from the LATEST usage snapshot, and are null — not 0 — before the first one;
  *  - the period is one of 7, 30 or 90 days, whatever is asked for;
  *  - self-serve and console-made workspaces are counted apart, day by day, with empty days present.
@@ -19,6 +22,7 @@ type Org = {
   createdAt: Date;
   status: string;
   planTier: string;
+  trialTier: string | null;
   trialEndsAt: Date | null;
   stripeSubscriptionId: string | null;
 };
@@ -79,6 +83,7 @@ const org = (extra: Partial<Org>): Org => ({
   createdAt: daysAgo(1),
   status: "ACTIVE",
   planTier: "STARTER",
+  trialTier: "TEAM",
   trialEndsAt: new Date(now.getTime() + 10 * DAY),
   stripeSubscriptionId: null,
   ...extra
@@ -123,20 +128,35 @@ describe("getSignupAnalytics", () => {
     expect(result.failures).toEqual([{ at: daysAgo(1).toISOString(), domain: "northwind.co.uk", detail: "Access denied" }]);
   });
 
-  it("calls a workspace converted only when it is paying for real", async () => {
+  it("calls a workspace converted by the shared rule — the same answer Revenue and retention give", async () => {
     orgs = [
-      org({ id: "trialling", trialEndsAt: new Date(now.getTime() + 5 * DAY), planTier: "TEAM" }),
-      org({ id: "paid-tier", trialEndsAt: daysAgo(1), planTier: "TEAM" }),
-      org({ id: "subscribed", trialEndsAt: null, planTier: "STARTER", stripeSubscriptionId: "sub_1" }),
-      org({ id: "lapsed", trialEndsAt: daysAgo(1), planTier: "STARTER" }),
-      org({ id: "suspended-paid", trialEndsAt: daysAgo(1), planTier: "TEAM", status: "SUSPENDED" })
+      // A self-serve trial: Starter, entitled to Team until the clock runs out. Not converted.
+      org({ id: "trialling", trialEndsAt: new Date(now.getTime() + 5 * DAY) }),
+      // Converted by hand in the console: clock and trial tier cleared, a paid plan, no Stripe.
+      org({ id: "by-hand", trialEndsAt: null, trialTier: null, planTier: "TEAM" }),
+      // Converted through Stripe checkout.
+      org({ id: "subscribed", trialEndsAt: null, trialTier: null, planTier: "TEAM", stripeSubscriptionId: "sub_1" }),
+      // The trial ran out on Starter: lapsed, whatever its status.
+      org({ id: "lapsed", trialEndsAt: daysAgo(1) }),
+      // Converted, then failed a renewal: still a conversion — its status pill says the rest.
+      org({ id: "converted-then-grace", trialEndsAt: null, trialTier: null, planTier: "TEAM", status: "GRACE" })
     ];
     const result = await getSignupAnalytics(30, now);
     const converted = Object.fromEntries(result.recent.map((r) => [r.orgId, r.converted]));
-    expect(converted).toEqual({ trialling: false, "paid-tier": true, subscribed: true, lapsed: false, "suspended-paid": false });
+    expect(converted).toEqual({ trialling: false, "by-hand": true, subscribed: true, lapsed: false, "converted-then-grace": true });
     expect(result.recent.find((r) => r.orgId === "trialling")?.trialDaysLeft).toBe(5);
     expect(result.recent.find((r) => r.orgId === "lapsed")?.trialDaysLeft).toBeNull();
     expect(result.recent[0].domain).toBe("northwind.co.uk");
+  });
+
+  it("counts self-serve and converted workspaces on the server, over every one in the period", async () => {
+    // 120 self-serve workspaces, the first 110 converted. The list stops at 100; the count must not.
+    orgs = Array.from({ length: 120 }, (_, i) =>
+      org({ id: `w${i}`, createdAt: new Date(now.getTime() - (i + 1) * 60_000), ...(i < 110 ? { trialEndsAt: null, trialTier: null, planTier: "TEAM" } : {}) })
+    );
+    const result = await getSignupAnalytics(30, now);
+    expect(result.recent).toHaveLength(100);
+    expect(result.selfServe).toEqual({ total: 120, converted: 110 });
   });
 
   it("reads seats from the latest snapshot, and null before the first one", async () => {

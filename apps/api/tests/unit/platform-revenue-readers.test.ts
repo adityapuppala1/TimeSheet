@@ -178,6 +178,19 @@ describe("getRevenueOverview — the churn window's two sides", () => {
   });
 });
 
+describe("getRevenueOverview — trial to paid", () => {
+  it("renders median days to convert from the recorded conversion moment", async () => {
+    // A trial converted by hand: clock and trial tier cleared, a paid plan, no Stripe. The page read
+    // four audit actions nothing writes, so this figure could never render.
+    orgs = [org("h", { trialStartedAt: new Date("2026-09-05T06:00:00Z"), trialEndsAt: null, trialTier: null, planTier: "TEAM", convertedAt: new Date("2026-09-15T06:00:00Z") })];
+    snaps = [snap("h", "2026-10-02")];
+    const overview = await getRevenueOverview(30);
+    expect(overview.trials.converted).toBe(1);
+    expect(overview.trials.medianDaysToConvert).toBe(10);
+    expect(control.platformAuditLog.findMany).not.toHaveBeenCalled();
+  });
+});
+
 describe("getOrgUsageProfile — Org 360 prices the workspace the way the fleet does", () => {
   it("reports no list MRR for a workspace still on its trial, as the fleet figure does", async () => {
     orgs = [org("t", { planTier: "STARTER", trialTier: "TEAM", trialEndsAt: new Date("2026-10-10T00:00:00Z") })];

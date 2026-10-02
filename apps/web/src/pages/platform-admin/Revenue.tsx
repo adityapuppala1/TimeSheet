@@ -299,19 +299,19 @@ function Loaded({ data }: { data: RevenueOverview }) {
           )}
         </ConsoleSection>
 
-        <ConsoleSection title="Trial → paid" description="Derived from the trial clock, the workspace status and the audit trail.">
+        <ConsoleSection
+          title={`Trial → paid (trials started in the last ${trials.windowDays ?? churn.windowDays} days)`}
+          description="Converted means a checkout, a subscription or a paid plan set in the console — the same rule Signups and the retention programme use."
+        >
           <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Stat label="Conversion" value={pct(trials.conversionPercent)} hint="Of DECIDED trials — running ones are excluded" />
-            <Stat label="Converted" value={String(trials.converted)} hint="Subscribed, or still active after the trial ended" />
+            <Stat label="Converted" value={String(trials.converted)} hint="Left the trial for a paid plan" />
             <Stat label="Lapsed" value={String(trials.lapsed)} hint="Trial ended, no plan followed" />
             <Stat label="Still trialling" value={String(trials.stillTrialing)} hint="Clock still running" />
-            <Stat label="Trials started" value={String(trials.trialsStarted)} hint="All time" />
-            <Stat
-              label="Median days to convert"
-              value={trials.medianDaysToConvert === null ? "—" : String(trials.medianDaysToConvert)}
-              hint={trials.medianDaysToConvert === null ? "No conversion has a recorded date yet" : "Median, not mean"}
-            />
+            <Stat label="Trials started" value={String(trials.trialsStarted)} hint="Inside the selected window" />
+            <Stat label="Median days to convert" value={trials.medianDaysToConvert === null ? "—" : String(trials.medianDaysToConvert)} hint={medianHint(trials)} />
           </dl>
+          <TrialCohorts cohorts={trials.byCohort} />
         </ConsoleSection>
       </div>
 
@@ -518,6 +518,48 @@ function BilledRevenue({ stripe }: { stripe: NonNullable<RevenueOverview["stripe
         </ul>
       )}
     </ConsoleSection>
+  );
+}
+
+/** Why the median reads what it reads — including the conversions that have no recorded date. */
+function medianHint(trials: RevenueOverview["trials"]): string {
+  if (trials.medianDaysToConvert === null) return trials.converted > 0 ? "No conversion here has a recorded date" : "Nothing has converted yet";
+  return trials.convertedUndated > 0 ? `Median, not mean · ${trials.convertedUndated} undated conversion${trials.convertedUndated === 1 ? "" : "s"} left out` : "Median, not mean";
+}
+
+/** Trial→paid by the month each trial STARTED — the cohort view, so a month's rate is about that
+ *  month's trials rather than about whichever trials happened to be decided in it. */
+function TrialCohorts({ cohorts }: { cohorts: RevenueOverview["trials"]["byCohort"] }) {
+  if (cohorts.length === 0) return null;
+  return (
+    <div className="mt-4">
+      <ConsoleTable minWidth={520}>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead>Trial start month</TableHead>
+            <TableHead className="text-right">Started</TableHead>
+            <TableHead className="text-right">Converted</TableHead>
+            <TableHead className="text-right">Lapsed</TableHead>
+            <TableHead className="text-right">Running</TableHead>
+            <TableHead className="text-right">Conversion</TableHead>
+            <TableHead className="text-right">Median days</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {cohorts.map((row) => (
+            <TableRow key={row.cohort}>
+              <TableCell className="font-mono text-xs">{row.cohort}</TableCell>
+              <Num>{row.trialsStarted}</Num>
+              <Num>{row.converted}</Num>
+              <Num>{row.lapsed}</Num>
+              <Num>{row.stillTrialing}</Num>
+              <Num>{pct(row.conversionPercent)}</Num>
+              <Num>{row.medianDaysToConvert ?? "—"}</Num>
+            </TableRow>
+          ))}
+        </TableBody>
+      </ConsoleTable>
+    </div>
   );
 }
 

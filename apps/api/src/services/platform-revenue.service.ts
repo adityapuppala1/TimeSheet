@@ -35,7 +35,7 @@
  * history yet" rather than as 0%.
  */
 import { controlPrisma } from "../config/control-prisma.js";
-import { platformDate } from "../utils/platform-time.js";
+import { platformDate, platformMonthKey } from "../utils/platform-time.js";
 import { MIN_TREND_SNAPSHOTS, scoreAccountHealth, selectSeatOverage, type AccountHealth, type SeatOverageRow, type SeatUsageRow } from "./platform-account-health.js";
 import { isStripeConfigured } from "./stripe-client.service.js";
 import { isConverted } from "./trial-conversion.js";
@@ -372,14 +372,18 @@ export interface TrialLifecycle {
   orgId: string;
   trialStartedAt: Date | null;
   trialEndsAt: Date | null;
-  status: string;
-  subscribed: boolean;
-  /** When the workspace became a customer, if it is known — read from `PlatformAuditLog`. Null on
-   *  a conversion that predates the audit trail, or one done by hand with no logged action. */
+  /** The three columns trial-conversion.ts#isConverted reads — the one "converted" rule. */
+  trialTier: string | null;
+  planTier: string;
+  stripeSubscriptionId: string | null;
+  /** `Organization.convertedAt`: when the workspace first became a customer. Null on a conversion
+   *  that predates the column and left no trace to backfill it from — unknown, never guessed. */
   convertedAt: Date | null;
 }
 
-export interface TrialConversion {
+/** One set of trials, decided or not. The same shape for the headline and for each cohort row, so a
+ *  cohort row and the headline cannot mean different things by "conversion". */
+export interface TrialTally {
   trialsStarted: number;
   converted: number;
   lapsed: number;
@@ -391,52 +395,87 @@ export interface TrialConversion {
   /** Median, not mean: one workspace that converted after a year would drag an average nowhere
    *  useful. Null when nothing with a known conversion date has converted. */
   medianDaysToConvert: number | null;
+  /** Converted trials with no recorded conversion moment — left out of the median, and counted so
+   *  the gap is visible rather than silently shrinking the sample. */
+  convertedUndated: number;
+}
+
+export interface TrialConversion extends TrialTally {
+  /** The window the headline covers: trials that STARTED in the last N days. Null = all time. */
+  windowDays: number | null;
+  /** By the month each trial STARTED (platform zone), newest first, the last twelve with any trial —
+   *  the cohort view ChartMogul and Baremetrics use, so a month's rate is about that month's trials
+   *  rather than about whichever trials happened to be decided during it. */
+  byCohort: Array<TrialTally & { cohort: string }>;
+}
+
+const median = (values: number[]): number | null => {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return Math.round(sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2);
+};
+
+/** Converted, still running, or lapsed — in that order, so a converted trial is never "running". */
+function trialOutcome(row: TrialLifecycle, now: Date): "converted" | "running" | "lapsed" {
+  if (isConverted(row)) return "converted";
+  return row.trialEndsAt !== null && row.trialEndsAt.getTime() > now.getTime() ? "running" : "lapsed";
+}
+
+function tallyTrials(trials: TrialLifecycle[], now: Date): TrialTally {
+  const counts = { converted: 0, running: 0, lapsed: 0 };
+  const daysToConvert: number[] = [];
+  let convertedUndated = 0;
+  for (const row of trials) {
+    const outcome = trialOutcome(row, now);
+    counts[outcome] += 1;
+    if (outcome !== "converted") continue;
+    if (row.convertedAt && row.trialStartedAt) daysToConvert.push(Math.max(0, row.convertedAt.getTime() - row.trialStartedAt.getTime()) / DAY_MS);
+    else convertedUndated += 1;
+  }
+  const decided = counts.converted + counts.lapsed;
+  return {
+    trialsStarted: trials.length,
+    converted: counts.converted,
+    lapsed: counts.lapsed,
+    stillTrialing: counts.running,
+    conversionPercent: decided > 0 ? Math.round((counts.converted / decided) * 1000) / 10 : null,
+    medianDaysToConvert: median(daysToConvert),
+    convertedUndated
+  };
 }
 
 /**
- * Trial→paid, derived entirely from columns that already exist.
+ * Trial→paid, as a cohort measure.
  *
- * WHAT COUNTS AS A CONVERSION, and why it is not simply "has a Stripe subscription": the very
- * common deployment here has no Stripe account at all and assigns tiers by hand. A workspace that
- * was still ACTIVE after its trial ended is a customer in exactly the way that matters, so both
- * routes count. A workspace that ended its trial and slid into GRACE, SUSPENDED or ARCHIVED lapsed.
+ * WHAT COUNTS AS A CONVERSION is trial-conversion.ts#isConverted — the rule the lifecycle worker, the
+ * retention programme and the console's plan edit already use: a Stripe checkout (which clears the
+ * trial tier), a subscription, or a paid tier set by hand. It used to be "subscribed, or still ACTIVE
+ * after the trial ended", which counted a lapse the worker had not processed yet as a customer and
+ * disagreed with Signups and retention about the same workspace.
+ *
+ * WHICH TRIALS. The headline is the trials that STARTED inside `windowDays` (the Revenue page's window
+ * selector — it used to be all time whatever the selector said), and `byCohort` groups every trial by
+ * its start month in the platform's zone. Days to convert is `convertedAt − trialStartedAt`.
  */
-export function computeTrialConversion(lifecycles: TrialLifecycle[], now = new Date()): TrialConversion {
-  const trials = lifecycles.filter((row) => row.trialStartedAt !== null);
-  let converted = 0;
-  let lapsed = 0;
-  let stillTrialing = 0;
-  const daysToConvert: number[] = [];
+export function computeTrialConversion(lifecycles: TrialLifecycle[], now = new Date(), windowDays: number | null = null): TrialConversion {
+  const trials = lifecycles.filter((row): row is TrialLifecycle & { trialStartedAt: Date } => row.trialStartedAt !== null);
+  const since = windowDays === null ? null : windowStart(windowDays, now).getTime();
+  const inWindow = since === null ? trials : trials.filter((row) => row.trialStartedAt.getTime() >= since);
 
+  const byMonth = new Map<string, TrialLifecycle[]>();
   for (const row of trials) {
-    const running = row.trialEndsAt !== null && row.trialEndsAt.getTime() > now.getTime();
-    const isCustomer = row.subscribed || (row.status === "ACTIVE" && !running);
-
-    if (isCustomer) {
-      converted += 1;
-      if (row.convertedAt && row.trialStartedAt) {
-        daysToConvert.push((row.convertedAt.getTime() - row.trialStartedAt.getTime()) / DAY_MS);
-      }
-    } else if (running) {
-      stillTrialing += 1;
-    } else {
-      lapsed += 1;
-    }
+    const key = platformMonthKey(row.trialStartedAt);
+    byMonth.set(key, [...(byMonth.get(key) ?? []), row]);
   }
 
-  const decided = converted + lapsed;
-  daysToConvert.sort((a, b) => a - b);
-  const middle = Math.floor(daysToConvert.length / 2);
-
   return {
-    trialsStarted: trials.length,
-    converted,
-    lapsed,
-    stillTrialing,
-    conversionPercent: decided > 0 ? Math.round((converted / decided) * 1000) / 10 : null,
-    medianDaysToConvert: daysToConvert.length
-      ? Math.round(daysToConvert.length % 2 === 1 ? daysToConvert[middle] : (daysToConvert[middle - 1] + daysToConvert[middle]) / 2)
-      : null
+    ...tallyTrials(inWindow, now),
+    windowDays,
+    byCohort: [...byMonth.entries()]
+      .sort(([a], [b]) => (a < b ? 1 : -1))
+      .slice(0, 12)
+      .map(([cohort, rows]) => ({ cohort, ...tallyTrials(rows, now) }))
   };
 }
 
@@ -476,8 +515,9 @@ export interface CohortTable {
   observedTo: string | null;
 }
 
-/** `YYYY-MM` in UTC. Deliberately UTC everywhere in this module: a deployment that moves timezone
- *  must not reshuffle which cohort a customer belongs to. */
+/** `YYYY-MM` of a DATE-ONLY value — a snapshot `day`, or a key built here — read off its UTC fields,
+ *  which is where a date-only value keeps its date. An INSTANT (a signup, a trial start) takes the
+ *  platform's month instead: `platformMonthKey`. */
 export function monthKey(at: Date): string {
   return `${at.getUTCFullYear()}-${String(at.getUTCMonth() + 1).padStart(2, "0")}`;
 }
@@ -499,7 +539,9 @@ function addMonths(key: string, offset: number): string {
 export function buildSignupCohorts(orgs: CohortOrg[], observed: { from: string | null; to: string | null }, maxOffset = 12): CohortTable {
   const byCohort = new Map<string, CohortOrg[]>();
   for (const org of orgs) {
-    const key = monthKey(org.createdAt);
+    // The month the customer signed up IN INDIA (the platform's zone): 01:30 IST on 1 July is a July
+    // signup, which UTC's month called June.
+    const key = platformMonthKey(org.createdAt);
     const bucket = byCohort.get(key) ?? [];
     bucket.push(org);
     byCohort.set(key, bucket);
@@ -679,7 +721,9 @@ export async function getRevenueOverview(windowDays = 30): Promise<RevenueOvervi
 
   const [prices, orgs, { rows, start, last }] = await Promise.all([
     getTierPrices(),
-    controlPrisma.organization.findMany({ select: { id: true, slug: true, name: true, createdAt: true, status: true, trialStartedAt: true, trialEndsAt: true, stripeSubscriptionId: true } }),
+    controlPrisma.organization.findMany({
+      select: { id: true, slug: true, name: true, createdAt: true, planTier: true, trialTier: true, trialStartedAt: true, trialEndsAt: true, stripeSubscriptionId: true, convertedAt: true }
+    }),
     loadRevenueWindow(since)
   ]);
 
@@ -719,7 +763,19 @@ export async function getRevenueOverview(windowDays = 30): Promise<RevenueOvervi
     },
     mrr,
     churn: computeChurn(startAccounts, endAccounts, prices, spanDays),
-    trials: computeTrialConversion(await loadTrialLifecycles(orgs), now),
+    trials: computeTrialConversion(
+      orgs.map((org) => ({
+        orgId: org.id,
+        trialStartedAt: org.trialStartedAt,
+        trialEndsAt: org.trialEndsAt,
+        trialTier: org.trialTier,
+        planTier: org.planTier,
+        stripeSubscriptionId: org.stripeSubscriptionId,
+        convertedAt: org.convertedAt
+      })),
+      now,
+      windowDays
+    ),
     cohorts: buildSignupCohorts(
       orgs.map((org) => ({ orgId: org.id, createdAt: org.createdAt, activeMonths: allActive.get(org.id) ?? new Set<string>() })),
       { from: firstEver ? monthKey(firstEver.day) : null, to: lastEver ? monthKey(lastEver.day) : null }
@@ -746,40 +802,6 @@ async function loadActiveMonths(): Promise<Map<string, Set<string>>> {
     out.set(row.organizationId, set);
   }
   return out;
-}
-
-/**
- * The trial lifecycle, from `Organization` plus the audit trail.
- *
- * `convertedAt` comes from `PlatformAuditLog` because that is where a plan change is recorded —
- * both the Stripe webhook's and a platform admin's manual move. It is genuinely absent for
- * conversions that predate the audit trail, and the median simply excludes those rather than
- * guessing a date.
- */
-async function loadTrialLifecycles(
-  orgs: Array<{ id: string; status: string; trialStartedAt: Date | null; trialEndsAt: Date | null; stripeSubscriptionId: string | null }>
-): Promise<TrialLifecycle[]> {
-  const trialOrgIds = orgs.filter((org) => org.trialStartedAt !== null).map((org) => org.id);
-  const conversions = trialOrgIds.length
-    ? await controlPrisma.platformAuditLog.findMany({
-        where: { entity: "Organization", entityId: { in: trialOrgIds }, action: { in: ["organization.plan_changed", "org.plan_changed", "billing.subscription_active", "plan_tier.assigned"] } },
-        orderBy: { createdAt: "asc" },
-        select: { entityId: true, createdAt: true }
-      })
-    : [];
-  const convertedAt = new Map<string, Date>();
-  for (const row of conversions) {
-    if (row.entityId && !convertedAt.has(row.entityId)) convertedAt.set(row.entityId, row.createdAt);
-  }
-
-  return orgs.map((org) => ({
-    orgId: org.id,
-    trialStartedAt: org.trialStartedAt,
-    trialEndsAt: org.trialEndsAt,
-    status: org.status,
-    subscribed: Boolean(org.stripeSubscriptionId),
-    convertedAt: convertedAt.get(org.id) ?? null
-  }));
 }
 
 /* ------------------------------------------------------------------------------------------ */
