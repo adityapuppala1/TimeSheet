@@ -604,6 +604,18 @@ describe("what the operators hear", () => {
     expect(alertIfProvisioningFailing).toHaveBeenCalledTimes(1);
   });
 
+  it("on a failed provision: says what actually happens next, not 'try again in a few minutes'", async () => {
+    // The continuation was spent before provisioning began, so the same request retried is a
+    // SIGNUP_EXPIRED. What does work is starting over — the workspace row and its claim are gone.
+    openSignup({ notifyMode: "EACH" });
+    provisionOrganization.mockRejectedValueOnce(new Error("migrate deploy failed"));
+    const res = await request(buildApp()).post("/api/signup/complete").send(completeBody);
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("PROVISIONING_FAILED");
+    expect(res.body.message).not.toMatch(/try again in a few minutes/i);
+    expect(res.body.message).toMatch(/start again/i);
+  });
+
   it("never lets a broken mail relay turn a successful signup into an error", async () => {
     openSignup({ notifyMode: "EACH" });
     sendPlatformTemplate.mockImplementation(async (key: string) => {

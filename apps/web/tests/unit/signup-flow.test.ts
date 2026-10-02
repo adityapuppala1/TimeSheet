@@ -57,6 +57,10 @@ describe("classifySignupError", () => {
     expect(classifySignupError(axiosError(400, { code: "SIGNUP_EXPIRED", message: "Expired." })).kind).toBe("expired");
   });
 
+  it("sends a failed provisioning back to the start too — its continuation is spent, so a retry from here cannot work", () => {
+    expect(classifySignupError(axiosError(502, { code: "PROVISIONING_FAILED", message: "Start again." }))).toEqual({ kind: "expired", message: "Start again." });
+  });
+
   it("names the throttle, because the limiter's own body says nothing useful", () => {
     expect(classifySignupError(axiosError(429)).kind).toBe("message");
     expect((classifySignupError(axiosError(429)) as { message: string }).message).toMatch(/wait/i);

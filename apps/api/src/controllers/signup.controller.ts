@@ -146,7 +146,14 @@ async function explainCollision(res: Response, holder: Holder | null, email: str
       return;
     }
     if (holder.status === "PROVISIONING") {
-      throw new AppError(409, "Your workspace is already being set up — we'll email you its link the moment it's ready.", { code: "SIGNUP_IN_PROGRESS" });
+      // The "if not" half is true because of signup-sweep.service.ts: an interrupted setup is removed
+      // after 30 minutes, freeing the address. Before that sweep this promised an email that, for a
+      // setup a restarted pod had abandoned, never came.
+      throw new AppError(
+        409,
+        "Your workspace is already being set up — we'll email you its link when it's ready. If nothing arrives within the hour, start again with your work email.",
+        { code: "SIGNUP_IN_PROGRESS" }
+      );
     }
   }
   // GRACE or SUSPENDED only: a PROVISIONING holder is a colleague who won the race a moment ago,
@@ -367,7 +374,15 @@ signupRouter.post(
       // The second failure inside an hour is an outage, not news for tomorrow's summary: it mails the
       // alert recipients now, once an hour (signup-digest.service.ts). Never throws.
       await alertIfProvisioningFailing(new Date());
-      throw new AppError(502, "We couldn't finish setting up your workspace. Our team has been notified and will be in touch — you can also try again in a few minutes.");
+      // What actually happens next. It used to say "try again in a few minutes", but the continuation
+      // was spent before provisioning began, so retrying this request is a SIGNUP_EXPIRED; and "will be
+      // in touch" was a promise only the EACH notify mode keeps. Starting over does work — the row and
+      // its claim are gone — and the code tells the page to take the person back to the first step.
+      throw new AppError(
+        502,
+        "We couldn't finish setting up your workspace, so nothing was kept and your company's address is free again. Start again with your work email — you'll get a new code.",
+        { code: "PROVISIONING_FAILED" }
+      );
     }
 
     // So the finder can route them here next time without waiting for a first sign-in.

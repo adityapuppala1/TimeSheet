@@ -61,6 +61,7 @@ import { startReportSubscriptionWorker } from "./workers/report-subscription.wor
 import { startServiceHealthWorker } from "./workers/service-health.worker.js";
 import { startApiTelemetryRetentionWorker } from "./workers/api-telemetry-retention.worker.js";
 import { startJobClaimPruneWorker } from "./workers/job-claim-prune.worker.js";
+import { startSignupSweepWorker } from "./workers/signup-sweep.worker.js";
 import { flushApiTelemetry, startApiTelemetry } from "./services/api-telemetry.service.js";
 import { refreshCustomDomainOrigins } from "./config/custom-domain-origins.js";
 
@@ -272,6 +273,8 @@ server.on("listening", async () => {
   startApiTelemetryRetentionWorker();
   // 04:30 daily — drops claim rows older than a week; the minute jobs above write ~10k a day.
   startJobClaimPruneWorker();
+  // Every 10 minutes — frees a company whose signup was interrupted mid-provisioning (> 30 min old).
+  startSignupSweepWorker();
 
   // The Studio's event triggers. Registered once, for the whole internal event vocabulary — which
   // flows actually fire is decided by the flows, not by what this file was compiled knowing about.

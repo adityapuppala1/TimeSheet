@@ -58,6 +58,9 @@ export function classifySignupError(error: unknown, fallback = "Something went w
   if (code === "DOMAIN_CLAIMED" || code === "NO_WORKSPACE") return { kind: "verify-again", message: message ?? "Things changed since you verified. Verify again." };
   if (code === "WORKSPACE_UNAVAILABLE") return { kind: "unavailable" };
   if (code === "SIGNUP_EXPIRED") return { kind: "expired", message: message ?? "Your email verification has expired. Start again." };
+  // Provisioning failed after the continuation was spent: the only way forward is the first step,
+  // which works because the half-made workspace and its domain claim were removed.
+  if (code === "PROVISIONING_FAILED") return { kind: "expired", message: message ?? "We couldn't finish setting up your workspace. Start again." };
   // The limiter answers with express-rate-limit's default body; "Couldn't send" for something that
   // will work again shortly reads as broken rather than as throttled.
   if (response?.status === 429 && !message) return { kind: "message", message: "Too many signup attempts from this network. Wait a few minutes and try again." };
