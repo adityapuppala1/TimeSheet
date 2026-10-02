@@ -461,6 +461,66 @@ describe("the role → route matrix", () => {
   }
 });
 
+/**
+ * COMPLETENESS (G13). The matrix above is a hand-written list, and a console route added without an
+ * entry was simply never tested — while `requirePlatformAdmin` admits every operator, so a route
+ * that forgot its capability guard would be open to READ_ONLY with nothing going red. This walks
+ * both routers' registered routes and fails on any that has no row above and is not one of the few
+ * listed below with the reason it is not.
+ */
+const NOT_IN_THE_MATRIX: Record<string, string> = {
+  "POST /auth/login": "open: the sign-in itself",
+  "POST /auth/login/totp": "open: act two of the sign-in",
+  "POST /auth/refresh": "open: authenticated by the refresh cookie, not a role",
+  "POST /auth/logout": "own account",
+  "POST /auth/change-password": "own account — platform-admin-password.test.ts",
+  "POST /auth/mfa/begin": "own account — platform-admin-mfa.test.ts",
+  "POST /auth/mfa/confirm": "own account — platform-admin-mfa.test.ts",
+  "POST /auth/mfa/disable": "own account — platform-admin-lockout.test.ts",
+  "DELETE /auth/sessions/:id": "own account — scoped to the caller's sessions in the query",
+  "PATCH /organizations/:id": "authorised per FIELD — its own describe block below",
+  "POST /governance/requests/:id/reject": "open to the requester as well as owners — platform-two-person.test.ts"
+};
+
+describe("every console route is in the matrix", () => {
+  const registered = async () => {
+    const { platformAdminRouter } = await import("../../src/controllers/platform-admin.controller.js");
+    const { platformAdminConsoleRouter } = await import("../../src/controllers/platform-admin-console.controller.js");
+    const routes: { method: string; path: string }[] = [];
+    for (const router of [platformAdminRouter, platformAdminConsoleRouter]) {
+      for (const layer of (router as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack) {
+        if (!layer.route) continue;
+        for (const method of Object.keys(layer.route.methods)) routes.push({ method: method.toUpperCase(), path: layer.route.path });
+      }
+    }
+    return routes;
+  };
+
+  /** Does a registered path (`/organizations/:id/domains`) cover a matrix row's concrete path? */
+  const matches = (routePath: string, concretePath: string) => {
+    const want = routePath.split("/");
+    const got = concretePath.split("/");
+    return want.length === got.length && want.every((segment, i) => segment.startsWith(":") || segment === got[i]);
+  };
+
+  it("finds the routes at all", async () => {
+    expect((await registered()).length).toBeGreaterThan(80);
+  });
+
+  it("has a row (or a stated reason) for every registered route", async () => {
+    const missing = (await registered()).filter(({ method, path }) => {
+      if (NOT_IN_THE_MATRIX[`${method} ${path}`]) return false;
+      return !ROUTES.some((route) => route.method.toUpperCase() === method && matches(path, route.path.split("?")[0]));
+    });
+    expect(missing.map(({ method, path }) => `${method} ${path}`), "add these to ROUTES with the capability they need").toEqual([]);
+  });
+
+  it("lists no exemption for a route that no longer exists — a stale exemption hides nothing but reads as if it did", async () => {
+    const keys = new Set((await registered()).map(({ method, path }) => `${method} ${path}`));
+    expect(Object.keys(NOT_IN_THE_MATRIX).filter((key) => !keys.has(key))).toEqual([]);
+  });
+});
+
 describe("the callouts, stated on their own so a regression names itself", () => {
   it("READ_ONLY cannot download a snapshot — the GET verb disguises an entire customer database leaving the building", async () => {
     const res = await call({ method: "get", path: "/backups/snap-1/download", cap: OPERATE }, "READ_ONLY");
