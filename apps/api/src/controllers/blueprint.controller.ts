@@ -22,7 +22,7 @@ import { deriveBlueprint, expandBlueprint, validateBlueprint, type BlueprintPayl
 import { setCustomFieldValues } from "../services/custom-field.service.js";
 import { getPlanningQuota } from "../services/plan-limits.service.js";
 import { assertPlanningEnabled } from "../services/planning.service.js";
-import { computeTicketDueDate, getGlobalTicketSettings, issueTicketKey } from "../services/ticket.service.js";
+import { computeTicketDueDate, getGlobalTicketSettings, isChangeTicketType, issueTicketKey } from "../services/ticket.service.js";
 import { readWorkingDays, toDay } from "../services/plan-schedule.service.js";
 
 export const blueprintRouter = Router();
@@ -199,7 +199,7 @@ blueprintRouter.post(
     if (!project) throw new AppError(404, "Project not found");
 
     // A blueprint saved before "Save as blueprint" learned to skip changes can still list one.
-    const changeItem = (blueprint.payload as unknown as BlueprintPayload).items?.find((item) => item.type === "CHANGE");
+    const changeItem = (blueprint.payload as unknown as BlueprintPayload).items?.find((item) => isChangeTicketType(item.type));
     if (changeItem) {
       throw new AppError(422, `"${changeItem.title}" in this blueprint has the CHANGE type, and a blueprint can't create changes. Edit the blueprint to remove it or give it another type.`);
     }

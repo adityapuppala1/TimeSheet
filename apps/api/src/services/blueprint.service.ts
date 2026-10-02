@@ -22,6 +22,7 @@
  */
 import { AppError } from "../middleware/error.js";
 import { addWorkingDays, dayKey, nextWorkingDay, toDay, type WorkingDays, DEFAULT_WORKING_DAYS } from "./plan-schedule.service.js";
+import { isChangeTicketType } from "./ticket.service.js";
 
 export interface BlueprintItem {
   title: string;
@@ -67,7 +68,7 @@ export function validateBlueprint(payload: BlueprintPayload): void {
     if (!item.title?.trim()) throw new AppError(400, `Item ${index + 1} needs a title.`);
     // A change is a one-off record of shipping something, created only by the change module; a
     // blueprint that stamped CHANGE-typed tickets would create changes nobody raised.
-    if (item.type === "CHANGE") throw new AppError(400, `"${item.title}" has the CHANGE type — a blueprint can't create changes.`);
+    if (isChangeTicketType(item.type)) throw new AppError(400, `"${item.title}" has the CHANGE type — a blueprint can't create changes.`);
     if (item.offsetStartDays !== undefined && (!Number.isInteger(item.offsetStartDays) || item.offsetStartDays < 0 || item.offsetStartDays > 3650)) {
       throw new AppError(400, `"${item.title}" has an implausible start offset.`);
     }

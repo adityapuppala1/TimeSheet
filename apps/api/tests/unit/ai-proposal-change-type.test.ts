@@ -51,4 +51,13 @@ describe("applying a proposal that creates a ticket", () => {
     expect((client.ticket as unknown as { create: ReturnType<typeof vi.fn> }).create).not.toHaveBeenCalled();
     expect(result.failed).toEqual([expect.objectContaining({ id: "c1", reason: expect.stringMatching(/CHANGE type/) })]);
   });
+
+  it("refuses it in lower case too — the type column compares case-insensitively, so it IS CHANGE there", async () => {
+    vi.mocked(client.aiProposal.findUnique).mockResolvedValue(proposalCreating({ title: "Rotate the cert", type: "change" }) as never);
+
+    const result = await runInTenant(client as unknown as PrismaClient, () => applyProposal({ proposalId: "p1", decisions: { c1: true }, actorId: "u1" }));
+
+    expect((client.ticket as unknown as { create: ReturnType<typeof vi.fn> }).create).not.toHaveBeenCalled();
+    expect(result.failed).toEqual([expect.objectContaining({ id: "c1", reason: expect.stringMatching(/CHANGE type/) })]);
+  });
 });

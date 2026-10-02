@@ -164,6 +164,30 @@ describe("a plain ticket cannot be raised or retyped as CHANGE", () => {
     expect(res.status).toBe(422);
     expect(client.$transaction).not.toHaveBeenCalled();
   });
+
+  // `TicketType.name` and `Ticket.type` use utf8mb4_unicode_ci: case- and accent-insensitive, trailing
+  // spaces ignored. Each spelling below finds the CHANGE row and, once stored, is a change to every SQL
+  // filter on `type` — the exact `=== "CHANGE"` let all of them through.
+  for (const spelling of ["change", "Change", "CHANGE ", "chánge"]) {
+    it(`POST / refuses "${spelling}", which the database reads as CHANGE`, async () => {
+      const res = await request(buildApp())
+        .post("/api/tickets")
+        .send({ projectId: "22222222-2222-4222-8222-222222222222", type: spelling, title: "Looks like a change" });
+      expect(res.status).toBe(422);
+      expect(client.$transaction).not.toHaveBeenCalled();
+    });
+  }
+
+  it("refuses any spelling the database itself matches to the CHANGE row", async () => {
+    // Whatever folding the string check misses, the collation is the authority: the row it finds says
+    // which type this is.
+    vi.mocked(client.ticketType.findFirst).mockResolvedValue({ id: "tt-change", name: "CHANGE", isActive: true } as never);
+    const res = await request(buildApp())
+      .post("/api/tickets")
+      .send({ projectId: "22222222-2222-4222-8222-222222222222", type: "CH​ANGE", title: "Looks like a change" });
+    expect(res.status).toBe(422);
+    expect(client.$transaction).not.toHaveBeenCalled();
+  });
 });
 
 describe("the ticket SLA sweep leaves changes to their own stage SLAs", () => {

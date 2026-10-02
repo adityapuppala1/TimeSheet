@@ -459,11 +459,12 @@ export async function applyProposal(params: {
         await assertReferencedRowsExist(data, current.projectId);
         await prisma.ticket.update({ where: { id: current.id }, data });
       } else if (change.op === "CREATE" && change.targetType === "TICKET") {
-        const { issueTicketKey, computeTicketDueDate, getGlobalTicketSettings, CHANGE_TICKET_TYPE } = await import("./ticket.service.js");
+        const { issueTicketKey, computeTicketDueDate, getGlobalTicketSettings, isChangeTicketType } = await import("./ticket.service.js");
         // Only the change module creates a change's ticket — a CHANGE-typed ticket made here would be
         // a change nobody raised, with no plan, approval or lifecycle. Every human and API create
-        // path refuses the type (ticket.service.ts#assertValidTicketType); so does this one.
-        if (String(after.type ?? "") === CHANGE_TICKET_TYPE) {
+        // path refuses the type (ticket.service.ts#assertValidTicketType); so does this one, in any
+        // spelling the database would read as CHANGE.
+        if (isChangeTicketType(after.type)) {
           throw new Error("A ticket can't be given the CHANGE type — raise a change request from the Changes page instead.");
         }
         const settings = await getGlobalTicketSettings();

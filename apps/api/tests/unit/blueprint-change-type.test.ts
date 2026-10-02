@@ -97,6 +97,14 @@ describe("validateBlueprint", () => {
   it("refuses an item of the CHANGE type", () => {
     expect(() => validateBlueprint({ items: [{ title: "Rotate the cert", type: "CHANGE" }] } as never)).toThrow(/CHANGE type/);
   });
+
+  // The type column compares case- and accent-insensitively, so each of these IS "CHANGE" to every
+  // SQL filter that reads it; an exact === let them all through.
+  for (const spelling of ["change", "Change", "CHANGE ", "chánge"]) {
+    it(`refuses "${spelling}", which the database reads as CHANGE`, () => {
+      expect(() => validateBlueprint({ items: [{ title: "Rotate the cert", type: spelling }] } as never)).toThrow(/CHANGE type/);
+    });
+  }
 });
 
 describe("instantiating a blueprint saved before the rule", () => {
@@ -107,6 +115,15 @@ describe("instantiating a blueprint saved before the rule", () => {
 
     expect(res.status).toBe(422);
     expect(res.body.message).toMatch(/Rotate the cert/);
+    expect(client.ticket.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses one whose item spells the type in lower case, too", async () => {
+    client.blueprint.findUnique.mockResolvedValue({ id: BLUEPRINT, payload: { items: [{ title: "Rotate the cert", type: "change" }] } });
+
+    const res = await app().post(`/api/blueprints/${BLUEPRINT}/instantiate`).send({ projectId: PROJECT, startDate: "2026-10-05" });
+
+    expect(res.status).toBe(422);
     expect(client.ticket.create).not.toHaveBeenCalled();
   });
 });

@@ -163,6 +163,18 @@ export async function restartSlaClock(priority: TicketPriority, now: Date = new 
  */
 export const CHANGE_TICKET_TYPE = "CHANGE";
 
+/**
+ * Is this the CHANGE type as the DATABASE compares it? `TicketType.name` and `Ticket.type` use
+ * utf8mb4_unicode_ci — case- and accent-insensitive, trailing spaces ignored — so "change", "Change ",
+ * and "chánge" all find the CHANGE row and, once stored, are a change to every SQL filter on the
+ * type. An exact `=== "CHANGE"` let each of them through as a plain ticket every list then counted as
+ * a change. Folded the same way here: compatibility-decomposed, marks dropped, trimmed, upper-cased.
+ */
+export function isChangeTicketType(type: unknown): boolean {
+  if (typeof type !== "string") return false;
+  return type.normalize("NFKD").replace(/\p{M}/gu, "").trim().toUpperCase() === CHANGE_TICKET_TYPE;
+}
+
 /** The ticket types a classifier may choose for a NEW plain ticket — every active one but CHANGE,
  *  which only a change request's own ticket carries (see `assertValidTicketType`). The AI triage
  *  suggestion and both intake pipelines read their candidate list through this. */
@@ -381,11 +393,13 @@ export const REASSIGN_FORBIDDEN_MESSAGE =
  * raised from the Changes page, which creates the ticket itself.
  */
 export async function assertValidTicketType(type: string): Promise<void> {
-  if (type === CHANGE_TICKET_TYPE) {
-    throw new AppError(422, "A ticket can't be given the CHANGE type — raise a change request from the Changes page instead.");
-  }
+  const refusal = "A ticket can't be given the CHANGE type — raise a change request from the Changes page instead.";
+  if (isChangeTicketType(type)) throw new AppError(422, refusal);
   const match = await prisma.ticketType.findFirst({ where: { name: type, isActive: true } });
   if (!match) throw new AppError(422, `"${type}" is not a valid ticket type`);
+  // The collation is the authority on what equals CHANGE: whatever the fold above misses, the row the
+  // database matched says which type this really is.
+  if (isChangeTicketType(match.name)) throw new AppError(422, refusal);
 }
 
 export function canReopenClosedTicket(req: any): boolean {
