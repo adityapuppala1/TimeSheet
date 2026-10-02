@@ -684,7 +684,7 @@ const PLAN_SELECT = {
   baselineStartDate: true,
   baselineEndDate: true,
   baselineEffortHours: true,
-  workflowStatus: { select: { id: true, name: true, category: true, color: true } },
+  // No `workflowStatus`: the pointer is frozen — see `legacyCategory` below.
   assignee: { select: { id: true, name: true, avatarUrl: true } },
   project: { select: { id: true, code: true, name: true } }
 } as const;
@@ -755,7 +755,7 @@ export async function buildPlan(params: {
     progressPct: r.progressPct,
     estimatedHours: r.estimatedHours ? Number(r.estimatedHours) : null,
     status: r.status,
-    statusCategory: r.workflowStatus?.category ?? legacyCategory(r.status),
+    statusCategory: legacyCategory(r.status),
     baselineStartDate: r.baselineStartDate,
     baselineEndDate: r.baselineEndDate,
     loggedHours: loggedByTicket.get(r.id) ?? 0
@@ -775,8 +775,15 @@ export async function buildPlan(params: {
   return { ...solved, raw: rows as unknown as Array<Record<string, unknown>> };
 }
 
-/** Fallback when a ticket has no workflowStatus row (custom workflows never enabled).
- *  Mirrors DEFAULT_STATUS_CATEGORY in @timesheet/shared. */
+/** A built-in status's category. Mirrors DEFAULT_STATUS_CATEGORY in @timesheet/shared.
+ *
+ * THE ONLY SOURCE OF A TICKET'S CATEGORY for the planning views (Timeline, Calendar, My Work).
+ * They used to prefer `Ticket.workflowStatus`, but custom workflows were never connected to ticket
+ * writes — `workflow.service.ts#resolveStatusWrite` has no caller and nothing has written
+ * `Ticket.workflowStatusId` since the V6 planning migration backfilled it once — so that pointer is
+ * frozen at upgrade day (a ticket OPEN then and IN_PROGRESS now still pointed at "Open"). Until
+ * custom workflows are wired into the one transition path (ticket-transition.service.ts), the
+ * built-in status is the only truth. */
 export function legacyCategory(status: string): string {
   switch (status) {
     case "OPEN":

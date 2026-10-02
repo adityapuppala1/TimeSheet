@@ -76,7 +76,7 @@ export async function computeMyWork(userId: string, now: Date = new Date()): Pro
     select: {
       id: true, key: true, title: true, startDate: true, endDate: true, dueAt: true, priority: true,
       status: true, type: true, isMilestone: true, progressPct: true, estimatedHours: true,
-      workflowStatus: { select: { name: true, category: true, color: true } },
+      // No `workflowStatus`: the pointer is frozen at upgrade day — see plan-schedule.service.ts#legacyCategory.
       project: { select: { id: true, code: true, name: true, color: true } },
       linksTo: {
         // Incoming BLOCKS/FS edges whose SOURCE is not finished — i.e. what is holding this up.
@@ -103,8 +103,9 @@ export async function computeMyWork(userId: string, now: Date = new Date()): Pro
       deadline: deadline ? dayKey(deadline) : null,
       priority: t.priority,
       status: t.status,
-      statusCategory: t.workflowStatus?.category ?? legacyCategory(t.status),
-      statusLabel: t.workflowStatus?.name ?? null,
+      statusCategory: legacyCategory(t.status),
+      // No custom label until custom workflows actually drive status — see legacyCategory.
+      statusLabel: null,
       type: t.type,
       isMilestone: t.isMilestone,
       progressPct: t.progressPct,

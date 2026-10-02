@@ -166,8 +166,10 @@ planRouter.get("/timeline", requirePermission(permissions.TICKETS_VIEW), async (
         violations: item.violations,
         status: item.status,
         statusCategory: item.statusCategory,
-        statusLabel: raw.workflowStatus?.name ?? null,
-        statusColor: raw.workflowStatus?.color ?? null,
+        // No custom label or colour until custom workflows actually drive status — the workflow
+        // pointer is frozen at upgrade day (see plan-schedule.service.ts#legacyCategory).
+        statusLabel: null,
+        statusColor: null,
         priority: raw.priority,
         type: raw.type,
         estimatedHours: item.estimatedHours,
@@ -504,7 +506,7 @@ planRouter.get("/calendar", requirePermission(permissions.TICKETS_VIEW), async (
     select: {
       id: true, key: true, title: true, startDate: true, endDate: true, dueAt: true, isMilestone: true,
       status: true, priority: true, type: true,
-      workflowStatus: { select: { name: true, category: true, color: true } },
+      // No `workflowStatus`: frozen at upgrade day — see plan-schedule.service.ts#legacyCategory.
       assignee: { select: USER_SUMMARY },
       project: { select: { id: true, code: true, name: true } }
     },
@@ -525,8 +527,8 @@ planRouter.get("/calendar", requirePermission(permissions.TICKETS_VIEW), async (
       isScheduled: Boolean(t.startDate || t.endDate),
       isMilestone: t.isMilestone,
       status: t.status,
-      statusCategory: t.workflowStatus?.category ?? legacyCategory(t.status),
-      statusLabel: t.workflowStatus?.name ?? null,
+      statusCategory: legacyCategory(t.status),
+      statusLabel: null,
       priority: t.priority,
       type: t.type,
       assignee: t.assignee,
