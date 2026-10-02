@@ -204,9 +204,14 @@ export function createChangeWorld(seed: { change?: Record<string, unknown>; appr
         const manager = u.managerId ? users[u.managerId] : null;
         return { ...u, manager: manager ? { id: manager.id, status: manager.status, deletedAt: null } : null };
       }),
+      // With the role in the shape `requireAuth` reads, for code that has to work out a person's
+      // authority without a request — the proposal applier.
       findUnique: vi.fn(async (args: any) => {
         const u = users[args.where.id];
-        return u ? { ...u, role: { name: u.id === "sa-1" ? "SUPER_ADMIN" : "EMPLOYEE", permissions: [] } } : null;
+        if (!u) return null;
+        const role = { "sa-1": "SUPER_ADMIN", "admin-1": "ADMIN", "manager-1": "MANAGER" }[u.id] ?? "EMPLOYEE";
+        const keys = ["changes:write", ...(role === "EMPLOYEE" ? [] : ["changes:approve"])];
+        return { ...u, deletedAt: null, role: { name: role, permissions: keys.map((key) => ({ permission: { key } })) } };
       }),
       // The super-admin fallback, and the mail's approver lookup.
       findMany: vi.fn(async () => [{ id: "sa-1" }])

@@ -52,11 +52,13 @@ import {
   findScheduleConflicts,
   getChangeSettings,
   getSlaConfig,
+  isChangeManager,
   judgeChangeSlas,
   judgePlanEdit,
   legalChangeTargets,
   MATERIAL_CHANGE_FIELDS,
   materialEdits,
+  mayWorkOnChange,
   missingForTransition,
   PLAN_LOCKED_STATES,
   type PlanEditVerdict,
@@ -546,10 +548,6 @@ const OUTCOME_FIELDS = [
 ];
 const FROZEN_AFTER: ChangeState[] = ["APPROVED", "SCHEDULED", "IMPLEMENTING", "VALIDATION", "PIR", "CLOSED"];
 
-function isChangeManager(user: { role: string; permissions: string[] }): boolean {
-  return ["SUPER_ADMIN", "ADMIN"].includes(user.role) || user.permissions.includes(permissions.CHANGES_MANAGE);
-}
-
 function mayEditChange(req: any, change: { state: string; ticket: { reporter: { id: string }; assignee: { id: string } | null } }): boolean {
   if (isChangeManager(req.user)) return true;
   const isParty = change.ticket.reporter.id === req.user.id || change.ticket.assignee?.id === req.user.id;
@@ -568,8 +566,7 @@ function planEditVerdict(req: any, change: { state: string } & Record<string, un
 }
 
 function assertMayEditChange(req: any, change: { state: string; ticket: { reporterId: string; assigneeId: string | null } } & Record<string, unknown>): void {
-  const isParty = change.ticket.reporterId === req.user.id || change.ticket.assigneeId === req.user.id;
-  if (!isChangeManager(req.user) && !isParty) {
+  if (!mayWorkOnChange(req.user, change.ticket)) {
     throw new AppError(403, "Only this change's requester, its implementer, or a change manager can edit it.");
   }
   const verdict = planEditVerdict(req, change);

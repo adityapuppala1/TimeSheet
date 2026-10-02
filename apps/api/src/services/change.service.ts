@@ -187,7 +187,7 @@ function sameFieldValue(next: unknown, current: unknown): boolean {
   if (next === null || next === undefined || current === null || current === undefined) {
     return (next ?? null) === (current ?? null);
   }
-  if (current instanceof Date) return new Date(String(next)).getTime() === current.getTime();
+  if (current instanceof Date) return new Date(next as string | Date).getTime() === current.getTime();
   if (typeof current === "object") {
     const sorted = (v: unknown) => JSON.stringify(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)));
     return typeof next === "object" && sorted(next) === sorted(current);
@@ -199,6 +199,18 @@ function sameFieldValue(next: unknown, current: unknown): boolean {
  *  it did not alter, and that is not an edit to the plan. */
 export function materialEdits(body: Record<string, unknown>, current: Record<string, unknown>): string[] {
   return MATERIAL_CHANGE_FIELDS.filter((field) => field in body && !sameFieldValue(body[field], current[field]));
+}
+
+/** A change manager: an admin, or anyone holding `changes:manage`. They may edit and move any change
+ *  they can see; everybody else only changes they raised or are implementing. */
+export function isChangeManager(user: { role: string; permissions: string[] }): boolean {
+  return ["SUPER_ADMIN", "ADMIN"].includes(user.role) || user.permissions.includes(permissions.CHANGES_MANAGE);
+}
+
+/** May this person edit or move this change at all? The requester, the implementer, or a change
+ *  manager — the same three the change page and every write route recognise. */
+export function mayWorkOnChange(user: { id: string; role: string; permissions: string[] }, ticket: { reporterId: string; assigneeId: string | null }): boolean {
+  return isChangeManager(user) || ticket.reporterId === user.id || ticket.assigneeId === user.id;
 }
 
 /** What an edit to a submitted change does: go through, re-open approval, or be refused (and why). */

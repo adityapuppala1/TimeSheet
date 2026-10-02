@@ -221,8 +221,12 @@ async function performAction(params: {
         requestedById: params.actorId,
         changes: [
           {
-            targetType: "TICKET",
-            targetId: subject.id,
+            // The CHANGE, not its ticket: `state` is the change's column. Targeted at the ticket, the
+            // staleness check compared it with a column that does not exist and every one of these
+            // proposals failed on apply. Applying it now runs the same move the change page makes —
+            // see `applyChangeMove` in ai-proposal.service.ts.
+            targetType: "CHANGE",
+            targetId: change.id,
             op: "UPDATE",
             before: { state: from },
             after: { state: to },

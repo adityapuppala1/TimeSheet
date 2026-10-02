@@ -24,7 +24,7 @@
  * WHO CALLS THIS: `controllers/ai-proposal.controller.ts`.
  */
 import { Prisma } from "@prisma/client";
-import type { AiProposalTargetType } from "@timesheet/shared";
+import { changeStates, permissions, type AiProposalTargetType, type ChangeState } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
 import { audit } from "./audit.service.js";
@@ -168,6 +168,56 @@ function projectChangeData(after: Record<string, unknown>): Record<string, unkno
     data[key] = value;
   }
   return data;
+}
+
+/** A change row whose whole payload is `{ state }`: a lifecycle MOVE, which a proposal-only Workflow
+ *  Studio flow records instead of making. Never a field write — `state` is not on the allowlist above
+ *  and must not be. */
+function isChangeMove(after: Record<string, unknown>): boolean {
+  const keys = Object.keys(after);
+  return keys.length === 1 && keys[0] === "state";
+}
+
+/**
+ * Applies a proposed lifecycle move by making it — through `applyChangeTransition`, the same function
+ * the change page's buttons call. So the gates run again now (the change may have stopped being
+ * ready since the flow looked), the approval round is opened, the approver is emailed, and the
+ * timestamps and the ticket follow, exactly as for a move made by hand.
+ *
+ * AS THE PERSON APPLYING IT. Accepting the row is them making the move, so they must be somebody who
+ * could make it by hand: hold `changes:write`, and be the requester, the implementer or a change
+ * manager. Seeing the proposal is not enough — that only takes visibility of the project.
+ *
+ * APPROVED and REJECTED are refused by name, as the dispatcher refuses them: a recorded decision is
+ * the only thing that writes those, and SCHEDULED → APPROVED ("unschedule") is a scheduling decision
+ * somebody should make on purpose rather than accept from a queue.
+ */
+async function applyChangeMove(changeId: string, before: unknown, after: Record<string, unknown>, actorId: string): Promise<void> {
+  const to = String(after.state) as ChangeState;
+  if (!(changeStates as readonly string[]).includes(to)) throw new Error("that is not a state a change can be in");
+  if (to === "APPROVED" || to === "REJECTED") throw new Error("a workflow cannot approve or reject a change — a person decides that");
+
+  const current = await prisma.changeRequest.findFirst({
+    where: { id: changeId },
+    include: { ticket: { select: { id: true, reporterId: true, assigneeId: true } } }
+  });
+  if (!current) throw new Error("that change no longer exists");
+  assertNotStale(before, current as unknown as Record<string, unknown>);
+
+  const person = await prisma.user.findUnique({
+    where: { id: actorId },
+    include: { role: { include: { permissions: { include: { permission: true } } } } }
+  });
+  if (!person || person.deletedAt || person.status !== "ACTIVE") throw new Error("the person applying this is not an active user");
+  const mover = { id: person.id, role: person.role.name, permissions: person.role.permissions.map((p) => p.permission.key) };
+
+  const { applyChangeTransition } = await import("./change-transition.service.js");
+  const { mayWorkOnChange } = await import("./change.service.js");
+  if (!mover.permissions.includes(permissions.CHANGES_WRITE) || !mayWorkOnChange(mover, current.ticket)) {
+    throw new Error("only this change's requester, its implementer, or a change manager can move it");
+  }
+
+  await applyChangeTransition({ change: current, to, actor: { id: person.id, name: person.name }, note: "Accepted from a workflow's proposal" });
 }
 
 /**
@@ -459,6 +509,8 @@ export async function applyProposal(params: {
           });
         }
         await prisma.aiProposalChange.update({ where: { id: change.id }, data: { targetId: created.id } });
+      } else if (change.op === "UPDATE" && change.targetType === "CHANGE" && change.targetId && isChangeMove(after)) {
+        await applyChangeMove(change.targetId, change.before, after, params.actorId);
       } else if (change.op === "UPDATE" && change.targetType === "CHANGE" && change.targetId) {
         const current = await prisma.changeRequest.findFirst({ where: { id: change.targetId } });
         if (!current) throw new Error("that change no longer exists");
@@ -777,6 +829,10 @@ export async function undoProposal(params: { proposalId: string; actorId: string
         const restore = projectTicketData(before);
         if (Object.keys(restore).length === 0) throw new Error("there is no recorded previous value for this");
         await prisma.ticket.update({ where: { id: current.id }, data: restore });
+      } else if (change.op === "UPDATE" && change.targetType === "CHANGE" && isChangeMove(after)) {
+        // Writing the old state back would walk the change past every gate in reverse — out of an
+        // approval round without settling it, back before a decision that was recorded.
+        throw new Error("a lifecycle move cannot be put back here — move it back from the change's own page");
       } else if (change.op === "UPDATE" && change.targetType === "CHANGE" && change.targetId) {
         const current = await prisma.changeRequest.findFirst({ where: { id: change.targetId } });
         if (!current) throw new Error("that change no longer exists");
