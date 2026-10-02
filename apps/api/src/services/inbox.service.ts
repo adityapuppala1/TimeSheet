@@ -21,6 +21,7 @@
 import { permissions } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { computeMyWork } from "./my-work.service.js";
+import { awaitingReviewWhere, loadApprovalAuthority } from "./timesheet-approval-scope.service.js";
 
 /** UTC midnight, matching `Timesheet.workDate`'s DATE semantics — the same normalisation
  *  report.controller.ts's `/daily-status` uses, so "did I log today" means one thing. */
@@ -54,7 +55,7 @@ export interface DailyBrief {
  * The brief. Each section names its own source so a reader can go and check it:
  *
  *  - overdue / blocked  → `my-work.service.ts` (the same buckets `/plan/my-work` renders)
- *  - timesheet approvals → the SUBMITTED predicate `timesheet.controller.ts` approves against
+ *  - timesheet approvals → `awaitingReviewWhere`, the approvals queue's own scope
  *  - deliverable approvals → `ApprovalStep` rows awaiting this person's decision
  *  - unlogged time      → the `Timesheet.workDate = today` check `/daily-status` performs
  *  - at-risk projects   → the latest `ProjectRiskSnapshot` per project, RED band
@@ -70,9 +71,11 @@ export async function buildDailyBrief(
 
   const [myWork, pendingTimesheets, pendingApprovals, loggedToday, redProjects, unread] = await Promise.all([
     computeMyWork(user.id, now),
-    // Only for people who can actually act on it: a queue you cannot clear is not a to-do.
+    // Only for people who can actually act on it: a queue you cannot clear is not a to-do. Counted
+    // with the approvals queue's own predicate — not yours, not your managers' — so the number here
+    // is the number of rows the link opens onto.
     canApprove
-      ? prisma.timesheet.count({ where: { status: "SUBMITTED", deletedAt: null, userId: { not: user.id } } })
+      ? loadApprovalAuthority(user.id).then((authority) => prisma.timesheet.count({ where: awaitingReviewWhere(authority) }))
       : Promise.resolve(0),
     prisma.approvalStep.count({ where: { approverId: user.id, decision: "PENDING" } }),
     prisma.timesheet.count({ where: { userId: user.id, workDate: today, deletedAt: null } }),

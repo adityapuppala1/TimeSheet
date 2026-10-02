@@ -48,6 +48,7 @@ import {
 } from "../services/timesheet-report.service.js";
 import { buildTimesheetReportWorkbook } from "../services/timesheet-report-xlsx.service.js";
 import { renderTimesheetReportPdf } from "../services/timesheet-report-pdf.service.js";
+import { awaitingReviewWhere, loadApprovalAuthority } from "../services/timesheet-approval-scope.service.js";
 
 export const reportRouter = Router();
 reportRouter.use(requireAuth);
@@ -162,6 +163,11 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
    *  unfiltered when there is not — which is what they have always done. */
   const breakdownWhere = ranged ? { deletedAt: null, workDate: inDays } : { deletedAt: null };
 
+  // "Pending approvals" is the approvals queue's own count — SUBMITTED, not the viewer's, not their
+  // managers'. It used to be every SUBMITTED row in the workspace, which matched neither the Inbox
+  // nor the queue the tile sends people to.
+  const awaitingReview = awaitingReviewWhere(await loadApprovalAuthority(req.user!.id));
+
   const [
     users,
     usersYesterday,
@@ -201,8 +207,8 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
       where: { status: "APPROVED", deletedAt: null, reviewedAt: { lt: winStart } },
       _sum: { totalHours: true }
     }),
-    prisma.timesheet.count({ where: { status: "SUBMITTED", deletedAt: null } }),
-    prisma.timesheet.count({ where: { status: "SUBMITTED", deletedAt: null, createdAt: { lt: winStart } } }),
+    prisma.timesheet.count({ where: awaitingReview }),
+    prisma.timesheet.count({ where: { ...awaitingReview, createdAt: { lt: winStart } } }),
     prisma.timesheet.count({ where: { slaBreachAt: { not: null }, deletedAt: null } }),
     prisma.timesheet.count({ where: { deletedAt: null, slaBreachAt: { not: null, lt: winStart } } }),
     prisma.escalation.count({ where: { resolvedAt: null } }),

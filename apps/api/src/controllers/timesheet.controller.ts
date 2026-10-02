@@ -31,7 +31,13 @@ import { processUpload } from "../services/attachment-storage.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
 import { bindVerificationToRecord, consumeVerification, getTimesheetVerificationBadges, isFaceVerificationRequired } from "../services/face.service.js";
 import { parseDayWindow, workDateFilter } from "../utils/date-window.js";
-import { assertMayDecide, loadApprovalAuthority, type ApprovalAuthority } from "../services/timesheet-approval-scope.service.js";
+import {
+  approvalScopeWhere,
+  assertMayDecide,
+  awaitingReviewWhere,
+  loadApprovalAuthority,
+  type ApprovalAuthority
+} from "../services/timesheet-approval-scope.service.js";
 
 const inputSchema = z.object({
   body: z.object({
@@ -151,6 +157,126 @@ timesheetRouter.get("/", async (req, res) => {
       identityVerificationApplies: badges.get(t.id)?.identityVerificationApplies ?? false
     }))
   );
+});
+
+/**
+ * GET /timesheets/approval-queue — the approvals page, filtered and paged ON THE SERVER.
+ *
+ * WHY IT IS NOT `GET /` WITH A STATUS: the page used to call `GET /` with nothing and filter for
+ * SUBMITTED in the browser. That route answers a `reports:view` holder with the newest 100 rows of
+ * every status in the workspace, so on a busy workspace an entry submitted on Monday had fallen off
+ * the page by Thursday — while its SLA escalation mail linked here to find it. Filtering one capped
+ * page client-side is the exact under-reporting PAGE_LIMIT's comment warns about.
+ *
+ * THE SCOPE is `approvalScopeWhere`: never your own entries and never your managers', in every
+ * status, because this is the page of decisions you can make (or made). `awaitingReview` is the
+ * same count the Inbox brief and the reports summary show, so the page's badge agrees with both.
+ *
+ * SEARCH matches the author's name and email and the task/notes text in SQL. The text columns hold
+ * rich-text HTML, so a needle that is also a tag or attribute name ("span", "strong") can match
+ * markup; names and words people actually type are unaffected, and the alternative — pulling every
+ * candidate row into Node to strip HTML before paging — would bring back the cap this route removes.
+ *
+ * FACETS are computed over the scope and status, NOT over the page, so a filter option is never
+ * missing because its rows happen to be on page 4. Per-day counts cover the last 120 days: they feed
+ * the range picker's calendar dots, which open on the current month.
+ */
+const QUEUE_STATUSES = new Set<string>(["SUBMITTED", "APPROVED", "REJECTED", "DRAFT"]);
+const QUEUE_MAX_PAGE_SIZE = 100;
+const QUEUE_FACET_DAYS = 120;
+
+/** `ALL` widens to every status; anything unrecognised falls back to the queue itself. */
+function queueStatus(raw: unknown): "SUBMITTED" | "APPROVED" | "REJECTED" | "DRAFT" | undefined {
+  if (raw === "ALL") return undefined;
+  if (typeof raw === "string" && QUEUE_STATUSES.has(raw)) return raw as "SUBMITTED";
+  return "SUBMITTED";
+}
+
+timesheetRouter.get("/approval-queue", requirePermission(permissions.TIMESHEETS_APPROVE), async (req, res) => {
+  const authority = await loadApprovalAuthority(req.user!.id);
+  const scope = approvalScopeWhere(authority);
+
+  const status = queueStatus(req.query.status);
+  const text = (key: string) => (typeof req.query[key] === "string" && req.query[key] ? String(req.query[key]) : undefined);
+  const projectId = text("projectId");
+  const activityType = text("activityType");
+  const search = text("search")?.trim();
+  const workDate = workDateFilter(parseDayWindow(req.query));
+
+  const page = Math.max(1, Math.floor(Number(req.query.page)) || 1);
+  const pageSize = Math.min(QUEUE_MAX_PAGE_SIZE, Math.max(1, Math.floor(Number(req.query.pageSize)) || 25));
+
+  const statusWhere: Prisma.TimesheetWhereInput = { ...scope, ...(status ? { status } : {}) };
+  const where: Prisma.TimesheetWhereInput = {
+    ...statusWhere,
+    ...(projectId ? { projectId } : {}),
+    ...(activityType ? { activityType } : {}),
+    ...(workDate ? { workDate } : {}),
+    ...(search
+      ? {
+          OR: [
+            { user: { name: { contains: search } } },
+            { user: { email: { contains: search } } },
+            { taskDescription: { contains: search } },
+            { notes: { contains: search } }
+          ]
+        }
+      : {})
+  };
+
+  const facetSince = new Date(Date.now() - QUEUE_FACET_DAYS * 86_400_000);
+  const [items, total, awaitingReview, byProject, byActivity, byDay] = await Promise.all([
+    prisma.timesheet.findMany({
+      where,
+      include: {
+        project: true,
+        module: true,
+        submodule: true,
+        ticket: { select: { id: true, key: true, title: true } },
+        attachments: true,
+        user: { select: { id: true, name: true, email: true, avatarUrl: true } }
+      },
+      orderBy: [{ workDate: "desc" }, { startTime: "desc" }],
+      skip: (page - 1) * pageSize,
+      take: pageSize
+    }),
+    prisma.timesheet.count({ where }),
+    prisma.timesheet.count({ where: awaitingReviewWhere(authority) }),
+    prisma.timesheet.groupBy({ by: ["projectId"], where: statusWhere, _count: true }),
+    prisma.timesheet.groupBy({ by: ["activityType"], where: statusWhere, _count: true }),
+    prisma.timesheet.groupBy({ by: ["workDate", "status"], where: { ...scope, workDate: { gte: facetSince } }, _count: true })
+  ]);
+
+  const projectNames = byProject.length
+    ? await prisma.project.findMany({ where: { id: { in: byProject.map((row) => row.projectId) } }, select: { id: true, name: true } })
+    : [];
+  const days: Record<string, Record<string, number>> = {};
+  for (const row of byDay) {
+    const key = row.workDate.toISOString().slice(0, 10);
+    days[key] = { ...days[key], [row.status]: row._count };
+  }
+
+  const [badges, decorated] = await Promise.all([
+    getTimesheetVerificationBadges(items.map((t) => ({ id: t.id, userId: t.userId }))),
+    decorateEditors(items)
+  ]);
+  res.json({
+    items: decorated.map((t) => ({
+      ...t,
+      identityVerified: badges.get(t.id)?.identityVerified ?? false,
+      identityVerifiedAt: badges.get(t.id)?.identityVerifiedAt ?? null,
+      identityVerificationApplies: badges.get(t.id)?.identityVerificationApplies ?? false
+    })),
+    total,
+    page,
+    pageSize,
+    awaitingReview,
+    facets: {
+      projects: projectNames.map((p) => ({ id: p.id, name: p.name })).sort((a, b) => a.name.localeCompare(b.name)),
+      activities: byActivity.map((row) => row.activityType).filter(Boolean).sort((a, b) => a.localeCompare(b)),
+      days
+    }
+  });
 });
 
 /**

@@ -19,6 +19,7 @@ const timesheetCount = vi.fn();
 const approvalStepCount = vi.fn();
 const notificationCount = vi.fn();
 const riskFindMany = vi.fn();
+const userFindMany = vi.fn();
 
 vi.mock("../../src/services/my-work.service.js", () => ({ computeMyWork: (...a: unknown[]) => computeMyWork(...a) }));
 vi.mock("../../src/config/prisma.js", () => ({
@@ -26,7 +27,8 @@ vi.mock("../../src/config/prisma.js", () => ({
     timesheet: { count: (...a: unknown[]) => timesheetCount(...a) },
     approvalStep: { count: (...a: unknown[]) => approvalStepCount(...a) },
     notification: { count: (...a: unknown[]) => notificationCount(...a) },
-    projectRiskSnapshot: { findMany: (...a: unknown[]) => riskFindMany(...a) }
+    projectRiskSnapshot: { findMany: (...a: unknown[]) => riskFindMany(...a) },
+    user: { findMany: (...a: unknown[]) => userFindMany(...a) }
   }
 }));
 
@@ -82,6 +84,7 @@ beforeEach(() => {
   approvalStepCount.mockResolvedValue(0);
   notificationCount.mockResolvedValue(0);
   riskFindMany.mockResolvedValue([]);
+  userFindMany.mockResolvedValue([]);
 });
 
 describe("what the brief shows whom", () => {
@@ -96,6 +99,19 @@ describe("what the brief shows whom", () => {
     timesheets({ pendingReview: 4 });
     const brief = await buildDailyBrief({ id: "u-1", permissions: ["timesheets:approve"] }, NOW);
     expect(section(brief, "timesheetApprovals")?.count).toBe(4);
+  });
+
+  it("counts awaiting review exactly as the approvals queue scopes it — not yours, not your managers'", async () => {
+    // u-1 reports to m-1, who reports to m-0. Their entries are not u-1's to decide, so counting
+    // them sent u-1 to a queue that (correctly) does not list them.
+    userFindMany.mockResolvedValue([
+      { id: "m-0", email: "m0@x.io", managerId: null, status: "ACTIVE", deletedAt: null },
+      { id: "m-1", email: "m1@x.io", managerId: "m-0", status: "ACTIVE", deletedAt: null },
+      { id: "u-1", email: "u1@x.io", managerId: "m-1", status: "ACTIVE", deletedAt: null }
+    ]);
+    await buildDailyBrief({ id: "u-1", permissions: ["timesheets:approve"] }, NOW);
+    const pendingCall = timesheetCount.mock.calls.find((c) => (c[0] as any).where.status === "SUBMITTED");
+    expect([...(pendingCall![0] as any).where.userId.notIn].sort()).toEqual(["m-0", "m-1", "u-1"]);
   });
 
   it("omits project risk from somebody without reports:view, and never queries it", async () => {
