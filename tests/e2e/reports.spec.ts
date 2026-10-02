@@ -302,7 +302,7 @@ test.describe("timesheet analytics", () => {
     // The utilisation table is the headline; it must render even when nobody has capacity set.
     // `exact` matters: the card's own description also mentions where the hours went, so a loose
     // match resolves to two elements and fails strict mode.
-    await expect(page.getByText("Utilisation — logged hours against contracted capacity", { exact: true })).toBeVisible();
-    await expect(page.getByText("Where the hours went", { exact: true })).toBeVisible();
+    await expect(page.getByText("Utilisation — logged hours against capacity to date", { exact: true })).toBeVisible();
+    await expect(page.getByText("Where the logged hours went", { exact: true })).toBeVisible();
   });
 });
