@@ -91,6 +91,10 @@ async function getTargetUsers() {
     where: {
       status: "ACTIVE",
       deletedAt: null,
+      // People only. An AI teammate is an ACTIVE EMPLOYEE row (agent-identity.ts) that never logs a
+      // timesheet, so it was reminded every afternoon and its owner was emailed an escalation every
+      // morning. The same population as the workforce card (admin-summary.service.ts#WORKFORCE_WHERE).
+      isAgent: false,
       role: { name: { in: ["EMPLOYEE", "TEAM_LEAD"] } }
     },
     // `timezone` is the whole point of this worker's scheduling — see the header. It is nullable,
@@ -212,8 +216,9 @@ export async function runEscalationReminders(now: Date = new Date()): Promise<{ 
     });
     employees += 1;
 
-    // Manager notification
-    if (user.manager) {
+    // Manager notification — to a person. An agent identity in the manager field has nobody behind
+    // it to act on an escalation.
+    if (user.manager && !user.manager.isAgent) {
       // Dedup by the unique (manager, employeeEmail, day) tuple — encoded in the
       // notification body. Email is guaranteed unique in the User table, so two
       // reports sharing a first name (which a `title contains user.name` check

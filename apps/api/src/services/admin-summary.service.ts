@@ -43,9 +43,9 @@ import { CLOSED_TICKET_STATUSES, LOGGED_TIMESHEET_STATUSES, percentOf } from "./
 
 /**
  * The people expected to fill a timesheet every working day: active employees and team leads who
- * are people. The daily reminder worker's population (workers/daily-reminder.worker.ts), minus AI
- * agent identities, which that worker should not be nagging either. BOTH sides of the workforce
- * card are this set — that is the whole fix.
+ * are people. Exactly the daily reminder worker's population (workers/daily-reminder.worker.ts),
+ * which excludes AI agent identities too. BOTH sides of the workforce card are this set — that is
+ * the whole fix.
  */
 export const WORKFORCE_WHERE = {
   status: "ACTIVE",
