@@ -742,6 +742,25 @@ export async function activeRiskParameterKeys(): Promise<string[]> {
   return params.map((p) => p.key);
 }
 
+/**
+ * The risk parameters an approval round already in flight is held to: the active ones that have not
+ * changed since the round opened — `updatedAt` at or before it, which also means created before it.
+ *
+ * WHY NOT TODAY'S SET: the decision re-checks what submission required, and reading the current
+ * parameters made one added (or switched back on) after submission a question every waiting change
+ * failed — unapprovable, and unanswerable without withdrawing it. A parameter that was active and
+ * untouched when the round opened was demanded at that submission, so a stripped answer still
+ * blocks; anything newer is the next submission's question. (`updatedAt` rather than `createdAt`
+ * because re-activating an old parameter is the same surprise as adding one.)
+ */
+export async function riskParameterKeysAsOf(roundOpenedAt: Date): Promise<string[]> {
+  const params = await prisma.changeRiskParameter.findMany({
+    where: { isActive: true, updatedAt: { lte: roundOpenedAt } },
+    select: { key: true }
+  });
+  return params.map((p) => p.key);
+}
+
 /* ------------------------------------------------------------------ *
  * SLA
  * ------------------------------------------------------------------ */

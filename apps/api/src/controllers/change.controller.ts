@@ -64,6 +64,7 @@ import {
   type PlanEditVerdict,
   REAPPROVABLE_STATES,
   requiresBackoutPlan,
+  riskParameterKeysAsOf,
   stateAfterDecision,
   ticketWriteFor
 } from "../services/change.service.js";
@@ -969,8 +970,9 @@ changeRouter.post("/:id/decision", requirePermission(permissions.CHANGES_APPROVE
   // requires — the same gate submission applied. The plan is locked while it waits, but changes
   // stripped by the old, unlocked edit path exist, and approving one would record a decision on a
   // HIGH-risk change with no way back. A rejection needs no such check: it is how one is sent back.
+  // Held to the risk questions of the round being decided, not today's: see `riskParameterKeysAsOf`.
   if (decision === "APPROVED") {
-    const missing = missingForTransition(change, "AWAITING_APPROVAL", await activeRiskParameterKeys());
+    const missing = missingForTransition(change, "AWAITING_APPROVAL", await riskParameterKeysAsOf(mine.createdAt));
     if (missing.length > 0) {
       throw new AppError(422, `This change no longer has everything approval requires: ${missing.join(", ")}. Reject it so the requester can complete it.`);
     }
