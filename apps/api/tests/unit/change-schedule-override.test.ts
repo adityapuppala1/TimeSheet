@@ -100,3 +100,70 @@ describe("scheduling into a window that collides", () => {
     expect(world.change.state).toBe("APPROVED");
   });
 });
+
+/**
+ * A reason answers for ONE window. It used to waive conflicts for good: once recorded, a change moved
+ * to a different window — or a different environment — collided again with the old reason still
+ * standing in for a decision nobody made about the new one.
+ */
+describe("a recorded override reason", () => {
+  const REASON = "The certificate expires on 1 November; the freeze owner agreed.";
+  const overridden = (over: Record<string, unknown> = {}) => inTheFreeze({ conflictOverrideReason: REASON, conflictOverridden: true, ...over });
+
+  it("is cleared when the window moves", async () => {
+    const world = overridden();
+    actor = ACTORS.admin;
+    const res = await request(buildChangeApp(changeRouter, world.client))
+      .patch(`/api/changes/${CHANGE_ID}`)
+      .send({ plannedStart: "2026-12-24T10:00:00.000Z", plannedEnd: "2026-12-24T11:00:00.000Z" });
+
+    expect(res.status).toBe(200);
+    expect(world.change.conflictOverrideReason).toBeNull();
+    expect(world.change.conflictOverridden).toBe(false);
+  });
+
+  it("is cleared when the environment changes, on a draft too", async () => {
+    const world = overridden({ state: "DRAFT", submittedAt: null, approvedAt: null });
+    const res = await request(buildChangeApp(changeRouter, world.client)).patch(`/api/changes/${CHANGE_ID}`).send({ environment: "STAGING" });
+
+    expect(res.status).toBe(200);
+    expect(world.change.conflictOverrideReason).toBeNull();
+    expect(world.change.conflictOverridden).toBe(false);
+  });
+
+  it("no longer lets a moved window go ahead into a new collision", async () => {
+    const world = overridden({ state: "DRAFT", submittedAt: null, approvedAt: null });
+    const app = buildChangeApp(changeRouter, world.client);
+    await request(app).patch(`/api/changes/${CHANGE_ID}`).send({ plannedStart: "2026-10-31T10:00:00.000Z", plannedEnd: "2026-10-31T11:00:00.000Z" });
+    // Approved again for the new window, which also sits in the freeze.
+    Object.assign(world.change, { state: "APPROVED", submittedAt: new Date(), approvedAt: new Date() });
+
+    const res = await request(app).post(`/api/changes/${CHANGE_ID}/transition`).send({ to: "SCHEDULED" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.message).toMatch(/Year-end freeze/);
+  });
+
+  it("survives re-saving the window it was written for", async () => {
+    // The Schedule tab saves on blur and can re-send the value it already has.
+    const world = overridden({ state: "DRAFT", submittedAt: null, approvedAt: null });
+    const res = await request(buildChangeApp(changeRouter, world.client))
+      .patch(`/api/changes/${CHANGE_ID}`)
+      .send({ plannedStart: "2026-11-01T10:00:00.000Z", environment: "PRODUCTION" });
+
+    expect(res.status).toBe(200);
+    expect(world.change.conflictOverrideReason).toBe(REASON);
+    expect(world.change.conflictOverridden).toBe(true);
+  });
+
+  it("can be replaced in the same save that moves the window", async () => {
+    const world = overridden({ state: "DRAFT", submittedAt: null, approvedAt: null });
+    const res = await request(buildChangeApp(changeRouter, world.client))
+      .patch(`/api/changes/${CHANGE_ID}`)
+      .send({ plannedStart: "2026-10-31T10:00:00.000Z", conflictOverrideReason: "Moved a day; still agreed with the freeze owner." });
+
+    expect(res.status).toBe(200);
+    expect(world.change.conflictOverrideReason).toBe("Moved a day; still agreed with the freeze owner.");
+    expect(world.change.conflictOverridden).toBe(true);
+  });
+});

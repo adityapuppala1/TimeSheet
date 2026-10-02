@@ -49,6 +49,7 @@ import {
   averageApprovalHours,
   canDecideChange,
   computeRiskScore,
+  editRetiresOverride,
   findScheduleConflicts,
   getChangeSettings,
   getSlaConfig,
@@ -873,6 +874,10 @@ changeRouter.patch("/:id", requirePermission(permissions.CHANGES_WRITE), validat
   }
   if ("conflictOverrideReason" in req.body) {
     data.conflictOverridden = Boolean(req.body.conflictOverrideReason);
+  } else if (editRetiresOverride(req.body, existing)) {
+    // The reason was written about the old window; see `editRetiresOverride`.
+    data.conflictOverrideReason = null;
+    data.conflictOverridden = false;
   }
 
   const ticketData: Record<string, unknown> = {};

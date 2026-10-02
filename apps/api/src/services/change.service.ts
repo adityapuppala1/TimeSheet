@@ -201,6 +201,22 @@ export function materialEdits(body: Record<string, unknown>, current: Record<str
   return MATERIAL_CHANGE_FIELDS.filter((field) => field in body && !sameFieldValue(body[field], current[field]));
 }
 
+/** What a conflict override reason answers for: the window, and the environment it collides in. */
+const OVERRIDE_SCOPE_FIELDS = ["plannedStart", "plannedEnd", "environment"] as const;
+
+/**
+ * Does this edit leave a recorded conflict override answering for a window it was never written
+ * about? A reason explains going ahead in ONE window; once recorded it used to waive conflicts for
+ * good, so a change moved elsewhere — or to another environment — collided again with the old reason
+ * standing in for a decision nobody made. Moving either clears it, unless the same save writes a new
+ * one. Re-sending an unchanged value (the Schedule tab saves on blur) is not a move.
+ */
+export function editRetiresOverride(body: Record<string, unknown>, current: Record<string, unknown>): boolean {
+  if ("conflictOverrideReason" in body) return false;
+  if (!current.conflictOverrideReason && !current.conflictOverridden) return false;
+  return OVERRIDE_SCOPE_FIELDS.some((field) => field in body && !sameFieldValue(body[field], current[field]));
+}
+
 /** A change manager: an admin, or anyone holding `changes:manage`. They may edit and move any change
  *  they can see; everybody else only changes they raised or are implementing. */
 export function isChangeManager(user: { role: string; permissions: string[] }): boolean {
