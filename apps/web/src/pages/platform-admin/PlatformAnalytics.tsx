@@ -49,6 +49,7 @@ import { Link } from "react-router";
 import { platformAdminAnalyticsApi, platformRevenueApi, type AccountHealthRow, type OrgAnalyticsSummary } from "../../services/platform-admin-api";
 import { exportCsv, type CsvColumn } from "../../utils/console-csv";
 import { runInBackground } from "../../lib/run-in-background";
+import { formatUsd } from "../../lib/console-format";
 import { HealthBandPill, HealthSignalLine } from "./health-ui";
 import {
   ConsolePage,
@@ -60,11 +61,14 @@ import {
   KpiGrid,
   Num,
   PRIMARY_BTN,
+  QueryFailed,
   Toolbar,
   shortDate
 } from "./console-ui";
 
-const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+/** AI spend is US dollars whatever a workspace's plan is priced in — the providers bill in USD and the
+ *  budget ceiling is set in it — formatted by the console's one money formatter. */
+const currency = { format: (amount: number) => formatUsd(amount) };
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
@@ -320,6 +324,22 @@ export function PlatformAdminAnalytics() {
           <Skeleton className="h-64 w-full rounded-xl" />
         </>
       )}
+
+      {analytics.isError && (
+        <QueryFailed
+          what="The per-workspace figures"
+          error={analytics.error}
+          stale={Boolean(analytics.data)}
+          retrying={analytics.isFetching}
+          onRetry={() => {
+            freshNext.current = true;
+            runInBackground(analytics.refetch());
+          }}
+        />
+      )}
+      {/* Its own notice: health comes from the snapshot, and a failure there must not read as
+          "nothing needs attention". */}
+      {health.isError && <QueryFailed what="Account health" error={health.error} stale={Boolean(health.data)} retrying={health.isFetching} onRetry={() => runInBackground(health.refetch())} />}
 
       {!analytics.isLoading && analytics.data && (
         <>

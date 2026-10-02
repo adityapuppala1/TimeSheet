@@ -21,7 +21,9 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { toast } from "../../components/ui/toaster";
 import { platformAdminConsoleApi } from "../../services/platform-admin-api";
-import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, KpiCard, KpiGrid, Num, OrgStatusPill, SegmentedControl, TierPill, shortDate, shortDateTime } from "./console-ui";
+import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, KpiCard, KpiGrid, Num, OrgStatusPill, QueryFailed, SegmentedControl, TierPill, shortDate, shortDateTime } from "./console-ui";
+import { runInBackground } from "../../lib/run-in-background";
+import { dayMonth, summariseCounts } from "../../lib/console-format";
 
 type Period = "7" | "30" | "90";
 const errorMessageOf = (error: unknown) => (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
@@ -81,6 +83,7 @@ export function PlatformAdminSignups() {
       }
     >
       {signups.isLoading && <Skeleton className="h-96 w-full" />}
+      {signups.isError && <QueryFailed what="Signups" error={signups.error} stale={Boolean(d)} retrying={signups.isFetching} onRetry={() => runInBackground(signups.refetch())} />}
       {d && (
         <>
           <KpiGrid>
@@ -124,9 +127,9 @@ export function PlatformAdminSignups() {
           <ConsoleSection title="New workspaces per day" description="Self-serve against those made in the console — so a quiet week for one is not mistaken for a quiet week for both.">
             <div className="h-56 w-full min-w-0">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={d.byDay} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+                <AreaChart data={d.byDay} margin={{ top: 8, right: 8, left: -20, bottom: 0 }} accessibilityLayer>
                   <CartesianGrid vertical={false} stroke="hsl(var(--border))" />
-                  <XAxis dataKey="day" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickFormatter={(day: string) => day.slice(5)} axisLine={false} tickLine={false} minTickGap={16} />
+                  <XAxis dataKey="day" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickFormatter={(day: string) => dayMonth(day)} axisLine={false} tickLine={false} minTickGap={16} />
                   <YAxis allowDecimals={false} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                   <RTooltip
                     contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12, color: "hsl(var(--popover-foreground))" }}
@@ -137,6 +140,12 @@ export function PlatformAdminSignups() {
                 </AreaChart>
               </ResponsiveContainer>
             </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {summariseCounts(
+                d.byDay.map((day) => ({ label: dayMonth(day.day), total: day.selfServe + day.console })),
+                { noun: "new workspace", span: `${d.days} days` }
+              )}
+            </p>
           </ConsoleSection>
 
           <ConsoleSection title="Who signed up" description="Self-serve workspaces created in the period, newest first. Seats are from the nightly usage snapshot — blank until the first one." flush>

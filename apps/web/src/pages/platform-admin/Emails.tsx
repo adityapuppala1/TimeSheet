@@ -35,7 +35,7 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../co
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
-import { consoleRangeForDays } from "../../lib/console-format";
+import { consoleRangeForDays, dayMonth, formatCount, summariseCounts } from "../../lib/console-format";
 import { cn } from "../../lib/utils";
 import { platformAdminConsoleApi, type PlatformEmailLogRow, type PlatformEmailTemplateRow } from "../../services/platform-admin-api";
 import {
@@ -50,6 +50,7 @@ import {
   Num,
   OrgStatusPill,
   PRIMARY_BTN,
+  QueryFailed,
   SegmentedControl,
   shortDate,
   shortDateTime,
@@ -469,6 +470,9 @@ export function PlatformAdminEmails() {
 
         <TabsContent value="templates" className="min-w-0">
           {templates.isLoading && <Skeleton className="h-96 w-full" />}
+          {templates.isError && (
+            <QueryFailed what="The templates" error={templates.error} stale={Boolean(templates.data)} retrying={templates.isFetching} onRetry={() => runInBackground(templates.refetch())} />
+          )}
           {templates.data && (
             <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
               <ConsoleSection title="Templates" className="min-w-0">
@@ -487,6 +491,9 @@ export function PlatformAdminEmails() {
 
         <TabsContent value="analytics" className="min-w-0">
           {analytics.isLoading && <Skeleton className="h-96 w-full" />}
+          {analytics.isError && (
+            <QueryFailed what="Delivery analytics" error={analytics.error} stale={Boolean(analytics.data)} retrying={analytics.isFetching} onRetry={() => runInBackground(analytics.refetch())} />
+          )}
           {analytics.data && (
             <div className="grid min-w-0 gap-6">
               <ConsoleSection
@@ -519,12 +526,12 @@ export function PlatformAdminEmails() {
               <ConsoleSection title="Deliveries per day" description="Delivered against failed, every day of the window — a flat line where you expected mail is the signal.">
                 <div className="h-56 w-full min-w-0">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={analytics.data.perDay} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+                    <BarChart data={analytics.data.perDay} margin={{ top: 8, right: 8, left: -18, bottom: 0 }} accessibilityLayer>
                       <CartesianGrid vertical={false} stroke="hsl(var(--border))" />
                       <XAxis
                         dataKey="day"
                         tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                        tickFormatter={(d: string) => d.slice(5)}
+                        tickFormatter={(d: string) => dayMonth(d)}
                         interval={Math.max(0, Math.floor(analytics.data.perDay.length / 7) - 1)}
                         axisLine={false}
                         tickLine={false}
@@ -538,6 +545,13 @@ export function PlatformAdminEmails() {
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {summariseCounts(
+                    analytics.data.perDay.map((day) => ({ label: dayMonth(day.day), total: day.sent + day.failed + day.skipped })),
+                    { noun: "email", span: `${analytics.data.windowDays} days` }
+                  )}{" "}
+                  {formatCount(analytics.data.totals.failed)} failed and {formatCount(analytics.data.totals.skipped)} were skipped.
+                </p>
               </ConsoleSection>
 
               <ConsoleSection

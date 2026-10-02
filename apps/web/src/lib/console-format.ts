@@ -65,9 +65,84 @@ export function summariseCounts(points: Array<{ label: string; total: number }>,
   const plural = (n: number) => `${options.noun}${n === 1 ? "" : "s"}`;
   if (total === 0) return `No ${plural(0)} in the last ${options.span}.`;
   const peak = points.reduce((best, point) => (point.total > best.total ? point : best), points[0]);
-  const latest = points[points.length - 1];
+  const latest = points.at(-1) ?? peak;
   return `${total.toLocaleString(CONSOLE_LOCALE)} ${plural(total)} in the last ${options.span}. The most, ${peak.total}, in ${peak.label}; ${latest.total} in ${latest.label}.`;
 }
 
 /** The console's number locale: Indian digit grouping (12,34,567) unless a page has a reason not to. */
 export const CONSOLE_LOCALE = "en-IN";
+
+/* ------------------------------------------------------------------------------------------ */
+/* Money and counts                                                                             */
+/* ------------------------------------------------------------------------------------------ */
+
+const moneyFormatters = new Map<string, Intl.NumberFormat>();
+
+/**
+ * Minor units as money — THE console money formatter. The CURRENCY always comes from the data (a
+ * tier's list-price currency, a Stripe subscription's), never from the page; the locale is the
+ * console's (`CONSOLE_LOCALE`). Revenue and Org 360 each hard-coded en-US, so an en-IN browser showed
+ * 1,00,000 beside $100,000 on the same screen.
+ *
+ * `null` is NEVER money: it is the absence of a price or a reading, and it renders as an em dash so
+ * it cannot be mistaken for zero down a column.
+ */
+export function formatMinor(minor: number | null | undefined, currency: string, fractionDigits = 0): string {
+  if (minor === null || minor === undefined) return "—";
+  const key = `${currency}|${fractionDigits}`;
+  let formatter = moneyFormatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(CONSOLE_LOCALE, { style: "currency", currency, minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits });
+    moneyFormatters.set(key, formatter);
+  }
+  return formatter.format(minor / 100);
+}
+
+/** AI spend: US dollars, because that is what the model providers bill and what the AI budget
+ *  ceiling is set in — whatever currency the workspace's plan is priced in. */
+export function formatUsd(amount: number | null | undefined, fractionDigits = 2): string {
+  return amount === null || amount === undefined ? "—" : formatMinor(Math.round(amount * 100), "USD", fractionDigits);
+}
+
+let countFormatter: Intl.NumberFormat | null = null;
+
+/** A whole count in the console's grouping. */
+export function formatCount(value: number): string {
+  countFormatter ??= new Intl.NumberFormat(CONSOLE_LOCALE, { maximumFractionDigits: 0 });
+  return countFormatter.format(value);
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* Chart labels                                                                                 */
+/* ------------------------------------------------------------------------------------------ */
+
+let monthFormatter: Intl.DateTimeFormat | null = null;
+
+/** A `YYYY-MM` key as "Oct 2026". Date-only, so formatted in UTC for the reason `dayMonth` is. */
+export function monthLabel(monthKey: string): string {
+  const [y, m] = monthKey.split("-").map(Number);
+  monthFormatter ??= new Intl.DateTimeFormat(CONSOLE_LOCALE, { timeZone: "UTC", month: "short", year: "numeric" });
+  return monthFormatter.format(new Date(Date.UTC(y, m - 1, 1)));
+}
+
+const trendFormatters = new Map<boolean, Intl.DateTimeFormat>();
+
+/**
+ * One tick on an hourly series, on the platform's calendar. Over a short window the hour is part of
+ * the label — twenty-four samples a day labelled by the date alone read as twenty-four identical
+ * ticks; over a long one the date is enough.
+ */
+export function trendTick(instant: string | number | Date, spanDays: number): string {
+  const withHour = spanDays <= 7;
+  let formatter = trendFormatters.get(withHour);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(CONSOLE_LOCALE, {
+      timeZone: CONSOLE_TIME_ZONE,
+      day: "numeric",
+      month: "short",
+      ...(withHour ? { hour: "2-digit", minute: "2-digit", hour12: false } : {})
+    });
+    trendFormatters.set(withHour, formatter);
+  }
+  return formatter.format(new Date(instant));
+}

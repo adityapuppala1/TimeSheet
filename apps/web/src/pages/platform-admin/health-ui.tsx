@@ -46,18 +46,22 @@ export function HealthBandPill({ band, score }: { band: AccountHealth["band"]; s
   );
 }
 
+/** The dot's colour AND its word: the colour alone said risk or expansion only to people who can tell
+ *  red from blue (WCAG 1.4.1), so the word goes beside it for a screen reader and in its tooltip. */
+const DIRECTION_DOT: Record<HealthSignal["direction"], { tone: string; word: string }> = {
+  risk: { tone: "bg-destructive", word: "Risk" },
+  expansion: { tone: "bg-info", word: "Expansion" },
+  neutral: { tone: "bg-muted-foreground/40", word: "Note" }
+};
+
 /** One signal as a single line: what it is, and the measured fact behind it. */
 export function HealthSignalLine({ signal, className }: { signal: HealthSignal; className?: string }) {
+  const dot = DIRECTION_DOT[signal.direction];
   return (
     <li className={cn("flex min-w-0 items-start gap-2", className)}>
-      <span
-        aria-hidden
-        className={cn(
-          "mt-1.5 h-2 w-2 shrink-0 rounded-full",
-          signal.direction === "risk" ? "bg-destructive" : signal.direction === "expansion" ? "bg-info" : "bg-muted-foreground/40"
-        )}
-      />
+      <span aria-hidden title={dot.word} className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", dot.tone)} />
       <span className="min-w-0">
+        <span className="sr-only">{dot.word}: </span>
         <span className="text-sm font-medium text-foreground">{signal.label}</span>
         {/* The detail is the whole reason this component exists. It carries the number. */}
         <span className="block text-xs text-muted-foreground">{signal.detail}</span>

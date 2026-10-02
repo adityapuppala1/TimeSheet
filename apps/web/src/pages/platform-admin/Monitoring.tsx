@@ -58,9 +58,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/ta
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import type { ServiceStatusValue, StatusPageService } from "../../services/api";
 import { platformOpsApi, type FleetHealthRow, type HealthAlert, type TenantDatabaseMetrics } from "../../services/platform-admin-api";
-import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, formatBytes, KpiCard, KpiGrid, Num, OrgStatusPill, SegmentedControl, TierPill, Toolbar, shortDateTime } from "./console-ui";
+import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, formatBytes, KpiCard, KpiGrid, Num, OrgStatusPill, QueryFailed, SegmentedControl, TierPill, Toolbar, shortDateTime } from "./console-ui";
 import { AdvisorPanel, SchemaPanel, TrendPanel } from "./MonitoringPanels";
 import { runInBackground } from "../../lib/run-in-background";
+import { trendTick } from "../../lib/console-format";
 import type { OrgStatus } from "../../services/platform-admin-api";
 
 /* ------------------------------------------------------------------------------------------- */
@@ -179,7 +180,7 @@ function FleetView({ onOpen }: { onOpen: (orgId: string) => void }) {
   // Only the Refresh button asks the server for a NEW sweep; the minute poll takes the server's last
   // one (up to five minutes old), so the page no longer opens a connection per workspace per minute.
   const freshNext = useRef(false);
-  const { data, isLoading, isFetching, refetch } = useQuery({
+  const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
     queryKey: ["platform-admin", "monitoring-fleet"],
     queryFn: () => {
       const fresh = freshNext.current;
@@ -224,8 +225,14 @@ function FleetView({ onOpen }: { onOpen: (orgId: string) => void }) {
     [rows]
   );
 
+  // A fleet read that failed is not a fleet of zero databases: the tiles below would read 0 / 0 / 0 B.
+  if (isError && !data) {
+    return <QueryFailed what="The fleet" error={error} retrying={isFetching} onRetry={() => runInBackground(refetch())} />;
+  }
+
   return (
     <>
+      {isError && <QueryFailed what="The fleet" error={error} stale retrying={isFetching} onRetry={() => runInBackground(refetch())} />}
       <KpiGrid>
         {/* The count is every active, in-grace and suspended workspace — including any with no
             database registered, which the hint used to say were not in it. */}
@@ -265,7 +272,7 @@ function FleetView({ onOpen }: { onOpen: (orgId: string) => void }) {
         <ConsoleSection title="Largest workspaces" description="Data plus indexes, in megabytes. The outlier is usually the story.">
           <div className="h-56 w-full min-w-0 sm:h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+              <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} accessibilityLayer>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                 <XAxis dataKey="name" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} interval={0} angle={-20} textAnchor="end" height={44} />
                 <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={48} />
@@ -274,6 +281,9 @@ function FleetView({ onOpen }: { onOpen: (orgId: string) => void }) {
               </BarChart>
             </ResponsiveContainer>
           </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Largest: {chartData.slice(0, 3).map((row) => `${row.name} ${row.mb} MB`).join(", ")}.
+          </p>
         </ConsoleSection>
       )}
 
@@ -438,7 +448,7 @@ function DatabasePanel({ metrics }: { metrics: TenantDatabaseMetrics }) {
               leaves whitespace under three. Inline, because the value is computed. */}
           <div className="w-full min-w-0" style={{ height: Math.max(180, tables.length * 30 + 48) }}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={tables} layout="vertical" margin={{ top: 8, right: 12, left: 8, bottom: 4 }} barCategoryGap="20%">
+              <BarChart data={tables} layout="vertical" margin={{ top: 8, right: 12, left: 8, bottom: 4 }} barCategoryGap="20%" accessibilityLayer>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" horizontal={false} />
                 <XAxis type="number" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                 <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
@@ -533,11 +543,24 @@ const WINDOWS = [
 
 function TenantView({ orgId, onBack }: { orgId: string; onBack: () => void }) {
   const [days, setDays] = useState<"7" | "30" | "90">("30");
-  const { data, isLoading, isFetching, refetch } = useQuery({
+  const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
     queryKey: ["platform-admin", "monitoring", orgId, days],
     queryFn: () => platformOpsApi.tenantHealth(orgId, Number(days)),
     refetchInterval: 60_000
   });
+
+  // A failed first read used to sit on the skeleton for ever — "still loading" is not what happened.
+  if (isError && !data) {
+    return (
+      <div className="grid gap-4">
+        <Button variant="outline" size="sm" className="w-fit gap-1.5" onClick={onBack}>
+          <ArrowLeft className="h-4 w-4" />
+          Back to the fleet
+        </Button>
+        <QueryFailed what="This workspace's health" error={error} retrying={isFetching} onRetry={() => runInBackground(refetch())} />
+      </div>
+    );
+  }
 
   if (isLoading || !data) {
     return (
@@ -556,7 +579,7 @@ function TenantView({ orgId, onBack }: { orgId: string; onBack: () => void }) {
   const openIncidents = incidents.filter((incident) => !incident.endedAt).length;
 
   const series = (api.data?.series ?? []).map((point) => ({
-    t: new Date(point.bucketStart).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit" }),
+    t: trendTick(point.bucketStart, 1),
     total: point.total,
     p95: Math.round(point.p95Ms),
     errors: point.serverErrors
@@ -862,7 +885,7 @@ function TenantView({ orgId, onBack }: { orgId: string; onBack: () => void }) {
               >
                 <div className="h-64 w-full min-w-0 sm:h-72">
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                    <AreaChart data={series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} accessibilityLayer>
                       <defs>
                         <linearGradient id="apiTotalFill" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor="hsl(var(--accent))" stopOpacity={0.35} />

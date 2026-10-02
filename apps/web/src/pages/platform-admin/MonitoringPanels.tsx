@@ -31,6 +31,7 @@ import {
   XCircle
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { trendTick } from "../../lib/console-format";
 import { Area, AreaChart, CartesianGrid, Legend, Line, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -100,14 +101,16 @@ export function TrendPanel({ orgId }: { orgId: string }) {
   const points = useMemo(
     () =>
       (data?.points ?? []).map((point) => ({
-        at: new Date(point.at).toLocaleDateString(undefined, { day: "numeric", month: "short" }),
+        // Hourly samples: over a week or less the hour is part of the label, or twenty-four points
+        // a day share one date and the axis reads as a stutter.
+        at: trendTick(point.at, Number(days)),
         dataMb: Math.round((point.dataBytes / 1024 / 1024) * 10) / 10,
         indexMb: Math.round((point.indexBytes / 1024 / 1024) * 10) / 10,
         freeMb: Math.round((point.freeBytes / 1024 / 1024) * 10) / 10,
         rows: point.estimatedRows,
         probeMs: point.queryMs
       })),
-    [data]
+    [data, days]
   );
 
   const growth = data?.growth;
@@ -145,7 +148,7 @@ export function TrendPanel({ orgId }: { orgId: string }) {
           <>
             <div className="h-64 w-full min-w-0 sm:h-72">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <AreaChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} accessibilityLayer>
                   <defs>
                     <linearGradient id="dataFill" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="hsl(var(--accent))" stopOpacity={0.4} />
@@ -158,7 +161,8 @@ export function TrendPanel({ orgId }: { orgId: string }) {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                   <XAxis dataKey="at" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} minTickGap={24} />
-                  <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={48} />
+                  {/* The unit is on the axis: a bare "300" next to a database is megabytes or gigabytes or rows. */}
+                  <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={56} tickFormatter={(value: number) => `${value} MB`} />
                   <RTooltip contentStyle={CHART_TOOLTIP} formatter={(value: number, key) => [`${value} MB`, String(key)]} />
                   <Legend wrapperStyle={{ fontSize: 11 }} iconType="plainline" />
                   {/* Stacked, because data and index together ARE the database — showing them as
@@ -187,6 +191,8 @@ export function TrendPanel({ orgId }: { orgId: string }) {
               />
             </div>
             <p className="mt-3 text-xs text-muted-foreground">
+              {points.length} hourly samples, from {points[0].at} to {points.at(-1)?.at}: data plus index went from {(points[0].dataMb + points[0].indexMb).toFixed(1)} MB to{" "}
+              {((points.at(-1)?.dataMb ?? 0) + (points.at(-1)?.indexMb ?? 0)).toFixed(1)} MB.{" "}
               The rate is measured from the first and last sample in the window rather than fitted — a least-squares slope across a series with one migration-shaped step in it
               reports a confident number that describes nothing. Anything under a day of span refuses to extrapolate at all.
             </p>

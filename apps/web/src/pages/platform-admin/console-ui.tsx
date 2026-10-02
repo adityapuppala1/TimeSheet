@@ -25,12 +25,14 @@
  *     `<Button variant="outline">` — there is deliberately no `ConsoleButton` to fork.
  */
 import { motion, useReducedMotion } from "framer-motion";
-import type { LucideIcon } from "lucide-react";
+import { RefreshCw, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
 import { Label } from "../../components/ui/label";
 import { Switch } from "../../components/ui/switch";
 import { TableCell } from "../../components/ui/table";
+import { formatCount } from "../../lib/console-format";
 import { cn } from "../../lib/utils";
 import type { DeletionBlocker, OrgStatus } from "../../services/platform-admin-api";
 
@@ -115,6 +117,32 @@ export function ConsoleSection({
       </header>
       <div className={cn("min-w-0", flush ? "p-0" : "p-4 sm:p-5", bodyClassName)}>{children}</div>
     </section>
+  );
+}
+
+/**
+ * A console read that FAILED, said as such — an em dash and a retry, never a page of zeros.
+ *
+ * Every console page used to render nothing (or its KPI tiles' `?? 0`) when its request failed, which
+ * is indistinguishable from a deployment with no customers, no mail and no signups. With `stale`, the
+ * page still shows the last figures that DID load and this says they are not current.
+ */
+export function QueryFailed({ what, error, onRetry, retrying, stale }: { what: string; error?: unknown; onRetry: () => void; retrying?: boolean; stale?: boolean }) {
+  const message = (error as { response?: { data?: { message?: string } }; message?: string } | null)?.response?.data?.message ?? (error as { message?: string } | null)?.message;
+  return (
+    <div role="alert" className="flex min-w-0 flex-wrap items-center gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4">
+      <span aria-hidden className="text-2xl font-black leading-none text-muted-foreground">
+        —
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-foreground">{stale ? `${what} could not be refreshed — these are the last figures that loaded.` : `${what} could not be loaded.`}</p>
+        <p className="text-xs text-muted-foreground">{stale ? "They may be out of date." : "Nothing here is a zero: the figures are unknown until this loads."}{message ? ` ${message}` : ""}</p>
+      </div>
+      <Button variant="outline" size="sm" className="gap-1.5" onClick={onRetry} disabled={retrying}>
+        <RefreshCw className={cn("h-3.5 w-3.5", retrying && "animate-spin")} />
+        Retry
+      </Button>
+    </div>
   );
 }
 
@@ -373,7 +401,7 @@ export function KpiCard({
   icon: Icon,
   hint,
   tone = "default",
-  format = (n) => Math.round(n).toLocaleString(),
+  format = (n) => formatCount(Math.round(n)),
   delay = 0
 }: {
   label: string;

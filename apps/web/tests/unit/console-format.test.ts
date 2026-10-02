@@ -7,7 +7,7 @@
  *    "the last 7 days" left out today entirely.
  */
 import { describe, expect, it } from "vitest";
-import { consoleDayKey, consoleRangeForDays, dayMonth, summariseCounts } from "../../src/lib/console-format";
+import { consoleDayKey, consoleRangeForDays, dayMonth, formatCount, formatMinor, formatUsd, monthLabel, summariseCounts, trendTick } from "../../src/lib/console-format";
 
 describe("consoleDayKey", () => {
   it("names the day as India sees it — 19:00 UTC on 1 Oct is already 2 Oct", () => {
@@ -51,5 +51,40 @@ describe("summariseCounts — a chart's text alternative", () => {
 
   it("says plainly when there is nothing to chart", () => {
     expect(summariseCounts([{ label: "today", total: 0 }], { noun: "email", span: "7 days" })).toBe("No emails in the last 7 days.");
+  });
+});
+
+describe("formatMinor — the console's one money formatter", () => {
+  it("formats in Indian digit grouping, in the currency the DATA carries", () => {
+    // The Revenue page hard-coded en-US, so an en-IN browser showed 1,00,000 beside $100,000.
+    expect(formatMinor(12_345_600, "INR")).toBe("₹1,23,456");
+    expect(formatMinor(80_000, "USD", 2)).toBe("$800.00");
+    expect(formatMinor(5_000, "EUR")).toBe("€50");
+  });
+
+  it("never renders an unknown amount as money", () => {
+    expect(formatMinor(null, "USD")).toBe("—");
+    expect(formatMinor(undefined, "INR")).toBe("—");
+  });
+
+  it("keeps AI spend in US dollars, as the providers bill it", () => {
+    expect(formatUsd(1234.5)).toBe("$1,234.50");
+    expect(formatUsd(null)).toBe("—");
+  });
+
+  it("counts in Indian digit grouping", () => {
+    expect(formatCount(1_234_567)).toBe("12,34,567");
+  });
+});
+
+describe("chart labels", () => {
+  it("names a month key as a month, not as 26-10", () => {
+    expect(monthLabel("2026-10")).toBe("Oct 2026");
+  });
+
+  it("labels an hourly series with the hour when the window is short enough to need it", () => {
+    // Hourly samples labelled by date only gave twenty-four points the same tick.
+    expect(trendTick("2026-10-02T08:30:00Z", 7)).toBe("2 Oct, 14:00");
+    expect(trendTick("2026-10-02T08:30:00Z", 90)).toBe("2 Oct");
   });
 });

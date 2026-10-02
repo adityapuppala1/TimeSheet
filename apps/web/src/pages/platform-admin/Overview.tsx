@@ -27,7 +27,8 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { dayMonth, summariseCounts } from "../../lib/console-format";
 import { platformAdminConsoleApi, type PlatformAuditRow } from "../../services/platform-admin-api";
-import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, KpiCard, KpiGrid, Num, PRIMARY_BTN, TierPill, shortDateTime } from "./console-ui";
+import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, KpiCard, KpiGrid, Num, PRIMARY_BTN, QueryFailed, TierPill, shortDateTime } from "./console-ui";
+import { runInBackground } from "../../lib/run-in-background";
 
 const STATUS_ORDER = ["ACTIVE", "GRACE", "SUSPENDED", "PROVISIONING", "ARCHIVED"] as const;
 const STATUS_TONE: Record<(typeof STATUS_ORDER)[number], string> = {
@@ -103,6 +104,10 @@ export function PlatformAdminOverview() {
             <Skeleton key={i} className="h-20 w-full sm:h-[6.5rem]" />
           ))}
         </KpiGrid>
+      )}
+
+      {overview.isError && (
+        <QueryFailed what="The overview" error={overview.error} stale={Boolean(d)} retrying={overview.isFetching} onRetry={() => runInBackground(overview.refetch())} />
       )}
 
       {d && (

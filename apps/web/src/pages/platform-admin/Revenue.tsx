@@ -41,19 +41,18 @@ import { cn } from "../../lib/utils";
 import { platformCapabilities, platformRoleHas } from "@timesheet/shared";
 import { platformRevenueApi, type CohortCell, type RevenueOverview } from "../../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../../store/platform-admin-auth";
-import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, KpiCard, KpiGrid, Num, PRIMARY_BTN, SegmentedControl, TierPill, Toolbar, shortDate } from "./console-ui";
+import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, KpiCard, KpiGrid, Num, PRIMARY_BTN, QueryFailed, SegmentedControl, TierPill, Toolbar, shortDate } from "./console-ui";
 import { runInBackground } from "../../lib/run-in-background";
+import { formatCount, formatMinor } from "../../lib/console-format";
 
 /* ------------------------------------------------------------------------------------------- */
 /* Formatting — every one of these has an explicit "we do not know" branch                       */
 /* ------------------------------------------------------------------------------------------- */
 
-/** Minor units as money. `null` is NEVER money: it is the absence of a price, and it renders as an
- *  em dash so it cannot be mistaken for zero at a glance down a column. */
-const money = (minor: number | null | undefined, currency: string, fractionDigits = 0) =>
-  minor === null || minor === undefined
-    ? "—"
-    : new Intl.NumberFormat("en-US", { style: "currency", currency, minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits }).format(minor / 100);
+/** Minor units as money — the console's one formatter (lib/console-format.ts): Indian digit grouping,
+ *  the currency the DATA carries, and `null` as an em dash, never as zero. It was a local en-US
+ *  formatter, so an en-IN browser showed 1,00,000 beside $100,000. */
+const money = formatMinor;
 
 /** The MRR tile's footnote: what the total leaves out, and what it carries over from an earlier night. */
 function mrrHint(mrr: RevenueOverview["mrr"]): string {
@@ -152,6 +151,10 @@ export function PlatformAdminRevenue() {
         </>
       )}
 
+      {revenue.isError && (
+        <QueryFailed what="Revenue and retention" error={revenue.error} stale={Boolean(data)} retrying={revenue.isFetching} onRetry={() => runInBackground(revenue.refetch())} />
+      )}
+
       {!revenue.isLoading && data && (data.coverage.snapshots === 0 ? <NoHistoryYet canSweep={canSweep} /> : <Loaded data={data} />)}
     </ConsolePage>
   );
@@ -221,7 +224,7 @@ function Loaded({ data }: { data: RevenueOverview }) {
           number above it is only as good as the series it came from, and a short series is the
           normal state for a while after this ships. */}
       <p className="text-xs text-muted-foreground">
-        {coverage.snapshots.toLocaleString()} snapshots covering {coverage.days} day{coverage.days === 1 ? "" : "s"}
+        {formatCount(coverage.snapshots)} snapshots covering {coverage.days} day{coverage.days === 1 ? "" : "s"}
         {coverage.firstDay ? ` — ${shortDate(coverage.firstDay)} to ${shortDate(coverage.lastDay)}` : ""}.{" "}
         {mrr.mixedCurrencies && <span className="font-semibold text-warning">Tiers are priced in more than one currency, so the totals above add unlike amounts.</span>}
       </p>
@@ -256,7 +259,7 @@ function Loaded({ data }: { data: RevenueOverview }) {
                   </TableCell>
                   <Num>{tier.perSeatMinor === null ? <span className="text-muted-foreground">Not set</span> : money(tier.perSeatMinor, currency, 2)}</Num>
                   <Num>{tier.accounts}</Num>
-                  <Num>{tier.seats.toLocaleString()}</Num>
+                  <Num>{formatCount(tier.seats)}</Num>
                   {/* An unpriced tier shows why it contributes nothing, rather than a $0 an
                       operator would read as "these customers pay us nothing". */}
                   <Num>{tier.mrrMinor === null ? <span className="text-muted-foreground">Priced per contract</span> : money(tier.mrrMinor, currency)}</Num>

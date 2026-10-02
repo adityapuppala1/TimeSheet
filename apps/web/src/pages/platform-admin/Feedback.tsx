@@ -24,7 +24,15 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { cn } from "../../lib/utils";
 import { platformAdminConsoleApi } from "../../services/platform-admin-api";
-import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, KpiCard, KpiGrid, MARKER_LABEL, Num, OrgStatusPill, TierPill, shortDateTime } from "./console-ui";
+import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, KpiCard, KpiGrid, MARKER_LABEL, Num, OrgStatusPill, QueryFailed, TierPill, shortDateTime } from "./console-ui";
+import { runInBackground } from "../../lib/run-in-background";
+import { monthLabel, summariseCounts } from "../../lib/console-format";
+
+/** The newest month that has a mean, said in words — the line's text alternative. */
+function latestRated(monthly: Array<{ month: string; avgRating: number | null }>): string {
+  const latest = [...monthly].reverse().find((month) => month.avgRating !== null);
+  return latest ? `The latest average, for ${monthLabel(latest.month)}, is ${latest.avgRating!.toFixed(1)} out of 5.` : "No month has a rating yet.";
+}
 
 function Stars({ rating }: { rating: number }) {
   return (
@@ -46,6 +54,7 @@ export function PlatformAdminFeedback() {
   return (
     <ConsolePage eyebrow="Growth" title="Feedback" description="Every answer to the feedback form — sent on day 10 of a trial, and with each reminder after it ends.">
       {feedback.isLoading && <Skeleton className="h-96 w-full" />}
+      {feedback.isError && <QueryFailed what="Feedback" error={feedback.error} stale={Boolean(d)} retrying={feedback.isFetching} onRetry={() => runInBackground(feedback.refetch())} />}
       {d && (
         <>
           <KpiGrid>
@@ -84,9 +93,9 @@ export function PlatformAdminFeedback() {
           >
             <div className="h-56 w-full min-w-0">
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={d.monthly} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+                <ComposedChart data={d.monthly} margin={{ top: 8, right: 8, left: -20, bottom: 0 }} accessibilityLayer>
                   <CartesianGrid vertical={false} stroke="hsl(var(--border))" />
-                  <XAxis dataKey="month" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickFormatter={(m: string) => m.slice(2)} axisLine={false} tickLine={false} />
+                  <XAxis dataKey="month" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickFormatter={(m: string) => monthLabel(m)} axisLine={false} tickLine={false} />
                   <YAxis yAxisId="count" allowDecimals={false} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                   <YAxis yAxisId="rating" orientation="right" domain={[0, 5]} ticks={[0, 1, 2, 3, 4, 5]} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                   <RTooltip
@@ -99,6 +108,13 @@ export function PlatformAdminFeedback() {
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {summariseCounts(
+                d.monthly.map((month) => ({ label: monthLabel(month.month), total: month.count })),
+                { noun: "answer", span: "twelve months" }
+              )}{" "}
+              {latestRated(d.monthly)}
+            </p>
           </ConsoleSection>
 
           {/* Side by side only where both halves still have room: 50/50 from `lg`, and the

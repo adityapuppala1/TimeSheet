@@ -77,9 +77,11 @@ import {
 import { HealthBandPill, HealthSignals } from "./health-ui";
 import { MicrosoftSignInFlag } from "./MicrosoftSignInFlag";
 import { runInBackground } from "../../lib/run-in-background";
+import { formatMinor } from "../../lib/console-format";
 
-const money = (minor: number | null, currency: string) =>
-  minor === null ? "Not set" : new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(minor / 100);
+/** The console's money formatter, with this tile's own word for "no figure": the tier has no list
+ *  price, or the seats were never measured. */
+const money = (minor: number | null, currency: string) => (minor === null ? "Not set" : formatMinor(minor, currency));
 
 /** Why the List MRR tile reads what it reads — the fleet's own predicates, for this one workspace. A
  *  running trial and a free account both list at 0, and they are different conversations. */
