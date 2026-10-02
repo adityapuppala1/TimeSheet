@@ -25,7 +25,6 @@
  */
 import { PrismaClient } from "@prisma/client";
 import { controlPrisma } from "../config/control-prisma.js";
-import { peekTenantClient } from "../config/prisma.js";
 import { tenantContext } from "../config/tenant-context.js";
 import { withOrgTenant } from "../config/with-org-tenant.js";
 import { AppError } from "../middleware/error.js";
@@ -174,17 +173,20 @@ export function redactStatement(sql: string | null): string | null {
 }
 
 /**
- * A client for one monitoring read of one workspace (analytics audit M14).
+ * ONE short-lived client for one monitoring read of one workspace, closed after (analytics audit M14).
  *
- * The workspace's LIVE cached tenant client when it has one — no new pool, and no change to its place
- * in the cache. Otherwise ONE short-lived client for this read, closed after. Never `getTenantClient`:
- * the fleet view reads every workspace every minute, and adding each idle one to the 50-entry cache
- * evicted the clients live requests were using. It used to build a fresh client per workspace per
- * poll whether or not a live one existed.
+ * Never `getTenantClient`: the fleet view reads every workspace every minute, and adding each idle one
+ * to the 50-entry cache evicted the clients live requests were using.
+ *
+ * And never the workspace's LIVE cached client either, though one may exist (H2 review, minor 3).
+ * `readDatabaseMetrics` runs five information_schema / SHOW queries at once; on a cached client
+ * (`PER_TENANT_CONNECTION_LIMIT`, five by default) that held every connection the workspace's own
+ * requests were waiting on, for the length of the read — every sweep, and every minute for a
+ * workspace an operator has drilled into. Borrowing it also did not hold off the idle sweeper or the
+ * LRU, which could close the client mid-read. The maintenance phase rides on the same client: it is
+ * one query on a connection this read already holds.
  */
-async function withMonitoringClient<T>(orgId: string, dsn: string, read: (client: PrismaClient) => Promise<T>): Promise<T> {
-  const live = peekTenantClient(orgId);
-  if (live) return read(live);
+async function withMonitoringClient<T>(dsn: string, read: (client: PrismaClient) => Promise<T>): Promise<T> {
   const client = new PrismaClient({ datasources: { db: { url: dsn } } });
   try {
     return await read(client);
@@ -194,15 +196,15 @@ async function withMonitoringClient<T>(orgId: string, dsn: string, read: (client
 }
 
 /**
- * Read one workspace's database metrics through its own connection string — the live tenant client
- * when there is one, a short-lived one otherwise (`withMonitoringClient`).
+ * Read one workspace's database metrics through its own connection string, on a short-lived client
+ * of its own (`withMonitoringClient`).
  */
 export async function getDatabaseMetrics(orgId: string): Promise<DatabaseMetrics> {
   const org = await controlPrisma.organization.findUnique({ where: { id: orgId }, include: { database: true } });
   if (!org) throw new AppError(404, "Organization not found");
   if (!org.database) throw new AppError(409, "This workspace has no database registered.");
   const database = org.database;
-  return withMonitoringClient(org.id, decryptSecret(database.encryptedDsn), (client) => readDatabaseMetrics(client, database));
+  return withMonitoringClient(decryptSecret(database.encryptedDsn), (client) => readDatabaseMetrics(client, database));
 }
 
 async function readDatabaseMetrics(client: PrismaClient, database: { databaseName: string; host: string }): Promise<DatabaseMetrics> {
@@ -686,9 +688,9 @@ export function __resetFleetHealthCacheForTests(): void {
  *
  * SEQUENTIAL, NOT PARALLEL, and that is the point: forty connections at once against one MySQL
  * server is a self-inflicted connection storm on the box the whole platform runs on. Each workspace
- * is read through its live tenant client when it has one, and through ONE short-lived client
- * otherwise (`withMonitoringClient`) — metrics and maintenance phase together — never through the
- * shared tenant-client cache, which a minute-by-minute sweep of every idle workspace thrashed.
+ * is read through ONE short-lived client of its own (`withMonitoringClient`) — metrics and
+ * maintenance phase together — never through the shared tenant-client cache, which a
+ * minute-by-minute sweep of every idle workspace thrashed, and never on a live client's pool.
  *
  * `maxAgeMs` lets a poller take the last sweep instead of a new one (the Monitoring page passes
  * `FLEET_HEALTH_MAX_AGE_MS`; its Refresh button passes 0). The default, 0, is what every other caller
@@ -742,7 +744,7 @@ async function sweepFleetHealth(): Promise<FleetHealth> {
     }
     try {
       const database = org.database;
-      const { metrics, phase } = await withMonitoringClient(org.id, decryptSecret(database.encryptedDsn), async (client) => ({
+      const { metrics, phase } = await withMonitoringClient(decryptSecret(database.encryptedDsn), async (client) => ({
         metrics: await readDatabaseMetrics(client, database),
         phase: await maintenancePhaseVia(client, org)
       }));
