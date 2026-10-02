@@ -127,3 +127,35 @@ describe("resetPassword", () => {
     expect(client.$transaction).toHaveBeenCalled();
   });
 });
+
+/**
+ * The shared password policy (utils/password-policy.ts, audit #10) is wired into both self-service
+ * routes. The rules themselves are pinned in password-policy.test.ts; this only proves they are
+ * ENFORCED here, before anything is written.
+ */
+describe("the password policy applies to change and reset", () => {
+  it("change-password refuses one of the most common passwords", async () => {
+    await expect(inTenant(() => changePassword(USER_ID, CURRENT, "Password123"))).rejects.toMatchObject({ statusCode: 422 });
+    expect(client.user.update).not.toHaveBeenCalled();
+  });
+
+  it("change-password refuses a password bcrypt would silently truncate", async () => {
+    await expect(inTenant(() => changePassword(USER_ID, CURRENT, "x".repeat(73)))).rejects.toThrow(/72/);
+    expect(client.user.update).not.toHaveBeenCalled();
+  });
+
+  it("a reset (or welcome) link refuses a common password and leaves the link usable", async () => {
+    vi.mocked(client.passwordResetToken.findUnique).mockResolvedValue({
+      id: "tok-1",
+      userId: USER_ID,
+      selector: "selectorSelector",
+      tokenHash: createHash("sha256").update("v".repeat(48)).digest("hex"),
+      usedAt: null,
+      expiresAt: new Date(Date.now() + 60_000)
+    } as never);
+    await expect(inTenant(() => resetPassword(`selectorSelector.${"v".repeat(48)}`, "qwertyuiop"))).rejects.toMatchObject({
+      statusCode: 422
+    });
+    expect(client.$transaction).not.toHaveBeenCalled();
+  });
+});

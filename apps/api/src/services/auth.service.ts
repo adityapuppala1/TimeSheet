@@ -22,6 +22,7 @@ import { countActiveSeats } from "./seat-count.service.js";
 import { rememberWorkspaceMembership, tenantBaseUrl } from "./workspace-directory.service.js";
 import { isMaintenanceActive } from "./maintenance.service.js";
 import { findLiveResetToken, issueResetToken, voidOutstandingResetTokens } from "./reset-token.service.js";
+import { assertPasswordPolicy } from "../utils/password-policy.js";
 import {
   DUMMY_PASSWORD_HASH,
   hashPassword,
@@ -668,6 +669,9 @@ export async function refresh(refreshToken: unknown) {
 export async function changePassword(userId: string, currentPassword: string, nextPassword: string, currentSessionId?: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   if (!(await verifyPassword(currentPassword, user.passwordHash))) throw new AppError(422, "Current password is incorrect");
+  // The shared policy (utils/password-policy.ts) — length, bcrypt's 72-byte limit, the common-password
+  // list, and the email address. Checked before the reuse compare below, which costs a bcrypt round.
+  assertPasswordPolicy(nextPassword, { email: user.email });
   // THE POINT OF THE WHOLE FLOW: a new password identical to the current one is not a password
   // change. It mattered most on the first sign-in, where `mustChangePassword` is set precisely
   // because an ADMIN knows the current password — re-entering it cleared the flag and left the
@@ -725,9 +729,12 @@ export async function resetPassword(rawToken: string, nextPassword: string): Pro
   // afterwards. Same message as a bad link — the holder learns nothing about the account's state.
   const resetting = await prisma.user.findUnique({
     where: { id: match.userId },
-    select: { passwordHash: true, status: true, deletedAt: true }
+    select: { email: true, passwordHash: true, status: true, deletedAt: true }
   });
   if (!resetting || resetting.deletedAt || resetting.status !== "ACTIVE") throw new AppError(422, INVALID_RESET_LINK);
+  // The same policy as change-password. Before the link is spent, so a refused password leaves it
+  // usable for a better one.
+  assertPasswordPolicy(nextPassword, { email: resetting.email });
 
   // Same rule as `changePassword`: re-setting the password you already have is not a reset. Most
   // reset links are sent precisely because someone else set (or may know) the current password,
