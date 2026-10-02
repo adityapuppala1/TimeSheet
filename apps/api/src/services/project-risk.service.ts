@@ -26,6 +26,7 @@ import { prisma } from "../config/prisma.js";
 import { buildPlan, dayKey, legacyCategory, readWorkingDays, workingDaysBetween } from "./plan-schedule.service.js";
 import { computeProjectBudgets } from "./budget.service.js";
 import { loadWorkload } from "./workload.service.js";
+import { openBreachedWhere } from "./workspace-metrics.js";
 
 export type RiskBand = "GREEN" | "AMBER" | "RED";
 
@@ -306,8 +307,10 @@ export async function assessProject(projectId: string): Promise<RiskAssessment &
     }).catch(() => null)
   ]);
 
+  // Open and past due now — the shared rule (workspace-metrics.ts), from `dueAt`. `slaBreachAt` is
+  // only written while the TICKET_SLA_ENABLED sweep runs, so reading it scored 0 wherever it is off.
   const slaBreachCount = await prisma.ticket.count({
-    where: { projectId, deletedAt: null, slaBreachAt: { not: null }, status: { notIn: ["RESOLVED", "CLOSED"] } }
+    where: { projectId, deletedAt: null, ...openBreachedWhere(new Date()) }
   });
   const reopenedCount = counts.find((c) => c.status === "REOPENED")?._count._all ?? 0;
   const resolvedCount = counts

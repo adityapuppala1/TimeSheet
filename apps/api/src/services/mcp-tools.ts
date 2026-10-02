@@ -406,11 +406,17 @@ const TOOLS: readonly McpToolRegistration[] = [
           role: { select: { name: true } },
           timesheets: {
             where: { deletedAt: null },
-            select: { status: true, totalHours: true, slaBreachAt: true }
+            select: { status: true, totalHours: true, approvalDeadline: true, reviewedAt: true }
           }
         },
         orderBy: { name: "asc" }
       });
+      // Approval-SLA breached = `(reviewedAt ?? now) > approvalDeadline` (workspace-metrics.ts), the
+      // rule the Team page and Reports use. Never `slaBreachAt`, which only the SLA_ENABLED sweep
+      // writes, so it read 0 wherever the sweep is off.
+      const now = Date.now();
+      const breached = (t: { approvalDeadline: Date | null; reviewedAt: Date | null }) =>
+        t.approvalDeadline !== null && (t.reviewedAt?.getTime() ?? now) > t.approvalDeadline.getTime();
       return {
         count: reports.length,
         reports: reports.map((person) => {
@@ -425,7 +431,7 @@ const TOOLS: readonly McpToolRegistration[] = [
               pendingApproval: sheets.filter((t) => t.status === "SUBMITTED").length,
               approved: sheets.filter((t) => t.status === "APPROVED").length,
               rejected: sheets.filter((t) => t.status === "REJECTED").length,
-              slaBreached: sheets.filter((t) => t.slaBreachAt).length,
+              slaBreached: sheets.filter(breached).length,
               approvedHours: Number(
                 sheets
                   .filter((t) => t.status === "APPROVED")

@@ -75,4 +75,14 @@ describe("assessProject", () => {
     expect(budget.points).toBe(0);
     expect(result.facts).toMatchObject({ burn: 50, forecast: 500, budgetCurrency: "USD", otherCurrencyBurn: "INR 50000" });
   });
+
+  it("counts SLA breaches from the due date, whether or not the breach sweep ran", async () => {
+    state.ticketCounts = [];
+    const result = await assessProject("p1");
+    expect(state.ticketCounts.some((args) => args.where.slaBreachAt)).toBe(false);
+    expect(state.ticketCounts).toContainEqual({
+      where: { projectId: "p1", deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] }, dueAt: { lt: NOW } }
+    });
+    expect(result.facts.slaBreaches).toBe(2);
+  });
 });
