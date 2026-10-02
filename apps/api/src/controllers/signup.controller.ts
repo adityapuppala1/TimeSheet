@@ -33,6 +33,7 @@ import { controlPrisma } from "../config/control-prisma.js";
 import { env } from "../config/env.js";
 import { withOrgTenant } from "../config/with-org-tenant.js";
 import { AppError } from "../middleware/error.js";
+import { assertPasswordPolicy } from "../utils/password-policy.js";
 import { validate } from "../middleware/validate.js";
 import { claimDomainInTransaction, DomainAlreadyClaimedError, findClaimForEmail } from "../services/company-domain-claims.service.js";
 import { countJoinRequestsSince, createJoinRequest } from "../services/join-request.service.js";
@@ -279,6 +280,10 @@ signupRouter.post(
     const proof = await peekSignupContinuation(req.body.continuation);
     if (!proof.ok) throw EXPIRED();
     const email = proof.email;
+    // The founder's password meets the policy every other password in the app does. Checked here —
+    // before the continuation is spent, so choosing a better one costs nothing, and long before
+    // provisioning, where a refusal would read as a failed workspace and alert an operator.
+    assertPasswordPolicy(req.body.adminPassword, { email });
     // Again, against the PROVEN address: an operator may have blocked its domain since the code was
     // sent, and the proven address — not anything this request supplies — is the one the workspace
     // is created for.

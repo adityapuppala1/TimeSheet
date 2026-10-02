@@ -367,6 +367,22 @@ describe("complete — creating the workspace", () => {
     expect(stages()).toContain("CREATED");
   });
 
+  it.each([
+    ["one of the most common passwords", "password1", /common/i],
+    ["a password built from the email address", "priya2026!", /email/i]
+  ])("refuses %s before anything is created, and keeps the verification", async (_label, adminPassword, reason) => {
+    // The founder's password is the first one a workspace has — the same policy as every other
+    // password in the app (utils/password-policy.ts), checked before the continuation is spent so
+    // choosing a better one costs nothing, and before provisioning, where a refusal would read as a
+    // failed workspace and page an operator.
+    const res = await request(buildApp()).post("/api/signup/complete").send({ ...completeBody, adminPassword });
+    expect(res.status).toBe(422);
+    expect(res.body.message).toMatch(reason);
+    expect(directory.redeemSignupContinuation).not.toHaveBeenCalled();
+    expect(control.organization.create).not.toHaveBeenCalled();
+    expect(provisionOrganization).not.toHaveBeenCalled();
+  });
+
   it("a taken address does NOT burn the verification — fix the address and finish", async () => {
     addWorkspace({ id: "other", name: "Other", slug: "northwind", status: "ACTIVE" });
     const first = await request(buildApp()).post("/api/signup/complete").send(completeBody);
