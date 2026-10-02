@@ -118,7 +118,11 @@ export type NotificationCategory =
   /** Somebody from the company's domain asked to join this workspace (signup Phase 1). In-app only
    *  here; the super admins' email is a transactional `workspace.join_request`, sent by the
    *  join-request service, because a request a person is waiting on must not be mutable away. */
-  | "join.requested";
+  | "join.requested"
+  /** In-app ONLY, to the super admins: somebody's first SSO sign-in created their account
+   *  ("just-in-time" provisioning — auth.service.ts#provisionSsoUser). It was silent until now, and
+   *  the people who can undo it should hear about it; news, not something to wait on, so no email. */
+  | "sso.user_provisioned";
 
 interface EmailPayload {
   templateKey: string;
@@ -182,6 +186,7 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "release.published": null,
   "workflow.attention": null,
   "join.requested": null,
+  "sso.user_provisioned": null,
   "workflow.approval": "emailWorkflowApproval",
   "goal.digest": "emailGoalDigest",
   "change.submitted": "emailChangeSubmitted",

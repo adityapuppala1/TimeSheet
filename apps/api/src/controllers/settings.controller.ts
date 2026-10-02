@@ -79,6 +79,9 @@ import {
 } from "../services/sso-validation.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
 import { ssoRegistrationValues } from "../services/sso.service.js";
+import { normaliseJitDomain, readJitAllowedDomains } from "../services/sso-jit.service.js";
+import { claimsForOrg } from "../services/company-domain-claims.service.js";
+import { Prisma as ControlPrisma, type OrgSsoConfig } from "../generated/control-client/index.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
 import { describeMcpCatalogue, generateMcpToken, getGlobalMcpSettings, updateGlobalMcpSettings } from "../services/mcp.service.js";
 import { MCP_TOOLS } from "../services/mcp-tools.js";
@@ -972,43 +975,55 @@ settingsRouter.post("/ai/native/benchmark", requireSuperAdmin, validate(nativeBe
  * (GlobalAISettings.apiKey, EmailIntakeSettings.imapPassword) — the encrypted value is never
  * returned to the client, only whether one is saved.
  */
+/** One provider's row as the card reads it — the same shape from GET and from PATCH. */
+function ssoConfigView(c: OrgSsoConfig) {
+  return {
+    provider: c.providerType,
+    isEnabled: c.isEnabled,
+    clientId: c.clientId,
+    clientSecretSet: Boolean(c.encryptedClientSecret),
+    tenantHint: c.tenantHint,
+    idpEntityId: c.idpEntityId,
+    idpSsoUrl: c.idpSsoUrl,
+    idpCertificateSet: Boolean(c.idpCertificate),
+    spEntityId: c.spEntityId,
+    ldapUrl: c.ldapUrl,
+    ldapBindDn: c.ldapBindDn,
+    ldapBindCredentialSet: Boolean(c.encryptedLdapBindCredential),
+    ldapSearchBase: c.ldapSearchBase,
+    ldapUserFilter: c.ldapUserFilter,
+    ldapTlsRejectUnauthorized: c.ldapTlsRejectUnauthorized,
+    lastTestedAt: c.lastTestedAt,
+    lastTestStatus: c.lastTestStatus,
+    lastTestMessage: c.lastTestMessage,
+    lastSuccessfulLoginAt: c.lastSuccessfulLoginAt,
+    // The certificate is public, so its facts can be read back in full — and an expiry an admin
+    // cannot see is an outage with a date on it. Null for every non-SAML provider. For a rollover
+    // bundle, the certificate that expires LAST — that is when sign-in actually stops.
+    certificate: describeCertificate(c.idpCertificate),
+    certificateCount: certificatePems(c.idpCertificate).length,
+    // Just-in-time account creation (audit H5). An absent column reads as today's behaviour: on, any domain.
+    jitEnabled: c.jitEnabled !== false,
+    jitAllowedDomains: readJitAllowedDomains(c.jitAllowedDomains)
+  };
+}
+
 settingsRouter.get("/sso", requireSuperAdmin, async (_req, res) => {
   const { orgId } = requireTenantContext();
-  const [configs, authMethod] = await Promise.all([
+  const [configs, authMethod, claims] = await Promise.all([
     controlPrisma.orgSsoConfig.findMany({ where: { organizationId: orgId } }),
-    controlPrisma.orgAuthMethod.findUnique({ where: { organizationId: orgId } })
+    controlPrisma.orgAuthMethod.findUnique({ where: { organizationId: orgId } }),
+    claimsForOrg(orgId)
   ]);
   res.json({
-    providers: configs.map((c) => ({
-      provider: c.providerType,
-      isEnabled: c.isEnabled,
-      clientId: c.clientId,
-      clientSecretSet: Boolean(c.encryptedClientSecret),
-      tenantHint: c.tenantHint,
-      idpEntityId: c.idpEntityId,
-      idpSsoUrl: c.idpSsoUrl,
-      idpCertificateSet: Boolean(c.idpCertificate),
-      spEntityId: c.spEntityId,
-      ldapUrl: c.ldapUrl,
-      ldapBindDn: c.ldapBindDn,
-      ldapBindCredentialSet: Boolean(c.encryptedLdapBindCredential),
-      ldapSearchBase: c.ldapSearchBase,
-      ldapUserFilter: c.ldapUserFilter,
-      ldapTlsRejectUnauthorized: c.ldapTlsRejectUnauthorized,
-      lastTestedAt: c.lastTestedAt,
-      lastTestStatus: c.lastTestStatus,
-      lastTestMessage: c.lastTestMessage,
-      lastSuccessfulLoginAt: c.lastSuccessfulLoginAt,
-      // The certificate is public, so its facts can be read back in full — and an expiry an admin
-      // cannot see is an outage with a date on it. Null for every non-SAML provider. For a rollover
-      // bundle, the certificate that expires LAST — that is when sign-in actually stops.
-      certificate: describeCertificate(c.idpCertificate),
-      certificateCount: certificatePems(c.idpCertificate).length
-    })),
+    providers: configs.map(ssoConfigView),
     passwordLoginEnabled: authMethod?.passwordLoginEnabled ?? true,
     requireSsoOnly: authMethod?.requireSsoOnly ?? false,
     // What the admin registers with their IdP, absolute and exactly as the flows send it (audit M4).
-    registration: ssoRegistrationValues(configs.find((c) => c.providerType === "SAML")?.spEntityId)
+    registration: ssoRegistrationValues(configs.find((c) => c.providerType === "SAML")?.spEntityId),
+    // The workspace's claimed company domains — the card's suggested "allowed domains" list for
+    // automatic account creation, so the safe setting is one click rather than a research task.
+    claimedDomains: claims.map((claim) => claim.domain)
   });
 });
 
@@ -1062,10 +1077,30 @@ const ssoConfigSchema = z.object({
       ldapBindCredential: z.string().max(2000).optional(),
       ldapSearchBase: z.string().max(500).optional().nullable(),
       ldapUserFilter: z.string().max(255).optional().nullable(),
-      ldapTlsRejectUnauthorized: z.boolean().optional()
+      ldapTlsRejectUnauthorized: z.boolean().optional(),
+      // Just-in-time account creation (audit H5) — see services/sso-jit.service.ts. Domains are
+      // checked here and NORMALISED in the handler (jitColumns): validate() keeps the raw body.
+      jitEnabled: z.boolean().optional(),
+      jitAllowedDomains: z
+        .array(z.string().max(253).refine((value) => normaliseJitDomain(value) !== null, "isn't a domain like example.com"))
+        .max(50)
+        .optional()
+        .nullable()
     })
     .strict()
 });
+
+/**
+ * `jitAllowedDomains` as the column stores it: lower-case ASCII, de-duplicated, and NULL (any domain)
+ * for an absent or EMPTIED list — `[]` would otherwise read as "nobody", turning a cleared field into a
+ * silent refusal of every new person. Untouched when the request did not mention it.
+ */
+function jitColumns(body: Record<string, unknown>): Record<string, unknown> {
+  if (!("jitAllowedDomains" in body)) return {};
+  const raw: unknown[] = Array.isArray(body.jitAllowedDomains) ? body.jitAllowedDomains : [];
+  const domains = [...new Set(raw.map((value) => normaliseJitDomain(String(value))).filter((value): value is string => value !== null))];
+  return { jitAllowedDomains: domains.length > 0 ? domains : ControlPrisma.DbNull };
+}
 
 /** The four providers this workspace can configure, as the control-plane column spells them.
  *  Named once because five copies of the same union is what tripped `sonarjs/use-type-alias`,
@@ -1171,7 +1206,7 @@ settingsRouter.patch("/sso/:provider", requireSuperAdmin, validate(ssoConfigSche
     clientSecret?: string;
     ldapBindCredential?: string;
   };
-  const data: Record<string, unknown> = { ...rest };
+  const data: Record<string, unknown> = { ...rest, ...jitColumns(rest) };
   if (typeof clientSecret === "string") data.encryptedClientSecret = clientSecret.length > 0 ? encryptSecret(clientSecret) : null;
   if (typeof ldapBindCredential === "string") data.encryptedLdapBindCredential = ldapBindCredential.length > 0 ? encryptSecret(ldapBindCredential) : null;
 
@@ -1220,29 +1255,7 @@ settingsRouter.patch("/sso/:provider", requireSuperAdmin, validate(ssoConfigSche
     create: { organizationId: orgId, providerType, ...data }
   });
   await audit(req.user!.id, "settings.sso_updated", "OrgSsoConfig", updated.id, { provider: providerType, ...req.body, clientSecret: undefined, ldapBindCredential: undefined });
-  res.json({
-    provider: updated.providerType,
-    isEnabled: updated.isEnabled,
-    clientId: updated.clientId,
-    clientSecretSet: Boolean(updated.encryptedClientSecret),
-    tenantHint: updated.tenantHint,
-    idpEntityId: updated.idpEntityId,
-    idpSsoUrl: updated.idpSsoUrl,
-    idpCertificateSet: Boolean(updated.idpCertificate),
-    spEntityId: updated.spEntityId,
-    ldapUrl: updated.ldapUrl,
-    ldapBindDn: updated.ldapBindDn,
-    ldapBindCredentialSet: Boolean(updated.encryptedLdapBindCredential),
-    ldapSearchBase: updated.ldapSearchBase,
-    ldapUserFilter: updated.ldapUserFilter,
-    ldapTlsRejectUnauthorized: updated.ldapTlsRejectUnauthorized,
-    lastTestedAt: updated.lastTestedAt,
-    lastTestStatus: updated.lastTestStatus,
-    lastTestMessage: updated.lastTestMessage,
-    lastSuccessfulLoginAt: updated.lastSuccessfulLoginAt,
-    certificate: describeCertificate(updated.idpCertificate),
-    certificateCount: certificatePems(updated.idpCertificate).length
-  });
+  res.json(ssoConfigView(updated));
 });
 
 /* ---------- SSO connection test ---------- */

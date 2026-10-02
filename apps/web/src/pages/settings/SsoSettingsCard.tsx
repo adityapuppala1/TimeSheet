@@ -49,6 +49,7 @@ import { copyText } from "../../lib/clipboard";
 import { SERVER_ORIGIN, settingsApi, type SsoProviderConfig, type SsoRegistrationValues, type SsoTestResult } from "../../services/api";
 import { runInBackground } from "../../lib/run-in-background";
 import { SSO_TEST_OUTCOME_LABEL, ssoTestOutcome, type SsoTestOutcome } from "../../lib/sso-test-status";
+import { formatDomainList, opensToAnyone, parseDomainList } from "../../lib/sso-jit";
 
 const SSO_PROVIDER_LABEL: Record<"GOOGLE" | "MICROSOFT", string> = { GOOGLE: "Google", MICROSOFT: "Microsoft / Azure AD" };
 
@@ -60,6 +61,9 @@ const SSO_PROVIDER_LABEL: Record<"GOOGLE" | "MICROSOFT", string> = { GOOGLE: "Go
    stopped — the state that silently breaks a sign-in button. Folding those two into one "not
    enabled" would hide a mistake behind a choice. */
 type ProviderState = SectionState;
+
+/** A provider as it appears in the settings API paths (`/settings/sso/:provider`). */
+type SsoProviderPath = "google" | "microsoft" | "saml" | "ldap";
 
 /** Every mark in provider-marks.tsx takes exactly this, so a card, a tile and a button can share one. */
 type ProviderMark = ComponentType<{ className?: string }>;
@@ -100,7 +104,7 @@ function ProviderShell({
 
 /** The fresh result if there is one, else the recorded one — read through ssoTestOutcome either way,
  *  so a Microsoft test shows "configuration looks valid", never a tick (lib/sso-test-status.ts). */
-function shownTestResult(provider: "google" | "microsoft" | "saml" | "ldap", result: SsoTestResult | null, config: SsoProviderConfig | undefined) {
+function shownTestResult(provider: SsoProviderPath, result: SsoTestResult | null, config: SsoProviderConfig | undefined) {
   if (result) {
     return { outcome: ssoTestOutcome(provider, result.status ?? (result.ok ? "PASS" : "FAIL")), message: result.message, testedAt: result.testedAt };
   }
@@ -156,7 +160,7 @@ function SsoVerification({
   config,
   readOnly
 }: {
-  provider: "google" | "microsoft" | "saml" | "ldap";
+  provider: SsoProviderPath;
   config: SsoProviderConfig | undefined;
   readOnly: boolean;
 }) {
@@ -236,6 +240,91 @@ function SsoVerification({
   );
 }
 
+/**
+ * WHO GETS AN ACCOUNT ON FIRST SIGN-IN (audit H5). It used to be anybody the provider authenticated,
+ * silently. The switch defaults ON — what every workspace already had — and the domain list defaults to
+ * empty, meaning any domain; that state is the one this warns about, with the workspace's own claimed
+ * company domains offered as the one-click fix. People who already have an account are never affected.
+ */
+function JitControls({
+  provider,
+  config,
+  claimedDomains,
+  readOnly
+}: {
+  provider: SsoProviderPath;
+  config: SsoProviderConfig | undefined;
+  claimedDomains: string[];
+  readOnly: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [domainsText, setDomainsText] = useState(formatDomainList(config?.jitAllowedDomains));
+  const saved = formatDomainList(config?.jitAllowedDomains);
+  useEffect(() => setDomainsText(saved), [saved]);
+
+  const save = useMutation({
+    mutationFn: (payload: { jitEnabled?: boolean; jitAllowedDomains?: string[] }) => settingsApi.updateSso(provider, payload),
+    onSuccess: () => {
+      toast.success("Saved");
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "sso"] }));
+    },
+    onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
+  });
+
+  const enabled = config?.jitEnabled !== false;
+  const domainsId = `sso-${provider}-jit-domains`;
+
+  return (
+    <div className="grid gap-3 rounded-lg border border-border p-4">
+      <ToggleRow
+        label="Create accounts automatically on first sign-in"
+        hint="Off: only people who already have an account here can sign in this way — anyone else is told to ask you for an invite."
+        checked={enabled}
+        disabled={readOnly || !config}
+        onChange={(v) => save.mutate({ jitEnabled: v })}
+      />
+      {enabled && (
+        <div className="grid gap-1.5">
+          <Label htmlFor={domainsId}>Only for these email domains</Label>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              id={domainsId}
+              className="min-w-0 flex-1"
+              value={domainsText}
+              disabled={readOnly || !config}
+              onChange={(e) => setDomainsText(e.target.value)}
+              placeholder="acme.com, acme.co.uk — empty means any domain"
+            />
+            <Button size="sm" variant="outline" disabled={readOnly || !config || domainsText === saved} onClick={() => save.mutate({ jitAllowedDomains: parseDomainList(domainsText) })}>
+              Save domains
+            </Button>
+          </div>
+          {provider === "google" && (
+            <p className="text-xs text-muted-foreground">
+              Google vouches for an address only at gmail.com or through a Google Workspace account, so outside gmail.com the
+              account must also belong to a Workspace on one of these domains.
+            </p>
+          )}
+        </div>
+      )}
+      {opensToAnyone(config ?? {}) && (
+        <Alert variant="warning">
+          <ShieldAlert />
+          <AlertTitle>Anyone this provider authenticates can join this workspace</AlertTitle>
+          <AlertDescription className="grid gap-2">
+            <span>A new account is created for whoever signs in, from any email domain, until the seat limit is reached.</span>
+            {claimedDomains.length > 0 && !readOnly && config && (
+              <Button size="sm" variant="outline" className="w-fit" onClick={() => save.mutate({ jitAllowedDomains: claimedDomains })}>
+                Limit to {claimedDomains.join(", ")}
+              </Button>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+    </div>
+  );
+}
+
 /* ── The five cards ───────────────────────────────────────────────────────────────────────────
    Each takes `open`/`onToggle` from the parent rather than owning it, because the board's tiles
    have to be able to open them. */
@@ -244,6 +333,7 @@ function SsoVerification({
 type CardProps = {
   config?: SsoProviderConfig;
   registration?: SsoRegistrationValues;
+  claimedDomains?: string[];
   readOnly: boolean;
   isLoading: boolean;
   open: boolean;
@@ -265,7 +355,7 @@ const isMultiTenantMicrosoft = (tenantHint: string) => MULTI_TENANT_MICROSOFT_AU
  * that org's own credentials. `clientSecret` is write-only (never echoed back), same masking
  * convention as the AI tab's BYOK API key and the email-intake IMAP password.
  */
-function OidcProviderCard({ provider, config, registration, readOnly, isLoading, open, onToggle }: CardProps & { provider: "GOOGLE" | "MICROSOFT" }) {
+function OidcProviderCard({ provider, config, registration, claimedDomains = [], readOnly, isLoading, open, onToggle }: CardProps & { provider: "GOOGLE" | "MICROSOFT" }) {
   const queryClient = useQueryClient();
   const [clientId, setClientId] = useState(config?.clientId ?? "");
   const [clientSecret, setClientSecret] = useState("");
@@ -402,6 +492,8 @@ function OidcProviderCard({ provider, config, registration, readOnly, isLoading,
             <Save className="h-4 w-4" />Save
           </Button>
 
+          <JitControls provider={provider.toLowerCase() as "google" | "microsoft"} config={config} claimedDomains={claimedDomains} readOnly={readOnly} />
+
           <SsoVerification provider={provider.toLowerCase() as "google" | "microsoft"} config={config} readOnly={readOnly} />
         </>
       )}
@@ -409,7 +501,7 @@ function OidcProviderCard({ provider, config, registration, readOnly, isLoading,
   );
 }
 
-function SamlProviderCard({ config, registration, readOnly, isLoading, open, onToggle }: CardProps) {
+function SamlProviderCard({ config, registration, claimedDomains = [], readOnly, isLoading, open, onToggle }: CardProps) {
   const queryClient = useQueryClient();
   const [idpEntityId, setIdpEntityId] = useState(config?.idpEntityId ?? "");
   const [idpSsoUrl, setIdpSsoUrl] = useState(config?.idpSsoUrl ?? "");
@@ -513,6 +605,8 @@ function SamlProviderCard({ config, registration, readOnly, isLoading, open, onT
             <Save className="h-4 w-4" />Save
           </Button>
 
+          <JitControls provider="saml" config={config} claimedDomains={claimedDomains} readOnly={readOnly} />
+
           <SsoVerification provider="saml" config={config} readOnly={readOnly} />
         </>
       )}
@@ -523,7 +617,7 @@ function SamlProviderCard({ config, registration, readOnly, isLoading, open, onT
 /** LDAP/Active Directory — a direct bind rather than a redirect, so the org admin provides a
  *  service-account bind DN/credential this app uses to look up + verify end users, not an
  *  OAuth app registration. Same write-only-credential masking convention as the other cards. */
-function LdapProviderCard({ config, readOnly, isLoading, open, onToggle }: CardProps) {
+function LdapProviderCard({ config, claimedDomains = [], readOnly, isLoading, open, onToggle }: CardProps) {
   const queryClient = useQueryClient();
   const [ldapUrl, setLdapUrl] = useState(config?.ldapUrl ?? "");
   const [ldapBindDn, setLdapBindDn] = useState(config?.ldapBindDn ?? "");
@@ -633,6 +727,8 @@ function LdapProviderCard({ config, readOnly, isLoading, open, onToggle }: CardP
           >
             <Save className="h-4 w-4" />Save
           </Button>
+
+          <JitControls provider="ldap" config={config} claimedDomains={claimedDomains} readOnly={readOnly} />
 
           <SsoVerification provider="ldap" config={config} readOnly={readOnly} />
         </>
@@ -955,6 +1051,7 @@ export function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
           provider={provider}
           config={providerOf(provider)}
           registration={settings.data?.registration}
+          claimedDomains={settings.data?.claimedDomains}
           readOnly={readOnly}
           isLoading={settings.isLoading}
           open={openId === provider.toLowerCase()}
@@ -965,6 +1062,7 @@ export function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
       <SamlProviderCard
         config={providerOf("SAML")}
         registration={settings.data?.registration}
+        claimedDomains={settings.data?.claimedDomains}
         readOnly={readOnly}
         isLoading={settings.isLoading}
         open={openId === "saml"}
@@ -973,6 +1071,7 @@ export function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
 
       <LdapProviderCard
         config={providerOf("LDAP")}
+        claimedDomains={settings.data?.claimedDomains}
         readOnly={readOnly}
         isLoading={settings.isLoading}
         open={openId === "ldap"}

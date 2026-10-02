@@ -551,6 +551,18 @@ model OrgSsoConfig {
   /// to get in after I turn off passwords", which is the question the switch is asking.
   lastSuccessfulLoginAt DateTime?
 
+  /// Whether a sign-in through this provider by somebody with NO account here creates one
+  /// ("just-in-time" provisioning). It always did, unconditionally and silently (audit H5); the
+  /// switch defaults ON so every existing workspace keeps exactly the behaviour it has. Off: the
+  /// person is sent back with sso_error=not_provisioned and told to ask for an invite. Existing
+  /// accounts are matched exactly as before either way.
+  jitEnabled        Boolean @default(true)
+  /// Email domains a just-in-time account may be created for — a JSON array of lower-case domains.
+  /// NULL means any domain, which is what every existing workspace had. For Google, a non-gmail.com
+  /// domain additionally needs the token's `hd` (Workspace hosted domain) claim in the list, because
+  /// Google is authoritative for an address only at gmail.com or with `hd`.
+  jitAllowedDomains Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

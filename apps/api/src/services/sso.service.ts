@@ -180,12 +180,21 @@ export async function recordSsoLoginSuccess(orgId: string, provider: SsoProvider
 }
 
 export interface SsoIdentity {
+  /** Which provider vouched for this person — what completeSsoLogin's account-creation policy and its
+   *  audit row are keyed on (see sso-jit.service.ts). */
+  provider: SsoProviderType;
   email: string;
   name: string | null;
   /** Informational once it reaches here. The one place it DECIDES anything is the Google branch
    *  of completeAuthorizationCodeGrant, which refuses an unverified address before an identity is
    *  ever built — see the comment there for why that check is Google-only. */
   emailVerified: boolean;
+  /** Google's `hd` claim: the Workspace domain that vouches for the address. Absent for a consumer
+   *  account. Decides account CREATION only (sso-jit.service.ts#jitRefusalReason). */
+  hostedDomain?: string | null;
+  /** Microsoft's `tid` claim: the directory the token came from. Recorded per workspace so an admin
+   *  can see which directories sign in before restricting to one (recordMicrosoftDirectory). */
+  tenantId?: string | null;
 }
 
 /** Completes the token exchange for a callback request and returns the verified identity.
@@ -245,9 +254,12 @@ export async function completeAuthorizationCodeGrant(currentUrl: URL, expectedSt
   return {
     orgId,
     identity: {
+      provider,
       email: claims.email,
       name: typeof claims.name === "string" ? claims.name : null,
-      emailVerified: claims.email_verified === true
+      emailVerified: claims.email_verified === true,
+      hostedDomain: provider === "GOOGLE" && typeof claims.hd === "string" ? claims.hd : null,
+      tenantId: provider === "MICROSOFT" && typeof claims.tid === "string" ? claims.tid : null
     }
   };
 }
@@ -649,6 +661,7 @@ export async function completeSamlLogin(
   return {
     orgId,
     identity: {
+      provider: "SAML",
       email,
       name: firstText(profile.displayName) ?? firstText(profile[ENTRA_DISPLAY_NAME_CLAIM]),
       emailVerified: true
@@ -757,6 +770,7 @@ export async function authenticateLdap(orgId: string, email: string, password: s
   }
 
   return {
+    provider: "LDAP",
     email: firstAttrValue(entry, "mail") || email,
     name: firstAttrValue(entry, "displayName") || firstAttrValue(entry, "cn"),
     emailVerified: true

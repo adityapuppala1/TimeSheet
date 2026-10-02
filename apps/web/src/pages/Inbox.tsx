@@ -122,7 +122,8 @@ const CATEGORY_PREFIXES: Array<[string, string]> = [
   ["digest.", "Digest"],
   ["goal.", "Goal"],
   ["security.", "Security"],
-  ["join.", "Join request"]
+  ["join.", "Join request"],
+  ["sso.", "Single sign-on"]
 ];
 
 const categoryLabel = (category?: string | null) => {

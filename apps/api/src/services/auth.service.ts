@@ -17,7 +17,7 @@ import { requireTenantContext } from "../config/tenant-context.js";
 import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
 import { audit, type AuditProvenance } from "./audit.service.js";
-import { dispatchTransactional } from "./notify.service.js";
+import { dispatchInAppToMany, dispatchTransactional } from "./notify.service.js";
 import { emailShell, templates } from "./mail-templates.js";
 import { getEffectiveSeatLimit } from "./plan-limits.service.js";
 import { countActiveSeats } from "./seat-count.service.js";
@@ -25,6 +25,9 @@ import { rememberWorkspaceMembership, tenantBaseUrl } from "./workspace-director
 import { isMaintenanceActive } from "./maintenance.service.js";
 import { findLiveResetToken, issueResetToken, voidOutstandingResetTokens } from "./reset-token.service.js";
 import { assertPasswordPolicy } from "../utils/password-policy.js";
+import { syncSubscriptionSeats } from "./billing-sync.service.js";
+import { emailDomainOf, jitRefusalReason, loadJitPolicy } from "./sso-jit.service.js";
+import type { SsoProviderType } from "./sso.service.js";
 import {
   DUMMY_PASSWORD_HASH,
   hashPassword,
@@ -581,12 +584,130 @@ export async function login(
 
 /* ================================== SSO ====================================== */
 
+/** What every SSO provider hands completeSsoLogin. `provider` is optional only so older callers and
+ *  tests that predate it still type-check; every production caller passes it (sso.service.ts). */
+export interface SsoLoginIdentity {
+  email: string;
+  name: string | null;
+  provider?: SsoProviderType;
+  /** Google `hd` — see sso-jit.service.ts for the one decision it takes part in. */
+  hostedDomain?: string | null;
+  /** Microsoft `tid` — recorded on the sign-in audit row; see recordSsoSignIn. */
+  tenantId?: string | null;
+}
+
 /**
- * Completes an SSO login (Google/Microsoft — see services/sso.service.ts for the OIDC token
- * exchange itself, which hands this function a verified email/name once it's done). Finds an
- * existing tenant User by email — so someone who already had a password account and later
- * enables SSO just starts using it against the same account — or creates a new one on first
- * SSO login, defaulting to the EMPLOYEE role (an admin can promote them afterward the same
+ * Creates the account for an SSO identity that has none — "just-in-time" provisioning.
+ *
+ * It used to be unconditional and silent (audit H5). Now, in order:
+ *  - the provider's policy is asked first (sso-jit.service.ts): switched off, or an address outside the
+ *    allowed domains, or a Google address `hd` does not vouch for → `not_provisioned`, "ask your admin
+ *    for an invite". The defaults — no row, switch on, no list — are today's behaviour exactly.
+ *  - the seat limit, as before;
+ *  - the account, WITH its UserRole row (the held-role set every permission check and the role
+ *    switcher read; an account without one held no role at all) and its notification preferences,
+ *    the same shape join-request and SCIM create;
+ *  - the audit row (`user.sso_provisioned`: provider and email DOMAIN, never the address), the
+ *    workspace-directory row and the Stripe seat sync, as every other create path writes them;
+ *  - an in-app note to the super admins, best-effort, so the people who can undo this hear about it.
+ */
+async function provisionSsoUser(orgId: string, identity: SsoLoginIdentity) {
+  const refusal = jitRefusalReason(await loadJitPolicy(orgId, identity.provider), identity);
+  if (refusal) {
+    throw new AppError(403, "You don't have an account in this workspace yet. Ask your workspace admin to send you an invite.", {
+      code: "SSO_NOT_PROVISIONED"
+    });
+  }
+
+  // Same seat-limit enforcement as user.controller.ts's manual creation path — an SSO-only
+  // org shouldn't be able to grow past its plan's seat limit just because its users
+  // self-provision on first login instead of an admin creating them by hand.
+  const [seatLimit, activeSeats] = await Promise.all([
+    getEffectiveSeatLimit(orgId),
+    countActiveSeats()
+  ]);
+  if (activeSeats >= seatLimit) {
+    throw new AppError(402, `This workspace has reached its seat limit (${seatLimit} seats). Contact your workspace admin to request more seats.`, {
+      code: "SSO_SEAT_LIMIT"
+    });
+  }
+
+  const employeeRole = await prisma.role.findUniqueOrThrow({ where: { name: "EMPLOYEE" } });
+  const created = await prisma.user.create({
+    data: {
+      name: identity.name || identity.email.split("@")[0],
+      email: identity.email,
+      passwordHash: await hashPassword(opaqueToken()),
+      roleId: employeeRole.id,
+      status: "ACTIVE",
+      emailVerifiedAt: new Date(),
+      userRoles: { create: { roleId: employeeRole.id } },
+      notificationPreference: { create: {} }
+    },
+    include: PROFILE_INCLUDE
+  });
+
+  const emailDomain = emailDomainOf(identity.email);
+  await audit(created.id, "user.sso_provisioned", "User", created.id, { provider: identity.provider ?? "UNKNOWN", emailDomain });
+  await rememberWorkspaceMembership(orgId, created.email);
+  // Never throws, and returns at once for a workspace with no Stripe subscription — see billing-sync.
+  await syncSubscriptionSeats(orgId);
+  await tellSuperAdminsAboutProvisioning(created, identity.provider);
+  return created;
+}
+
+const SSO_PROVIDER_NAMES: Record<SsoProviderType, string> = {
+  GOOGLE: "Google",
+  MICROSOFT: "Microsoft",
+  SAML: "SAML single sign-on",
+  LDAP: "the directory (LDAP)"
+};
+
+/** Best-effort: the account exists and the sign-in should complete whether or not the bell row lands. */
+async function tellSuperAdminsAboutProvisioning(created: { id: string; name: string; email: string }, provider: SsoProviderType | undefined) {
+  try {
+    const superAdmins = await prisma.user.findMany({
+      where: { status: "ACTIVE", deletedAt: null, isAgent: false, role: { name: "SUPER_ADMIN" }, id: { not: created.id } },
+      select: { id: true }
+    });
+    await dispatchInAppToMany({
+      userIds: superAdmins.map((admin) => admin.id),
+      category: "sso.user_provisioned",
+      title: `${created.name} joined through ${provider ? SSO_PROVIDER_NAMES[provider] : "single sign-on"}`,
+      body: `An account was created automatically for ${created.email} on their first sign-in. Check their role in Users, or limit automatic accounts in Settings → Single sign-on.`,
+      link: "/app/users"
+    });
+  } catch (error) {
+    console.warn(`[sso] could not notify super admins about a new SSO account: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * One audit row per successful SSO sign-in, naming the provider — and, for Microsoft, the directory
+ * (`tid`) the token came from, which is what lets the settings card offer "Restrict to my directory"
+ * prefilled with the admin's OWN directory. A directory id identifies an organisation, not a person;
+ * the address is never written.
+ *
+ * Best-effort: the session already exists, and losing an audit row must not cost a person their
+ * sign-in. A failure is logged for the operator.
+ */
+async function recordSsoSignIn(userId: string, identity: SsoLoginIdentity): Promise<void> {
+  try {
+    await audit(userId, "auth.sso_login", "User", userId, {
+      provider: identity.provider ?? "UNKNOWN",
+      ...(identity.provider === "MICROSOFT" && identity.tenantId ? { directory: identity.tenantId } : {})
+    });
+  } catch (error) {
+    console.warn(`[sso] sign-in audit row could not be written for user ${userId}: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Completes an SSO login (Google/Microsoft/SAML/LDAP — see services/sso.service.ts for each protocol,
+ * which hands this function a verified identity once it's done). Finds an existing tenant User by
+ * email — so someone who already had a password account and later enables SSO just starts using it
+ * against the same account — or, when the provider's policy allows it, creates one on first sign-in
+ * (provisionSsoUser), defaulting to the EMPLOYEE role (an admin can promote them afterward the same
  * way as any other user). The password hash on an SSO-created account is an unusable random
  * value, the same pattern already used for the email-intake system account in prisma/seed.ts
  * — nobody is meant to password-login to it; it exists purely to satisfy User's required
@@ -594,48 +715,20 @@ export async function login(
  */
 export async function completeSsoLogin(
   orgId: string,
-  identity: { email: string; name: string | null },
+  identity: SsoLoginIdentity,
   userAgent?: string,
   ipAddress?: string,
   /** See utils/device-cookie.ts. Threaded here too so SSO users are not the one login path that
    *  keeps accumulating a session row per sign-in. */
   deviceId?: string
 ) {
-  let user = await prisma.user.findUnique({ where: { email: identity.email }, include: PROFILE_INCLUDE });
-
-  if (!user) {
-    // Same seat-limit enforcement as user.controller.ts's manual creation path — an SSO-only
-    // org shouldn't be able to grow past its plan's seat limit just because its users
-    // self-provision on first login instead of an admin creating them by hand.
-    const [seatLimit, activeSeats] = await Promise.all([
-      getEffectiveSeatLimit(orgId),
-      countActiveSeats()
-    ]);
-    if (activeSeats >= seatLimit) {
-      throw new AppError(402, `This workspace has reached its seat limit (${seatLimit} seats). Contact your workspace admin to request more seats.`, {
-        code: "SSO_SEAT_LIMIT"
-      });
-    }
-
-    const employeeRole = await prisma.role.findUniqueOrThrow({ where: { name: "EMPLOYEE" } });
-    const created = await prisma.user.create({
-      data: {
-        name: identity.name || identity.email.split("@")[0],
-        email: identity.email,
-        passwordHash: await hashPassword(opaqueToken()),
-        roleId: employeeRole.id,
-        status: "ACTIVE",
-        emailVerifiedAt: new Date()
-      },
-      include: PROFILE_INCLUDE
-    });
-    user = created;
-  }
+  const user = (await prisma.user.findUnique({ where: { email: identity.email }, include: PROFILE_INCLUDE })) ?? (await provisionSsoUser(orgId, identity));
 
   // The code is what sso.controller.ts turns into `?sso_error=inactive` on the login page.
   if (user.deletedAt || user.status !== "ACTIVE") throw new AppError(403, "Account is not active", { code: "SSO_INACTIVE" });
 
   const session = await establishSession(user, orgId, { userAgent, ipAddress, deviceId });
+  await recordSsoSignIn(user.id, identity);
 
   return {
     ...session,

@@ -14,7 +14,11 @@ import { createFakeTenantClient } from "../helpers/fake-prisma-client.js";
 import { runInTenant } from "../helpers/tenant-context.js";
 
 type Row = Record<string, unknown> & { providerType: string };
-const { rows } = vi.hoisted(() => ({ rows: [] as Row[] }));
+const { rows, upserts, claims } = vi.hoisted(() => ({
+  rows: [] as Row[],
+  upserts: [] as Array<{ update: Record<string, unknown>; create: Record<string, unknown> }>,
+  claims: [] as Array<{ domain: string; status: string; source: string; createdAt: Date }>
+}));
 
 const actor = { id: "sa-1", name: "Root", email: "sa@x.io", role: "SUPER_ADMIN", permissions: [] as string[] };
 vi.mock("../../src/middleware/auth.js", async () => {
@@ -31,7 +35,16 @@ vi.mock("../../src/services/audit.service.js", () => ({ audit: vi.fn().mockResol
 vi.mock("../../src/config/control-prisma.js", () => ({
   controlPrisma: {
     orgAuthMethod: { findUnique: async () => null },
-    orgSsoConfig: { findMany: async () => rows }
+    orgSsoConfig: {
+      findMany: async () => rows,
+      findUnique: async ({ where }: { where: { organizationId_providerType: { providerType: string } } }) =>
+        rows.find((r) => r.providerType === where.organizationId_providerType.providerType) ?? null,
+      upsert: async (args: { update: Record<string, unknown>; create: Record<string, unknown> }) => {
+        upserts.push(args);
+        return { providerType: "GOOGLE", isEnabled: false, jitEnabled: true, jitAllowedDomains: null, ...args.update };
+      }
+    },
+    orgEmailDomain: { findMany: async () => claims }
   }
 }));
 
@@ -51,6 +64,8 @@ function app() {
 beforeEach(() => {
   client = createFakeTenantClient();
   rows.length = 0;
+  upserts.length = 0;
+  claims.length = 0;
 });
 
 describe("the values an admin registers with their IdP (M4)", () => {
@@ -70,5 +85,42 @@ describe("the values an admin registers with their IdP (M4)", () => {
     rows.push({ providerType: "SAML", isEnabled: true, spEntityId: "urn:acme:timesphere" });
     const res = await request(app()).get("/api/settings/sso");
     expect(res.body.registration.samlSpEntityId).toBe("urn:acme:timesphere");
+  });
+});
+
+/**
+ * Just-in-time account creation controls (audit H5) — what the card reads and what it may save.
+ * `jitAllowedDomains` is a nullable JSON column: NULL means "any domain", which is what every existing
+ * workspace has, so an EMPTIED list is stored as NULL rather than as `[]`.
+ */
+describe("automatic account creation settings (H5)", () => {
+  it("reads back the switch and the list for each provider, defaulting to today's behaviour", async () => {
+    rows.push({ providerType: "GOOGLE", isEnabled: true, jitEnabled: true, jitAllowedDomains: null });
+    const res = await request(app()).get("/api/settings/sso");
+    expect(res.body.providers[0]).toMatchObject({ jitEnabled: true, jitAllowedDomains: null });
+  });
+
+  it("offers the workspace's claimed company domains as the suggested list", async () => {
+    claims.push({ domain: "acme.example", status: "UNVERIFIED", source: "SIGNUP", createdAt: new Date() });
+    const res = await request(app()).get("/api/settings/sso");
+    expect(res.body.claimedDomains).toEqual(["acme.example"]);
+  });
+
+  it("saves the switch and a normalised domain list", async () => {
+    const res = await request(app()).patch("/api/settings/sso/google").send({ jitEnabled: false, jitAllowedDomains: [" Acme.Example ", "gmail.com"] });
+    expect(res.status).toBe(200);
+    expect(upserts[0].update).toMatchObject({ jitEnabled: false, jitAllowedDomains: ["acme.example", "gmail.com"] });
+  });
+
+  it("stores an emptied list as NULL — any domain — never as an empty list that would read as nobody", async () => {
+    const { Prisma } = await import("../../src/generated/control-client/index.js");
+    await request(app()).patch("/api/settings/sso/google").send({ jitAllowedDomains: [] });
+    expect(upserts[0].update.jitAllowedDomains).toBe(Prisma.DbNull);
+  });
+
+  it("refuses something that is not a domain", async () => {
+    const res = await request(app()).patch("/api/settings/sso/google").send({ jitAllowedDomains: ["sam@acme.example"] });
+    expect(res.status).toBe(422);
+    expect(upserts).toHaveLength(0);
   });
 });

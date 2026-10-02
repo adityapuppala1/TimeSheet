@@ -2642,6 +2642,10 @@ export interface SsoProviderConfig {
    * junk strings tests green.
    */
   lastSuccessfulLoginAt: string | null;
+  /** Create an account on first sign-in for somebody with none here ("just-in-time"). Defaults on — audit H5. */
+  jitEnabled?: boolean;
+  /** Email domains such an account may be created for, lower-case. null = any domain. */
+  jitAllowedDomains?: string[] | null;
   /** How many certificates the SAML field holds — more than one is a rollover bundle. 0 for other providers. */
   certificateCount?: number;
   /** Parsed facts about the SAML signing certificate (the latest-expiring one, for a bundle). Null for every other provider. */
@@ -2680,6 +2684,8 @@ export interface SsoSettings {
   passwordLoginEnabled: boolean;
   requireSsoOnly: boolean;
   registration?: SsoRegistrationValues;
+  /** The workspace's claimed company domains — the suggested allowed-domain list for automatic accounts. */
+  claimedDomains?: string[];
 }
 
 export interface EmailTemplateRow {

@@ -205,7 +205,7 @@ describe("Google sign-in requires a verified email address", () => {
     stubGoogle(googleClaims({ email_verified: true }));
     const { orgId, identity } = await callback("GOOGLE");
     expect(orgId).toBe("org-acme");
-    expect(identity).toEqual({ email: "sam@acme.example", name: "Sam", emailVerified: true });
+    expect(identity).toEqual({ provider: "GOOGLE", email: "sam@acme.example", name: "Sam", emailVerified: true, hostedDomain: null, tenantId: null });
     expect(warn).not.toHaveBeenCalled();
   });
 });
@@ -219,6 +219,21 @@ describe("Microsoft sign-in is not held to email_verified", () => {
     expect(identity.emailVerified).toBe(false);
     // A tenant ID is set, so this is the configuration we recommend — nothing to warn about.
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("carries the token's directory (tid) on the identity, so the workspace can see which directories sign in", async () => {
+    ssoRow!.tenantHint = HOME_TENANT;
+    stubMicrosoft(HOME_TENANT, microsoftClaims(HOME_TENANT));
+    const { identity } = await callback("MICROSOFT");
+    expect(identity).toMatchObject({ provider: "MICROSOFT", tenantId: HOME_TENANT, hostedDomain: null });
+  });
+});
+
+describe("Google's hosted-domain claim", () => {
+  it("is carried on the identity, because account CREATION depends on it", async () => {
+    stubGoogle(googleClaims({ email_verified: true, hd: "acme.example" }));
+    const { identity } = await callback("GOOGLE");
+    expect(identity.hostedDomain).toBe("acme.example");
   });
 
   it("refuses a token from another directory when the tenant ID IS set", async () => {
