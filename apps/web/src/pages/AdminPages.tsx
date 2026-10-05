@@ -11,6 +11,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
+  AlertTriangle,
   Archive,
   ArchiveRestore,
   Check,
@@ -2876,6 +2877,19 @@ export function ApprovalsPage() {
                 <Paperclip className="h-3 w-3" />
                 {row.original.attachments.length} attachment(s)
               </p>
+            ) : null}
+            {/* The approver brief: facts worth a second look, never a decision (approval-signals.service.ts). */}
+            {row.original.reviewSignals?.length ? (
+              <ul className="mt-1.5 flex flex-wrap gap-1" aria-label="Worth a look">
+                {row.original.reviewSignals.map((signal: { code: string; label: string }) => (
+                  <li key={signal.code}>
+                    <Badge variant="warning" className="gap-1">
+                      <AlertTriangle className="h-3 w-3" aria-hidden />
+                      {signal.label}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
             ) : null}
           </div>
         )

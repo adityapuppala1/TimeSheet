@@ -9,7 +9,7 @@
  * them. This is the single definition; each caller supplies only its own trigger.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Compass, FileClock, LogOut, Repeat, Sparkles, UserRound, CircleHelp } from "lucide-react";
+import { ArrowLeftRight, Compass, FileClock, LogOut, Repeat, Sparkles, UserRound, CircleHelp } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 import type { RoleName } from "@timesheet/shared";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
@@ -41,6 +41,8 @@ export function initialsFor(name?: string) {
 }
 
 export function AccountMenuContent() {
+  const workspacesQuery = useQuery({ queryKey: ["auth", "workspaces"], queryFn: authApi.workspaces, staleTime: 5 * 60_000 });
+  const otherWorkspaces = workspacesQuery.data?.workspaces ?? [];
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
@@ -121,6 +123,21 @@ export function AccountMenuContent() {
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
+        </>
+      )}
+      {otherWorkspaces.length > 0 && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Your other workspaces</DropdownMenuLabel>
+          {otherWorkspaces.map((workspace) => (
+            <DropdownMenuItem key={workspace.url} asChild>
+              {/* A plain anchor: another workspace is another origin, and the router would keep this
+                  tab on this workspace's host. Its own sign-in applies there. */}
+              <a href={workspace.url}>
+                <ArrowLeftRight /> {workspace.name}
+              </a>
+            </DropdownMenuItem>
+          ))}
         </>
       )}
       <DropdownMenuSeparator />

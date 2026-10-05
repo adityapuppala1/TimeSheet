@@ -37,6 +37,8 @@ import {
   AlertDialogTitle
 } from "../components/ui/alert-dialog";
 import { Badge } from "../components/ui/badge";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import type { TimesheetStatusValue } from "../services/api";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { DataTable } from "../components/ui/data-table";
@@ -69,6 +71,17 @@ const statusVariant: Record<string, "success" | "warning" | "destructive" | "mut
   REJECTED: "destructive"
 };
 
+/** The list route's row caps (timesheet.controller.ts PAGE_LIMIT / RANGE_LIMIT): reaching one means
+ *  older rows exist that this page is not showing, which the page has to say. */
+const HISTORY_PAGE_CAP = 100;
+const HISTORY_RANGE_CAP = 2_000;
+
+function capNotice(count: number, hasRange: boolean): string {
+  const shown = `Showing the newest ${count.toLocaleString()} entries`;
+  if (hasRange) return `${shown} in this range. Older ones aren't listed — narrow the date range to see them.`;
+  return `${shown}. Older ones aren't listed — pick a date range to see them.`;
+}
+
 export function History() {
   const currentUser = useAuthStore((s) => s.user);
   const [status, setStatus] = useState<StatusFilter>("ALL");
@@ -86,8 +99,16 @@ export function History() {
    * reaches it.
    */
   const timesheets = useQuery({
-    queryKey: ["timesheets", "history", { from, to }],
-    queryFn: () => timesheetApi.list({ from: from || undefined, to: to || undefined }),
+    // Person and status go to the server too: filtered in SQL BEFORE the row cap. Filtering the capped
+    // page in the browser silently dropped a person's older rows once the page filled with others'.
+    queryKey: ["timesheets", "history", { from, to, userId, status }],
+    queryFn: () =>
+      timesheetApi.list({
+        from: from || undefined,
+        to: to || undefined,
+        userId: userId === "all" ? undefined : userId,
+        status: status === "ALL" ? undefined : (status as TimesheetStatusValue)
+      }),
     refetchInterval: 30_000,
     placeholderData: (previous) => previous
   });
@@ -148,6 +169,7 @@ export function History() {
   });
 
   const rows: any[] = Array.isArray(timesheets.data) ? timesheets.data : [];
+  const hasRange = Boolean(from || to);
 
   /**
    * Mirrors the server's delete rule so the button never offers something the API refuses.
@@ -190,14 +212,17 @@ export function History() {
     () => [...new Set(rows.map((row) => row.activityType).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b))),
     [rows]
   );
+  // Everyone seen so far, not only this response: once the server filters to one person, the rows
+  // hold only them, and the menu must still offer the others to switch to.
+  const [seenPeople] = useState(() => new Map<string, string>());
   const peopleOptions = useMemo(() => {
-    const byId = new Map<string, string>();
+    const byId = seenPeople;
     for (const row of rows) {
       const id = row.userId ?? row.user?.id;
       if (id) byId.set(id, row.user?.name ?? row.user?.email ?? id);
     }
     return [...byId].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
-  }, [rows]);
+  }, [rows, seenPeople]);
 
   const filtered = useMemo(() => {
     return rows.filter((row) => {
@@ -585,6 +610,12 @@ export function History() {
           </div>
         </CardContent>
       </Card>
+
+      {rows.length >= (hasRange ? HISTORY_RANGE_CAP : HISTORY_PAGE_CAP) && (
+        <Alert variant="info" data-testid="history-cap">
+          <AlertDescription>{capNotice(rows.length, hasRange)}</AlertDescription>
+        </Alert>
+      )}
 
       <Card>
         <CardContent className="p-4">

@@ -60,6 +60,12 @@ function PageTitle() {
   return <PageHeader title="Sprints" description="Time-boxed iterations per project, with a burndown that is replayed from what actually happened." icon={Timer} />;
 }
 
+function carryOverSummary(count: number, to: string | undefined, rows: SprintRow[]): string {
+  if (count === 0) return "Every ticket in it was finished.";
+  const where = !to || to === "backlog" ? "the backlog" : (rows.find((r) => r.id === to)?.name ?? "the next sprint");
+  return `${count} unfinished ticket${count === 1 ? "" : "s"} moved to ${where}.`;
+}
+
 export function SprintsPage() {
   const { features } = usePlanningFeatures();
   const user = useAuthStore((s) => s.user);
@@ -77,6 +83,9 @@ export function SprintsPage() {
     enabled: features.sprints && Boolean(effectiveProjectId)
   });
   const rows = useMemo(() => sprints.data ?? [], [sprints.data]);
+  /** The sprint whose completion is being reviewed, and where its unfinished tickets go. */
+  const [completing, setCompleting] = useState<SprintRow | null>(null);
+  const [carryTo, setCarryTo] = useState("backlog");
   // The active sprint is the natural selection; otherwise the most recent.
   const selected = useMemo(() => rows.find((s) => s.id === selectedId) ?? rows.find((s) => s.status === "ACTIVE") ?? rows[0] ?? null, [rows, selectedId]);
   const burndown = useQuery({
@@ -90,9 +99,12 @@ export function SprintsPage() {
     runInBackground(queryClient.invalidateQueries({ queryKey: ["tickets"] }));
   };
   const transition = useMutation({
-    mutationFn: ({ id, to }: { id: string; to: SprintRow["status"] }) => sprintApi.update(id, { status: to }),
+    mutationFn: ({ id, to, carryOverTo }: { id: string; to: SprintRow["status"]; carryOverTo?: string }) =>
+      sprintApi.update(id, { status: to, ...(carryOverTo ? { carryOverTo } : {}) }),
     onSuccess: (s) => {
-      toast.success(s.status === "ACTIVE" ? "Sprint started" : "Sprint completed");
+      setCompleting(null);
+      if (s.status === "ACTIVE") toast.success("Sprint started");
+      else toast.success("Sprint completed", { description: carryOverSummary(s.carriedOver ?? 0, s.carriedOverTo, rows) });
       invalidate();
     },
     onError: (err) => toast.error("Could not change the sprint", { description: serverMessage(err, "Try again.") })
@@ -136,8 +148,47 @@ export function SprintsPage() {
     ideal: progress?.countsOnly ? null : p.idealPoints
   }));
 
+  const carryTargets = completing ? rows.filter((r) => r.id !== completing.id && r.status !== "COMPLETED") : [];
+
   return (
     <div className="space-y-4">
+      <Dialog open={completing !== null} onOpenChange={(open) => !open && setCompleting(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Complete {completing?.name}?</DialogTitle>
+            <DialogDescription>
+              A completed sprint can't be reopened. Its tickets that aren't resolved or closed move to the place you pick here.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-1.5">
+            <Label htmlFor="carry-to">Move unfinished tickets to</Label>
+            <Select value={carryTo} onValueChange={setCarryTo}>
+              <SelectTrigger id="carry-to">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="backlog">The backlog (no sprint)</SelectItem>
+                {carryTargets.map((r) => (
+                  <SelectItem key={r.id} value={r.id}>
+                    {r.name} ({SPRINT_STATUS_LABEL[r.status].toLowerCase()})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCompleting(null)}>
+              Keep it running
+            </Button>
+            <Button
+              disabled={transition.isPending || !completing}
+              onClick={() => completing && transition.mutate({ id: completing.id, to: "COMPLETED", carryOverTo: carryTo })}
+            >
+              {transition.isPending ? "Completing…" : "Complete sprint"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <PageHeader
         title="Sprints"
         description="Time-boxed iterations per project, with a burndown that is replayed from what actually happened."
@@ -197,7 +248,19 @@ export function SprintsPage() {
                   {canManage && (
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       {action && (
-                        <Button size="sm" variant={s.status === "PLANNED" ? "default" : "outline"} className="h-[44px]" disabled={transition.isPending} onClick={() => transition.mutate({ id: s.id, to: action.to })}>
+                        <Button
+                          size="sm"
+                          variant={s.status === "PLANNED" ? "default" : "outline"}
+                          className="h-[44px]"
+                          disabled={transition.isPending}
+                          onClick={() => {
+                            // Completing is final and moves tickets, so it is reviewed first; starting is not.
+                            if (action.to === "COMPLETED") {
+                              setCarryTo("backlog");
+                              setCompleting(s);
+                            } else transition.mutate({ id: s.id, to: action.to });
+                          }}
+                        >
                           {s.status === "ACTIVE" && <CheckCircle2 className="h-3.5 w-3.5" />}
                           {action.label}
                         </Button>

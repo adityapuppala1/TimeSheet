@@ -597,6 +597,26 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
     })
   },
 
+  "ticket.reporter_resolved": {
+    subject: "[{{ticketKey}}] Your request has been {{outcome}}",
+    bodyHtml: shell({
+      preheader: "An update on the request you sent us.",
+      accent: COLORS.accent,
+      body: [
+        heading("Your request has been {{outcome}}"),
+        lead("Hi {{reporterName}}, the request you reported has been {{outcome}}."),
+        infoCard(
+          [
+            { label: "Reference", value: "{{ticketKey}}", emphasize: true },
+            { label: "Summary", value: "{{title}}" }
+          ],
+          COLORS.accent
+        ),
+        lead("If something still isn't right, get in touch and mention {{ticketKey}}.")
+      ].join("\n")
+    })
+  },
+
   "digest.weekly": {
     subject: "Your week in review — {{weekLabel}}",
     bodyHtml: shell({

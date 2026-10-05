@@ -2493,6 +2493,9 @@ model EmailIntakeSettings {
   /// Never returned to the client — GET responses expose only `imapPasswordSet: boolean`.
   imapPassword        String?   @db.VarChar(500)
   pollIntervalMinutes Int       @default(5)
+  /// Email the outside person who reported a ticket (email intake or a public request form) when
+  /// it is resolved or closed. OFF by default: it is mail to a customer, which a workspace opts into.
+  notifyReporterOnResolve Boolean @default(false)
   fallbackProjectId   String?
   fallbackProject     Project?  @relation(fields: [fallbackProjectId], references: [id], onDelete: SetNull)
   lastPolledAt        DateTime?

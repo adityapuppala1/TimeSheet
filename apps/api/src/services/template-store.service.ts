@@ -39,6 +39,7 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "ticket.escalation": ["targetName", "ticketKey", "title", "assigneeName", "appUrl"],
   "ticket.received_via_email": ["senderName", "ticketKey", "title", "priority", "appUrl"],
   "ticket.needs_review": ["targetName", "ticketKey", "title", "senderEmail", "confidence", "ticketId", "appUrl"],
+  "ticket.reporter_resolved": ["reporterName", "ticketKey", "title", "outcome", "appUrl"],
   "digest.weekly": ["name", "weekLabel", "summary", "tablesHtml", "appUrl"],
   "digest.practice_update": ["periodLabel", "headline", "sectionsHtml", "appUrl"],
   "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "ticketId", "appUrl"],
@@ -97,6 +98,8 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "ticket.escalation": "Sent to the escalation target when a ticket's SLA breach is escalated.",
   "ticket.received_via_email": "Confirmation sent to an external sender whose email was auto-converted into a ticket.",
   "ticket.needs_review": "Sent to project admins/managers when an email-sourced ticket's AI confidence is below the threshold.",
+  "ticket.reporter_resolved":
+    "Sent to the outside person who reported a ticket (by email or a request form) when it is resolved or closed — only when Email intake → \"Tell the reporter when it's resolved\" is on.",
   "digest.weekly": "Monday-morning AI-authored recap of a person's ticket + timesheet activity for the past week.",
   "digest.practice_update":
     "The consolidated Weekly AI/ML Practice Update sent to a leadership distribution list — products, POCs, bugs, security, training, metrics, risks and the decisions being asked for. Sent on demand by a SUPER_ADMIN, and optionally every Monday.",
@@ -259,6 +262,9 @@ export function sampleVariables(key: string): Record<string, string> {
       targetName: "Avery Stone", ticketKey: "HICS-OPS-1", title: "Checkout page throws a 500 error",
       senderEmail: "priya@example.com", confidence: "0.42",
       ticketId: "6f1f0b4e-8d2a-4d55-9b1e-0f2c7a5d31aa", appUrl: "https://timesphere.local"
+    },
+    "ticket.reporter_resolved": {
+      reporterName: "Priya Nair", ticketKey: "HICS-OPS-1", title: "Checkout page throws a 500 error", outcome: "resolved", appUrl: "https://timesphere.local"
     },
     "goal.digest": {
       name: "Priya Raman", weekLabel: "Aug 17 - Aug 23",
@@ -562,6 +568,10 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
     html: compiledTemplates.ticketReceivedViaEmail({
       senderName: V("senderName"), ticketKey: V("ticketKey"), title: V("title"), priority: V("priority")
     })
+  },
+  "ticket.reporter_resolved": {
+    subject: "[{{ticketKey}}] Your request has been {{outcome}}",
+    html: compiledTemplates.ticketReporterResolved({ reporterName: V("reporterName"), ticketKey: V("ticketKey"), title: V("title"), outcome: V("outcome") })
   },
   "ticket.needs_review": {
     subject: "{{ticketKey}} needs a human look",

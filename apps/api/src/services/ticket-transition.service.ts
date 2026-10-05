@@ -26,7 +26,7 @@ import { htmlToPlainText } from "../utils/sanitize.js";
 import { audit } from "./audit.service.js";
 import { emitTicketStatusChanged } from "./domain-events.js";
 import { templates } from "./mail-templates.js";
-import { dispatchNotification } from "./notify.service.js";
+import { dispatchNotification, dispatchTransactional } from "./notify.service.js";
 import {
   assertCiAllowsResolve,
   assertNotChangeOwned,
@@ -287,9 +287,33 @@ async function afterResolution(args: {
   // The security/test-status digest — its own recipients (closer, their manager, admins) and its own
   // toggle. Detached: it renders a report and sends real SMTP mail, none of which the close depends
   // on, and awaiting it made closing a ticket hang for seconds.
+  // The outside person who reported it (email intake, a public request form) hears that it is done —
+  // only when the workspace switched it on (EmailIntakeSettings.notifyReporterOnResolve, off by
+  // default: it is mail to a customer). Detached and caught: mail never decides whether a move lands.
+  notifyExternalReporter(ticket, to).catch((error) =>
+    console.error(`[ticket] reporter notification failed for ${ticket.key}:`, (error as Error).message)
+  );
+
   if (to === "CLOSED" && person) {
     void security
       .sendTicketClosedDigest({ id: ticket.id, key: ticket.key, title: ticket.title }, { id: person.id, name: person.name, email: person.email })
       .catch((error) => console.error(`[ticket] closed digest failed for ${ticket.key}:`, (error as Error).message));
   }
+}
+
+async function notifyExternalReporter(ticket: { id: string; key: string; title: string }, to: TicketStatus): Promise<void> {
+  const settings = await prisma.emailIntakeSettings.findUnique({ where: { id: "global" }, select: { notifyReporterOnResolve: true } });
+  if (!settings?.notifyReporterOnResolve) return;
+  const row = await prisma.ticket.findUnique({ where: { id: ticket.id }, select: { externalReporterEmail: true, externalReporterName: true } });
+  if (!row?.externalReporterEmail) return;
+  const outcome = to === "RESOLVED" ? "resolved" : "closed";
+  await dispatchTransactional({
+    to: row.externalReporterEmail,
+    templateKey: "ticket.reporter_resolved",
+    vars: { ticketKey: ticket.key, title: ticket.title, outcome, reporterName: row.externalReporterName ?? "" },
+    fallback: {
+      subject: `[${ticket.key}] Your request has been ${outcome}`,
+      html: templates.ticketReporterResolved({ reporterName: row.externalReporterName ?? "", ticketKey: ticket.key, title: ticket.title, outcome })
+    }
+  });
 }

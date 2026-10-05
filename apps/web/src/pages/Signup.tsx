@@ -171,6 +171,10 @@ export function Signup() {
     resolver: zodResolver(workspaceSchema),
     defaultValues: { workspaceName: "", slug: "", adminName: "", adminPassword: "" }
   });
+  // The address is permanent, so it is shown whole and named on the button before anything is created.
+  const watchedSlug = wsForm.watch("slug").trim().toLowerCase();
+  const watchedName = wsForm.watch("workspaceName").trim();
+  const fullAddress = watchedSlug ? `${watchedSlug}${hostSuffix ?? ""}` : "";
   const joinForm = useForm<z.infer<typeof joinSchema>>({ resolver: zodResolver(joinSchema), defaultValues: { name: "", message: "" } });
 
   /** Acts on a refusal from any step. Returns nothing: every branch sets the state that shows it. */
@@ -433,8 +437,15 @@ export function Signup() {
                     {wsForm.formState.errors.adminPassword && <p className="text-xs text-destructive">{wsForm.formState.errors.adminPassword.message}</p>}
                   </div>
 
+                  {fullAddress && !busy && (
+                    <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm" data-testid="signup-address-review">
+                      You're creating <span className="font-semibold">{watchedName || "your workspace"}</span> at{" "}
+                      <span className="font-semibold break-all">{fullAddress}</span>. The address can't be changed later.
+                    </p>
+                  )}
                   <Button type="submit" disabled={busy} className="w-full">
-                    {busy ? "Setting up your workspace…" : "Create workspace"}
+                    {busy && "Setting up your workspace…"}
+                    {!busy && (fullAddress ? `Create ${fullAddress}` : "Create workspace")}
                     {!busy && <ArrowRight className="h-4 w-4" />}
                   </Button>
                   {busy && (

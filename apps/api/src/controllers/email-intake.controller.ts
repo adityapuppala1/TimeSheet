@@ -40,7 +40,8 @@ const settingsSchema = z.object({
       imapUser: z.string().max(255).optional().nullable(),
       imapPassword: z.string().max(500).optional(),
       pollIntervalMinutes: z.coerce.number().int().min(1).max(1440).optional(),
-      fallbackProjectId: z.string().uuid().optional().nullable()
+      fallbackProjectId: z.string().uuid().optional().nullable(),
+      notifyReporterOnResolve: z.boolean().optional()
     })
     .strict()
 });
@@ -55,6 +56,7 @@ emailIntakeRouter.patch("/settings", validate(settingsSchema), async (req, res) 
   if (typeof req.body.imapPassword === "string" && req.body.imapPassword.length > 0) data.imapPassword = encryptSecret(req.body.imapPassword);
   if (typeof req.body.pollIntervalMinutes === "number") data.pollIntervalMinutes = req.body.pollIntervalMinutes;
   if ("fallbackProjectId" in req.body) data.fallbackProjectId = req.body.fallbackProjectId || null;
+  if (typeof req.body.notifyReporterOnResolve === "boolean") data.notifyReporterOnResolve = req.body.notifyReporterOnResolve;
 
   const updated = await prisma.emailIntakeSettings.upsert({
     where: { id: "global" },

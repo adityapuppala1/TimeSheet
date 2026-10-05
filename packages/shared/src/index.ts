@@ -296,13 +296,19 @@ export const ticketStatuses = ["OPEN", "IN_PROGRESS", "IN_REVIEW", "RESOLVED", "
 export type TicketStatus = (typeof ticketStatuses)[number];
 
 /** Valid forward/backward moves for the ticket workflow. Shared so the API can enforce it and the UI can restrict the status picker to the same set. */
+/**
+ * CLOSED is reachable from OPEN, IN_PROGRESS and REOPENED as well as RESOLVED: "won't fix",
+ * duplicates and out-of-scope requests used to have to be pretend-resolved first. Closing without a
+ * resolution requires a reason (ticket.controller.ts `closeReason`, kept as a comment), and it stays
+ * reversible through the existing restricted CLOSED → REOPENED move.
+ */
 export const ticketStatusTransitions: Record<TicketStatus, TicketStatus[]> = {
-  OPEN: ["IN_PROGRESS"],
-  IN_PROGRESS: ["IN_REVIEW", "OPEN"],
+  OPEN: ["IN_PROGRESS", "CLOSED"],
+  IN_PROGRESS: ["IN_REVIEW", "OPEN", "CLOSED"],
   IN_REVIEW: ["RESOLVED", "IN_PROGRESS"],
   RESOLVED: ["CLOSED", "REOPENED"],
   CLOSED: ["REOPENED"],
-  REOPENED: ["IN_PROGRESS"]
+  REOPENED: ["IN_PROGRESS", "CLOSED"]
 };
 
 /** Ingest-only assessment types — see docs/ROADMAP.md's "Security assessment suite"
@@ -960,6 +966,8 @@ export type ChatMatchType = (typeof chatMatchTypes)[number];
 
 /** Workspace-wide IMAP mailbox connection + polling cadence for email-to-ticket ingestion. */
 export interface EmailIntakeSettings {
+  /** Email the outside reporter when their ticket is resolved or closed. Off by default. */
+  notifyReporterOnResolve?: boolean;
   imapHost: string | null;
   imapPort: number;
   imapSecure: boolean;

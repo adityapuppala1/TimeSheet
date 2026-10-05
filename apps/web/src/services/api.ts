@@ -492,6 +492,8 @@ export const authApi = {
    *  workspace, or the browser cannot read it. See pages/SsoHandoff.tsx. */
   ssoHandoff: async (code: string) => (await api.post<LoginResponse>("/auth/sso/handoff", { code })).data,
   me: async () => (await api.get<AuthUser>("/auth/me")).data,
+  /** The caller's OTHER workspaces (multi-org installs only) — the account menu's switcher. */
+  workspaces: async () => (await api.get<{ workspaces: { name: string; url: string }[] }>("/auth/workspaces")).data,
   /** Self-service switch among roles the account already holds — granting a NEW role is
    *  SUPER_ADMIN-only, from User Management (userApi.create/update's `roles` field below). */
   switchRole: async (role: RoleName) => (await api.post<AuthUser>("/auth/switch-role", { role })).data,
@@ -780,6 +782,8 @@ export interface TimesheetEntryDetail {
   identityVerified: boolean;
   identityVerifiedAt: string | null;
   identityVerificationApplies: boolean;
+  /** The approver brief — facts worth a second look (approval queue only). Never a decision. */
+  reviewSignals?: { code: "NO_TICKET" | "LONG_DAY" | "NO_ACTIVITY" | "THIN_NOTE"; label: string }[];
 }
 
 /** Everything PATCH /timesheets/:id accepts. Every field optional — the server merges onto the
@@ -804,6 +808,9 @@ export interface DateWindow {
   to?: string;
 }
 
+/** A timesheet entry's status, as the API sends and accepts it. */
+export type TimesheetStatusValue = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
+
 export interface TimesheetListParams extends DateWindow {
   /**
    * `team` asks the server for the role-appropriate set rather than the caller's own guess:
@@ -814,6 +821,8 @@ export interface TimesheetListParams extends DateWindow {
   /** Somebody's entries in particular. Honoured for a `reports:view` holder; everyone else only ever
    *  gets their own, whatever is sent. */
   userId?: string;
+  /** One status only — applied in SQL, before the row cap (History used to filter it in the browser). */
+  status?: TimesheetStatusValue;
 }
 
 /** The approvals queue's filters. Every one is applied by the server — see `approvalQueue`. */
@@ -842,7 +851,33 @@ export interface ApprovalQueuePage {
   };
 }
 
+/** One suggested row from "Draft my week" (GET /timesheets/week-draft). Never saved until accepted. */
+export interface WeekDraftSuggestion {
+  workDate: string;
+  ticketId: string;
+  ticketKey: string;
+  projectId: string;
+  projectName: string;
+  moduleId: string;
+  moduleName: string;
+  moduleGuessed: boolean;
+  activityType: string;
+  taskDescription: string;
+  hours: number;
+  startTime: string;
+  endTime: string;
+  sources: { kind: "change" | "comment"; count: number }[];
+}
+export interface WeekDraft {
+  weekStart: string;
+  dailyCapacityHours: number;
+  days: { day: string; loggedHours: number }[];
+  suggestions: WeekDraftSuggestion[];
+}
+
 export const timesheetApi = {
+  /** "Draft my week": suggested rows from the caller's ticket activity. Read-only. */
+  weekDraft: async (weekStart: string) => (await api.get<WeekDraft>("/timesheets/week-draft", { params: { weekStart } })).data,
   /** With a window, the server filters AND raises its row cap. Without one it returns the newest
    *  page, as before — which is why a range must never be filtered in the browser instead. */
   list: async (params?: TimesheetListParams) => (await api.get("/timesheets", { params })).data,
@@ -3553,8 +3588,10 @@ export const sprintApi = {
   list: async (projectId: string) => (await api.get<SprintRow[]>("/sprints", { params: { projectId } })).data,
   create: async (payload: { projectId: string; name: string; goal?: string | null; startDate: string; endDate: string }) =>
     (await api.post<SprintRow>("/sprints", payload)).data,
-  update: async (id: string, payload: Partial<{ name: string; goal: string | null; startDate: string; endDate: string; status: SprintStatusValue }>) =>
-    (await api.patch<SprintRow>(`/sprints/${id}`, payload)).data,
+  update: async (
+    id: string,
+    payload: Partial<{ name: string; goal: string | null; startDate: string; endDate: string; status: SprintStatusValue; carryOverTo: string }>
+  ) => (await api.patch<SprintRow & { carriedOver?: number; carriedOverTo?: string }>(`/sprints/${id}`, payload)).data,
   remove: async (id: string) => api.delete(`/sprints/${id}`),
   burndown: async (id: string) => (await api.get<BurndownRow>(`/sprints/${id}/burndown`)).data
 };
@@ -3609,8 +3646,30 @@ export const ticketApi = {
   },
   create: async (payload: unknown) => (await api.post<TicketDetail>("/tickets", payload)).data,
   update: async (id: string, payload: unknown) => (await api.patch<TicketDetail>(`/tickets/${id}`, payload)).data,
-  updateStatus: async (id: string, status: TicketStatus, faceVerificationId?: string) =>
-    (await api.patch<TicketDetail>(`/tickets/${id}/status`, { status, ...(faceVerificationId ? { faceVerificationId } : {}) })).data,
+  /**
+   * Closing a ticket that was never resolved needs a reason. The server says so with
+   * CLOSE_REASON_REQUIRED; this asks once (components/CloseReasonPrompt.tsx) and retries, so every
+   * caller — detail page, status pill, Kanban drop — gets the same question. Cancelling rethrows the
+   * original refusal, which callers already treat as "the move did not happen".
+   */
+  updateStatus: async (id: string, status: TicketStatus, faceVerificationId?: string) => {
+    const send = (closeReason?: string) =>
+      api.patch<TicketDetail>(`/tickets/${id}/status`, {
+        status,
+        ...(faceVerificationId ? { faceVerificationId } : {}),
+        ...(closeReason ? { closeReason } : {})
+      });
+    try {
+      return (await send()).data;
+    } catch (error) {
+      const data = (error as { response?: { data?: { code?: string } } }).response?.data;
+      if (data?.code !== "CLOSE_REASON_REQUIRED") throw error;
+      const { requestCloseReason } = await import("../components/CloseReasonPrompt");
+      const reason = await requestCloseReason("this ticket");
+      if (!reason) throw error;
+      return (await send(reason)).data;
+    }
+  },
   assign: async (id: string, assigneeId: string | null) =>
     (await api.patch<TicketDetail>(`/tickets/${id}/assign`, { assigneeId })).data,
   setAiFeedback: async (id: string, feedback: AiFeedbackValue) =>
@@ -3742,6 +3801,7 @@ export const emailIntakeApi = {
     imapPassword?: string;
     pollIntervalMinutes?: number;
     fallbackProjectId?: string | null;
+    notifyReporterOnResolve?: boolean;
   }) => (await api.patch<EmailIntakeSettings>("/email-intake/settings", payload)).data,
   testConnection: async (payload?: { host?: string; port?: number; secure?: boolean; user?: string; password?: string }) =>
     (await api.post<{ ok: boolean; error?: string }>("/email-intake/settings/test-connection", payload ?? {})).data,

@@ -111,7 +111,10 @@ const patchSchema = z.object({
       goal: z.string().max(600).nullish(),
       startDate: DATE.optional(),
       endDate: DATE.optional(),
-      status: z.enum(SPRINT_STATUSES).optional()
+      status: z.enum(SPRINT_STATUSES).optional(),
+      /// Where a COMPLETED sprint's unfinished tickets go: another planned/active sprint of the same
+      /// project, or "backlog" (the default). Ignored for every other change.
+      carryOverTo: z.union([z.literal("backlog"), z.string().uuid()]).optional()
     })
     .strict()
 });
@@ -137,9 +140,34 @@ sprintRouter.patch("/:id", requirePermission(permissions.PLAN_WRITE), validate(p
     data.status = body.status;
   }
   if (Object.keys(data).length === 0) throw new AppError(422, "Nothing to change.");
+
+  // Completing a sprint carries its unfinished tickets forward. Before this they stayed attached to a
+  // sprint that is history and does not reopen — off every board, invisible to the next sprint.
+  let carryTarget: string | null = null;
+  const completing = data.status === "COMPLETED";
+  if (completing && body.carryOverTo && body.carryOverTo !== "backlog") {
+    const target = await prisma.sprint.findFirst({ where: { id: body.carryOverTo, projectId: existing.projectId }, select: { id: true, status: true } });
+    if (!target || target.id === existing.id || target.status === "COMPLETED") {
+      throw new AppError(422, "Unfinished tickets can only move to a planned or active sprint of this project, or to the backlog.");
+    }
+    carryTarget = target.id;
+  }
+  const unfinished = completing
+    ? await prisma.ticket.findMany({
+        where: { sprintId: existing.id, deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] } },
+        select: { id: true }
+      })
+    : [];
+
   const sprint = await prisma.sprint.update({ where: { id: existing.id }, data });
-  await audit(req.user!.id, "sprint.updated", "Sprint", sprint.id, { keys: Object.keys(data), status: sprint.status });
-  res.json(sprint);
+  if (unfinished.length > 0) {
+    await prisma.ticket.updateMany({ where: { id: { in: unfinished.map((t) => t.id) } }, data: { sprintId: carryTarget } });
+    for (const t of unfinished) {
+      await audit(req.user!.id, "ticket.sprint_changed", "Ticket", t.id, { from: existing.id, to: carryTarget, reason: "sprint_completed" });
+    }
+  }
+  await audit(req.user!.id, "sprint.updated", "Sprint", sprint.id, { keys: Object.keys(data), status: sprint.status, carriedOver: unfinished.length });
+  res.json({ ...sprint, carriedOver: unfinished.length, carriedOverTo: completing ? (carryTarget ?? "backlog") : undefined });
 });
 
 sprintRouter.delete("/:id", requirePermission(permissions.PLAN_WRITE), async (req, res) => {

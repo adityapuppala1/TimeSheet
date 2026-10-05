@@ -8,6 +8,7 @@
  */
 import { zodResolver } from "@hookform/resolvers/zod";
 import { PageHeader } from "../components/PageHeader";
+import { WeekDraftPanel } from "../components/WeekDraftPanel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { calculateHours } from "@timesheet/shared";
 import { AlertTriangle, CalendarClock, Check, ChevronsUpDown, Eraser, Save, Send, Sparkles, Ticket } from "lucide-react";
@@ -451,6 +452,8 @@ export function Timesheet() {
   return (
     <div className="grid gap-5">
       <PageHeader title="Timesheet entry" description="Capture daily work with hierarchy-aware selects, automatic hour calculation, and rich task notes." />
+
+      <WeekDraftPanel />
 
       <Card data-tour="timesheet-form">
         <CardContent className="pt-6">

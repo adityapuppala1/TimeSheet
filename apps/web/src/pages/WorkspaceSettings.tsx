@@ -1545,6 +1545,15 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
     }
   }, [settings.data]);
 
+  const notifyReporter = useMutation({
+    mutationFn: (on: boolean) => emailIntakeApi.updateSettings({ notifyReporterOnResolve: on }),
+    onSuccess: (_data, on) => {
+      toast.success(on ? "Reporters will be told when their ticket is resolved" : "Reporters won't be emailed on resolution");
+      queryClient.invalidateQueries({ queryKey: ["settings", "email-intake"] }).catch(() => undefined);
+    },
+    onError: () => toast.error("Couldn't change that setting. Try again.")
+  });
+
   const update = useMutation({
     mutationFn: () =>
       emailIntakeApi.updateSettings({
@@ -1741,6 +1750,23 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
                   <p className="mt-0.5 text-xs text-muted-foreground">Almost always on for port 993.</p>
                 </div>
                 <Switch checked={draft.imapSecure} disabled={readOnly} onCheckedChange={(v) => setDraft({ ...draft, imapSecure: v })} />
+              </div>
+              {/* Its own immediate save, not part of the connection form: it is a policy, not a mailbox
+                  detail, and it should not wait on a Save next to IMAP credentials. */}
+              <div className="flex items-center gap-4 rounded-lg border border-border bg-muted/30 p-4">
+                <div className="flex-1">
+                  <Label htmlFor="notify-reporter">Tell the reporter when it's resolved</Label>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Emails the person outside the company who reported a ticket — by email or a request form — when it's resolved or
+                    closed. The wording is editable under Email templates.
+                  </p>
+                </div>
+                <Switch
+                  id="notify-reporter"
+                  checked={settings.data?.notifyReporterOnResolve ?? false}
+                  disabled={readOnly || notifyReporter.isPending}
+                  onCheckedChange={(v) => notifyReporter.mutate(v)}
+                />
               </div>
               {!readOnly && (
                 <div className="flex flex-wrap gap-2">

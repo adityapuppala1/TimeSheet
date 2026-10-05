@@ -22,6 +22,8 @@ import { AppError } from "../middleware/error.js";
 import { preserveTenantContext, upload } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
+import { buildWeekDraft } from "../services/week-draft.service.js";
+import { loadApprovalSignals } from "../services/approval-signals.service.js";
 import { buildRateSnapshotPatch, clearRateSnapshotPatch } from "../services/billing-rate.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { emailShell, templates } from "../services/mail-templates.js";
@@ -287,13 +289,20 @@ timesheetRouter.get("/approval-queue", requirePermission(permissions.TIMESHEETS_
     days[key] = { ...days[key], [row.status]: row._count };
   }
 
-  const [badges, decorated] = await Promise.all([
+  const [badges, decorated, signals] = await Promise.all([
     getTimesheetVerificationBadges(items.map((t) => ({ id: t.id, userId: t.userId }))),
-    decorateEditors(items)
+    decorateEditors(items),
+    // The approver brief (services/approval-signals.service.ts): facts, never a decision — and never a
+    // reason the queue itself fails. Advisory data that cannot load leaves the entries unflagged.
+    loadApprovalSignals(items).catch((error: unknown) => {
+      console.warn("[approvals] review signals unavailable:", (error as Error).message);
+      return new Map<string, never[]>();
+    })
   ]);
   res.json({
     items: decorated.map((t) => ({
       ...t,
+      reviewSignals: signals.get(t.id) ?? [],
       identityVerified: badges.get(t.id)?.identityVerified ?? false,
       identityVerifiedAt: badges.get(t.id)?.identityVerifiedAt ?? null,
       identityVerificationApplies: badges.get(t.id)?.identityVerificationApplies ?? false
@@ -402,6 +411,19 @@ async function respondWithEntry(res: any, entry: NonNullable<Awaited<ReturnType<
     identityVerificationApplies: badges.get(entry.id)?.identityVerificationApplies ?? false
   });
 }
+
+/**
+ * "Draft my week": suggested DRAFT rows from the caller's own ticket activity — see
+ * services/week-draft.service.ts. Read-only; the client creates the rows the person accepts through
+ * POST /draft, so nothing here can submit or overwrite anything. Before `/:id`, which would read
+ * "week-draft" as an id.
+ */
+timesheetRouter.get("/week-draft", requirePermission(permissions.TIMESHEETS_WRITE), async (req, res) => {
+  const raw = typeof req.query.weekStart === "string" ? req.query.weekStart : "";
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? new Date(`${raw}T00:00:00`) : new Date();
+  if (Number.isNaN(parsed.getTime())) throw new AppError(400, "weekStart must be YYYY-MM-DD.");
+  res.json(await buildWeekDraft(req.user!.id, parsed));
+});
 
 timesheetRouter.get("/:id", async (req, res) => {
   const entry = await loadVisibleEntry(req, String(req.params.id));

@@ -23,6 +23,7 @@ import { loginUrlFor, safeReturnTo } from "./utils/return-to";
 import { initializeTheme } from "./lib/theme";
 import { hasSeenPlatformAdminSession, usePlatformAdminAuthStore } from "./store/platform-admin-auth";
 import { Toaster } from "./components/ui/toaster";
+import { CloseReasonPrompt } from "./components/CloseReasonPrompt";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { BackendHealthGate } from "./components/BackendHealthGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -329,6 +330,7 @@ export function App() {
           <BackendHealthGate />
           <RouterProvider router={router} />
           <Toaster />
+          <CloseReasonPrompt />
         </TooltipProvider>
       </QueryClientProvider>
     </ErrorBoundary>

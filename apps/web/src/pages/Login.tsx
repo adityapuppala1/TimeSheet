@@ -300,7 +300,9 @@ export function Login() {
   // page, and it has to render before anyone is authenticated.
   const branding = useQuery({ queryKey: ["branding"], queryFn: brandingApi.get, staleTime: Infinity });
   const workspaceLogo = brandingLogoUrl(branding.data);
-  const workspaceName = branding.data?.displayName?.trim() || "TimeSphere";
+  // Display name first, then the organisation's own name (multi-org, or any non-default workspace),
+  // and only then the product: two workspaces open side by side must never both say "TimeSphere".
+  const workspaceName = branding.data?.displayName?.trim() || branding.data?.workspaceName?.trim() || "TimeSphere";
   const passwordEnabled = ssoMethods.data?.passwordEnabled ?? true;
   const allProviders = ssoMethods.data?.providers ?? [];
   // LDAP is a direct bind, not a redirect, so it's rendered as its own inline form (below)

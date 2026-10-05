@@ -914,6 +914,22 @@ export const templates = {
         paragraph(button("Review ticket", ticketUrl(params.ticketId), ACCENT))
     ),
 
+  /** To an OUTSIDE reporter (email intake, request form) — no app link: they have no account. */
+  ticketReporterResolved: (params: { reporterName: string; ticketKey: string; title: string; outcome: string }) =>
+    shell(
+      { title: `[${params.ticketKey}] Your request has been ${params.outcome}`, preheader: "An update on the request you sent us.", accentColor: ACCENT },
+      heading(`Your request has been ${escape(params.outcome)}`) +
+        paragraph(`${params.reporterName ? `Hi ${escape(params.reporterName)}, the` : "The"} request you reported has been ${escape(params.outcome)}.`) +
+        infoCard(
+          [
+            ["Reference", escape(params.ticketKey)],
+            ["Summary", escape(params.title)]
+          ],
+          ACCENT
+        ) +
+        paragraph(`If something still isn't right, get in touch and mention ${escape(params.ticketKey)}.`)
+    ),
+
   /* ---- Face (identity) verification lifecycle. Deliberately data-light: none of these ever
      contain a captured image, a similarity score, or anything biometric — email gets forwarded,
      archived, and read on unmanaged devices, so they say THAT something needs attention and

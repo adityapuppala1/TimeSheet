@@ -261,6 +261,24 @@ authRouter.get("/heartbeat", requireAuth, async (_req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * The OTHER workspaces the signed-in person belongs to, for the account menu's switcher.
+ *
+ * Only ever about the caller's own address (taken from the session, never from the request), so it
+ * discloses nothing a person could not already learn by signing in elsewhere. Empty on a single-org
+ * install: without ROOT_DOMAIN every workspace shares one URL and there is nowhere to switch to.
+ */
+authRouter.get("/workspaces", requireAuth, async (req, res) => {
+  if (!env.ROOT_DOMAIN) {
+    res.json({ workspaces: [] });
+    return;
+  }
+  const me = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { email: true } });
+  const current = requireTenantContext().orgSlug;
+  const all = me ? await findWorkspacesForEmail(me.email) : [];
+  res.json({ workspaces: all.filter((w) => w.slug !== current).map(({ name, url }) => ({ name, url })) });
+});
+
 authRouter.get("/me", requireAuth, async (req, res) => {
   // `passwordChangeRequired` is a property of THIS session (requireAuth decides it), not of the
   // user, so it is added here rather than in buildProfilePayload. The SPA renders the forced

@@ -882,6 +882,9 @@ const statusSchema = z.object({
   params: z.object({ id: z.string().uuid() }),
   body: z.object({
     status: z.enum(["OPEN", "IN_PROGRESS", "IN_REVIEW", "RESOLVED", "CLOSED", "REOPENED"]),
+    /// Required when closing a ticket that was never resolved ("won't fix", duplicate, out of scope);
+    /// saved as a comment so the ticket says why it closed. Ignored for every other move.
+    closeReason: z.string().trim().min(5).max(1000).optional(),
     /// See createSchema.faceVerificationId — status transitions are gated by the same
     /// requireForTicket policy as creation. Comments and field edits deliberately are NOT.
     faceVerificationId: z.string().uuid().optional().or(z.literal(""))
@@ -896,11 +899,22 @@ const statusSchema = z.object({
  * too. This route only says which surface it is.
  */
 ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), validate(statusSchema), async (req, res) => {
-  const { ticket } = await transitionTicketStatus(String(req.params.id), req.body.status as TicketStatus, {
+  const id = String(req.params.id);
+  const closingUnresolved =
+    req.body.status === "CLOSED" &&
+    (await prisma.ticket.findFirst({ where: { id, deletedAt: null }, select: { status: true } }))?.status !== "RESOLVED";
+  if (closingUnresolved && !req.body.closeReason) {
+    throw new AppError(422, "Say why you're closing a ticket that wasn't resolved — for example \"won't fix\" or \"duplicate of WEB-12\".", { code: "CLOSE_REASON_REQUIRED" });
+  }
+  const { ticket } = await transitionTicketStatus(id, req.body.status as TicketStatus, {
     via: "ui",
     req: { user: req.user! },
     faceVerificationId: req.body.faceVerificationId
   });
+  // After the move succeeded, never before: a refused move must not leave a "closed because…" note.
+  if (closingUnresolved && req.body.closeReason) {
+    await prisma.ticketComment.create({ data: { ticketId: id, authorId: req.user!.id, body: `Closed without a fix: ${req.body.closeReason}` } });
+  }
   res.json(ticket);
 });
 
