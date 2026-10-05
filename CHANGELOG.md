@@ -10,6 +10,12 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 6.2.0 — faster, smaller, current, and it installs and repairs itself — 2026-10-05
+
+Lighter pages and cached assets, a 59% smaller API image on Node 24, every dependency current that can
+move without a migration, installers that wait, retry and repair, and the whole CI job runnable locally.
+Nothing to configure: upgrade with the usual `./update.sh` (`update.cmd` on Windows).
+
 ### ⚡ Performance: lighter pages, cached assets, a 59% smaller API image
 
 - **First page load: 80 files and 380 KB down to 45 files and 321 KB** (compressed). Icons ship as one
