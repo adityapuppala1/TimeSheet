@@ -58,6 +58,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "../components/ui/toaster";
+import { MfaCodeStep } from "../components/MfaCodeStep";
 import { apiUrl, authApi, brandingApi, brandingLogoUrl, isMaintenanceLockoutError, type LoginResponse } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { ssoErrorMessage } from "../lib/sso-error";
@@ -341,9 +342,14 @@ export function Login() {
     void navigate(safeReturnTo(params.get("next")), { replace: true });
   };
 
+  /** Set when the password was right and the account has two-factor on: the code step shows. */
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
   const mutation = useMutation({
     mutationFn: (values: FormData) => authApi.login(values.email, values.password, Boolean(values.rememberMe)),
-    onSuccess: handleLoginSuccess,
+    onSuccess: (data) => {
+      if ("mfaRequired" in data) setMfaToken(data.mfaToken);
+      else handleLoginSuccess(data);
+    },
     onError: (error: any) => {
       if (isMaintenanceLockoutError(error)) return; // the api interceptor is already navigating to /maintenance
       // Inline only — SignInError is the one announcement (see the file header).
@@ -514,7 +520,17 @@ export function Login() {
                 </div>
               )}
 
-              {showPasswordForm && (
+              {mfaToken && (
+                <MfaCodeStep
+                  mfaToken={mfaToken}
+                  onSuccess={handleLoginSuccess}
+                  onCancel={() => {
+                    setMfaToken(null);
+                    mutation.reset();
+                  }}
+                />
+              )}
+              {showPasswordForm && !mfaToken && (
                 <Form {...form}>
                   <form
                     className={ssoProviders.length > 0 || bothLocalMethods ? "mt-4 grid gap-4" : "mt-7 grid gap-4"}

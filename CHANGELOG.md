@@ -10,6 +10,39 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### ✨ Features: your week drafted for you, and a brief for whoever approves it
+
+- **Draft my week** (Log timesheet): one press turns the tickets you updated or commented on into
+  suggested entries, day by day — only the time still free each day, split by how active each ticket
+  was. Untick what's wrong and add the rest as drafts; you still review and submit them yourself.
+- **Approver brief**: each entry in Approvals carries the facts worth a second look — no linked ticket,
+  more than 10 hours that day, no ticket activity that day, a very short description. Information only;
+  the decision stays yours.
+- **Close without a fix**: a duplicate, out-of-scope or works-as-designed ticket can close straight from
+  Open, In progress or Reopened. It asks why, and keeps the reason as a comment.
+- **Sprints carry over**: completing a sprint is reviewed first and moves its unfinished tickets to the
+  backlog or a sprint you pick, instead of leaving them inside a sprint that is history.
+- **Tell the reporter**: an opt-in Email intake setting emails the outside person who reported a ticket
+  when it is resolved or closed. Off by default; the wording is an editable email template.
+- **Your other workspaces** appear in the account menu on a multi-workspace deployment, and the sign-in
+  page names the workspace even when no display name is set.
+
+### 🔒 Security: two-factor sign-in for every workspace
+
+- **Two-factor sign-in** (Profile): scan a QR code with any authenticator app, confirm a code, and keep
+  ten one-time recovery codes. Password sign-ins then ask for the current code; a code works once, and
+  wrong codes count toward the usual lockout.
+- **Require it for everyone** (Workspace Settings → Single sign-on): people without two-factor are taken
+  to setup at their next sign-in, and the server refuses everything else until it is done. Only a super
+  admin who has set it up themselves can switch the requirement on.
+
+### 🐛 Fixes
+
+- **History** filters by person and status on the server, before its row limit, and says so when the
+  limit is reached — a person's older entries no longer drop silently out of a filtered view.
+- **Signup** shows the full workspace address before creating it and names it on the button, because it
+  can't be changed later.
+
 ## 6.2.0 — faster, smaller, current, and it installs and repairs itself — 2026-10-05
 
 Lighter pages and cached assets, a 59% smaller API image on Node 24, every dependency current that can

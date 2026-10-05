@@ -166,6 +166,54 @@ export const HELP_ARTICLES: HelpArticle[] = [
     keywords: ["log", "time", "timesheet", "entry", "hours", "submit", "draft", "task", "attachment"]
   },
   {
+    id: "draft-my-week",
+    category: "Timesheets",
+    title: "Draft my week from your ticket work",
+    where: "Log timesheet → Draft my week (the panel above the entry form)",
+    when: "At the end of a day or week, when your hours went into tickets and you'd rather check a draft than rebuild the week from memory.",
+    steps: [
+      "Open Log timesheet and choose This week or Last week in the Draft my week panel.",
+      "Press Find this week's work. You get suggested entries, grouped by day, built from the tickets you updated or commented on.",
+      "Each row shows the ticket, project and module, the activity type, the time slot and how much activity it came from. A \"module guessed\" tag means the ticket had no module and the project's first one was used.",
+      "Untick anything that isn't right, then press Add as drafts.",
+      "Open History to adjust any draft and submit it — nothing is submitted for you."
+    ],
+    notes:
+      "Suggestions only fill the time still free on each weekday up to today: your daily capacity (weekly capacity ÷ 5, otherwise 8 hours) minus what you have already logged, split by how active each ticket was, in quarter hours and never under half an hour. A ticket already on a timesheet for that day is not suggested again, and deleted tickets never are. If a row can't be added (an overlap, a project you are no longer on), it stays ticked with the reason beside it.",
+    keywords: ["draft my week", "suggest", "auto fill", "autofill", "prefill", "week", "from tickets", "ai timesheet", "draft"]
+  },
+  {
+    id: "two-factor",
+    category: "Getting started",
+    title: "Two-factor sign-in",
+    where: "Profile → Two-factor sign-in",
+    when: "To protect your account with a code from your phone, or when your workspace requires it.",
+    steps: [
+      "Open Profile and press Set up two-factor.",
+      "Scan the QR code with an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy). Can't scan? Type the key shown beside it.",
+      "Enter the 6-digit code the app shows and press Turn on two-factor.",
+      "Save the ten recovery codes — copy or download them. Each one signs you in once if you lose your phone, and they are not shown again.",
+      "From now on, after your password you'll be asked for the current code. Lost your phone? Choose Use a recovery code on that step."
+    ],
+    notes:
+      "Two-factor applies to password sign-in; Google, Microsoft, SAML and directory sign-ins use your company's own checks. A code works once. Wrong codes count toward the same temporary lockout as wrong passwords. Running low on recovery codes? Make new ones from Profile (the old ones stop working). If your workspace requires two-factor, you'll be taken to setup at your next sign-in and can't turn it off; a super admin turns the requirement on under Workspace Settings → Single sign-on (Require two-factor sign-in), after setting it up on their own account.",
+    keywords: ["two-factor", "2fa", "mfa", "authenticator", "totp", "one-time code", "verification code", "recovery code", "lost phone", "security"]
+  },
+  {
+    id: "close-without-fix",
+    category: "Tickets",
+    title: "Closing a ticket without a fix",
+    where: "Tickets → a ticket's status (the pill in the list, the ticket's status, or a drag to Closed on the board)",
+    when: "When a ticket won't be fixed — a duplicate, out of scope, or works as designed.",
+    steps: [
+      "Change the ticket's status to Closed straight from Open, In progress or Reopened.",
+      "Say why in the box that appears, for example \"Duplicate of WEB-12\" or \"Works as designed\".",
+      "Press Close without a fix. The reason is added to the ticket as a comment."
+    ],
+    notes: "Keep it open cancels and nothing changes. A ticket that was resolved first closes without the question. An assigner or admin can reopen a closed ticket later.",
+    keywords: ["won't fix", "wont fix", "close", "duplicate", "out of scope", "reject ticket", "closed"]
+  },
+  {
     id: "timesheet-statuses",
     category: "Timesheets",
     title: "What the timesheet statuses mean",

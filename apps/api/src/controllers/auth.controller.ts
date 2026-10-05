@@ -12,6 +12,7 @@ import path from "node:path";
 import { Router } from "express";
 import { z } from "zod";
 import { roles, ACCENT_IDS, AI_ANSWER_STYLES, DENSITIES, THEME_MODES, type AccentId, type AiAnswerStyle } from "@timesheet/shared";
+import { confirmMfaSetup, disableMfa, mfaStatus, regenerateRecoveryCodes, startMfaSetup } from "../services/mfa.service.js";
 import { env } from "../config/env.js";
 import { avatarsDir, resolveWithin } from "../config/storage-paths.js";
 import { prisma } from "../config/prisma.js";
@@ -26,6 +27,7 @@ import { audit } from "../services/audit.service.js";
 import {
   buildProfilePayload,
   changePassword,
+  completeMfaLogin,
   completeSsoLogin,
   endSessions,
   login,
@@ -114,11 +116,55 @@ authRouter.post(
     // and never an authenticator.
     const deviceId = attachDeviceId(req, res);
     const result = await login(req.body.email, req.body.password, req.body.rememberMe === true, req.headers["user-agent"], req.ip, deviceId);
+    // Two-factor on: no session yet, no cookie — the client asks for the code and calls /login/mfa.
+    if ("mfaRequired" in result && result.mfaRequired) {
+      res.json({ mfaRequired: true, mfaToken: result.mfaToken });
+      return;
+    }
     // An unticked "Remember me" gets a browser-session cookie — see utils/refresh-cookie.ts.
     res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt, result.persistentCookie));
     res.json({ accessToken: result.accessToken, user: result.user });
   }
 );
+
+/** The second step of a password sign-in with two-factor on (services/mfa.service.ts). Same limiter
+ *  as /login — app.ts mounts the auth limiter over /api/auth/login*. */
+authRouter.post(
+  "/login/mfa",
+  validate(z.object({ body: z.object({ mfaToken: z.string().min(20).max(2000), code: z.string().trim().min(6).max(20) }) })),
+  async (req, res) => {
+    const deviceId = attachDeviceId(req, res);
+    const result = await completeMfaLogin(req.body.mfaToken, req.body.code, req.headers["user-agent"], req.ip, deviceId);
+    res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt, result.persistentCookie));
+    res.json({ accessToken: result.accessToken, user: result.user });
+  }
+);
+
+/* ---------------------------- Two-factor sign-in: your own settings ---------------------------- */
+
+const mfaCodeBody = z.object({ body: z.object({ code: z.string().trim().min(6).max(20) }) });
+
+authRouter.get("/mfa", requireAuth, async (req, res) => {
+  res.json(await mfaStatus(req.user!.id, requireTenantContext().orgId));
+});
+
+authRouter.post("/mfa/setup", requireAuth, async (req, res) => {
+  const { orgSlug } = requireTenantContext();
+  res.json(await startMfaSetup(req.user!.id, orgSlug));
+});
+
+authRouter.post("/mfa/confirm", requireAuth, validate(mfaCodeBody), async (req, res) => {
+  res.json(await confirmMfaSetup(req.user!.id, req.body.code));
+});
+
+authRouter.post("/mfa/disable", requireAuth, validate(mfaCodeBody), async (req, res) => {
+  await disableMfa(req.user!.id, requireTenantContext().orgId, req.body.code);
+  res.json({ ok: true });
+});
+
+authRouter.post("/mfa/recovery-codes", requireAuth, validate(mfaCodeBody), async (req, res) => {
+  res.json(await regenerateRecoveryCodes(req.user!.id, req.body.code));
+});
 
 /** LDAP is the one SSO provider that's a direct bind rather than a redirect (see
  *  services/sso.service.ts's LDAP section), so unlike Google/Microsoft/SAML it has no separate
@@ -283,7 +329,11 @@ authRouter.get("/me", requireAuth, async (req, res) => {
   // `passwordChangeRequired` is a property of THIS session (requireAuth decides it), not of the
   // user, so it is added here rather than in buildProfilePayload. The SPA renders the forced
   // change-password screen from it.
-  res.json({ ...(await buildProfilePayload(req.user!.id)), passwordChangeRequired: Boolean(req.passwordChangeRequired) });
+  res.json({
+    ...(await buildProfilePayload(req.user!.id)),
+    passwordChangeRequired: Boolean(req.passwordChangeRequired),
+    mfaSetupRequired: Boolean(req.mfaSetupRequired)
+  });
 });
 
 /**

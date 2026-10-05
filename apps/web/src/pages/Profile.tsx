@@ -31,6 +31,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { TwoFactorPanel } from "../components/TwoFactorPanel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { DataTable } from "../components/ui/data-table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
@@ -602,6 +603,23 @@ export function Profile() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-3">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary/10 text-primary">
+              <ShieldCheck className="h-5 w-5" />
+            </div>
+            <div>
+              <CardTitle>Two-factor sign-in</CardTitle>
+              <CardDescription>A code from an authenticator app, asked for each time you sign in with a password.</CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <TwoFactorPanel />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

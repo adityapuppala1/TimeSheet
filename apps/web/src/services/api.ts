@@ -480,8 +480,16 @@ export const authApi = {
    *  this tab within seconds (see components/SessionEndedDialog.tsx). Deliberately tiny. */
   heartbeat: async () => (await api.get<{ ok: boolean }>("/auth/heartbeat")).data,
   onboardingStatus: async () => (await api.get<OnboardingStatus>("/auth/onboarding-status")).data,
+  /** Two-factor on: `{ mfaRequired, mfaToken }` instead of a session — then call `loginMfa`. */
   login: async (email: string, password: string, rememberMe: boolean) =>
-    (await api.post<LoginResponse>("/auth/login", { email, password, rememberMe })).data,
+    (await api.post<LoginResponse | { mfaRequired: true; mfaToken: string }>("/auth/login", { email, password, rememberMe })).data,
+  loginMfa: async (mfaToken: string, code: string) => (await api.post<LoginResponse>("/auth/login/mfa", { mfaToken, code })).data,
+  mfaStatus: async () =>
+    (await api.get<{ enabled: boolean; enabledAt: string | null; recoveryCodesLeft: number; requiredByWorkspace: boolean }>("/auth/mfa")).data,
+  mfaSetup: async () => (await api.post<{ secret: string; otpauthUrl: string }>("/auth/mfa/setup")).data,
+  mfaConfirm: async (code: string) => (await api.post<{ recoveryCodes: string[] }>("/auth/mfa/confirm", { code })).data,
+  mfaDisable: async (code: string) => (await api.post<{ ok: true }>("/auth/mfa/disable", { code })).data,
+  mfaRecoveryCodes: async (code: string) => (await api.post<{ recoveryCodes: string[] }>("/auth/mfa/recovery-codes", { code })).data,
   /** LDAP is a direct bind, not a redirect (see auth.controller.ts's "/login/ldap"), so it
    *  returns the same JSON shape as /login rather than navigating away to an IdP. */
   loginLdap: async (email: string, password: string) => (await api.post<LoginResponse>("/auth/login/ldap", { email, password })).data,
@@ -2460,8 +2468,8 @@ export const settingsApi = {
   testSso: async (provider: "google" | "microsoft" | "saml" | "ldap", payload: { probeEmail?: string } = {}) =>
     (await api.post<SsoTestResult>(`/settings/sso/${provider}/test-connection`, payload)).data,
 
-  updateAuthMethod: async (payload: { passwordLoginEnabled?: boolean; requireSsoOnly?: boolean }) =>
-    (await api.patch<{ passwordLoginEnabled: boolean; requireSsoOnly: boolean }>("/settings/auth-method", payload)).data,
+  updateAuthMethod: async (payload: { passwordLoginEnabled?: boolean; requireSsoOnly?: boolean; requireMfa?: boolean }) =>
+    (await api.patch<{ passwordLoginEnabled: boolean; requireSsoOnly: boolean; requireMfa: boolean }>("/settings/auth-method", payload)).data,
   getSecurityIngestion: async () =>
     (
       await api.get<{
@@ -2810,6 +2818,8 @@ export interface SsoSettings {
   providers: SsoProviderConfig[];
   passwordLoginEnabled: boolean;
   requireSsoOnly: boolean;
+  /** Every password sign-in needs two-factor; people without it are taken to setup. */
+  requireMfa?: boolean;
   registration?: SsoRegistrationValues;
   /** The workspace's claimed company domains — the suggested allowed-domain list for automatic accounts. */
   claimedDomains?: string[];

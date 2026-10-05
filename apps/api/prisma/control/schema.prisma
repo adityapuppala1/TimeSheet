@@ -594,6 +594,9 @@ model OrgAuthMethod {
   /// When true, password login is force-disabled regardless of passwordLoginEnabled — an org
   /// can require SSO-only.
   requireSsoOnly       Boolean      @default(false)
+  /// Every password sign-in must pass two-factor; people without it are held at setup on their next
+  /// sign-in (middleware/auth.ts). SSO sign-ins are the identity provider's business, not this flag's.
+  requireMfa           Boolean      @default(false)
   updatedAt            DateTime     @updatedAt
 }
 

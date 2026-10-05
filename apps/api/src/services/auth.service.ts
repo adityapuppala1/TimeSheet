@@ -23,6 +23,7 @@ import { getEffectiveSeatLimit } from "./plan-limits.service.js";
 import { countActiveSeats } from "./seat-count.service.js";
 import { rememberWorkspaceMembership, tenantBaseUrl } from "./workspace-directory.service.js";
 import { isMaintenanceActive } from "./maintenance.service.js";
+import { readMfaChallenge, signMfaChallenge, verifyMfaCode, workspaceRequiresMfaCached } from "./mfa.service.js";
 import { findLiveResetToken, issueResetToken, voidOutstandingResetTokens } from "./reset-token.service.js";
 import { assertPasswordPolicy } from "../utils/password-policy.js";
 import { syncSubscriptionSeats } from "./billing-sync.service.js";
@@ -555,12 +556,52 @@ export async function login(
   }
   clearFailedLogins(orgId, email);
 
+  // TWO-FACTOR: the password was right, but no session exists until the second factor is too. The
+  // challenge proves only the password step (mfa.service.ts#signMfaChallenge) and lasts 5 minutes.
+  if (user.mfaEnabled) {
+    await auditAuthEvent(user.id, "auth.login_mfa_challenged", user.id, { method: "PASSWORD" }, { ipAddress });
+    return { mfaRequired: true as const, mfaToken: signMfaChallenge({ sub: user.id, org: orgId, rememberMe }) };
+  }
+
   const session = await establishSession(user, orgId, { rememberMe, authMethod: "PASSWORD", userAgent, ipAddress, deviceId });
   await auditAuthEvent(user.id, "auth.login_succeeded", user.id, { method: "PASSWORD", rememberMe }, { ipAddress });
+  // The workspace requires two-factor and this person has none yet: the SPA goes straight to setup
+  // (requireAuth holds the session there anyway — this only saves a refused request first).
+  const mfaSetupRequired = await workspaceRequiresMfaCached(orgId);
+  return { ...session, user: { ...passwordLoginUser(user), mfaSetupRequired } };
+}
 
+/**
+ * The second step of a password sign-in with two-factor on: a valid challenge plus a code (or a
+ * recovery code) creates the session exactly as `login` would have. A wrong code counts toward the
+ * same per-account lockout a wrong password does.
+ */
+export async function completeMfaLogin(mfaToken: string, code: string, userAgent?: string, ipAddress?: string, deviceId?: string) {
+  const { orgId } = requireTenantContext();
+  const challenge = readMfaChallenge(mfaToken);
+  if (challenge.org !== orgId) throw new AppError(401, "That sign-in has expired. Enter your email and password again.", { code: "MFA_CHALLENGE_EXPIRED" });
+  const user = await prisma.user.findUnique({ where: { id: challenge.sub }, include: PROFILE_INCLUDE });
+  if (!user || user.deletedAt || user.status !== "ACTIVE") throw new AppError(401, "Invalid email or password");
+  checkAccountLockout(orgId, user.email);
+  let method: "totp" | "recovery";
+  try {
+    method = await verifyMfaCode(user.id, code);
+  } catch (error) {
+    recordFailedLogin(orgId, user.email);
+    await auditAuthEvent(user.id, "auth.login_failed", user.id, { email: user.email, method: "PASSWORD", reason: "mfa_code_invalid" }, { actorType: "GUEST", actorLabel: "sign-in form", ipAddress });
+    throw error;
+  }
+  clearFailedLogins(orgId, user.email);
+  const session = await establishSession(user, orgId, { rememberMe: challenge.rememberMe, authMethod: "PASSWORD", userAgent, ipAddress, deviceId });
+  await auditAuthEvent(user.id, "auth.login_succeeded", user.id, { method: "PASSWORD", rememberMe: challenge.rememberMe, secondFactor: method }, { ipAddress });
+  return { ...session, user: passwordLoginUser(user) };
+}
+
+type LoginUserRow = NonNullable<Awaited<ReturnType<typeof prisma.user.findUnique<{ where: { id: string }; include: typeof PROFILE_INCLUDE }>>>>;
+
+/** What a password sign-in returns about the person — shared by `login` and `completeMfaLogin`. */
+function passwordLoginUser(user: LoginUserRow) {
   return {
-    ...session,
-    user: {
       id: user.id,
       name: user.name,
       email: user.email,
@@ -578,8 +619,7 @@ export async function login(
       manager: user.manager ?? null,
       appearance: readAppearance(user.appearance),
       aiPreferences: readAiPreferences(user.aiPreferences)
-    } satisfies ProfilePayload
-  };
+    } satisfies ProfilePayload;
 }
 
 /* ================================== SSO ====================================== */

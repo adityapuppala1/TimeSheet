@@ -226,6 +226,9 @@ function quoted(text: string, limit = 1200): string {
 }
 
 
+/** "Hi Priya, the" or "The" — the opening of the reporter-resolved email. */
+const greetingFor = (name: string) => (name ? "Hi " + escape(name) + ", the" : "The");
+
 export const templates = {
   welcome: (name: string) =>
     shell(
@@ -919,7 +922,7 @@ export const templates = {
     shell(
       { title: `[${params.ticketKey}] Your request has been ${params.outcome}`, preheader: "An update on the request you sent us.", accentColor: ACCENT },
       heading(`Your request has been ${escape(params.outcome)}`) +
-        paragraph(`${params.reporterName ? `Hi ${escape(params.reporterName)}, the` : "The"} request you reported has been ${escape(params.outcome)}.`) +
+        paragraph(`${greetingFor(params.reporterName)} request you reported has been ${escape(params.outcome)}.`) +
         infoCard(
           [
             ["Reference", escape(params.ticketKey)],

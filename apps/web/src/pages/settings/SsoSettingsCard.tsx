@@ -995,7 +995,7 @@ export function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
   const autoOpened = useRef(false);
 
   const authMethod = useMutation({
-    mutationFn: (payload: { passwordLoginEnabled?: boolean; requireSsoOnly?: boolean }) => settingsApi.updateAuthMethod(payload),
+    mutationFn: (payload: { passwordLoginEnabled?: boolean; requireSsoOnly?: boolean; requireMfa?: boolean }) => settingsApi.updateAuthMethod(payload),
     onSuccess: () => {
       toast.success("Saved");
       runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "sso"] }));
@@ -1122,6 +1122,13 @@ export function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
                 checked={settings.data.requireSsoOnly}
                 disabled={readOnly || !anyProviderConfigured}
                 onChange={(v) => authMethod.mutate({ requireSsoOnly: v })}
+              />
+              <ToggleRow
+                label="Require two-factor sign-in"
+                hint="Everyone who signs in with a password must also enter a code from an authenticator app. People who haven't set it up are taken to setup at their next sign-in. Set it up on your own account first (Profile). SSO sign-ins use your identity provider's own checks."
+                checked={settings.data.requireMfa ?? false}
+                disabled={readOnly}
+                onChange={(v) => authMethod.mutate({ requireMfa: v })}
               />
               {settings.data.requireSsoOnly && !anyProviderConfigured && (
                 <Alert variant="warning">

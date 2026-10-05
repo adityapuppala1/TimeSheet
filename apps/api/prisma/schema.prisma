@@ -152,6 +152,16 @@ model User {
   /// reset flow). A GATE for password sessions (security audit #11): until it clears, requireAuth
   /// allows only the forced change-password screen. SSO and LDAP sessions are not gated.
   mustChangePassword       Boolean    @default(false)
+  /// Two-factor sign-in (TOTP). `mfaSecret` is encrypted (utils/encryption.ts) because the server has
+  /// to read it back to check a code; `mfaPendingSecret` holds a secret between "set up" and the first
+  /// confirmed code, so an abandoned setup never turns two-factor on. `mfaLastStep` is the last
+  /// 30-second step accepted, so one code cannot be used twice.
+  mfaEnabled               Boolean    @default(false)
+  mfaSecret                String?    @db.Text
+  mfaPendingSecret         String?    @db.Text
+  mfaEnabledAt             DateTime?
+  mfaLastStep              Int?
+  recoveryCodes            UserRecoveryCode[]
   /// --- Agent identity (V8 phase 3, decision 2 in docs/AGENTIC_WORK_MANAGEMENT.md §7) ----------
   /// True for the non-login service identity an `AgentProfile` acts as. Making an agent a real
   /// `User` row is what lets every existing surface work unchanged — an agent can be an assignee,
@@ -6031,4 +6041,16 @@ model JoinRequest {
 
   @@index([status, createdAt])
   @@index([email, status])
+}
+
+/// One-time recovery codes for two-factor sign-in, HASHED (bcrypt) — shown once at setup, never again.
+model UserRecoveryCode {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String    @db.VarChar(255)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }

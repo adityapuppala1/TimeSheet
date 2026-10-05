@@ -14,7 +14,8 @@ import { authApi } from "../services/api";
 import { PasswordChangeBanner } from "../components/PasswordChangeBanner";
 import { OnboardingGate } from "../components/OnboardingGate";
 import { ForcedPasswordChange } from "../components/ForcedPasswordChange";
-import { isPasswordChangeRequired } from "../lib/password-change-gate";
+import { ForcedMfaSetup } from "../components/ForcedMfaSetup";
+import { isMfaSetupRequired, isPasswordChangeRequired } from "../lib/password-change-gate";
 import { FaceModelUpgradePrompt } from "../components/FaceModelUpgradePrompt";
 import { SessionEndedDialog } from "../components/SessionEndedDialog";
 import { MobileNav, Sidebar } from "../components/Sidebar";
@@ -60,6 +61,16 @@ export function AppLayout() {
     return (
       <>
         <ForcedPasswordChange />
+        <SessionEndedDialog />
+      </>
+    );
+  }
+  // The workspace requires two-factor and this person has none: the server serves only the setup
+  // routes (requireAuth's MFA_SETUP_REQUIRED), so the shell is not mounted — same as above.
+  if (isMfaSetupRequired(user)) {
+    return (
+      <>
+        <ForcedMfaSetup />
         <SessionEndedDialog />
       </>
     );

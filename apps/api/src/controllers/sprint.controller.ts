@@ -119,6 +119,36 @@ const patchSchema = z.object({
     .strict()
 });
 
+/**
+ * Completing a sprint carries its unfinished tickets forward — to another planned/active sprint of the
+ * same project, or to the backlog (null). Before this they stayed attached to a sprint that is history
+ * and does not reopen: off every board, invisible to the next sprint. Validated before the sprint
+ * changes, applied after.
+ */
+async function planCarryOver(existing: { id: string; projectId: string }, carryOverTo: string | undefined) {
+  let target: string | null = null;
+  if (carryOverTo && carryOverTo !== "backlog") {
+    const row = await prisma.sprint.findFirst({ where: { id: carryOverTo, projectId: existing.projectId }, select: { id: true, status: true } });
+    if (!row || row.id === existing.id || row.status === "COMPLETED") {
+      throw new AppError(422, "Unfinished tickets can only move to a planned or active sprint of this project, or to the backlog.");
+    }
+    target = row.id;
+  }
+  const unfinished = await prisma.ticket.findMany({
+    where: { sprintId: existing.id, deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] } },
+    select: { id: true }
+  });
+  return { target, ticketIds: unfinished.map((t) => t.id) };
+}
+
+async function applyCarryOver(fromSprintId: string, carry: { target: string | null; ticketIds: string[] }, actorId: string): Promise<void> {
+  if (carry.ticketIds.length === 0) return;
+  await prisma.ticket.updateMany({ where: { id: { in: carry.ticketIds } }, data: { sprintId: carry.target } });
+  for (const id of carry.ticketIds) {
+    await audit(actorId, "ticket.sprint_changed", "Ticket", id, { from: fromSprintId, to: carry.target, reason: "sprint_completed" });
+  }
+}
+
 sprintRouter.patch("/:id", requirePermission(permissions.PLAN_WRITE), validate(patchSchema), async (req, res) => {
   const existing = await loadSprint(String(req.params.id));
   await assertTicketVisible(req, existing.projectId);
@@ -141,33 +171,12 @@ sprintRouter.patch("/:id", requirePermission(permissions.PLAN_WRITE), validate(p
   }
   if (Object.keys(data).length === 0) throw new AppError(422, "Nothing to change.");
 
-  // Completing a sprint carries its unfinished tickets forward. Before this they stayed attached to a
-  // sprint that is history and does not reopen — off every board, invisible to the next sprint.
-  let carryTarget: string | null = null;
   const completing = data.status === "COMPLETED";
-  if (completing && body.carryOverTo && body.carryOverTo !== "backlog") {
-    const target = await prisma.sprint.findFirst({ where: { id: body.carryOverTo, projectId: existing.projectId }, select: { id: true, status: true } });
-    if (!target || target.id === existing.id || target.status === "COMPLETED") {
-      throw new AppError(422, "Unfinished tickets can only move to a planned or active sprint of this project, or to the backlog.");
-    }
-    carryTarget = target.id;
-  }
-  const unfinished = completing
-    ? await prisma.ticket.findMany({
-        where: { sprintId: existing.id, deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] } },
-        select: { id: true }
-      })
-    : [];
-
+  const carry = completing ? await planCarryOver(existing, body.carryOverTo) : null;
   const sprint = await prisma.sprint.update({ where: { id: existing.id }, data });
-  if (unfinished.length > 0) {
-    await prisma.ticket.updateMany({ where: { id: { in: unfinished.map((t) => t.id) } }, data: { sprintId: carryTarget } });
-    for (const t of unfinished) {
-      await audit(req.user!.id, "ticket.sprint_changed", "Ticket", t.id, { from: existing.id, to: carryTarget, reason: "sprint_completed" });
-    }
-  }
-  await audit(req.user!.id, "sprint.updated", "Sprint", sprint.id, { keys: Object.keys(data), status: sprint.status, carriedOver: unfinished.length });
-  res.json({ ...sprint, carriedOver: unfinished.length, carriedOverTo: completing ? (carryTarget ?? "backlog") : undefined });
+  if (carry) await applyCarryOver(existing.id, carry, req.user!.id);
+  await audit(req.user!.id, "sprint.updated", "Sprint", sprint.id, { keys: Object.keys(data), status: sprint.status, carriedOver: carry?.ticketIds.length ?? 0 });
+  res.json({ ...sprint, carriedOver: carry?.ticketIds.length ?? 0, carriedOverTo: carry ? (carry.target ?? "backlog") : undefined });
 });
 
 sprintRouter.delete("/:id", requirePermission(permissions.PLAN_WRITE), async (req, res) => {

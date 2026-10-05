@@ -84,6 +84,36 @@ function describe(ticket: WeekDraftTicket, changes: number, comments: number): s
   return `${ticket.key} — ${ticket.title} (${parts.join(", ")})`;
 }
 
+type ActivityCount = { changes: number; comments: number };
+
+/** One day's activity per ticket, skipping tickets already on a timesheet that day. */
+function activityByTicket(day: WeekDraftDayState, activities: WeekDraftActivity[], tickets: Map<string, WeekDraftTicket>): Map<string, ActivityCount> {
+  const perTicket = new Map<string, ActivityCount>();
+  for (const a of activities) {
+    if (a.day !== day.day || day.loggedTicketIds.includes(a.ticketId) || !tickets.has(a.ticketId)) continue;
+    const row = perTicket.get(a.ticketId) ?? { changes: 0, comments: 0 };
+    if (a.kind === "change") row.changes++;
+    else row.comments++;
+    perTicket.set(a.ticketId, row);
+  }
+  return perTicket;
+}
+
+/** `hours` split by weight in quarter hours, at least half an hour each, never more than `hours`. */
+function splitHours(weights: number[], hours: number): number[] {
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  const shares = weights.map((w) => Math.max(MIN_HOURS, quarter((hours * w) / total)));
+  // Rounding can overshoot the day; take the excess off the largest share in quarter-hour steps.
+  let over = quarter(shares.reduce((s, h) => s + h, 0) - hours);
+  while (over > 0) {
+    const i = shares.indexOf(Math.max(...shares));
+    if (shares[i] - 0.25 < MIN_HOURS) break;
+    shares[i] -= 0.25;
+    over = quarter(over - 0.25);
+  }
+  return shares.map(quarter);
+}
+
 /**
  * The pure part, unit-tested on its own: activity + what is already logged + capacity → rows.
  * `fallbackModule` resolves a module for a ticket that has none (the project's first module).
@@ -99,34 +129,14 @@ export function allocateWeekDraft(input: {
   for (const day of input.days) {
     const remaining = quarter(input.dailyCapacityHours - day.loggedHours);
     if (remaining < MIN_HOURS) continue;
-
-    // Activity per ticket on this day, skipping tickets already on a timesheet that day.
-    const perTicket = new Map<string, { changes: number; comments: number }>();
-    for (const a of input.activities) {
-      if (a.day !== day.day || day.loggedTicketIds.includes(a.ticketId) || !input.tickets.has(a.ticketId)) continue;
-      const row = perTicket.get(a.ticketId) ?? { changes: 0, comments: 0 };
-      if (a.kind === "change") row.changes++;
-      else row.comments++;
-      perTicket.set(a.ticketId, row);
-    }
+    const perTicket = activityByTicket(day, input.activities, input.tickets);
     if (perTicket.size === 0) continue;
 
     // Most active first, and no more tickets than the remaining time can give half an hour each.
     const ranked = [...perTicket.entries()]
       .sort(([, a], [, b]) => b.changes + b.comments - (a.changes + a.comments))
       .slice(0, Math.max(1, Math.floor(remaining / MIN_HOURS)));
-    const total = ranked.reduce((sum, [, r]) => sum + r.changes + r.comments, 0);
-
-    let shares = ranked.map(([, r]) => Math.max(MIN_HOURS, quarter((remaining * (r.changes + r.comments)) / total)));
-    // Rounding can overshoot the day; take the excess off the largest share in quarter-hour steps.
-    let over = quarter(shares.reduce((s, h) => s + h, 0) - remaining);
-    while (over > 0) {
-      const i = shares.indexOf(Math.max(...shares));
-      if (shares[i] - 0.25 < MIN_HOURS) break;
-      shares[i] -= 0.25;
-      over = quarter(over - 0.25);
-    }
-    shares = shares.map(quarter);
+    const shares = splitHours(ranked.map(([, r]) => r.changes + r.comments), remaining);
 
     let cursor = day.lastEnd ? Math.max(toMinutes(day.lastEnd), toMinutes(DAY_START)) : toMinutes(DAY_START);
     ranked.forEach(([ticketId, r], i) => {
@@ -211,7 +221,8 @@ export async function buildWeekDraft(userId: string, weekStart: Date, now = new 
   const ticketIds = [...new Set(activities.map((a) => a.ticketId))];
   const ticketRows = ticketIds.length
     ? await prisma.ticket.findMany({
-        where: { id: { in: ticketIds } },
+        // Deleted tickets keep their history but cannot take new time — never suggest them.
+        where: { id: { in: ticketIds }, deletedAt: null },
         select: { id: true, key: true, title: true, type: true, projectId: true, moduleId: true, project: { select: { name: true } }, module: { select: { name: true } } }
       })
     : [];

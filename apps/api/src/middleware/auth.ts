@@ -20,6 +20,7 @@ import { requireTenantContext } from "../config/tenant-context.js";
 import { verifyAccessToken } from "../utils/security.js";
 import { isMaintenanceActive } from "../services/maintenance.service.js";
 import { getOrgStatus } from "../services/org-status.service.js";
+import { workspaceRequiresMfaCached } from "../services/mfa.service.js";
 import { AppError } from "./error.js";
 
 /** Session-id -> last lastSeenAt write, for the liveness throttle below. In-memory is correct
@@ -77,6 +78,9 @@ declare global {
       /** True while this PASSWORD session must change the admin-set password first — see
        *  PASSWORD_CHANGE_ALLOWED below. Set by requireAuth. */
       passwordChangeRequired?: boolean;
+      /** The workspace requires two-factor and this password session's person has not set it up:
+       *  only MFA_SETUP_ALLOWED is reachable. Set by requireAuth. */
+      mfaSetupRequired?: boolean;
     }
   }
 }
@@ -116,6 +120,20 @@ const GRACE_OPEN_PATHS = new Set(["/api/billing/standing"]);
 const PASSWORD_CHANGE_ALLOWED = new Set([
   "/api/auth/me",
   "/api/auth/change-password",
+  "/api/auth/heartbeat",
+  "/api/auth/logout",
+  "/api/auth/logout-all"
+]);
+
+/**
+ * What a session held at two-factor setup may reach: the profile it renders from, the setup itself,
+ * the heartbeat and the sign-outs. Exact paths, for the reason PASSWORD_CHANGE_ALLOWED gives.
+ */
+const MFA_SETUP_ALLOWED = new Set([
+  "/api/auth/me",
+  "/api/auth/mfa",
+  "/api/auth/mfa/setup",
+  "/api/auth/mfa/confirm",
   "/api/auth/heartbeat",
   "/api/auth/logout",
   "/api/auth/logout-all"
@@ -247,6 +265,17 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
    * maintenance and billing gates, so their answers still take precedence.
    */
   holdAtPasswordChange(req, Boolean(user.mustChangePassword) && establishedBy === "PASSWORD");
+
+  // THE TWO-FACTOR SETUP GATE — the workspace requires two-factor (OrgAuthMethod.requireMfa) and this
+  // person signed in with a password but has not set it up. Same shape as the gate above, after it
+  // (a new password first, then the second factor), and only for PASSWORD sessions: an SSO sign-in's
+  // second factor is the identity provider's. The policy read is cached (mfa.service.ts).
+  const mfaSetupRequired =
+    establishedBy === "PASSWORD" && !user.mfaEnabled && (await workspaceRequiresMfaCached(requireTenantContext().orgId));
+  req.mfaSetupRequired = mfaSetupRequired;
+  if (mfaSetupRequired && !req.passwordChangeRequired && !MFA_SETUP_ALLOWED.has(req.originalUrl.split("?")[0])) {
+    throw new AppError(403, "Set up two-factor sign-in before you continue — this workspace requires it.", { code: "MFA_SETUP_REQUIRED" });
+  }
 
   // Throttled liveness stamp — what makes the admin's "who is online right now?" panel honest.
   // At most one UPDATE per session per 5 minutes, tracked in-memory: unconditionally writing

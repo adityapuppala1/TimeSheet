@@ -10,6 +10,7 @@
  *  - THIN_NOTE     the description is under 20 characters of text
  */
 import { prisma } from "../config/prisma.js";
+import { htmlToPlainText } from "../utils/sanitize.js";
 
 export type ApprovalSignalCode = "NO_TICKET" | "LONG_DAY" | "NO_ACTIVITY" | "THIN_NOTE";
 export interface ApprovalSignal {
@@ -30,7 +31,7 @@ const TICKET_WORK = /development|bug|testing|deployment/i;
 const LONG_DAY_HOURS = 10;
 const THIN_NOTE_CHARS = 20;
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
-const plain = (html: string) => html.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+const plain = (html: string) => htmlToPlainText(html).trim();
 
 /** Pure: entries + per-(user, day) totals + per-(user, day) ticket activity → signals per entry. */
 export function computeApprovalSignals(

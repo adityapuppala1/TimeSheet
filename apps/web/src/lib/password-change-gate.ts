@@ -33,3 +33,12 @@ export function newPasswordProblem(current: string, next: string, confirm: strin
   if (next === current) return "That's the password you already have — choose a new one.";
   return null;
 }
+
+/**
+ * The two-factor setup gate — same rules as the password gate above: the server decides
+ * (`mfaSetupRequired` on /auth/login and /auth/me, from OrgAuthMethod.requireMfa) and only an explicit
+ * `true` holds anyone. The password gate goes first when both apply, as requireAuth's order does.
+ */
+export function isMfaSetupRequired(user: unknown): boolean {
+  return (user as { mfaSetupRequired?: unknown } | undefined)?.mfaSetupRequired === true;
+}

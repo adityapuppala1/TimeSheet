@@ -20,6 +20,7 @@ import { describeStorageLayout, validateDirectory } from "../config/storage-path
 import { requireAuth, requirePermission, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
+import { forgetMfaPolicy } from "../services/mfa.service.js";
 import { audit } from "../services/audit.service.js";
 import { describeAutonomyCatalogue, setCapabilityLevel } from "../services/ai-autonomy.service.js";
 import {
@@ -1088,6 +1089,7 @@ settingsRouter.get("/sso", requireSuperAdmin, async (req, res) => {
     providers: configs.map(ssoConfigView),
     passwordLoginEnabled: authMethod?.passwordLoginEnabled ?? true,
     requireSsoOnly: authMethod?.requireSsoOnly ?? false,
+    requireMfa: authMethod?.requireMfa ?? false,
     // What the admin registers with their IdP, absolute and exactly as the flows send it (audit M4).
     registration: ssoRegistrationValues(configs.find((c) => c.providerType === "SAML")?.spEntityId),
     // The workspace's claimed company domains — the card's suggested "allowed domains" list for
@@ -1427,7 +1429,7 @@ settingsRouter.post("/sso/:provider/test-connection", requireSuperAdmin, validat
 });
 
 const authMethodSchema = z.object({
-  body: z.object({ passwordLoginEnabled: z.boolean().optional(), requireSsoOnly: z.boolean().optional() }).strict()
+  body: z.object({ passwordLoginEnabled: z.boolean().optional(), requireSsoOnly: z.boolean().optional(), requireMfa: z.boolean().optional() }).strict()
 });
 
 settingsRouter.patch("/auth-method", requireSuperAdmin, validate(authMethodSchema), async (req, res) => {
@@ -1466,13 +1468,24 @@ settingsRouter.patch("/auth-method", requireSuperAdmin, validate(authMethodSchem
     }
   }
 
+  // Requiring two-factor: the super admin turning it on must have set it up first, so the policy is
+  // never switched on by somebody who has not been through the setup everyone else will meet.
+  // Turning it OFF is ungated, for the same reason requireSsoOnly's off-switch is.
+  if (req.body.requireMfa === true) {
+    const me = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { mfaEnabled: true } });
+    if (!me?.mfaEnabled) {
+      throw new AppError(422, "Set up two-factor sign-in on your own account first (Profile → Two-factor sign-in), then require it for everyone.");
+    }
+  }
+
   const updated = await controlPrisma.orgAuthMethod.upsert({
     where: { organizationId: orgId },
     update: req.body,
     create: { organizationId: orgId, ...req.body }
   });
+  forgetMfaPolicy(orgId);
   await audit(req.user!.id, "settings.auth_method_updated", "OrgAuthMethod", updated.id, req.body);
-  res.json({ passwordLoginEnabled: updated.passwordLoginEnabled, requireSsoOnly: updated.requireSsoOnly });
+  res.json({ passwordLoginEnabled: updated.passwordLoginEnabled, requireSsoOnly: updated.requireSsoOnly, requireMfa: updated.requireMfa });
 });
 
 /**
