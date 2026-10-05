@@ -13,18 +13,20 @@
  *
  * Escape hatch for an emergency: `git push --no-verify` (CI on `main` still runs everything).
  */
-import { execSync, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-const sh = (cmd) => execSync(cmd, { encoding: "utf8" }).trim();
-const root = sh("git rev-parse --show-toplevel");
+// Argument arrays, never a shell string: on Windows a shell is cmd.exe, where `^` in `HEAD^{tree}` is
+// an escape character and the revision silently becomes something else.
+const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
+const root = git("rev-parse", "--show-toplevel");
 process.chdir(root);
-const record = path.join(sh("git rev-parse --git-common-dir"), "local-ci-passed");
+const record = path.join(git("rev-parse", "--git-common-dir"), "local-ci-passed");
 const DOCS_ONLY = /^(docs\/|.*\.md$|\.env\.example$|LICENSE$|\.gitignore$)/;
 
-const dirty = sh("git status --porcelain --untracked-files=no") !== "";
-const tree = sh("git rev-parse HEAD^{tree}");
+const dirty = git("status", "--porcelain", "--untracked-files=no") !== "";
+const tree = git("rev-parse", "HEAD^{tree}");
 const passed = fs.existsSync(record) ? fs.readFileSync(record, "utf8").split("\n").filter(Boolean) : [];
 
 if (!dirty && !process.argv.includes("--force")) {
