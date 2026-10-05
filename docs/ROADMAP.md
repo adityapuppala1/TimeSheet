@@ -437,6 +437,25 @@ Every row above governs cost/usage the same way `GlobalAISettings.monthlyBudgetU
 `AIUsageLog` already do for existing AI features — no new governance model needed, just new
 things flowing through the existing meter.
 
+## Major upgrades deferred on 2026-10-05 — each a migration, not a bump
+
+Everything else was brought current that day (see CHANGELOG, Unreleased → Dependencies). These were
+left on purpose, because each rewrites code across many files and deserves its own branch and a
+`npm run ci:docker -- --e2e` pass:
+
+| Package | From → to | Why it is its own unit |
+|---|---|---|
+| prisma / @prisma/client | 6.19 → 7.x (8 is RC) | new client generator + config file; both schemas, every service |
+| tailwindcss | 3.4 → 4.x | CSS-first config, new scanner; also removes the `braces` alert (#93) |
+| typescript | 5.9 → 7.x | the Go-native compiler; flags and emit differ |
+| zod | 3.25 → 4.x | error and type APIs changed; every request schema |
+| recharts | 2.15 → 3.x | component API changes in every chart |
+| @tanstack/react-table | 8 → 9 | table model API |
+| framer-motion | 12 → 14 | animation API; check `lib/render-loop.ts` users |
+| vitest + coverage | 4 → 5 | `change-automation-actions.test.ts` fails under v5's mock semantics |
+| pdf-parse | 1 → 2 | rewritten API (and cannot read PDFKit output here — see memory/PDF notes) |
+| @types/node | 22 → 26 | stays on the major of the Node runtime the images ship (22) |
+
 ## Dependency advisories, triaged 2026-10-05
 
 After 6.1.0's `npm audit fix`, `npm audit --omit=dev` reports **0**. One Dependabot alert stays open:

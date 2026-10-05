@@ -167,6 +167,14 @@ The one-click scripts are environment-aware and end with evidence, not hope:
   API health, the server reporting exactly the checkout's `VERSION`, both schemas at the latest
   migration, the seeded platform-admin actually able to log in, and the SPA being served. Any
   failure prints `[FAIL]`, exits non-zero, and points at the logs. "Installed" means proven.
+- **Self-healing** (`scripts/installer-heal.sh` / `.ps1`, shared by install and update): waits up
+  to 2 minutes for the Docker engine (Docker Desktop answers `docker compose version` before it is
+  ready), refuses below 2 GB free disk and warns below 5 GB, retries a failed build twice (the last
+  time `--pull --no-cache`), and - when the checkout sits on an OLDER release tag with no local
+  changes - offers the newest release and re-runs the new installer. A branch is never switched.
+- **Update = upgrade or repair**: `./update.sh` installs the newest release with backup, verify and
+  automatic rollback; when there is nothing newer it verifies the running install instead and
+  repairs it (start containers, recover a stranded migration, restart the API).
 - **Non-interactive mode**: `TS_AUTO=1 ./install.sh` (or `$env:TS_AUTO="1"` on Windows) accepts
   every default — bundled Docker MySQL, localhost URLs, no SMTP. CI executes exactly this on
   every PR, so installer rot is caught in review rather than by a customer.

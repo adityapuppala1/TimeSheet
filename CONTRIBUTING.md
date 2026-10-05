@@ -46,6 +46,14 @@ pushes to `main`, on pull requests and on demand (`workflow_dispatch`) — not o
 A broken push is caught here, for free, instead of there. Emergency only: `git push --no-verify`;
 CI on `main` still runs everything, including integration and e2e.
 
+**The rest of CI, in local Docker: `npm run ci:docker`** (`-- --e2e` adds the browser suite,
+`-- --keep` leaves the containers up). It runs what the pre-push gate cannot: the production build,
+migrations against an empty MySQL 8.4, both seeds and the integration suite - inside the Playwright
+Linux image with the same env values as CI, on your committed tree plus uncommitted edits. Run it
+before a release or after touching migrations, seeds, Dockerfiles or anything Linux-sensitive; a
+Linux- or database-only failure then shows up here instead of as a red run on `main`. Needs Docker
+Desktop; the first run downloads the image (~2 GB).
+
 ## Before you open a PR
 
 ```bash

@@ -10,6 +10,18 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 📦 Dependencies: everything current that can move without a migration
+
+- **Every minor and patch update applied**, and **15 major versions**: the Anthropic and OpenAI SDKs,
+  Stripe 23, express-rate-limit 8 (the AI limiter now keys IPv6 clients through the library's own
+  helper), dotenv 18, nanoid 6, imapflow 2, ldapts 9, jwks-rsa 4, ssh2-sftp-client 12, PDFKit 0.20,
+  three.js 0.186, Mermaid 12, react-dropzone 20, lucide-react 1 and the Vite React plugin 6. Each was
+  installed alone, kept only after both typechecks and the unit suites passed, then checked in a
+  running API and browser (icons, diagrams, rate-limit headers).
+- **Deliberately not in this release** — each is a migration of its own, listed in the roadmap:
+  Prisma 7, Tailwind 4, TypeScript 7, Zod 4, Recharts 3, TanStack Table 9, framer-motion 14 and
+  Vitest 5 (one unit test fails under its changed mocking).
+
 ### 🔒 Security: no working password in the repository
 
 - **The old development console password is no longer shipped as a working credential.**
@@ -26,6 +38,12 @@ number, on purpose — an installation must never render history for a version t
   whole workflow twice whenever a branch and `main` received the same commit.
 - **Images are not rebuilt for documentation-only commits**, and a newer push to `main` cancels an
   older image build. Release tags always build.
+- **`npm run ci:docker` runs the rest of CI locally** - production build, migrations, seeds and the
+  integration suite (and e2e with `--e2e`) in MySQL 8.4 and the Playwright Linux image.
+- **The installers and updaters heal themselves** (Linux/macOS and Windows alike): they wait for the
+  Docker engine instead of failing while Docker Desktop starts, check free disk space, retry a failed
+  build (the last attempt from scratch), offer the newest release when you install from an older
+  one, and an update with nothing new to install now checks the running system and repairs it.
 - **Old images are pruned after every publish.** The retention job was waiting for a workflow named
   "CD", which does not exist, and could not check out the repository once it became private.
 
