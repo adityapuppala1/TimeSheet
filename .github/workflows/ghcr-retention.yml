@@ -19,7 +19,7 @@ name: GHCR retention
 on:
   # After a release is published, so the new image displaces the oldest kept one immediately.
   workflow_run:
-    workflows: ["CD"]
+    workflows: ["CD — Build & Publish Images"]
     types: [completed]
   # And weekly, so a registry that drifts for any other reason still converges. Sunday 03:20 UTC,
   # away from the nightly workers described in docs/DEPLOYMENT.md.
