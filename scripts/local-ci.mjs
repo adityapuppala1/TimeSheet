@@ -50,6 +50,7 @@ if (dirty) console.log("[local-ci] note: uncommitted changes are present; checki
 const steps = [
   ["Lint (typechecks + Sonar rules + ratchet)", "npm run lint"],
   ["Audit production dependencies", "node scripts/audit-gate.mjs"],
+  ["Lockfile valid for npm 10 (Node 22) too", "node scripts/lockfile-check.mjs"],
   ["API unit tests", "npm run test -w apps/api"],
   ["Web unit tests", "npm run test -w apps/web"]
 ];

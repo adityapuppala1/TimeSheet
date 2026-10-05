@@ -27,6 +27,9 @@ number, on purpose — an installation must never render history for a version t
 - **Fixed on the way:** the API image could not start after the LDAP library upgrade (a package
   installed under the workspace was not shipped), and `npm run doctor` refused to run inside a
   container, which the updater's migration recovery relies on. dotenv's new startup line is silenced.
+- **The lockfile installs on Node 22 again.** One written by npm 11 was refused by Node 22's npm 10
+  ("not in sync"), which failed CI and would have failed a Node 22 install; the pre-push gate now
+  checks the lockfile against npm 10 as well.
 
 ### 📦 Dependencies: everything current that can move without a migration
 
