@@ -12,6 +12,8 @@ RUN --mount=type=cache,target=/root/.npm npm ci --include=dev --no-audit --no-fu
 
 FROM deps AS build
 COPY tsconfig.base.json ./
+# Prisma 7 reads its connection settings from prisma.config.ts (the root one re-exports apps/api's).
+COPY prisma.config.ts ./
 COPY packages/shared packages/shared
 COPY apps/api apps/api
 RUN npx prisma generate --schema=apps/api/prisma/schema.prisma \
@@ -94,6 +96,10 @@ COPY --from=build --chown=app:app /app/apps/api/scripts apps/api/scripts
 COPY --from=build --chown=app:app /app/packages/shared/dist packages/shared/dist
 COPY --from=build --chown=app:app /app/packages/shared/package.json packages/shared/package.json
 COPY --chown=app:app package.json ./
+# Both Prisma configs: `prisma migrate deploy --schema=apps/api/prisma/...` runs from /app at every
+# boot (docker-compose.yml), and the API config is where the URL for each schema is chosen.
+COPY --chown=app:app prisma.config.ts ./
+COPY --from=build --chown=app:app /app/apps/api/prisma.config.ts apps/api/prisma.config.ts
 COPY --chown=app:app apps/api/package.json apps/api/package.json
 # The generated Prisma clients are plain JS that tsc does not compile into dist/, but
 # config/control-prisma.js's compiled relative import expects them at dist/src/generated. A symlink

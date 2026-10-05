@@ -9,7 +9,7 @@
  * 8.4, same env values as `.github/workflows/ci.yml` → build-test-ubuntu, inside the Playwright Linux
  * image — so a Linux-only or database-only failure is found here, for free, before anything is pushed.
  *
- * What is tested is the COMMITTED tree plus your uncommitted tracked edits (`git stash create`), copied
+ * What is tested is your working tree as git would commit it (new files included, .gitignore honoured), copied
  * into the container — never this machine's node_modules, which hold Windows binaries.
  *
  * Usage:  npm run ci:docker            build, unit, migrate, seed, integration
@@ -59,11 +59,20 @@ for (let i = 0; i < 60 && !ready; i++) {
 if (!ready) fail("MySQL never became ready");
 dockerOut(["exec", DB, "mysql", "-uroot", "-proot_ci_password", "-e", "CREATE DATABASE IF NOT EXISTS ci_tenant; CREATE DATABASE IF NOT EXISTS ci_control;"]);
 
-// 2. The tree under test: committed HEAD plus uncommitted tracked edits.
-const ref = git("stash", "create") || "HEAD";
+// 2. The tree under test: the working tree as git would commit it — tracked edits AND new files,
+//    .gitignore respected. Built in a throwaway index so your own staging area is never touched.
+//    (`git stash create` was used before, and it silently leaves out new untracked files: a branch
+//    adding a module tested here without it and failed with "Cannot find module".)
+const tmpIndex = path.join(os.tmpdir(), `tsci-index-${Date.now()}`);
+const withIndex = { ...process.env, GIT_INDEX_FILE: tmpIndex };
+execFileSync("git", ["read-tree", "HEAD"], { env: withIndex });
+execFileSync("git", ["add", "-A"], { env: withIndex });
+const tree = execFileSync("git", ["write-tree"], { env: withIndex, encoding: "utf8" }).trim();
+fs.rmSync(tmpIndex, { force: true });
+const clean = tree === git("rev-parse", "HEAD^{tree}");
 const tarball = path.join(os.tmpdir(), `tsci-${Date.now()}.tar`);
-execFileSync("git", ["archive", "--format=tar", "-o", tarball, ref]);
-console.log(`[ci-docker] ▶ testing ${ref === "HEAD" ? git("rev-parse", "--short", "HEAD") : "HEAD + your uncommitted edits"} in ${IMAGE}`);
+execFileSync("git", ["archive", "--format=tar", "-o", tarball, tree]);
+console.log(`[ci-docker] ▶ testing ${clean ? git("rev-parse", "--short", "HEAD") : "HEAD + your uncommitted changes (new files included)"} in ${IMAGE}`);
 
 // 3. The runner shares MySQL's network namespace, so 127.0.0.1:3306 is the database — as in CI.
 const env = {

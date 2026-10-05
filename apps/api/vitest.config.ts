@@ -21,8 +21,10 @@ export default defineConfig({
       NODE_ENV: "test",
       // Deliberately unreachable — if a "unit" test forgets to mock something and code tries a
       // real connection, it should fail fast and loudly, never silently touch a real database.
-      DATABASE_URL: "mysql://127.0.0.1:3306/no_db_should_ever_be_touched_by_unit_tests",
-      CONTROL_DATABASE_URL: "mysql://127.0.0.1:3306/no_db_should_ever_be_touched_by_unit_tests",
+      // `pool_timeout=1`: Prisma 7's driver pool retries a failed connection until its acquire
+      // timeout (10s by default) instead of failing at once as Prisma 6's engine did.
+      DATABASE_URL: "mysql://127.0.0.1:3306/no_db_should_ever_be_touched_by_unit_tests?connect_timeout=1&pool_timeout=1",
+      CONTROL_DATABASE_URL: "mysql://127.0.0.1:3306/no_db_should_ever_be_touched_by_unit_tests?connect_timeout=1&pool_timeout=1",
       JWT_ACCESS_SECRET: "unit-test-access-secret-not-for-real-use-0123456789",
       JWT_REFRESH_SECRET: "unit-test-refresh-secret-not-for-real-use-0123456789",
       PLATFORM_ADMIN_JWT_SECRET: "unit-test-platform-admin-secret-not-for-real-use-0123456789",

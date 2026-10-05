@@ -32,6 +32,7 @@ import { decryptSecret } from "../utils/encryption.js";
 import { getSystemHealth } from "./system-health.service.js";
 import { getStatusPage } from "./service-health.service.js";
 import { getApiPerformanceOverview } from "./api-performance.service.js";
+import { mysqlAdapter } from "../utils/prisma-adapter.js";
 
 /* ------------------------------------------------------------------------------------------ */
 /* Database metrics                                                                            */
@@ -187,7 +188,7 @@ export function redactStatement(sql: string | null): string | null {
  * one query on a connection this read already holds.
  */
 async function withMonitoringClient<T>(dsn: string, read: (client: PrismaClient) => Promise<T>): Promise<T> {
-  const client = new PrismaClient({ datasources: { db: { url: dsn } } });
+  const client = new PrismaClient({ adapter: mysqlAdapter(dsn) });
   try {
     return await read(client);
   } finally {

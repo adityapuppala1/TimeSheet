@@ -38,6 +38,7 @@ import { decryptSecret } from "../utils/encryption.js";
 import { adapterFor, type DestinationRecord } from "./backup-destination.service.js";
 import { platformAudit } from "./platform-audit.service.js";
 import { sendPlatformTemplate } from "./platform-mail.service.js";
+import { mysqlAdapter } from "../utils/prisma-adapter.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SAFE_DB_NAME = /^\w{1,64}$/;
@@ -500,7 +501,7 @@ export async function testRestore(runId: string, actorLabel: string): Promise<{ 
   const base = new URL(env.TENANT_DB_PROVISION_BASE_URL);
   const bootstrap = new URL(base.toString());
   bootstrap.pathname = "/mysql";
-  const admin = new ControlPrismaClient({ datasources: { db: { url: bootstrap.toString() } } });
+  const admin = new ControlPrismaClient({ adapter: mysqlAdapter(bootstrap.toString()) });
 
   const started = await controlPrisma.backupRun.create({
     data: { organizationId: run.organizationId, destinationId: run.destinationId, kind: "TEST_RESTORE", status: "RUNNING", metadata: { of: run.id, by: actorLabel } }

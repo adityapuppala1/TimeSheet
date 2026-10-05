@@ -24,6 +24,7 @@ import { AppError } from "../middleware/error.js";
 import { encryptSecret } from "../utils/encryption.js";
 import { seedTenant } from "../../prisma/seed.js";
 import { claimDomainForProvisionedOrg, type ProvisionedClaim } from "./company-domain-claims.service.js";
+import { mysqlAdapter } from "../utils/prisma-adapter.js";
 
 export interface ProvisionOrgInput {
   adminEmail: string;
@@ -66,7 +67,7 @@ async function createPhysicalDatabase(baseUrl: string, databaseName: string): Pr
   assertSafeDatabaseName(databaseName);
   const bootstrapUrl = new URL(baseUrl);
   bootstrapUrl.pathname = "/mysql";
-  const scratch = new PrismaClient({ datasources: { db: { url: bootstrapUrl.toString() } } });
+  const scratch = new PrismaClient({ adapter: mysqlAdapter(bootstrapUrl.toString()) });
   try {
     await scratch.$executeRawUnsafe(`CREATE DATABASE IF NOT EXISTS \`${databaseName}\``);
   } finally {

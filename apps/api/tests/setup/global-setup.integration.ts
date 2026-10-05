@@ -6,6 +6,7 @@ import { PrismaClient as ControlPrismaClient } from "../../src/generated/control
 import { seedTenant } from "../../prisma/seed.js";
 import { encryptSecret } from "../../src/utils/encryption.js";
 import { deriveTestDbUrls } from "./derive-test-db-urls.js";
+import { mysqlAdapter, runSql } from "../../src/utils/prisma-adapter.js";
 
 const API_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -20,13 +21,9 @@ function dbNameOf(url: string): string {
   return new URL(url).pathname.replace(/^\//, "");
 }
 
-function recreateDatabase(url: string): void {
+async function recreateDatabase(url: string): Promise<void> {
   const name = dbNameOf(url);
-  execSync(`npx prisma db execute --stdin --url="${baseUrl(url)}"`, {
-    input: `DROP DATABASE IF EXISTS \`${name}\`; CREATE DATABASE \`${name}\`;`,
-    stdio: ["pipe", "pipe", "pipe"],
-    cwd: API_ROOT
-  });
+  await runSql(baseUrl(url), [`DROP DATABASE IF EXISTS \`${name}\``, `CREATE DATABASE \`${name}\``], { database: false });
 }
 
 function migrate(schema: string, envVar: "DATABASE_URL" | "CONTROL_DATABASE_URL", url: string): void {
@@ -37,13 +34,9 @@ function migrate(schema: string, envVar: "DATABASE_URL" | "CONTROL_DATABASE_URL"
   });
 }
 
-function dropDatabase(url: string): void {
+async function dropDatabase(url: string): Promise<void> {
   const name = dbNameOf(url);
-  execSync(`npx prisma db execute --stdin --url="${baseUrl(url)}"`, {
-    input: `DROP DATABASE IF EXISTS \`${name}\`;`,
-    stdio: ["pipe", "pipe", "pipe"],
-    cwd: API_ROOT
-  });
+  await runSql(baseUrl(url), [`DROP DATABASE IF EXISTS \`${name}\``], { database: false });
 }
 
 /**
@@ -55,16 +48,16 @@ function dropDatabase(url: string): void {
 export async function setup(): Promise<() => Promise<void>> {
   const { tenantUrl, controlUrl } = deriveTestDbUrls();
 
-  recreateDatabase(tenantUrl);
-  recreateDatabase(controlUrl);
+  await recreateDatabase(tenantUrl);
+  await recreateDatabase(controlUrl);
   migrate("prisma/schema.prisma", "DATABASE_URL", tenantUrl);
   migrate("prisma/control/schema.prisma", "CONTROL_DATABASE_URL", controlUrl);
 
-  const tenantClient = new PrismaClient({ datasources: { db: { url: tenantUrl } } });
+  const tenantClient = new PrismaClient({ adapter: mysqlAdapter(tenantUrl) });
   await seedTenant(tenantClient, { includeDemoData: false });
   await tenantClient.$disconnect();
 
-  const controlClient = new ControlPrismaClient({ datasources: { db: { url: controlUrl } } });
+  const controlClient = new ControlPrismaClient({ adapter: mysqlAdapter(controlUrl) });
   await controlClient.planTierLimit.createMany({
     data: [
       // Generous enough to comfortably exceed seedTenant's own baseline users (the one real
@@ -120,7 +113,7 @@ export async function setup(): Promise<() => Promise<void>> {
 
   return async () => {
     if (process.env.KEEP_TEST_DB === "1") return;
-    dropDatabase(tenantUrl);
-    dropDatabase(controlUrl);
+    await dropDatabase(tenantUrl);
+    await dropDatabase(controlUrl);
   };
 }

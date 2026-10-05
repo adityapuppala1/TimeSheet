@@ -11,8 +11,10 @@ import { PrismaClient } from "../../src/generated/control-client/index.js";
 import { encryptSecret } from "../../src/utils/encryption.js";
 import { hashPassword } from "../../src/utils/security.js";
 import { resolveBootstrapPassword } from "../../src/services/platform-bootstrap.js";
+import { mysqlAdapter } from "../../src/utils/prisma-adapter.js";
+import { env } from "../../src/config/env.js";
 
-const controlPrisma = new PrismaClient();
+const controlPrisma = new PrismaClient({ adapter: mysqlAdapter(env.CONTROL_DATABASE_URL) });
 
 const DEFAULT_ORG_SLUG = process.env.DEFAULT_ORG_SLUG ?? "default";
 

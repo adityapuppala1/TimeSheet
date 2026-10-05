@@ -42,6 +42,7 @@ import { reclaimAfterRestore } from "./company-domain-claims.service.js";
 import { getRetentionSettings } from "./retention.service.js";
 import { platformAudit } from "./platform-audit.service.js";
 import { isRegularFileInside, resolveSnapshotDir } from "./snapshot-root.js";
+import { mysqlAdapter } from "../utils/prisma-adapter.js";
 
 const SAFE_DB_NAME = /^\w{1,64}$/;
 /** `<slug>-<iso timestamp>.sql`, which is what `snapshotDatabase` writes. */
@@ -256,7 +257,7 @@ export async function restoreSnapshot(id: string, orgId: string, confirmSlug: st
   const base = new URL(env.TENANT_DB_PROVISION_BASE_URL);
   const bootstrap = new URL(base.toString());
   bootstrap.pathname = "/mysql";
-  const scratch = new ControlPrismaClient({ datasources: { db: { url: bootstrap.toString() } } });
+  const scratch = new ControlPrismaClient({ adapter: mysqlAdapter(bootstrap.toString()) });
   try {
     await scratch.$executeRawUnsafe(`CREATE DATABASE IF NOT EXISTS \`${databaseName}\``);
   } finally {

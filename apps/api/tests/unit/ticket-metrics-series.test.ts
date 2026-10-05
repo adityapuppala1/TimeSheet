@@ -28,8 +28,11 @@ const { platformDayKey } = await import("../../src/utils/platform-time.js");
 
 /** `daysAgo` days before today, at midday UTC — safely inside that day whatever the clock says. */
 function daysAgo(n: number): Date {
-  const now = new Date();
-  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 12));
+  // Counted back from the PLATFORM's today (India's, by default) — the calendar the series is built
+  // on — not UTC's. From 18:30 to midnight UTC the two are different dates, and counting from UTC put
+  // every fixture one day off: this file failed every evening for five and a half hours.
+  const [y, m, day] = platformDayKey(new Date()).split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1, day, 12));
   d.setUTCDate(d.getUTCDate() - n);
   return d;
 }

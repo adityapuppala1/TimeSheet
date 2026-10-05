@@ -44,6 +44,7 @@ import { RETENTION_MARKER_TEMPLATE } from "./platform-mail-templates.js";
 import { sendPlatformTemplate } from "./platform-mail.service.js";
 import { resolveSnapshotDir } from "./snapshot-root.js";
 import { workspaceUrlForSlug } from "./workspace-directory.service.js";
+import { mysqlAdapter } from "../utils/prisma-adapter.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const appBase = () => env.APP_BASE_URL.replace(/\/$/, "");
@@ -537,7 +538,7 @@ async function dropPhysicalDatabase(dsn: string, databaseName: string): Promise<
   // The provisioning credentials if there are any (they created it), else the tenant's own DSN.
   const url = new URL(env.TENANT_DB_PROVISION_BASE_URL || dsn);
   url.pathname = "/mysql";
-  const scratch = new ControlPrismaClient({ datasources: { db: { url: url.toString() } } });
+  const scratch = new ControlPrismaClient({ adapter: mysqlAdapter(url.toString()) });
   try {
     await scratch.$executeRawUnsafe(`DROP DATABASE IF EXISTS \`${databaseName}\``);
   } finally {

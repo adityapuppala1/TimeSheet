@@ -15,6 +15,8 @@ import { GIT_INTEGRATION_SYSTEM_EMAIL } from "../src/services/git-provider.servi
 import { AGENT_SYSTEM_EMAIL } from "../src/services/principal.service.js";
 import { hashPassword } from "../src/utils/security.js";
 import { SEED_TEMPLATES } from "./email-templates-seed.js";
+import { mysqlAdapter } from "../src/utils/prisma-adapter.js";
+import { env } from "../src/config/env.js";
 
 const TEMPLATE_VARIABLES: Record<string, string[]> = {
   welcome: ["name", "appUrl"],
@@ -707,6 +709,6 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
 // org-provisioning time) without ALSO triggering this side effect just by importing it.
 const isEntryPoint = Boolean(process.argv[1]) && import.meta.url === `file:///${process.argv[1].replaceAll("\\", "/").replace(/^\//, "")}`;
 if (isEntryPoint) {
-  const prisma = new PrismaClient();
+  const prisma = new PrismaClient({ adapter: mysqlAdapter(env.DATABASE_URL) });
   seedTenant(prisma).finally(() => prisma.$disconnect());
 }

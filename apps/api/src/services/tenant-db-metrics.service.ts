@@ -33,6 +33,7 @@ import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { getDatabaseMetrics } from "./platform-tenant-health.service.js";
 import { platformAudit } from "./platform-audit.service.js";
+import { mysqlAdapter } from "../utils/prisma-adapter.js";
 
 /* ------------------------------------------------------------------------------------------ */
 /* Sampling                                                                                    */
@@ -508,7 +509,7 @@ export async function runMaintenanceOperation(input: {
   }
 
   const dsn = decryptSecret(org.database.encryptedDsn);
-  const client = new ControlPrismaClient({ datasources: { db: { url: dsn } } });
+  const client = new ControlPrismaClient({ adapter: mysqlAdapter(dsn) });
   const started = Date.now();
   const messages: OperationResult["messages"] = [];
 
@@ -544,7 +545,7 @@ export async function runMaintenanceOperation(input: {
 /** Every base table in the schema, by name. Its own short-lived connection for the same reason
  *  `getDatabaseMetrics` uses one: this is an operator screen, not the request path. */
 async function listTableNames(encryptedDsn: string, databaseName: string): Promise<string[]> {
-  const client = new ControlPrismaClient({ datasources: { db: { url: decryptSecret(encryptedDsn) } } });
+  const client = new ControlPrismaClient({ adapter: mysqlAdapter(decryptSecret(encryptedDsn)) });
   try {
     const rows = await client.$queryRawUnsafe<Array<{ TABLE_NAME: string }>>(
       `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`,

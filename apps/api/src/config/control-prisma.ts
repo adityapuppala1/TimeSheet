@@ -9,7 +9,10 @@
  * structurally hard: there is no join between them, only two independent clients.
  */
 import { PrismaClient } from "../generated/control-client/index.js";
+import { mysqlAdapter } from "../utils/prisma-adapter.js";
+import { env } from "./env.js";
 
 export const controlPrisma = new PrismaClient({
+  adapter: mysqlAdapter(env.CONTROL_DATABASE_URL),
   log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"]
 });

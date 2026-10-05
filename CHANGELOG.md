@@ -36,6 +36,18 @@ number, on purpose — an installation must never render history for a version t
   to setup at their next sign-in, and the server refuses everything else until it is done. Only a super
   admin who has set it up themselves can switch the requirement on.
 
+### ⚡ Performance and 📦 platform: the three big upgrades, done
+
+- **The animation library is gone.** The Dashboard and the sign-in recovery pages loaded ~39 KB
+  (compressed) of framer-motion for fade-ups and a spinning gear; they are CSS now, and still honour
+  reduced-motion settings.
+- **Tailwind CSS 4.** Faster builds, and checked pixel by pixel: 26 screenshots of 13 pages in light and
+  dark match the Tailwind 3 originals. It also removes the last security alert on the project (`braces`).
+- **Prisma 7.** The database layer moves to Prisma's current major and its MySQL driver adapter. Two
+  schemas keep two databases apart through one `prisma.config.ts` that reads `--schema`, so every
+  install, update and migration command works unchanged. The API image grows to ~1.44 GB and idle
+  memory to ~400 MB with Prisma 7's JavaScript query engine.
+
 ### 🐛 Fixes
 
 - **History** filters by person and status on the server, before its row limit, and says so when the

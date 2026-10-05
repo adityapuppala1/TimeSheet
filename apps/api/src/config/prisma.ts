@@ -1,6 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { dbTimingStore } from "./db-timing.js";
 import { requireTenantContext } from "./tenant-context.js";
+import { mysqlAdapter } from "../utils/prisma-adapter.js";
 
 /**
  * `prisma` is a Proxy, not a real client — every property access forwards to whichever
@@ -128,7 +129,8 @@ export async function getTenantClient(orgId: string, dsn: string): Promise<Prism
 
   const client = withDbTiming(
     new PrismaClient({
-      datasources: { db: { url: withConnectionLimit(dsn) } },
+      // Prisma 7 connects through a driver adapter; the pool size rides in the URL as before.
+      adapter: mysqlAdapter(withConnectionLimit(dsn)),
       log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"]
     })
   );

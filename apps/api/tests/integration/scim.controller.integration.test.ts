@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { controlPrisma } from "../../src/config/control-prisma.js";
 import { encryptSecret } from "../../src/utils/encryption.js";
 import { buildScimApp } from "../helpers/test-apps.js";
+import { mysqlAdapter } from "../../src/utils/prisma-adapter.js";
 
 /**
  * Full end-to-end SCIM test against a real throwaway MySQL database (see
@@ -24,7 +25,7 @@ function scimAuthHeader() {
 }
 
 beforeAll(async () => {
-  tenant = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
+  tenant = new PrismaClient({ adapter: mysqlAdapter(process.env.DATABASE_URL ?? "") });
   await tenant.scimSettings.upsert({
     where: { id: "global" },
     update: { isEnabled: true, encryptedToken: encryptSecret(SCIM_TOKEN) },

@@ -46,6 +46,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { failedMigrationName, isRerunnable, p3009Recovery } from "./lib/migration-recovery.js";
+import { runSql } from "../src/utils/prisma-adapter.js";
 
 const HEAL = process.argv.includes("--heal");
 const FIX_ENV = process.argv.includes("--fix-env");
@@ -260,13 +261,9 @@ function describeLocalMysqlInstall(): string[] {
 // Heal helpers
 // ---------------------------------------------------------------------------------------------
 
-function ensureDatabaseExists(label: string, parsed: ParsedDsn): void {
+async function ensureDatabaseExists(label: string, parsed: ParsedDsn): Promise<void> {
   try {
-    execSync(`npx prisma db execute --stdin --url="${withoutDatabase(parsed)}"`, {
-      input: `CREATE DATABASE IF NOT EXISTS \`${parsed.databaseName}\`;`,
-      stdio: ["pipe", "pipe", "pipe"],
-      cwd: apiCwd
-    });
+    await runSql(withoutDatabase(parsed), [`CREATE DATABASE IF NOT EXISTS \`${parsed.databaseName}\``], { database: false });
     ok(`${label} — database "${parsed.databaseName}" exists (created if it didn't)`);
   } catch (error) {
     fail(
@@ -567,20 +564,16 @@ async function main(): Promise<void> {
   }
 
   if (HEAL) {
-    ensureDatabaseExists("DATABASE_URL", tenant);
-    ensureDatabaseExists("CONTROL_DATABASE_URL", control);
+    await ensureDatabaseExists("DATABASE_URL", tenant);
+    await ensureDatabaseExists("CONTROL_DATABASE_URL", control);
   }
 
   try {
-    execSync("npx prisma db execute --stdin --schema=prisma/schema.prisma", {
-      input: "SELECT 1;",
-      stdio: ["pipe", "pipe", "pipe"],
-      cwd: apiCwd
-    });
+    await runSql(env!.DATABASE_URL, ["SELECT 1"]);
     ok("DATABASE_URL — credentials accepted, query succeeded");
   } catch (error) {
     const detail = (error as Error).message;
-    const hint = /P1000|Authentication failed/i.test(detail)
+    const hint = /P1000|Authentication failed|Access denied|ER_ACCESS_DENIED/i.test(detail)
       ? `The server is reachable, so this is a username/password problem, not a networking one.\n` +
         `  - XAMPP's default is user "root" with an EMPTY password: mysql://root:@${tenant.host}:${tenant.port}/${tenant.databaseName}\n` +
         `  - If your password contains #, % or other URL-special characters, percent-encode them (# → %23, % → %25).`
