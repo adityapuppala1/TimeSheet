@@ -10,7 +10,11 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
-### 🏢 Workspaces: each tab is the workspace its address says
+## 6.1.0 — every workspace is the one its address says — 2026-10-05
+
+A fix-and-security release. Nothing to configure: upgrade and restart.
+
+### 🐛 Workspaces: each tab is the workspace its address says
 
 - **`acme.localhost` opens Acme, not the default workspace.** Without `ROOT_DOMAIN` a two-label host
   fell back to the default tenant, so signing in at `acme.localhost:5173` with credentials that also
@@ -21,7 +25,7 @@ number, on purpose — an installation must never render history for a version t
   welcome email linked to `https://<slug>.localhost` with no port; they now keep the dev server's port.
 - **A long workspace name no longer suggests an address ending in "-"**, which the server refused.
 
-### 🔒 Dependencies: no known advisory left in what production runs
+### 🔒 Security: no known advisory left in what production runs
 
 - `npm audit fix`, in-range only: axios, nodemailer (and mailparser through it), multer, morgan,
   dompurify, fast-uri, ip-address and brace-expansion. `npm audit --omit=dev` now reports 0. The five
