@@ -44,7 +44,7 @@
  *
  * ── THE MUSL PROBLEM, WHICH IS THE WHOLE REASON THIS FILE HAS A REFUSAL PATH ────────────────
  *
- * llama.cpp's published Linux builds are glibc-linked. This app's own image is `node:22-alpine`,
+ * llama.cpp's published Linux builds are glibc-linked. This app's own image is `node:24-alpine`,
  * which is musl. A glibc binary on musl does not fail with a diagnosis — it fails with
  * `no such file or directory` from the kernel's loader, naming a file that plainly exists, which is
  * one of the most confusing errors in Linux. Offering that download would therefore be worse than

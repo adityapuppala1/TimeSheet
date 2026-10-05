@@ -192,8 +192,8 @@ command.
 
 ### Prerequisites
 
-- **Node.js 20.19+ or 22.12+** — the floor Vite 8 sets. CI and both Docker images use Node 22;
-  local development has run on Node 24 (v24.18.0 / npm 11.16.0 as of 2026-10-01).
+- **Node.js 20.19+ or 22.12+** — the floor Vite 8 sets. **Node 24 (the active LTS) is recommended**:
+  CI and both Docker images run it since 2026-10-05, and local development has run on it since 2026-10.
 - **A running MySQL 8 server reachable from your machine.** XAMPP's bundled server works fine (it
   is MariaDB under the hood): a default install listens on `localhost:3306` with user `root` and
   an **empty password**. Any other MySQL server works too — see

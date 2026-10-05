@@ -16,7 +16,6 @@ import { AppLoader } from "./components/ui/app-loader";
 import { createBrowserRouter, Navigate, RouterProvider, useLocation, useSearchParams } from "react-router";
 import { permissions, type Permission, type PlatformRole } from "@timesheet/shared";
 import { AppLayout } from "./layouts/AppLayout";
-import { PlatformAdminLayout } from "./layouts/PlatformAdminLayout";
 import { authApi } from "./services/api";
 import { platformAdminAuthApi } from "./services/platform-admin-api";
 import { useAuthStore } from "./store/auth";
@@ -90,6 +89,9 @@ const ProjectsPage = lazy(() => adminPages().then((m) => ({ default: m.ProjectsP
 const ReportsPage = lazy(() => adminPages().then((m) => ({ default: m.ReportsPage })));
 const UsersPage = lazy(() => adminPages().then((m) => ({ default: m.UsersPage })));
 
+// Lazy like the console pages under it: only platform operators ever render it, and eager it put
+// ~60 KB of console code (layout, palette, console UI kit) into every tenant user's first download.
+const PlatformAdminLayout = lazy(() => import("./layouts/PlatformAdminLayout").then((m) => ({ default: m.PlatformAdminLayout })));
 const PlatformAdminLogin = lazy(() => import("./pages/platform-admin/PlatformAdminLogin").then((m) => ({ default: m.PlatformAdminLogin })));
 const PlatformAdminOrganizations = lazy(() => import("./pages/platform-admin/Organizations").then((m) => ({ default: m.PlatformAdminOrganizations })));
 const PlatformAdminPlanTiers = lazy(() => import("./pages/platform-admin/PlanTiers").then((m) => ({ default: m.PlatformAdminPlanTiers })));
@@ -256,7 +258,7 @@ const router = createBrowserRouter([
   { path: "/platform-admin/login", element: <PageShell><RedirectIfPlatformAdmin><PlatformAdminLogin /></RedirectIfPlatformAdmin></PageShell> },
   {
     path: "/platform-admin",
-    element: <RequirePlatformAdmin><PlatformAdminLayout /></RequirePlatformAdmin>,
+    element: <RequirePlatformAdmin><PageShell><PlatformAdminLayout /></PageShell></RequirePlatformAdmin>,
     children: [
       { index: true, element: <PageShell><PlatformAdminOverview /></PageShell> },
       { path: "organizations", element: <PageShell><PlatformAdminOrganizations /></PageShell> },

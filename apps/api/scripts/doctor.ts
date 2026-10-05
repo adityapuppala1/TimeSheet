@@ -442,7 +442,13 @@ async function main(): Promise<void> {
   info(`System: ${process.platform} ${process.arch}, ${os.type()} ${os.release()}, Node ${process.version}`);
   info(`Checking ${ENV_PATH} ...\n`);
 
-  if (!fs.existsSync(ENV_PATH)) {
+  // In a container there is no file: Compose and Helm pass the configuration as environment
+  // variables. Requiring the file made `doctor` fail before checking anything in exactly the place
+  // update.sh's stranded-migration recovery runs it. Environment-provided config is validated below
+  // the same way a file's is.
+  const configFromEnvironment = !fs.existsSync(ENV_PATH) && Boolean(process.env.DATABASE_URL);
+  if (configFromEnvironment) info("No apps/api/.env — using the configuration in the environment (container deployment).");
+  if (!fs.existsSync(ENV_PATH) && !configFromEnvironment) {
     fail(
       `apps/api/.env doesn't exist.\n` +
         `Create it from the template: copy .env.example to apps/api/.env (NOT to the repo root), then fill in\n` +

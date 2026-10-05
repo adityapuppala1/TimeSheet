@@ -109,6 +109,19 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     customLogger: quietProxyLogger,
+    build: {
+      rolldownOptions: {
+        output: {
+          // lucide-react 1.x ships one module per icon, and Rolldown gave each its own chunk: 191
+          // chunks under 1.2 KB (~70 KB in all), dozens of them requested on the very first page.
+          // One shared icon chunk is ~20 KB gzipped and one request, cached across releases that
+          // do not add an icon. Everything else keeps the default per-route splitting.
+          codeSplitting: {
+            groups: [{ name: "icons", test: /node_modules[/\\]lucide-react[/\\]/ }]
+          }
+        }
+      }
+    },
     define: {
       __APP_VERSION__: JSON.stringify(bundleVersion)
     },

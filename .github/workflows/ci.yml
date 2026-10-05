@@ -68,7 +68,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: "22"
+  NODE_VERSION: "24"
 
 # ── The minutes budget, and where it goes ───────────────────────────────────────────────────────
 #

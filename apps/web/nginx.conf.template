@@ -5,7 +5,14 @@ server {
   index index.html;
 
   gzip on;
-  gzip_types text/plain text/css application/javascript application/json image/svg+xml;
+  # Serve the `.gz` files the build writes beside every asset (apps/web/scripts/precompress.mjs):
+  # compressed once at level 9, instead of again on every request. Files without one (and API
+  # responses, which this block also covers via the proxy) still get on-the-fly gzip below.
+  gzip_static on;
+  gzip_vary on;
+  gzip_comp_level 5;
+  gzip_proxied any;
+  gzip_types text/plain text/css text/xml application/javascript application/json application/xml application/manifest+json application/wasm image/svg+xml;
   gzip_min_length 1024;
 
   location /api/ {
@@ -33,6 +40,16 @@ server {
   location /uploads/ {
     proxy_pass http://${API_UPSTREAM}/uploads/;
     proxy_set_header Host $host;
+  }
+
+  # Hashed build output: the file name changes whenever its content does, so it can be cached for a
+  # year and never revalidated. Before this, every visit re-checked every chunk. `=404` rather than
+  # the SPA fallback, so a chunk missing after a deploy fails as a missing script, not as HTML parsed
+  # as JavaScript. The security headers below are on documents (`location /`); scripts need nosniff.
+  location ^~ /assets/ {
+    try_files $uri =404;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    add_header X-Content-Type-Options "nosniff" always;
   }
 
   location / {
@@ -104,5 +121,8 @@ server {
 
     # Severs the window.opener relationship, so a page this app opens cannot reach back into it.
     add_header Cross-Origin-Opener-Policy "same-origin" always;
+    # index.html and the other unhashed files: always revalidate (a cheap 304), so a release is picked
+    # up on the next load while the year-long asset cache above stays correct.
+    add_header Cache-Control "no-cache" always;
   }
 }

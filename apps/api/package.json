@@ -66,11 +66,13 @@
     "openid-client": "^6.8.4",
     "pdf-parse": "^1.1.1",
     "pdfkit": "^0.20.2",
+    "prisma": "^6.7.0",
     "sanitize-html": "^2.13.1",
     "sharp": "^0.35.3",
     "ssh2-sftp-client": "^12.1.1",
     "stripe": "^23.0.0",
     "tldts": "^7.4.11",
+    "tsx": "^4.19.4",
     "zod": "^3.24.4"
   },
   "devDependencies": {
@@ -91,9 +93,7 @@
     "@types/ssh2-sftp-client": "^9.0.6",
     "@types/supertest": "^7.2.1",
     "@vitest/coverage-v8": "^4.1.11",
-    "prisma": "^6.7.0",
     "supertest": "^7.2.2",
-    "tsx": "^4.19.4",
     "typescript": "^5.8.3",
     "vitest": "^4.1.11"
   }

@@ -21,7 +21,7 @@
  *
  * `external` is somebody else running it — a Docker Compose service, a Kubernetes sidecar — with
  * this process only pointing at the address. It is the DEFAULT under both orchestrators, and the
- * reason is not stylistic: this app's image is `node:22-alpine`, which is musl. Upstream llama.cpp
+ * reason is not stylistic: this app's image is `node:24-alpine`, which is musl. Upstream llama.cpp
  * binaries are glibc, so baking one in means either building it in the image (turning a 200 MB image
  * into a compiler toolchain) or shipping a musl build this project would then own. A sidecar is the
  * idiomatic answer in both orchestrators, it is how everyone already runs models beside an app, and

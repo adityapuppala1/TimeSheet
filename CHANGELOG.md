@@ -10,6 +10,24 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### ⚡ Performance: lighter pages, cached assets, a 59% smaller API image
+
+- **First page load: 80 files and 380 KB down to 45 files and 321 KB** (compressed). Icons ship as one
+  shared chunk instead of ~190 tiny ones; the loading animation's WebGL library and the platform
+  console (which only operators use) no longer load on every page.
+- **Static files are cached for a year and pre-compressed.** Hashed scripts and styles carry
+  `immutable` caching (a release still shows at once: index.html always revalidates), and nginx serves
+  files gzipped once at build time instead of compressing every response — less CPU per request.
+- **Animations draw at 30 fps and stop when off-screen**, through the shared render loop; the loading
+  and AI "thinking" strands used to redraw at the display rate (up to 144 fps).
+- **API image 3.17 GB -> 1.29 GB.** It installs the API's production dependencies only (no web
+  packages, compilers or test runners), no longer copies the database client twice, and no longer
+  picks up Windows engine files from a developer checkout. Same boot, migrations, seeds and logins.
+- **Node 24** (the active LTS) in both images and CI; nginx 1.28 in the web image.
+- **Fixed on the way:** the API image could not start after the LDAP library upgrade (a package
+  installed under the workspace was not shipped), and `npm run doctor` refused to run inside a
+  container, which the updater's migration recovery relies on. dotenv's new startup line is silenced.
+
 ### 📦 Dependencies: everything current that can move without a migration
 
 - **Every minor and patch update applied**, and **15 major versions**: the Anthropic and OpenAI SDKs,

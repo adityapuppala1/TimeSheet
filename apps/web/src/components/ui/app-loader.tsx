@@ -1,7 +1,12 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { cn } from "../../lib/utils";
-import { Strands } from "./strands";
+
+// Lazy: this loader is on the first-paint path of every page, and Strands brings the whole WebGL
+// library (ogl) with it — the single largest third-party module in the entry chunk after React. The
+// animation only mounts after ANIMATE_AFTER_MS anyway, which is ample time to fetch it; until then
+// (and if it fails to load) the label alone carries the loader, exactly as before.
+const Strands = lazy(() => import("./strands").then((m) => ({ default: m.Strands })));
 
 /**
  * WHAT: the application's loading state — the Strands animation with a line of text under it,
@@ -103,6 +108,7 @@ export function AppLoader({ label = "Loading…", variant = "page", className }:
             ANIMATE_AFTER_MS. Until then the label alone carries the loader. */}
         <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
           {animate && (
+          <Suspense fallback={null}>
           <Strands
             colors={[...PALETTES[theme]]}
             count={3}
@@ -119,6 +125,7 @@ export function AppLoader({ label = "Loading…", variant = "page", className }:
             opacity={theme === "dark" ? 1 : 0.9}
             scale={1.5}
           />
+          </Suspense>
           )}
         </div>
 

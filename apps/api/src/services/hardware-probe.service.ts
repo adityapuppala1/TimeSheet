@@ -178,7 +178,7 @@ export async function readCgroupCpuQuota(
  * be a second probe of the same box, which is the mistake this file's own header warns about.
  *
  * WHY IT MATTERS SO MUCH HERE. llama.cpp publishes only glibc-linked Linux builds, and this app's
- * image is `node:22-alpine`, which is musl. A glibc binary on musl does not fail with a diagnosis:
+ * image is `node:24-alpine`, which is musl. A glibc binary on musl does not fail with a diagnosis:
  * the kernel's loader reports "no such file or directory" for the binary itself, which plainly
  * exists. An operator handed that error debugs the wrong thing for an hour. So this is checked
  * BEFORE anything is offered, and musl gets the sidecar instructions instead of a download.

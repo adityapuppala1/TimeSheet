@@ -22,6 +22,7 @@ import { useEffect, useRef } from "react";
 import { AiStrands } from "./ai-strands";
 import "./strands-gl.css";
 import { usePrefersReducedMotion } from "../../lib/use-motion";
+import { createRenderLoop } from "../../lib/render-loop";
 
 const MAX_STRANDS = 12;
 const MAX_COLORS = 8;
@@ -235,16 +236,18 @@ export function StrandsGL({ className }: { className?: string }) {
     });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme"] });
 
-    let frame = 0;
-    const update = (t: number) => {
-      frame = requestAnimationFrame(update);
-      program.uniforms.uTime.value = t * 0.001;
-      renderer.render({ scene: mesh });
-    };
-    frame = requestAnimationFrame(update);
+    // The shared render loop (lib/render-loop.ts): 30 fps rather than the display rate, and nothing
+    // drawn while off-screen or in a background tab. It used to run its own uncapped rAF loop.
+    const loop = createRenderLoop({
+      host: container,
+      render: () => {
+        program.uniforms.uTime.value = performance.now() * 0.001;
+        renderer.render({ scene: mesh });
+      }
+    });
 
     return () => {
-      cancelAnimationFrame(frame);
+      loop.stop();
       observer.disconnect();
       resizeObserver.disconnect();
       if (gl.canvas.parentNode === container) container.removeChild(gl.canvas);

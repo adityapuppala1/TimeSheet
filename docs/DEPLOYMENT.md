@@ -1947,7 +1947,7 @@ section for where the engine itself runs.
 
 Under Docker or Kubernetes, `auto` resolves to `external`
 (`services/native-runtime.service.ts#resolveNativeRuntimeMode`), and that is about more than
-replicas: the API image is `node:22-alpine`, which is musl, and llama.cpp publishes only
+replicas: the API image is `node:24-alpine`, which is musl, and llama.cpp publishes only
 glibc-linked Linux builds. **Install the engine** detects the libc
 (`services/hardware-probe.service.ts`) and refuses inside the shipped image, with the sidecar
 instructions attached, rather than handing over a binary that fails with the loader's misleading

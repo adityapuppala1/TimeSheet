@@ -1,6 +1,7 @@
 import { Color, Mesh, Program, Renderer, RenderTarget, Triangle } from "ogl";
 import { useEffect, useRef } from "react";
 
+import { createRenderLoop } from "../../lib/render-loop";
 import { cn } from "../../lib/utils";
 
 /**
@@ -351,9 +352,10 @@ export function Strands({
 
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
-    let animateId = 0;
+    // Through the shared render loop (lib/render-loop.ts), like every other animated scene: 30 fps
+    // instead of the display's 120-144, and no draws while off-screen or in a background tab. This
+    // used to run its own uncapped requestAnimationFrame.
     const update = (t: number) => {
-      animateId = requestAnimationFrame(update);
       const current = propsRef.current;
       // Frozen at a representative instant when motion is reduced: a still, drawn frame rather
       // than a hidden visual or a flat (t=0) comb.
@@ -385,13 +387,13 @@ export function Strands({
         renderer.render({ scene: mesh });
       }
 
-      // Reduced motion draws exactly one frame and then leaves the GPU alone.
-      if (reduceMotion) cancelAnimationFrame(animateId);
+      // Reduced motion draws exactly one frame and then leaves the GPU alone (`false` = rest).
+      return !reduceMotion;
     };
-    animateId = requestAnimationFrame(update);
+    const loop = createRenderLoop({ host: ctn, render: () => update(performance.now()) });
 
     return () => {
-      cancelAnimationFrame(animateId);
+      loop.stop();
       window.removeEventListener("resize", resize);
       if (ctn && gl.canvas.parentNode === ctn) {
         ctn.removeChild(gl.canvas);

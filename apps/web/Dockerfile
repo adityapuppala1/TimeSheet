@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
 COPY apps/api/package.json apps/api/package.json
@@ -37,7 +37,7 @@ ARG VITE_API_URL
 RUN if [ -z "${VITE_API_URL:-}" ]; then unset VITE_API_URL; fi; \
     npm run build -w packages/shared && npm run build -w apps/web
 
-FROM nginx:1.27-alpine
+FROM nginx:1.28-alpine
 # A TEMPLATE, not a finished conf: the stock nginx entrypoint's 20-envsubst-on-templates.sh
 # renders /etc/nginx/templates/*.template into conf.d at startup, substituting ${API_UPSTREAM}.
 # The old hardcoded `proxy_pass http://api:4000` was the compose service name baked into the

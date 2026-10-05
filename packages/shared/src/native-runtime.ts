@@ -249,7 +249,7 @@ export function suggestNativeMaxOutputTokens(input: {
  *   where a binary on PATH is an ordinary thing to have.
  * `external` — something else runs it (a Docker Compose service, a Kubernetes sidecar) and we only
  *   point at it. The DEFAULT under Docker and Kubernetes, because baking a llama.cpp binary into
- *   `node:22-alpine` is a musl-vs-glibc problem with no good answer, and a sidecar is the idiomatic
+ *   `node:24-alpine` is a musl-vs-glibc problem with no good answer, and a sidecar is the idiomatic
  *   solution in both orchestrators anyway.
  * `off` — nothing native. The default everywhere until an operator says otherwise, and the state
  *   this whole subsystem must cost nothing in.

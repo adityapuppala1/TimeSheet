@@ -36,3 +36,8 @@ playwright-report
 .claude
 .github
 skills-lock.json
+
+# Generated Prisma clients: the build stage regenerates them for Linux. A Windows dev checkout
+# carries its own engine here (plus .tmp copies left by interrupted generates: 387 MB once), and
+# all of it was being shipped into the Linux image.
+apps/api/src/generated

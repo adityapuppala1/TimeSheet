@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:22-alpine AS deps
+FROM node:24-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 COPY apps/api/package.json apps/api/package.json
@@ -19,7 +19,21 @@ RUN npx prisma generate --schema=apps/api/prisma/schema.prisma \
  && npm run build -w packages/shared \
  && npm run build -w apps/api
 
-FROM node:22-alpine
+# Production dependencies of the API alone — no web packages (mermaid, three, lucide…), no test runners
+# or compilers. The runtime used to copy the build stage's full monorepo install: 1.46 GB, most of it
+# for the browser bundle or for tooling. prisma and tsx are runtime dependencies of THIS image (boot
+# runs `prisma migrate deploy`; the documented seeds and `doctor` run through tsx), so they live in
+# apps/api's "dependencies", not devDependencies. Every workspace's package.json is copied because
+# `npm ci` validates the whole lockfile even when installing one workspace.
+FROM node:24-alpine AS prod-deps
+WORKDIR /app
+COPY package.json package-lock.json* ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/shared/package.json packages/shared/package.json
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --workspace apps/api --workspace packages/shared --no-audit --no-fund  && mkdir -p apps/api/node_modules packages/shared/node_modules
+
+FROM node:24-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 # The image carries its own identity: there is no .git inside a container, so the SHA and build
@@ -41,13 +55,17 @@ COPY --chown=app:app VERSION ./
 # The What's-new page's offline release history — parsed by changelog-releases.service.ts when
 # GitHub has nothing to offer (private repo, air-gapped install, no releases published).
 COPY --chown=app:app CHANGELOG.md ./
-COPY --from=build --chown=app:app /app/node_modules node_modules
+COPY --from=prod-deps --chown=app:app /app/node_modules node_modules
+# The tenant Prisma client is generated INTO node_modules/.prisma by the build stage's `prisma
+# generate`; the production install above never ran generate, so it has none of its own.
+COPY --from=build --chown=app:app /app/node_modules/.prisma node_modules/.prisma
+# Workspace-local installs too: npm nests a package under the workspace when its version differs from
+# the hoisted one (dotenv, and ldapts until 2026-10-05). Shipping only the root node_modules made the
+# API crash at boot with ERR_MODULE_NOT_FOUND — invisible to every test run from a full checkout.
+COPY --from=prod-deps --chown=app:app /app/apps/api/node_modules apps/api/node_modules
+COPY --from=prod-deps --chown=app:app /app/packages/shared/node_modules packages/shared/node_modules
 COPY --from=build --chown=app:app /app/apps/api/dist apps/api/dist
 COPY --from=build --chown=app:app /app/apps/api/prisma apps/api/prisma
-# The control-plane Prisma client is plain generated JS (not compiled by tsc), so it isn't
-# under apps/api/dist on its own — copy it to the exact path config/control-prisma.js's
-# compiled relative import (`../generated/control-client/index.js`) expects to find it at.
-COPY --from=build --chown=app:app /app/apps/api/src/generated apps/api/dist/src/generated
 # The SOURCE tree rides along too, and this line is load-bearing for every documented seed:
 # `npm run seed` / `npm run control:seed` invoke tsx against prisma/*.ts, whose imports fan out
 # through src/services and src/generated — paths that only existed compiled under dist/ in this
@@ -77,7 +95,10 @@ COPY --from=build --chown=app:app /app/packages/shared/dist packages/shared/dist
 COPY --from=build --chown=app:app /app/packages/shared/package.json packages/shared/package.json
 COPY --chown=app:app package.json ./
 COPY --chown=app:app apps/api/package.json apps/api/package.json
-RUN mkdir -p /app/uploads/avatars && chown -R app:app /app/uploads
+# The generated Prisma clients are plain JS that tsc does not compile into dist/, but
+# config/control-prisma.js's compiled relative import expects them at dist/src/generated. A symlink
+# to the copy src/ already carries, instead of a second COPY of the same tree (and its engine).
+RUN ln -s ../../src/generated apps/api/dist/src/generated && chown -h app:app apps/api/dist/src/generated  && mkdir -p /app/uploads/avatars && chown -R app:app /app/uploads
 USER app
 EXPOSE 4000
 CMD ["node", "apps/api/dist/src/server.js"]

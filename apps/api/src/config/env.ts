@@ -37,7 +37,7 @@ import { z } from "zod";
 const APP_ENV = process.env.APP_ENV?.trim();
 if (APP_ENV) {
   const profilePath = `.env.${APP_ENV}`;
-  const result = dotenv.config({ path: profilePath });
+  const result = dotenv.config({ path: profilePath, quiet: true });
   if (result.error) {
     console.error(
       `[env] APP_ENV=${APP_ENV} but ${profilePath} could not be read (${(result.error as Error).message}).\n` +
@@ -47,7 +47,9 @@ if (APP_ENV) {
   }
   console.log(`[env] profile: ${APP_ENV} (${profilePath}, with .env as fallback for unset keys)`);
 }
-dotenv.config();
+// `quiet`: dotenv 17+ prints "injecting env (N) from .env" on every load, to stderr — noise in every
+// log, and worse, in the error log a supervisor watches.
+dotenv.config({ quiet: true });
 
 /**
  * Force the Node.js process timezone before any Date is created elsewhere.

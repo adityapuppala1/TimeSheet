@@ -12,7 +12,7 @@
  *  1. `@vladmandic/human`'s package.json exports map lists the "node" condition FIRST, so both
  *     `require("@vladmandic/human")` and `import` of the bare name resolve to dist/human.node.js
  *     — which hard-requires the NATIVE @tensorflow/tfjs-node. That's a compiled addon with no
- *     musl prebuilds, i.e. it does not install on this project's node:22-alpine image.
+ *     musl prebuilds, i.e. it does not install on this project's node:24-alpine image.
  *  2. dist/human.esm.js (the browser bundle, tfjs baked in) loads under Node but dies
  *     immediately on `util.TextEncoder is not a constructor` — it assumes browser globals.
  *  3. dist/human.node-wasm.js is the build that is both native-free AND Node-correct: it takes

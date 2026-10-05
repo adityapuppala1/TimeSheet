@@ -35,7 +35,7 @@
  * ── THE FIVE REFUSALS, AND WHY EACH IS HERE RATHER THAN AT FIRST INFERENCE ──────────────────
  *
  * 1. MUSL. Checked before anything is offered. llama.cpp publishes only glibc-linked Linux builds and
- *    this app's image is `node:22-alpine`. A glibc binary on musl fails with the kernel loader's
+ *    this app's image is `node:24-alpine`. A glibc binary on musl fails with the kernel loader's
  *    "no such file or directory" — naming a file that plainly exists — which is one of the most
  *    misleading errors in Linux. So Alpine is told plainly to run a sidecar, and offered no download.
  *
