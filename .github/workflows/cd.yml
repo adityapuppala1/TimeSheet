@@ -9,6 +9,28 @@ on:
   push:
     branches: [main]
     tags: ["v*.*.*"]
+    # A docs-only commit produces byte-identical images; rebuilding them bought nothing. GitHub does
+    # not evaluate path filters for tag pushes, so a release tag always builds.
+    paths-ignore:
+      - "docs/**"
+      # Named one by one, NOT "**/*.md": CHANGELOG.md is copied into the API image (What's new reads
+      # it), so a changelog-only commit must rebuild.
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "GEMINI.md"
+      - ".env.example"
+      - "LICENSE"
+      - ".gitignore"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/ghcr-retention.yml"
+
+# A newer push to `main` supersedes an in-flight build of an older one: only the tip becomes `latest`.
+# Tags each get their own group (the ref), so a release build is never cancelled.
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 env:
   REGISTRY: ghcr.io

@@ -11,7 +11,12 @@ name: CI
 # fastest failure signal, then integration tests against a real MySQL, then Playwright.
 on:
   push:
-    branches: ["**"]
+    # `main` ONLY (2026-10-05). Every other branch is checked on the developer's machine before it
+    # leaves it — scripts/local-ci.mjs, installed as the `pre-push` hook by `npm install` — and gets CI
+    # through its pull request. Pushing a branch and then fast-forwarding `main` to the same commit
+    # used to run this whole workflow twice for one SHA; on a private repo that is billed minutes for
+    # an answer already known. A branch that wants CI without a PR: `workflow_dispatch` on it.
+    branches: ["main"]
     # NO `tags:` HERE, AND THAT IS THE SINGLE BIGGEST SAVING IN THIS FILE. A release tag points at a
     # commit that has ALREADY landed on `main` and already run everything below against that exact
     # SHA — so a tag push re-ran the whole suite for zero new information. Measured on 2026-09-28:

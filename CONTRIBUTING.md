@@ -33,6 +33,19 @@ your own account) makes every suite fail at auth setup, and five retries later t
 lockout turns the symptom into 429s. Make yourself a *new* SUPER_ADMIN user instead and leave
 the seeded three as fixtures.
 
+## The local CI gate (runs before every push)
+
+`npm install` installs a `pre-push` git hook that runs `scripts/local-ci.mjs`: lint (both
+typechecks, the Sonar/promise rules, the warning ratchet), the production-dependency audit gate, and
+the API and web unit suites — the same checks as CI's main job, minus MySQL integration and e2e.
+It takes a few minutes the first time and is skipped for a commit that already passed on this machine
+(or whose only changes since a pass are docs). Run it by hand with `npm run ci:local`.
+
+**Why it exists:** the repository is private, so every GitHub Actions minute is billed. CI now runs on
+pushes to `main`, on pull requests and on demand (`workflow_dispatch`) — not on every branch push.
+A broken push is caught here, for free, instead of there. Emergency only: `git push --no-verify`;
+CI on `main` still runs everything, including integration and e2e.
+
 ## Before you open a PR
 
 ```bash

@@ -10,6 +10,17 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🚢 Deployment: CI checks run on your machine first, and GitHub only pays for what is new
+
+- **A `pre-push` hook runs the CI gate locally** (`scripts/local-ci.mjs`, installed by `npm install`;
+  `npm run ci:local` by hand): lint, the dependency audit and both unit suites, remembered per commit.
+- **CI runs on `main`, pull requests and on demand** — no longer on every branch push, which ran the
+  whole workflow twice whenever a branch and `main` received the same commit.
+- **Images are not rebuilt for documentation-only commits**, and a newer push to `main` cancels an
+  older image build. Release tags always build.
+- **Old images are pruned after every publish.** The retention job was waiting for a workflow named
+  "CD", which does not exist, and could not check out the repository once it became private.
+
 ## 6.1.0 — every workspace is the one its address says — 2026-10-05
 
 A fix-and-security release. Nothing to configure: upgrade and restart.

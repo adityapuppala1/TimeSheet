@@ -7,6 +7,7 @@
   ],
   "scripts": {
     "postinstall": "node -e \"const{existsSync}=require('fs');if(existsSync('packages/shared/tsconfig.json')){require('child_process').execSync('npm run build -w packages/shared',{stdio:'inherit'})}else{console.log('postinstall: packages/shared sources absent (manifest-only install layer) - skipping build')}\"",
+    "prepare": "node -e \"const f='scripts/install-git-hooks.mjs';if(require('fs').existsSync(f)){require('child_process').execSync('node '+f,{stdio:'inherit'})}\"",
     "predev": "node scripts/ensure-deps.mjs && node scripts/ensure-migrations.mjs",
     "dev": "concurrently \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
     "prebuild": "node scripts/ensure-deps.mjs",
@@ -35,7 +36,8 @@
     "check:public": "npm run check:public -w apps/api",
     "pitch:html": "node scripts/pitch-export/build-html.mjs",
     "pitch:pptx": "node scripts/pitch-export/build-pptx.mjs",
-    "pitch": "npm run pitch:html && npm run pitch:pptx"
+    "pitch": "npm run pitch:html && npm run pitch:pptx",
+    "ci:local": "node scripts/local-ci.mjs --force"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
