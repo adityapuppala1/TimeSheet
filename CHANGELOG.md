@@ -21,6 +21,13 @@ number, on purpose — an installation must never render history for a version t
   welcome email linked to `https://<slug>.localhost` with no port; they now keep the dev server's port.
 - **A long workspace name no longer suggests an address ending in "-"**, which the server refused.
 
+### 🔒 Dependencies: no known advisory left in what production runs
+
+- `npm audit fix`, in-range only: axios, nodemailer (and mailparser through it), multer, morgan,
+  dompurify, fast-uri, ip-address and brace-expansion. `npm audit --omit=dev` now reports 0. The five
+  left are Tailwind 3's build-time file watcher (braces/micromatch/chokidar), never shipped to a
+  server or browser; clearing them needs the Tailwind 4 migration.
+
 ## 6.0.0 — every workflow traced end to end, and fixed where it broke — 2026-10-02
 
 A major version because upgrading asks something of operators: in production the API now refuses to
