@@ -134,9 +134,11 @@ describe("/uploads — what it must NOT serve", () => {
   });
 
   it("refuses traversal out of the storage root", async () => {
-    // The unencoded form never reaches `/uploads` at all — the client collapses it before the
-    // request is sent, so it lands on the app's 404. The encoded form does reach the gate.
-    expect((await request(app).get(`/uploads/../${path.basename(outsideFile)}`)).status).toBe(404);
+    // The unencoded form: 403 or 404, never 200 — which one depends on the TEST CLIENT, not the server.
+    // superagent < 10.4 collapsed `../` before sending, so it landed on the app's 404; 10.4+ sends it
+    // as written, it reaches `/uploads`, and the gate refuses it unsigned (403). Both are refusals.
+    // The encoded form always reaches the gate.
+    expect([403, 404]).toContain((await request(app).get(`/uploads/../${path.basename(outsideFile)}`)).status);
     expect((await request(app).get("/uploads/..%2F..%2F..%2Fetc%2Fpasswd")).status).toBe(403);
     // And traversal does not become reachable just because the caller can sign what they ask for:
     // past the gate, containment (resolveStoredFile's key normalisation and serve-static's own

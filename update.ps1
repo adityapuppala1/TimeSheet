@@ -31,6 +31,24 @@ if (-not (Test-Path ".env")) { Write-Fail "No .env here - this doesn't look like
 try { git rev-parse --git-dir | Out-Null } catch { Write-Fail "This directory isn't a git clone. Updates need one: git clone the repo, copy your .env in, run .\install.ps1 once - after that .\update.ps1 works." }
 try { docker compose version | Out-Null } catch { Write-Fail "Docker Compose isn't available - is Docker Desktop running?" }
 
+# Self-healing steps shared with install.ps1 (scripts/installer-heal.ps1). Absent in an older
+# checkout: then the plain behaviour it always had.
+$Auto = ($env:TS_AUTO -eq "1")
+function Ask($Prompt, $Default) {
+  if ($Auto) { return $Default }
+  $reply = Read-Host $Prompt
+  if ([string]::IsNullOrWhiteSpace($reply)) { return $Default } else { return $reply }
+}
+if (Test-Path "scripts\installer-heal.ps1") {
+  . .\scripts\installer-heal.ps1
+} else {
+  function Wait-DockerEngine { }
+  function Test-DiskSpace([string]$Purpose) { }
+  function Invoke-ComposeUpWithRetry([string]$File) { docker compose -f $File up -d --build }
+}
+Wait-DockerEngine
+Test-DiskSpace "a database backup and an image rebuild"
+
 $ComposeFile = if (Select-String -Path ".env" -Pattern "^MYSQL_ROOT_PASSWORD=" -Quiet) { "docker-compose.yml" } else { "docker-compose.external-db.yml" }
 
 # --- The console signing secret (2026-10 audit) -----------------------------------------------
@@ -146,64 +164,7 @@ if ([string]::IsNullOrWhiteSpace($egressValue)) {
   Write-Warn "  lives on a private address. Not a blocker - this update continues."
 }
 
-# -- Resolve the target release ----------------------------------------------------------------
-if ([string]::IsNullOrWhiteSpace($To)) {
-  Write-Step "Fetching release tags..."
-  git fetch --tags --quiet origin
-  # Sort-Object with [version] orders 1.9 < 1.10 correctly, which string sorting does not.
-  $tags = git tag --list "v*.*.*" | Where-Object { $_ -match "^v\d+\.\d+\.\d+$" }
-  if (-not $tags) { Write-Fail "No release tags (vX.Y.Z) exist yet - nothing to update to." }
-  $To = $tags | Sort-Object { [version]($_ -replace "^v", "") } | Select-Object -Last 1
-}
-git rev-parse -q --verify "refs/tags/$To" | Out-Null
-if ($LASTEXITCODE -ne 0) { Write-Fail "Tag $To doesn't exist." }
-
-$CurrentRef = (git rev-parse --short=12 HEAD).Trim()
-$CurrentVersion = (Get-Content "VERSION" -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
-$TargetVersion = $To -replace "^v", ""
-
-if ($CurrentVersion -eq $TargetVersion) { Write-Step "Already on $CurrentVersion - nothing to do."; exit 0 }
-Write-Step "Updating: v$CurrentVersion ($CurrentRef) -> $To"
-
-# -- 1. Backup FIRST ---------------------------------------------------------------------------
-New-Item -ItemType Directory -Force "backups" | Out-Null
-$Stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss")
-$BackupFile = "backups\pre-update-$CurrentVersion-to-$TargetVersion-$Stamp.sql.gz"
-if ($ComposeFile -eq "docker-compose.yml") {
-  Write-Step "Backing up both databases to $BackupFile ..."
-  # Credentials come from the container's own env - never parsed out of .env, so a hand-edited
-  # quoting style can't corrupt the command.
-  #
-  # WHY THE DUMP IS WRITTEN INSIDE THE CONTAINER AND COPIED OUT, instead of piped into a file here
-  # (a real restore hazard - do not "simplify" this back into a pipe): PowerShell decodes a native
-  # command's stdout into .NET strings using the console encoding and re-emits it with its own line
-  # endings, so `mysqldump | Out-File` REWROTE the dump rather than copying it - CRLFs, a possible
-  # BOM, and any byte the active codepage could not round-trip replaced. Nothing complains until
-  # restore day, which is the worst possible time to find out. `docker compose cp` writes the file
-  # itself, so the bytes are never PowerShell's to touch. Gzipped and named .sql.gz to match
-  # update.sh, so the same restore command works whichever script took the backup.
-  $ContainerDump = "/tmp/timesphere-pre-update.sql.gz"
-  $DumpCmd = 'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --all-databases --single-transaction --no-tablespaces | gzip -c > ' + $ContainerDump
-  docker compose -f $ComposeFile exec -T mysql sh -c $DumpCmd
-  if ($LASTEXITCODE -ne 0) { Write-Fail "Backup failed - refusing to update without one. Is the mysql container running (docker compose ps)?" }
-  docker compose -f $ComposeFile cp ("mysql:" + $ContainerDump) $BackupFile
-  if ($LASTEXITCODE -ne 0) { Write-Fail "The dump was written inside the container but could not be copied to $BackupFile - refusing to update without a backup on disk." }
-  docker compose -f $ComposeFile exec -T mysql rm -f $ContainerDump 2>&1 | Out-Null
-  # The exit status above belongs to gzip, the last command in the container-side pipe, so a
-  # mysqldump that died mid-write can still report success (update.sh has the same shape). A gzip
-  # of nothing is a few dozen bytes, so a size floor catches exactly that case.
-  $DumpSize = (Get-Item $BackupFile -ErrorAction SilentlyContinue).Length
-  if (-not $DumpSize -or $DumpSize -lt 1024) { Write-Fail "Backup file $BackupFile is $DumpSize bytes - that is not a dump of both schemas. Refusing to update." }
-} else {
-  Write-Warn "External-database deployment: this script cannot reach into your MySQL server to back it up."
-  Write-Warn "Take your own backup/snapshot NOW (RDS snapshot, mysqldump from a host that can reach it)."
-  $confirm = Read-Host "Type 'backed-up' to confirm you have one"
-  if ($confirm -ne "backed-up") { Write-Fail "Not updating without a backup. Nothing has changed." }
-  $BackupFile = "(external - operator-managed)"
-}
-Write-Step "Backup ready: $BackupFile"
-
-# -- 2-3. Checkout, rebuild, verify ------------------------------------------------------------
+# -- Helpers (defined before the version check, which uses them when there is nothing to update) --
 function Invoke-Verification([string]$Expected) {
   # Wait-ApiHealth is defined below; PowerShell resolves the call at invocation time, and every
   # caller of this function runs after both definitions.
@@ -252,7 +213,7 @@ function Invoke-Verification([string]$Expected) {
 function Invoke-DeployRef([string]$Ref) {
   git checkout --quiet $Ref
   if ($LASTEXITCODE -ne 0) { Write-Fail "git checkout $Ref failed." }
-  docker compose -f $ComposeFile up -d --build
+  Invoke-ComposeUpWithRetry $ComposeFile
 }
 
 function Wait-ApiHealth {
@@ -300,6 +261,77 @@ function Invoke-HealStrandedMigration {
   return $false
 }
 
+# -- Resolve the target release ----------------------------------------------------------------
+if ([string]::IsNullOrWhiteSpace($To)) {
+  Write-Step "Fetching release tags..."
+  git fetch --tags --quiet origin
+  # Sort-Object with [version] orders 1.9 < 1.10 correctly, which string sorting does not.
+  $tags = git tag --list "v*.*.*" | Where-Object { $_ -match "^v\d+\.\d+\.\d+$" }
+  if (-not $tags) { Write-Fail "No release tags (vX.Y.Z) exist yet - nothing to update to." }
+  $To = $tags | Sort-Object { [version]($_ -replace "^v", "") } | Select-Object -Last 1
+}
+git rev-parse -q --verify "refs/tags/$To" | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Fail "Tag $To doesn't exist." }
+
+$CurrentRef = (git rev-parse --short=12 HEAD).Trim()
+$CurrentVersion = (Get-Content "VERSION" -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
+$TargetVersion = $To -replace "^v", ""
+
+if ($CurrentVersion -eq $TargetVersion) {
+  # Nothing to update - so check the install is actually healthy, and repair it if not, instead of
+  # reporting success over a stack that may have stopped. Same verification an update ends with.
+  Write-Step "Already on $CurrentVersion - checking that the running install is healthy..."
+  if (Invoke-Verification $CurrentVersion) { Write-Host "OK: v$CurrentVersion is up to date and healthy." -ForegroundColor Green; exit 0 }
+  Write-Warn "The install is not healthy - attempting repair (start containers, recover a stranded migration, restart)..."
+  docker compose -f $ComposeFile up -d
+  if (-not (Wait-ApiHealth)) {
+    if (-not (Invoke-HealStrandedMigration)) { docker compose -f $ComposeFile restart api }
+  }
+  if (Invoke-Verification $CurrentVersion) { Write-Host "OK: repaired - v$CurrentVersion is healthy again." -ForegroundColor Green; exit 0 }
+  docker compose -f $ComposeFile logs --tail=80 api
+  Write-Fail "Still unhealthy after repair. The api log is above; 'npm run doctor -w apps/api' inside the api container names the cause."
+}
+Write-Step "Updating: v$CurrentVersion ($CurrentRef) -> $To"
+
+# -- 1. Backup FIRST ---------------------------------------------------------------------------
+New-Item -ItemType Directory -Force "backups" | Out-Null
+$Stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss")
+$BackupFile = "backups\pre-update-$CurrentVersion-to-$TargetVersion-$Stamp.sql.gz"
+if ($ComposeFile -eq "docker-compose.yml") {
+  Write-Step "Backing up both databases to $BackupFile ..."
+  # Credentials come from the container's own env - never parsed out of .env, so a hand-edited
+  # quoting style can't corrupt the command.
+  #
+  # WHY THE DUMP IS WRITTEN INSIDE THE CONTAINER AND COPIED OUT, instead of piped into a file here
+  # (a real restore hazard - do not "simplify" this back into a pipe): PowerShell decodes a native
+  # command's stdout into .NET strings using the console encoding and re-emits it with its own line
+  # endings, so `mysqldump | Out-File` REWROTE the dump rather than copying it - CRLFs, a possible
+  # BOM, and any byte the active codepage could not round-trip replaced. Nothing complains until
+  # restore day, which is the worst possible time to find out. `docker compose cp` writes the file
+  # itself, so the bytes are never PowerShell's to touch. Gzipped and named .sql.gz to match
+  # update.sh, so the same restore command works whichever script took the backup.
+  $ContainerDump = "/tmp/timesphere-pre-update.sql.gz"
+  $DumpCmd = 'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --all-databases --single-transaction --no-tablespaces | gzip -c > ' + $ContainerDump
+  docker compose -f $ComposeFile exec -T mysql sh -c $DumpCmd
+  if ($LASTEXITCODE -ne 0) { Write-Fail "Backup failed - refusing to update without one. Is the mysql container running (docker compose ps)?" }
+  docker compose -f $ComposeFile cp ("mysql:" + $ContainerDump) $BackupFile
+  if ($LASTEXITCODE -ne 0) { Write-Fail "The dump was written inside the container but could not be copied to $BackupFile - refusing to update without a backup on disk." }
+  docker compose -f $ComposeFile exec -T mysql rm -f $ContainerDump 2>&1 | Out-Null
+  # The exit status above belongs to gzip, the last command in the container-side pipe, so a
+  # mysqldump that died mid-write can still report success (update.sh has the same shape). A gzip
+  # of nothing is a few dozen bytes, so a size floor catches exactly that case.
+  $DumpSize = (Get-Item $BackupFile -ErrorAction SilentlyContinue).Length
+  if (-not $DumpSize -or $DumpSize -lt 1024) { Write-Fail "Backup file $BackupFile is $DumpSize bytes - that is not a dump of both schemas. Refusing to update." }
+} else {
+  Write-Warn "External-database deployment: this script cannot reach into your MySQL server to back it up."
+  Write-Warn "Take your own backup/snapshot NOW (RDS snapshot, mysqldump from a host that can reach it)."
+  $confirm = Read-Host "Type 'backed-up' to confirm you have one"
+  if ($confirm -ne "backed-up") { Write-Fail "Not updating without a backup. Nothing has changed." }
+  $BackupFile = "(external - operator-managed)"
+}
+Write-Step "Backup ready: $BackupFile"
+
+# -- 2-3. Checkout, rebuild, verify ------------------------------------------------------------
 Write-Step "Deploying $To (build + migrate + restart)..."
 Invoke-DeployRef $To
 

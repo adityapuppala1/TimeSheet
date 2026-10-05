@@ -36,6 +36,20 @@ command -v git >/dev/null 2>&1 || fail "git is required to update (the deploymen
 git rev-parse --git-dir >/dev/null 2>&1 || fail "This directory isn't a git clone. Updates need one: git clone the repo, copy your .env in, and run ./install.sh once — after that ./update.sh works."
 docker compose version >/dev/null 2>&1 || fail "Docker Compose isn't available — is the Docker daemon running?"
 
+# Self-healing steps shared with install.sh (wait for the engine, disk check, build retries). Absent
+# in an older checkout: then the plain behaviour it always had.
+if [ -f scripts/installer-heal.sh ]; then
+  AUTO="${TS_AUTO:-0}"
+  ask() { local reply; if [ "$AUTO" = "1" ]; then printf '%s' "$2"; return; fi; read -r -p "$1" reply; printf '%s' "${reply:-$2}"; }
+  # shellcheck source=scripts/installer-heal.sh
+  . scripts/installer-heal.sh
+else
+  heal_wait_for_docker() { :; }; heal_check_disk() { :; }
+  heal_compose_up() { docker compose -f "$1" up -d --build; }
+fi
+heal_wait_for_docker
+heal_check_disk "a database backup and an image rebuild"
+
 # Same detection install.sh uses: MYSQL_ROOT_PASSWORD only ever exists for the bundled-MySQL path.
 if grep -qE "^MYSQL_ROOT_PASSWORD=" .env; then COMPOSE_FILE="docker-compose.yml"; else COMPOSE_FILE="docker-compose.external-db.yml"; fi
 
@@ -141,54 +155,7 @@ elif [ "$EGRESS_LINE" = "true" ] && grep -qE '^HTTPS_DOMAIN=.+' .env; then
   warn "  Not a blocker — this update continues. See docs/DEPLOYMENT.md."
 fi
 
-# ── Resolve the target release ────────────────────────────────────────────────────────────────
-TARGET_TAG="${2:-}"
-if [ "${1:-}" = "--to" ] && [ -n "$TARGET_TAG" ]; then
-  :
-else
-  log "Fetching release tags..."
-  git fetch --tags --quiet origin
-  # Newest semver tag. `sort -V` orders 1.9 < 1.10 correctly, which lexical sort does not.
-  TARGET_TAG="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)"
-  [ -n "$TARGET_TAG" ] || fail "No release tags (vX.Y.Z) exist yet — nothing to update to."
-fi
-git rev-parse -q --verify "refs/tags/$TARGET_TAG" >/dev/null || { git fetch --tags --quiet origin; git rev-parse -q --verify "refs/tags/$TARGET_TAG" >/dev/null || fail "Tag $TARGET_TAG doesn't exist."; }
-
-CURRENT_REF="$(git rev-parse --short=12 HEAD)"
-CURRENT_VERSION="$(tr -d '[:space:]' < VERSION 2>/dev/null || echo unknown)"
-TARGET_VERSION="${TARGET_TAG#v}"
-
-if [ "$CURRENT_VERSION" = "$TARGET_VERSION" ]; then
-  log "Already on $CURRENT_VERSION — nothing to do."
-  exit 0
-fi
-log "Updating: v$CURRENT_VERSION ($CURRENT_REF) -> $TARGET_TAG"
-
-# ── 1. Backup FIRST ───────────────────────────────────────────────────────────────────────────
-mkdir -p backups
-STAMP="$(date -u +%Y%m%d-%H%M%S)"
-BACKUP_FILE="backups/pre-update-${CURRENT_VERSION}-to-${TARGET_VERSION}-${STAMP}.sql.gz"
-log "Backing up both databases to $BACKUP_FILE ..."
-if [ "$COMPOSE_FILE" = "docker-compose.yml" ]; then
-  # Bundled MySQL: dump from inside its own container, credentials from the container's env —
-  # never parsed out of .env, so a hand-edited quoting style can't corrupt the command.
-  # --all-databases rather than naming the two defaults: a platform admin can provision MORE
-  # organizations, each with its own database on this same container, and a backup that silently
-  # misses them isn't a backup — it's a surprise scheduled for restore day.
-  docker compose -f "$COMPOSE_FILE" exec -T mysql sh -c \
-    'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --all-databases --single-transaction --no-tablespaces' \
-    | gzip > "$BACKUP_FILE" \
-    || fail "Backup failed — refusing to update without one. Is the mysql container running (docker compose ps)?"
-else
-  warn "External-database deployment: this script cannot reach into your MySQL server to back it up."
-  warn "Take your own backup/snapshot NOW (RDS snapshot, mysqldump from a host that can reach it)."
-  read -r -p "Type 'backed-up' to confirm you have one: " CONFIRM
-  [ "$CONFIRM" = "backed-up" ] || fail "Not updating without a backup. Nothing has changed."
-  BACKUP_FILE="(external — operator-managed)"
-fi
-log "Backup ready: $BACKUP_FILE"
-
-# ── 2-3. Checkout, rebuild, verify ────────────────────────────────────────────────────────────
+# ── Helpers (defined before the version check, which uses them when there is nothing to update) ──
 wait_for_health() { # up to 3 minutes, the same budget every caller here used inline before
   for _ in $(seq 1 60); do curl -fsS http://localhost:4000/health >/dev/null 2>&1 && return 0; sleep 3; done
   return 1
@@ -257,7 +224,7 @@ run_verification() { # run_verification <expected-version>  — mirrors install.
 
 deploy_ref() { # deploy_ref <git-ref>  — checkout + rebuild + up; migrations run on container boot
   git checkout --quiet "$1"
-  docker compose -f "$COMPOSE_FILE" up -d --build
+  heal_compose_up "$COMPOSE_FILE"
 }
 
 migrate_extra_tenants() {
@@ -277,6 +244,73 @@ migrate_extra_tenants() {
   docker compose -f "$COMPOSE_FILE" exec -T api npm run migrate:tenants -w apps/api     || warn "migrate:tenants reported a problem — check which org failed above; the default org is unaffected."
 }
 
+
+# ── Resolve the target release ────────────────────────────────────────────────────────────────
+TARGET_TAG="${2:-}"
+if [ "${1:-}" = "--to" ] && [ -n "$TARGET_TAG" ]; then
+  :
+else
+  log "Fetching release tags..."
+  git fetch --tags --quiet origin
+  # Newest semver tag. `sort -V` orders 1.9 < 1.10 correctly, which lexical sort does not.
+  TARGET_TAG="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)"
+  [ -n "$TARGET_TAG" ] || fail "No release tags (vX.Y.Z) exist yet — nothing to update to."
+fi
+git rev-parse -q --verify "refs/tags/$TARGET_TAG" >/dev/null || { git fetch --tags --quiet origin; git rev-parse -q --verify "refs/tags/$TARGET_TAG" >/dev/null || fail "Tag $TARGET_TAG doesn't exist."; }
+
+CURRENT_REF="$(git rev-parse --short=12 HEAD)"
+CURRENT_VERSION="$(tr -d '[:space:]' < VERSION 2>/dev/null || echo unknown)"
+TARGET_VERSION="${TARGET_TAG#v}"
+
+if [ "$CURRENT_VERSION" = "$TARGET_VERSION" ]; then
+  # Nothing to update — so check the install is actually healthy, and repair it if not, instead of
+  # reporting success over a stack that may have stopped. Same verification an update ends with.
+  log "Already on $CURRENT_VERSION — checking that the running install is healthy..."
+  if run_verification "$CURRENT_VERSION"; then
+    printf '[1;32m✓ %s is up to date and healthy.[0m
+' "v$CURRENT_VERSION"
+    exit 0
+  fi
+  warn "The install is not healthy — attempting repair (start containers, recover a stranded migration, restart)..."
+  docker compose -f "$COMPOSE_FILE" up -d || true
+  if ! wait_for_health; then
+    heal_stranded_migration || docker compose -f "$COMPOSE_FILE" restart api || true
+  fi
+  if run_verification "$CURRENT_VERSION"; then
+    printf '[1;32m✓ Repaired: v%s is healthy again.[0m
+' "$CURRENT_VERSION"
+    exit 0
+  fi
+  docker compose -f "$COMPOSE_FILE" logs --tail=80 api || true
+  fail "Still unhealthy after repair. The api log is above; 'npm run doctor -w apps/api' inside the api container names the cause."
+fi
+log "Updating: v$CURRENT_VERSION ($CURRENT_REF) -> $TARGET_TAG"
+
+# ── 1. Backup FIRST ───────────────────────────────────────────────────────────────────────────
+mkdir -p backups
+STAMP="$(date -u +%Y%m%d-%H%M%S)"
+BACKUP_FILE="backups/pre-update-${CURRENT_VERSION}-to-${TARGET_VERSION}-${STAMP}.sql.gz"
+log "Backing up both databases to $BACKUP_FILE ..."
+if [ "$COMPOSE_FILE" = "docker-compose.yml" ]; then
+  # Bundled MySQL: dump from inside its own container, credentials from the container's env —
+  # never parsed out of .env, so a hand-edited quoting style can't corrupt the command.
+  # --all-databases rather than naming the two defaults: a platform admin can provision MORE
+  # organizations, each with its own database on this same container, and a backup that silently
+  # misses them isn't a backup — it's a surprise scheduled for restore day.
+  docker compose -f "$COMPOSE_FILE" exec -T mysql sh -c \
+    'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --all-databases --single-transaction --no-tablespaces' \
+    | gzip > "$BACKUP_FILE" \
+    || fail "Backup failed — refusing to update without one. Is the mysql container running (docker compose ps)?"
+else
+  warn "External-database deployment: this script cannot reach into your MySQL server to back it up."
+  warn "Take your own backup/snapshot NOW (RDS snapshot, mysqldump from a host that can reach it)."
+  read -r -p "Type 'backed-up' to confirm you have one: " CONFIRM
+  [ "$CONFIRM" = "backed-up" ] || fail "Not updating without a backup. Nothing has changed."
+  BACKUP_FILE="(external — operator-managed)"
+fi
+log "Backup ready: $BACKUP_FILE"
+
+# ── 2-3. Checkout, rebuild, verify ────────────────────────────────────────────────────────────
 log "Deploying $TARGET_TAG (build + migrate + restart)..."
 deploy_ref "$TARGET_TAG"
 

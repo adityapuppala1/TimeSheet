@@ -37,7 +37,8 @@
     "pitch:html": "node scripts/pitch-export/build-html.mjs",
     "pitch:pptx": "node scripts/pitch-export/build-pptx.mjs",
     "pitch": "npm run pitch:html && npm run pitch:pptx",
-    "ci:local": "node scripts/local-ci.mjs --force"
+    "ci:local": "node scripts/local-ci.mjs --force",
+    "ci:docker": "node scripts/ci-docker.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

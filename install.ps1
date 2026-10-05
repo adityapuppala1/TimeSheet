@@ -43,6 +43,24 @@ function Ask($Prompt, $Default) {
   if ([string]::IsNullOrWhiteSpace($reply)) { return $Default } else { return $reply }
 }
 
+# Self-healing steps shared with update.ps1 (scripts/installer-heal.ps1): wait for the Docker engine,
+# check disk, retry a failed build, offer the newest release. Optional on purpose - an older checkout
+# without the file installs exactly as it always did.
+$HealLib = Join-Path $RootDir "scripts\installer-heal.ps1"
+if (Test-Path $HealLib) {
+  . $HealLib
+} else {
+  function Wait-DockerEngine { }
+  function Test-DiskSpace([string]$Purpose) { }
+  function Invoke-ComposeUpWithRetry([string]$File) { docker compose -f $File up -d --build }
+  function Invoke-NewestReleaseOffer { return $false }
+}
+if (Invoke-NewestReleaseOffer) {
+  # Re-run the NEW installer (same PowerShell host) and hand back its result.
+  & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RootDir "install.ps1") @args
+  exit $LASTEXITCODE
+}
+
 Write-Step "Checking for Docker..."
 $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
 if (-not $dockerCmd) {
@@ -63,6 +81,8 @@ try { docker compose version | Out-Null } catch {
   Write-Fail "Couldn't run 'docker compose'. Most likely cause: Docker Desktop is installed but not running yet — start it from the Start menu and wait for it to say `"Docker Desktop is running`" before re-running this script. If it IS running, your Docker Desktop version may be old enough to lack the Compose plugin — update it."
 }
 Write-Host "Docker with Compose plugin found."
+Wait-DockerEngine
+Test-DiskSpace "building the images"
 
 # Self-heal check: an existing .env from an older version of this script, or one hand-edited
 # and accidentally missing a line, gets diagnosed here instead of failing opaquely inside
@@ -353,7 +373,7 @@ foreach ($port in $PortsToCheck) {
 
 Write-Step "Building and starting the stack (this can take a few minutes on first run)..."
 Write-Host "Using $ComposeFile$(if ($ComposeFile -eq 'docker-compose.external-db.yml') { ' (your own MySQL server, no bundled mysql container)' })"
-docker compose -f $ComposeFile up -d --build
+Invoke-ComposeUpWithRetry $ComposeFile
 
 Write-Step "Waiting for the API to become healthy..."
 $apiReady = $false

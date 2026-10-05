@@ -59,6 +59,19 @@ ask() { # ask <prompt> <default-var-name>  — honours TS_AUTO by echoing the de
   printf '%s' "${reply:-$default}"
 }
 
+# Self-healing steps shared with update.sh: wait for the Docker engine, check disk, retry a failed
+# build, offer the newest release. Optional on purpose — an older checkout without the file installs
+# exactly as it always did.
+HEAL_LIB="$ROOT_DIR/scripts/installer-heal.sh"
+if [ -f "$HEAL_LIB" ]; then
+  # shellcheck source=scripts/installer-heal.sh
+  . "$HEAL_LIB"
+  heal_offer_newest_release "$ROOT_DIR/install.sh" "$@"
+else
+  heal_wait_for_docker() { :; }; heal_check_disk() { :; }
+  heal_compose_up() { docker compose -f "$1" up -d --build; }
+fi
+
 docker_install_hint() {
   case "$OS_ID" in
     linux-ubuntu|linux-debian) echo "curl -fsSL https://get.docker.com | sh   (then: sudo usermod -aG docker \$USER, log out/in)" ;;
@@ -148,6 +161,8 @@ if ! docker compose version >/dev/null 2>&1; then
   fail "Couldn't run 'docker compose'. Most likely cause: the Docker daemon isn't running yet (start Docker Desktop, or 'sudo systemctl start docker' on Linux) — wait for it to be ready and re-run this script. If it IS running, the Compose plugin may genuinely be missing/outdated: https://docs.docker.com/compose/install/"
 fi
 log "Docker $(docker --version | sed 's/Docker version //') with Compose plugin found."
+heal_wait_for_docker
+heal_check_disk "building the images"
 
 check_port_free() {
   local port="$1"
@@ -509,7 +524,7 @@ log "Building and starting the stack (this can take a few minutes on first run).
 if [ "$COMPOSE_FILE" = "docker-compose.external-db.yml" ]; then
   log "Using $COMPOSE_FILE (your own MySQL server, no bundled mysql container)"
 fi
-docker compose -f "$COMPOSE_FILE" up -d --build
+heal_compose_up "$COMPOSE_FILE"
 
 log "Waiting for the API to become healthy..."
 API_READY=false
