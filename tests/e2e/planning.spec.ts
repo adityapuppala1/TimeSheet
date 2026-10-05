@@ -10,6 +10,7 @@
  * separately walks every route for horizontal overflow, which is where the phone/tablet
  * behaviour of these pages is checked.
  */
+import { ticketStatusTransitions } from "@timesheet/shared";
 import { expect, test, type Page } from "@playwright/test";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
 import { accessToken, signIn as sharedSignIn } from "./helpers/sign-in";
@@ -90,7 +91,10 @@ test.describe("planning layer", () => {
     const system = workflows.find((w: any) => w.isSystem);
     expect(system, "a system workflow must always exist").toBeTruthy();
     expect(system.statuses).toHaveLength(6);
-    expect(system.transitions).toHaveLength(9);
+    // Counted from the SAME table the server enforces (packages/shared ticketStatusTransitions), not a
+    // literal: a hard-coded 9 went stale the day closing without a fix added three moves to it.
+    const builtInMoves = Object.values(ticketStatusTransitions).reduce((sum, to) => sum + to.length, 0);
+    expect(system.transitions).toHaveLength(builtInMoves);
     expect(system.statuses.map((s: any) => s.legacyStatus).sort()).toEqual(
       ["CLOSED", "IN_PROGRESS", "IN_REVIEW", "OPEN", "REOPENED", "RESOLVED"]
     );
