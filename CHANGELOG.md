@@ -10,6 +10,17 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🏢 Workspaces: each tab is the workspace its address says
+
+- **`acme.localhost` opens Acme, not the default workspace.** Without `ROOT_DOMAIN` a two-label host
+  fell back to the default tenant, so signing in at `acme.localhost:5173` with credentials that also
+  exist in the default workspace succeeded and showed the default organisation's data.
+- **The sidebar names the workspace** under the logo in multi-org mode, so two workspaces open side by
+  side no longer look identical.
+- **"Open your workspace" works in development.** With `ROOT_DOMAIN="localhost"` the signup page and the
+  welcome email linked to `https://<slug>.localhost` with no port; they now keep the dev server's port.
+- **A long workspace name no longer suggests an address ending in "-"**, which the server refused.
+
 ## 6.0.0 — every workflow traced end to end, and fixed where it broke — 2026-10-02
 
 A major version because upgrading asks something of operators: in production the API now refuses to

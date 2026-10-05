@@ -120,7 +120,22 @@ export async function findWorkspacesForEmail(email: string): Promise<DiscoveredW
  */
 export function workspaceUrlForSlug(slug: string): string {
   if (!env.ROOT_DOMAIN) return env.APP_BASE_URL.replace(/\/$/, "");
-  return `https://${slug}.${env.ROOT_DOMAIN}`;
+  const root = env.ROOT_DOMAIN.toLowerCase();
+  // `ROOT_DOMAIN="localhost"` is the two-workspace dev setup, where the SPA is on a port
+  // (`acme.localhost:5173`). A port-less `https://acme.localhost` reached whatever listens on 443/80
+  // instead — on this machine XAMPP's Apache — so the "Open your workspace" button and the welcome
+  // email were dead links. Borrow the scheme and port from APP_BASE_URL, which already knows them.
+  // A real root domain keeps the plain https URL: production serves the SPA on the default port.
+  if (root === "localhost") {
+    try {
+      const base = new URL(env.APP_BASE_URL);
+      const port = base.port ? ":" + base.port : "";
+      return `${base.protocol}//${slug}.${root}${port}`;
+    } catch {
+      // APP_BASE_URL unparseable: fall through to the production shape rather than throw from a link builder.
+    }
+  }
+  return `https://${slug}.${root}`;
 }
 
 /**

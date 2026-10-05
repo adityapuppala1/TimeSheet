@@ -19,7 +19,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { Router } from "express";
 import { z } from "zod";
+import { controlPrisma } from "../config/control-prisma.js";
+import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 import { brandingDir } from "../config/storage-paths.js";
 import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
@@ -37,10 +40,26 @@ async function readBranding() {
 }
 
 /** Public: what to render at the top of the login page and in the sidebar. */
+/**
+ * The organisation's own name, in multi-org mode (or for any non-default tenant). Two workspaces open in one browser looked
+ * identical — the sidebar said "TimeSphere" in both — so a person could not tell which tenant a tab
+ * was showing. Single-org installs get null and keep their tagline: "Default Organization" there
+ * names nothing the person chose. Public like the rest of this route: the hostname already names it.
+ */
+async function readWorkspaceName(): Promise<string | null> {
+  const tenant = requireTenantContext();
+  // Without ROOT_DOMAIN a second workspace is still reachable in dev (`acme.localhost`), so any
+  // tenant other than the default one is named even then.
+  if (!env.ROOT_DOMAIN && tenant.orgSlug === env.DEFAULT_ORG_SLUG) return null;
+  const org = await controlPrisma.organization.findUnique({ where: { id: tenant.orgId }, select: { name: true } });
+  return org?.name ?? null;
+}
+
 brandingRouter.get("/", async (_req, res) => {
-  const row = await readBranding();
+  const [row, workspaceName] = await Promise.all([readBranding(), readWorkspaceName()]);
   res.json({
     displayName: row?.displayName ?? null,
+    workspaceName,
     // A cache-busting stamp rather than the filename: the client never needs to know what the
     // file is called, only that it changed.
     logoVersion: row?.logoFile ? row.updatedAt.getTime() : null,

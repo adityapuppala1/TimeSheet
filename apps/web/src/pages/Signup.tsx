@@ -64,8 +64,9 @@ function suggestSlug(name: string): string {
   return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 63);
+    .slice(0, 63)
+    // Trimmed AFTER the cut: a long name cut mid-word could end in "-", which the server refuses.
+    .replace(/^-+|-+$/g, "");
 }
 
 type JoinOutcome = { status: "requested" | "already_pending" | "member"; url?: string };

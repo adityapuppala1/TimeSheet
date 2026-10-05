@@ -560,6 +560,8 @@ export const authApi = {
  *  before anyone signs in (see controllers/branding.controller.ts for why that is the design). */
 export interface WorkspaceBranding {
   displayName: string | null;
+  /** The organisation's name in multi-org mode, so every tab says which workspace it is; null on a single-org install. */
+  workspaceName?: string | null;
   hasLogo: boolean;
   /** Changes on every upload; used as a cache-busting query param on the image URL. */
   logoVersion: number | null;

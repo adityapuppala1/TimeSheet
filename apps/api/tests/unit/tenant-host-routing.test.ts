@@ -82,6 +82,9 @@ describe("single-org / on-prem: ROOT_DOMAIN unset", () => {
   it.each([
     ["acme.example.com", "acme", "the case this rule is designed for"],
     ["acme.example.test", "acme", "and any other three-label host"],
+    ["acme.localhost", "acme", "a .localhost subdomain is a subdomain despite having two labels"],
+    ["acme.localhost:5173", "acme", "with the dev server's port"],
+    ["www.localhost", "default", "www is never a workspace"],
     ["timesheet.company.com", "timesheet", "THE TRAP: a deployment's own hostname becomes a slug"],
     ["hics.com.sg", "hics", "a public suffix is indistinguishable from a subdomain by label count"],
     ["app.mycorp.co.uk", "app", "so is this"]
@@ -191,6 +194,13 @@ describe("tenantBaseUrl — the address an emailed link should use", () => {
     expect(inTenant("globex", tenantBaseUrl)).toBe("https://globex.timesphere.app");
     // And the reverse of the bug: two tenants no longer share one link base.
     expect(inTenant("acme", tenantBaseUrl)).not.toBe(inTenant("globex", tenantBaseUrl));
+  });
+
+  it("keeps the dev server's scheme and port when the root domain is localhost", async () => {
+    // A port-less https://acme.localhost reached whatever listened on 443/80, not the SPA on 5173,
+    // so the signup page's "Open your workspace" button and the welcome email were dead in dev.
+    const { tenantBaseUrl, inTenant } = await loadAddressing("localhost");
+    expect(inTenant("acme", tenantBaseUrl)).toBe("http://acme.localhost:5173");
   });
 
   it("produces a base that resolveOrgSlug routes straight back to the same workspace", async () => {

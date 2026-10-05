@@ -535,7 +535,13 @@ function BrandMark({ slim = false, className = "mb-8" }: { slim?: boolean; class
       {!slim && (
         <div className="min-w-0">
           <p className="truncate text-base font-bold tracking-tight">{name}</p>
-          <p className="truncate text-xs text-muted-foreground">Enterprise Timesheets</p>
+          {branding.data?.workspaceName ? (
+            <p className="truncate text-xs text-muted-foreground" title={branding.data.workspaceName} data-testid="sidebar-workspace-name">
+              {branding.data.workspaceName}
+            </p>
+          ) : (
+            <p className="truncate text-xs text-muted-foreground">Enterprise Timesheets</p>
+          )}
         </div>
       )}
     </div>

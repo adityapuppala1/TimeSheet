@@ -74,6 +74,16 @@ export function resolveOrgSlug(req: Request): string {
     return env.DEFAULT_ORG_SLUG;
   }
 
+  // `<slug>.localhost` is a subdomain even though it has two labels. `.localhost` is reserved for
+  // loopback (RFC 6761) and every browser resolves it with no hosts entry, so it is how two
+  // workspaces are opened side by side in development. Without this, `acme.localhost:5173` fell
+  // into the two-label rule below and silently served the DEFAULT workspace: a sign-in there with
+  // credentials that also exist in the default tenant succeeded and showed the wrong organisation.
+  if (hostname.endsWith(".localhost")) {
+    const slug = hostname.slice(0, -".localhost".length);
+    if (slug && slug !== "www") return slug;
+  }
+
   // Single-org / on-prem: unchanged. localhost, a bare IP, or a domain with too few labels to
   // carry a subdomain — none of these have a real subdomain to parse.
   const labels = hostname.split(".").filter(Boolean);
