@@ -407,11 +407,12 @@ Created by `npm run seed` here, and by the Docker installer's seed step:
 | Super Admin | `superadmin@timesheet.local` | `Admin@12345` | `/login` |
 | Manager | `manager@timesheet.local` | `Admin@12345` | `/login` |
 | Employee | `employee@timesheet.local` | `Admin@12345` | `/login` |
-| Platform Admin | `platform-admin@timesphere.local` | `PlatformAdmin@12345` (dev only — see below) | `/platform-admin/login` |
+| Platform Admin | `platform-admin@timesphere.local` | printed once by `control:seed` (see below) | `/platform-admin/login` |
 
-**The platform-admin password above is the development value only.** `.env.example` passes it to the
-seed as `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` so local and CI sign-ins are predictable. The installers
-generate a strong one instead and print it once, and a seed run without the variable generates one —
+**There is no fixed platform-admin password.** `.env.example` ships `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD`
+empty, so `control:seed` generates one and prints it once; for predictable local sign-ins set your own
+(12+ characters) in `apps/api/.env`, which the dev scripts and local e2e read. CI builds one per run.
+The installers generate a strong one and print it once —
 on a production install the account is held at **Change password** until it is rotated, and, with
 `NODE_ENV=production`, at MFA enrolment after that. It has cross-org access; treat it accordingly.
 

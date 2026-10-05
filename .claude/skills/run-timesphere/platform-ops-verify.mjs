@@ -1,3 +1,4 @@
+import { platformAdminPassword } from "./pa-password.mjs";
 /**
  * End-to-end check of the 4.0.0 platform-admin work, against the running stack.
  *
@@ -11,7 +12,7 @@ const PA = `${API}/platform-admin`;
 const ok = (label, pass, detail = "") => console.log(`${pass ? "ok  " : "FAIL"} ${label}${detail ? ` — ${detail}` : ""}`);
 
 const paLogin = await (
-  await fetch(`${PA}/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "platform-admin@timesphere.local", password: "PlatformAdmin@12345" }) })
+  await fetch(`${PA}/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "platform-admin@timesphere.local", password: platformAdminPassword() }) })
 ).json();
 const PAH = { authorization: `Bearer ${paLogin.accessToken}`, "content-type": "application/json" };
 

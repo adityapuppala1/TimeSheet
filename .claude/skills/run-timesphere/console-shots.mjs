@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { platformAdminPassword } from "./pa-password.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../..");
@@ -159,7 +160,7 @@ async function main() {
       const page = await ctx.newPage();
       await page.goto(`${WEB}/platform-admin/login`);
       await page.getByPlaceholder("platform-admin@timesphere.local").fill("platform-admin@timesphere.local");
-      await page.getByPlaceholder("••••••••").fill("PlatformAdmin@12345");
+      await page.getByPlaceholder("••••••••").fill(platformAdminPassword());
       await page.getByRole("button", { name: /^sign in$/i }).click();
       await page.waitForURL(/\/platform-admin$/, { timeout: 20_000 });
 

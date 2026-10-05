@@ -140,8 +140,9 @@ jobs:
       JWT_REFRESH_SECRET: "ci-only-refresh-secret-not-for-real-use-0123456789"
       PLATFORM_ADMIN_JWT_SECRET: "ci-only-platform-admin-secret-not-for-real-use-0123456789"
       # The control seed generates (and flags for rotation) a random bootstrap password unless one is
-      # passed. CI passes the known dev value so the e2e suite's console sign-in keeps working.
-      PLATFORM_ADMIN_BOOTSTRAP_PASSWORD: "PlatformAdmin@12345"
+      # passed. CI passes one built from the run id, so the e2e suite (which reads this variable) can
+      # sign in to the console — and no password literal sits in this file for a scanner to report.
+      PLATFORM_ADMIN_BOOTSTRAP_PASSWORD: "ci-console-${{ github.run_id }}-${{ github.run_attempt }}"
       # Exactly 64 hex characters — `env.ts` requires /^[0-9a-f]{64}$/i (32 bytes for AES-256-GCM).
       # This was 62 for as long as it has existed: two characters short, and never caught, because
       # every step that loads the app config sat behind an earlier failing gate in this same job and
@@ -362,8 +363,9 @@ jobs:
       JWT_REFRESH_SECRET: "ci-only-refresh-secret-not-for-real-use-0123456789"
       PLATFORM_ADMIN_JWT_SECRET: "ci-only-platform-admin-secret-not-for-real-use-0123456789"
       # The control seed generates (and flags for rotation) a random bootstrap password unless one is
-      # passed. CI passes the known dev value so the e2e suite's console sign-in keeps working.
-      PLATFORM_ADMIN_BOOTSTRAP_PASSWORD: "PlatformAdmin@12345"
+      # passed. CI passes one built from the run id, so the e2e suite (which reads this variable) can
+      # sign in to the console — and no password literal sits in this file for a scanner to report.
+      PLATFORM_ADMIN_BOOTSTRAP_PASSWORD: "ci-console-${{ github.run_id }}-${{ github.run_attempt }}"
       ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
       WEB_ORIGIN: "http://localhost:5173"
       APP_BASE_URL: "http://localhost:5173"

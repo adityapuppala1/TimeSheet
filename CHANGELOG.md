@@ -10,6 +10,14 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🔒 Security: no working password in the repository
+
+- **The old development console password is no longer shipped as a working credential.**
+  `.env.example` leaves `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` empty (the seed generates one and prints
+  it once), CI builds a different one for every run, and the e2e suite and local scripts read the
+  variable instead of a literal. A secret scanner had reported the literal as an exposed password.
+  The app still recognises that old value so an install that kept it is made to change it.
+
 ### 🚢 Deployment: CI checks run on your machine first, and GitHub only pays for what is new
 
 - **A `pre-push` hook runs the CI gate locally** (`scripts/local-ci.mjs`, installed by `npm install`;

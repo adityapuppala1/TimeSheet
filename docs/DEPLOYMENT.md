@@ -323,8 +323,8 @@ provisioning of new organizations from that console.
    per-org DNS entry beyond a wildcard (`*.yourdomain.com`) is needed.
 5. Log into `https://yourdomain.com/platform-admin/login` as `platform-admin@timesphere.local` with
    the password `control:seed` printed. Since 2026-10 there is **no fixed production password**: the
-   seed uses `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` when it is set (the installers generate one, and dev
-   and CI pass the known `PlatformAdmin@12345` through `.env.example`), and otherwise generates a
+   seed uses `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` when it is set (the installers generate one, CI builds
+   one per run, and `.env.example` ships it empty), and otherwise generates a
    24-character password and prints it once. An account on a generated password — or on the public dev
    value under `NODE_ENV=production` — is held at **Change password** until it is rotated, and in
    production an OWNER or OPERATOR without a second factor is held at MFA enrolment

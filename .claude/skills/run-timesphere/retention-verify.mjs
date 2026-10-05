@@ -21,6 +21,7 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { platformAdminPassword } from "./pa-password.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../..");
@@ -70,7 +71,7 @@ async function api(method, url, token, body) {
 }
 
 async function main() {
-  const login = await api("POST", "/platform-admin/auth/login", null, { email: "platform-admin@timesphere.local", password: "PlatformAdmin@12345" });
+  const login = await api("POST", "/platform-admin/auth/login", null, { email: "platform-admin@timesphere.local", password: platformAdminPassword() });
   if (login.status !== 200) throw new Error(`platform-admin login failed: ${login.status} ${JSON.stringify(login.body)}`);
   const token = login.body.accessToken;
 

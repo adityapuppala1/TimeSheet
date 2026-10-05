@@ -10,13 +10,14 @@
  *   node .claude/skills/run-timesphere/overflow-probe.mjs /platform-admin/backups 390
  */
 import { chromium } from "@playwright/test";
+import { platformAdminPassword } from "./pa-password.mjs";
 
 const WEB = process.env.TS_WEB ?? "https://localhost:5173";
 const [, , route = "/platform-admin", widthArg = "390"] = process.argv;
 const width = Number(widthArg);
 
 const email = process.env.TS_PA_USER ?? "platform-admin@timesphere.local";
-const password = process.env.TS_PA_PASS ?? "PlatformAdmin@12345";
+const password = platformAdminPassword();
 
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width, height: 900 }, ignoreHTTPSErrors: true });

@@ -106,7 +106,7 @@ account on the platform (cross-org access). **Since 2026-10 it no longer has a f
 - An account on a generated password is held at **Change password** — every other console route
   answers `403 PASSWORD_ROTATION_REQUIRED` — until it is rotated (current password re-verified, at
   least 12 characters, every *other* console session signed out). The public dev value
-  (`PlatformAdmin@12345`, which `.env.example` passes for dev and CI) is held the same way under
+  (the old seeded default, no longer shipped in `.env.example` or CI) is held the same way under
   `NODE_ENV=production`, and an older install still on it keeps the amber **"seeded bootstrap
   password"** banner.
 - In production an OWNER or OPERATOR without a second factor is then held at MFA enrolment

@@ -20,6 +20,7 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { platformAdminPassword } from "./pa-password.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../..");
@@ -30,7 +31,7 @@ const WEB = process.env.TS_WEB ?? "https://localhost:5173";
 const API = process.env.TS_API ?? "http://localhost:4000";
 const OUT = path.resolve(root, process.env.TS_OUT ?? "test-results/run-shots");
 
-const THROWAWAY = { email: "ops-verify@timesphere.local", name: "Ops Verify", password: "PlatformAdmin@12345" };
+const THROWAWAY = { email: "ops-verify@timesphere.local", name: "Ops Verify", password: platformAdminPassword() };
 const ROTATED = "Rotated-For-Verification-2026!";
 const TENANT_ADMIN = { email: "superadmin@timesheet.local", password: "Admin@12345" };
 

@@ -12,6 +12,8 @@
  * past any reasonable grace window (see auth.service.ts#refresh). A fresh login per test
  * sidesteps that entirely instead of trying to widen the window to cover it.
  */
+import { readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { test, expect } from "@playwright/test";
 import { deleteTicket, withAdminRequest } from "./helpers/admin-request";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
@@ -496,10 +498,21 @@ test("full navigation is reachable at every viewport size", async ({ page }) => 
  * had no mobile/tablet treatment at all until that gap was found via manual review, not this
  * suite. Covered as its own describe block since it needs a different login call.
  */
+/** The console password: CI sets PLATFORM_ADMIN_BOOTSTRAP_PASSWORD per run; a local run reads the
+ *  same variable from apps/api/.env. Never a literal — see .env.example. */
+function platformAdminPassword(): string {
+  const fromEnv = process.env.PLATFORM_ADMIN_BOOTSTRAP_PASSWORD;
+  if (fromEnv) return fromEnv;
+  const file = readFileSync(resolvePath(process.cwd(), "apps/api/.env"), "utf8");
+  const match = /^PLATFORM_ADMIN_BOOTSTRAP_PASSWORD="?([^"\r\n]*)"?/m.exec(file);
+  if (!match?.[1]) throw new Error("Set PLATFORM_ADMIN_BOOTSTRAP_PASSWORD (env or apps/api/.env) to run the console tests.");
+  return match[1];
+}
+
 test.describe("platform-admin console", () => {
   test.beforeEach(async ({ page }) => {
     await page.request.post("/api/platform-admin/auth/login", {
-      data: { email: "platform-admin@timesphere.local", password: "PlatformAdmin@12345" }
+      data: { email: "platform-admin@timesphere.local", password: platformAdminPassword() }
     });
   });
 

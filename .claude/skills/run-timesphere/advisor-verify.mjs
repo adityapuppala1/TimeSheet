@@ -11,6 +11,7 @@
  * that does not exist, a wall of prose, and forty findings.
  */
 import { createServer } from "node:http";
+import { platformAdminPassword } from "./pa-password.mjs";
 
 const API = "http://localhost:4000/api/platform-admin";
 const PORT = 4599;
@@ -47,7 +48,7 @@ const stub = createServer((req, res) => {
 await new Promise((resolve) => stub.listen(PORT, "127.0.0.1", resolve));
 
 const login = await (
-  await fetch(`${API}/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "platform-admin@timesphere.local", password: "PlatformAdmin@12345" }) })
+  await fetch(`${API}/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "platform-admin@timesphere.local", password: platformAdminPassword() }) })
 ).json();
 const H = { authorization: `Bearer ${login.accessToken}`, "content-type": "application/json" };
 const get = async (path) => (await fetch(`${API}${path}`, { headers: H })).json();
