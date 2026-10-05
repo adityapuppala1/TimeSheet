@@ -41,7 +41,7 @@ function TicketCard({ ticket }: { ticket: TicketRow }) {
   const TypeIcon = iconForType(ticket.type);
   const avatarSrc = fileUrl(ticket.assignee?.avatarUrl);
   return (
-    <div data-kanban-card className="pressable grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
+    <div data-kanban-card className="pressable grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-xs">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <span className="font-mono">{ticket.key}</span>
         {ticket.source === "EMAIL" && <Mail className="h-3 w-3" />}

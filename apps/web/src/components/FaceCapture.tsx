@@ -348,10 +348,10 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
 
   return (
     <div className={cn("flex w-full flex-col items-center gap-3", className)}>
-      <div className="relative w-full max-w-sm overflow-hidden rounded-xl border border-border bg-muted/40 shadow-sm">
+      <div className="relative w-full max-w-sm overflow-hidden rounded-xl border border-border bg-muted/40 shadow-xs">
         {/* Fixed 4:3 box: reserves layout space before the stream arrives, so the dialog
             doesn't jump when the camera starts. */}
-        <div className="relative aspect-[4/3] w-full">
+        <div className="relative aspect-4/3 w-full">
           <video
             ref={(el) => {
               videoRef.current = el;
@@ -396,8 +396,8 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
           )}
 
           {live && !overlayText && (liveHint || scanPhase) && (
-            <div role="status" aria-live="polite" className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-3 pb-3 pt-8 text-center">
-              <p className="text-sm font-semibold text-white drop-shadow">
+            <div role="status" aria-live="polite" className="pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-black/75 to-transparent px-3 pb-3 pt-8 text-center">
+              <p className="text-sm font-semibold text-white drop-shadow-sm">
                 {liveHint ?? (scanPhase === "locking" ? "Hold still…" : "Looking for you — face the camera")}
               </p>
             </div>
@@ -405,8 +405,8 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
 
           {live && overlayText && (
             /* Challenge instruction + meter, announced for screen readers too. */
-            <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-3 pb-3 pt-8 text-center">
-              <p className="text-sm font-semibold text-white drop-shadow sm:text-base">{overlayText}</p>
+            <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-black/75 to-transparent px-3 pb-3 pt-8 text-center">
+              <p className="text-sm font-semibold text-white drop-shadow-sm sm:text-base">{overlayText}</p>
               {poseMeter && (
                 <>
                   {/* The bar IS the fix. The requirement never changed — what changed is that it
@@ -430,7 +430,7 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
                       style={{ width: `${Math.round(poseMeter.progress * 100)}%` }}
                     />
                   </div>
-                  <p className="mt-1 text-xs font-medium text-white/90 drop-shadow">
+                  <p className="mt-1 text-xs font-medium text-white/90 drop-shadow-sm">
                     {poseMeter.coaching}
                     {poseMeter.secondsLeft != null && !poseMeter.satisfied ? ` · ${poseMeter.secondsLeft}s` : ""}
                   </p>

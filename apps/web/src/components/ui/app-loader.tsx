@@ -92,7 +92,7 @@ export function AppLoader({ label = "Loading…", variant = "page", className }:
       aria-live="polite"
       className={cn(
         "grid place-items-center",
-        // Solid page background, not a translucent scrim. A backdrop-blur veil belongs to a modal
+        // Solid page background, not a translucent scrim. A backdrop-blur-sm veil belongs to a modal
         // over content the user was already looking at; a loader has nothing behind it to veil, and
         // the frosted panel made it read as an overlay stuck on top of the app.
         variant === "screen" ? "fixed inset-0 z-50 bg-background" : "min-h-[50vh] w-full",

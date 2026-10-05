@@ -199,12 +199,12 @@ export function TimesheetEntryDialog({
           have to hunt for. */}
       <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[min(96vw,720px)] max-w-none flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
-          <DialogTitle className="flex flex-wrap items-center gap-2 break-words">
+          <DialogTitle className="flex flex-wrap items-center gap-2 wrap-break-word">
             <UserIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
             {entry?.user?.name ?? "Timesheet entry"}
             {entry && <Badge variant={STATUS_VARIANT[entry.status] ?? "muted"}>{entry.status}</Badge>}
           </DialogTitle>
-          <DialogDescription className="break-words">
+          <DialogDescription className="wrap-break-word">
             {entry ? (
               <>
                 {entry.user?.email}
@@ -324,7 +324,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   return (
     <div className="grid gap-0.5 border-b border-border/60 pb-2 last:border-b-0 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-3">
       <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
-      <div className="min-w-0 break-words [overflow-wrap:anywhere]">{children}</div>
+      <div className="min-w-0 wrap-break-word wrap-anywhere">{children}</div>
     </div>
   );
 }

@@ -213,7 +213,7 @@ export function PlanCalendar({
         <div className="flex min-w-0 items-center gap-3">
           <div
             aria-hidden
-            className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-border bg-background shadow-sm"
+            className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-border bg-background shadow-xs"
           >
             <span className="text-[9px] font-bold uppercase leading-none tracking-widest text-primary">
               {MONTHS[month].slice(0, 3)}
@@ -238,7 +238,7 @@ export function PlanCalendar({
 
         <div className="flex flex-wrap items-center gap-2">
           {onPeriodChange && (
-            <div role="radiogroup" aria-label="Calendar period" className="flex items-center rounded-lg border border-border shadow-sm">
+            <div role="radiogroup" aria-label="Calendar period" className="flex items-center rounded-lg border border-border shadow-xs">
               {(["day", "4days", "week", "month"] as const).map((p) => (
                 <Button
                   key={p}
@@ -254,7 +254,7 @@ export function PlanCalendar({
               ))}
             </div>
           )}
-          <div className="flex items-center rounded-lg border border-border shadow-sm">
+          <div className="flex items-center rounded-lg border border-border shadow-xs">
             <Button size="sm" variant="ghost" className="h-[44px] rounded-r-none" onClick={() => step(-1)} aria-label={isWeek ? `Previous ${PERIOD_LABEL[period].toLowerCase()}` : "Previous month"}>
               <ChevronLeft className="h-4 w-4" />
             </Button>
@@ -301,7 +301,7 @@ export function PlanCalendar({
                   className={cn(
                     isWeek ? "min-h-[360px]" : "min-h-[104px]",
                     "border-b border-r border-border p-1.5 transition-shadow last:border-r-0",
-                    span === 7 && "[&:nth-child(7n)]:border-r-0",
+                    span === 7 && "nth-[7n]:border-r-0",
                     (isWeek || index >= 35) && "border-b-0",
                     !inMonth && "bg-muted/20",
                     dragOverDay === key && "ring-2 ring-inset ring-primary"

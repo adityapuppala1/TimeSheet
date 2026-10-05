@@ -178,7 +178,7 @@ export function ChangeCalendarPage() {
                         "relative h-9 rounded-md border border-border bg-muted/30",
                         isToday && "ring-1 ring-primary/40",
                         canWrite &&
-                          "cursor-pointer transition-colors hover:border-primary/50 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                          "cursor-pointer transition-colors hover:border-primary/50 hover:bg-primary/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary"
                       )}
                     >
                       {dayBlackouts.map((b) => {
@@ -187,7 +187,7 @@ export function ChangeCalendarPage() {
                           <Tooltip key={`${b.id}-${day.toISOString()}`}>
                             <TooltipTrigger asChild>
                               <div
-                                className="absolute inset-y-0 bg-destructive/10 [background-image:repeating-linear-gradient(45deg,transparent,transparent_4px,hsl(var(--destructive)/0.18)_4px,hsl(var(--destructive)/0.18)_8px)]"
+                                className="absolute inset-y-0 bg-destructive/10 bg-[repeating-linear-gradient(45deg,transparent,transparent_4px,hsl(var(--destructive)/0.18)_4px,hsl(var(--destructive)/0.18)_8px)]"
                                 style={{ left: `${g.left}%`, width: `${g.width}%` }}
                               />
                             </TooltipTrigger>

@@ -83,7 +83,7 @@ export function TrialFeedbackPage() {
         </header>
 
         <form
-          className="grid gap-5 rounded-xl border border-border bg-card p-6 shadow-sm"
+          className="grid gap-5 rounded-xl border border-border bg-card p-6 shadow-xs"
           onSubmit={(e) => {
             e.preventDefault();
             if (rating > 0) submit.mutate();

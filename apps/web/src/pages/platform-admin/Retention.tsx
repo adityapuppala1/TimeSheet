@@ -316,7 +316,7 @@ function QueueRow({ row, markers }: { row: RetentionQueueRow; markers: string[] 
           slug and owner share the second line. Three stacked lines per row turned six workspaces
           into a page of scrolling. */}
       <TableCell>
-        <div className="grid min-w-0 max-w-[22rem] gap-0.5">
+        <div className="grid min-w-0 max-w-88 gap-0.5">
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="truncate font-medium text-foreground" title={row.name}>
               {row.name}

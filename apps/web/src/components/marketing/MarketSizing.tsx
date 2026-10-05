@@ -302,7 +302,7 @@ export function MarketSizing() {
                 reader who only sees the bar cannot tell 0.4% from 4%. */}
             <div className="mt-1.5 h-11 w-full overflow-hidden rounded-lg border border-border bg-muted/30">
               <div
-                className={`h-full rounded-lg border bg-gradient-to-r transition-[width] duration-500 ease-out motion-reduce:transition-none ${band.tone}`}
+                className={`h-full rounded-lg border bg-linear-to-r transition-[width] duration-500 ease-out motion-reduce:transition-none ${band.tone}`}
                 style={{ width: `${band.width}%` }}
               />
             </div>

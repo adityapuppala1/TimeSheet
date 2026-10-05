@@ -359,7 +359,7 @@ export function Profile() {
                 <AvatarFallback className="text-2xl">{initialsFor(user?.name)}</AvatarFallback>
               </Avatar>
               {avatarMutation.isPending && (
-                <div className="absolute inset-0 grid place-items-center rounded-full bg-background/70 backdrop-blur-sm">
+                <div className="absolute inset-0 grid place-items-center rounded-full bg-background/70 backdrop-blur-xs">
                   <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 </div>
               )}
@@ -448,7 +448,7 @@ export function Profile() {
                     {/* Country first, number second — the country picks the validation rules,
                         so "is this number valid" always has a defined answer. */}
                     <Select value={phoneCountry} onValueChange={(v) => setPhoneCountry(v as CountryCode)}>
-                      <SelectTrigger className="w-[8.5rem] shrink-0" aria-label="Country code">
+                      <SelectTrigger className="w-34 shrink-0" aria-label="Country code">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="max-h-72">
@@ -768,7 +768,7 @@ function AppearanceCard() {
                 onClick={() => chooseMode(value)}
                 className={cn(
                   "flex min-h-[44px] flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                   mode === value ? "border-primary bg-primary/10" : "border-border hover:bg-muted/60"
                 )}
               >
@@ -804,7 +804,7 @@ function AppearanceCard() {
                   // the V12 Auto-Heal Log, because every `h-11` target in the app has the same property.
                   className={cn(
                     "grid h-[44px] w-[44px] place-items-center rounded-full border-2 transition-transform",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                    "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                     accent === id ? "border-foreground" : "border-transparent hover:scale-105"
                   )}
                   style={{ backgroundColor: `hsl(${palette.primary})` }}
@@ -831,7 +831,7 @@ function AppearanceCard() {
                 onClick={() => chooseDensity(value)}
                 className={cn(
                   "flex min-h-[44px] flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                   density === value ? "border-primary bg-primary/10" : "border-border hover:bg-muted/60"
                 )}
               >

@@ -112,7 +112,7 @@ export function FeatureExplorer({ features, groups }: { features: ExplorerFeatur
                   aria-hidden
                 />
               </summary>
-              <p className="mt-2.5 pl-[2.625rem] text-sm leading-6 text-muted-foreground">{feature.body}</p>
+              <p className="mt-2.5 pl-10.5 text-sm leading-6 text-muted-foreground">{feature.body}</p>
             </details>
           ))}
         </div>

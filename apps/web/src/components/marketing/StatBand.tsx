@@ -86,7 +86,7 @@ function StatValue({ stat, animate }: { stat: Stat; animate: boolean }) {
   // stops across the whole column and the centred digits only ever sampled the middle of it — every
   // number came out the same flat blue. Sized to the digits, the sweep is actually visible.
   return (
-    <span ref={ref} className="inline-block bg-gradient-to-r from-primary to-info bg-clip-text tabular-nums text-transparent">
+    <span ref={ref} className="inline-block bg-linear-to-r from-primary to-info bg-clip-text tabular-nums text-transparent">
       {shown}
       {stat.suffix}
     </span>
@@ -108,7 +108,7 @@ export function StatBand({ stats }: { stats: Stat[] }) {
       {stats.map((stat) => (
         <div
           key={stat.label}
-          className="group bg-background p-5 text-center transition-colors hover:bg-primary/[0.04] sm:p-6"
+          className="group bg-background p-5 text-center transition-colors hover:bg-primary/4 sm:p-6"
         >
           <dd className="text-3xl font-black tracking-tight sm:text-4xl">
             <StatValue stat={stat} animate={animate} />

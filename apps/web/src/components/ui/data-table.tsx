@@ -284,7 +284,7 @@ export function DataTable<TData>({
                       : undefined
                   }
                   className={cn(
-                    "grid gap-1.5 rounded-lg border border-border bg-card p-3 text-left text-sm shadow-sm",
+                    "grid gap-1.5 rounded-lg border border-border bg-card p-3 text-left text-sm shadow-xs",
                     onRowClick && "cursor-pointer"
                   )}
                 >
@@ -307,7 +307,7 @@ export function DataTable<TData>({
                     return (
                       <div key={cell.id} className="flex items-start justify-between gap-3">
                         {label ? <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span> : null}
-                        <span className="min-w-0 flex-1 break-words text-right [overflow-wrap:anywhere]">
+                        <span className="min-w-0 flex-1 wrap-break-word text-right wrap-anywhere">
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </span>
                       </div>
@@ -375,7 +375,7 @@ export function DataTable<TData>({
                   return (
                     <TableRow
                       key={row.id}
-                      className={cn(onRowClick && "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring", rowClassName)}
+                      className={cn(onRowClick && "cursor-pointer focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring", rowClassName)}
                       onClick={onRowClick ? () => onRowClick(row.original) : undefined}
                       // V12 4.3 keyboard pass: a clickable row is reachable by Tab and opens on
                       // Enter/Space — a keyboard user had no way to open a ticket from the table.

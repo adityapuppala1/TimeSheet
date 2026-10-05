@@ -1044,7 +1044,7 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className={cn("max-h-[90vh] overflow-y-auto sm:max-w-2xl", view === "canvas" && "lg:max-w-[72rem]")}>
+      <DialogContent className={cn("max-h-[90vh] overflow-y-auto sm:max-w-2xl", view === "canvas" && "lg:max-w-6xl")}>
         <DialogHeader>
           <DialogTitle>{flow ? "Edit flow" : "New flow"}</DialogTitle>
           <DialogDescription>

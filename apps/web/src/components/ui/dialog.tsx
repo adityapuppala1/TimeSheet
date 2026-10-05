@@ -15,7 +15,7 @@ export const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/55 backdrop-blur-sm motion-safe:data-[state=open]:animate-in motion-safe:data-[state=closed]:animate-out motion-safe:data-[state=closed]:fade-out-0 motion-safe:data-[state=open]:fade-in-0",
+      "fixed inset-0 z-50 bg-black/55 backdrop-blur-xs motion-safe:data-[state=open]:animate-in motion-safe:data-[state=closed]:animate-out motion-safe:data-[state=closed]:fade-out-0 motion-safe:data-[state=open]:fade-in-0",
       className
     )}
     {...props}
@@ -63,7 +63,7 @@ export const DialogContent = React.forwardRef<
           without moving or resizing anything visible — the pseudo-element belongs to the button, so it
           catches the tap. Applied here rather than at each call site because a close control this small
           is a problem in every dialog in the product, not only the AI ones. */}
-      <DialogPrimitive.Close className="focus-ring absolute right-4 top-4 rounded-sm opacity-70 transition after:absolute after:-inset-[16px] after:content-[''] hover:opacity-100 disabled:pointer-events-none sm:after:hidden">
+      <DialogPrimitive.Close className="focus-ring absolute right-4 top-4 rounded-sm opacity-70 transition after:absolute after:inset-[-16px] after:content-[''] hover:opacity-100 disabled:pointer-events-none sm:after:hidden">
         <X className="h-4 w-4" />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>

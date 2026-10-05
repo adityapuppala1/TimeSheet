@@ -62,7 +62,7 @@ export function ContextualAiPanel() {
 
   return (
     <>
-      <div className="fixed bottom-[4.75rem] right-4 z-40 lg:bottom-6 lg:right-6">
+      <div className="fixed bottom-19 right-4 z-40 lg:bottom-6 lg:right-6">
       <Button
         type="button"
         variant="ai"

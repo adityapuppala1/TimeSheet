@@ -189,7 +189,7 @@ export function AskAi() {
     <div className="flex h-[calc(100vh-7.5rem)] flex-col">
       <header className="flex flex-wrap items-center justify-between gap-3 pb-3">
         <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-primary/15 to-info/15 text-primary">
+          <div className="grid h-10 w-10 place-items-center rounded-xl bg-linear-to-br from-primary/15 to-info/15 text-primary">
             <MessagesSquare className="h-5 w-5" />
           </div>
           <div>
@@ -248,7 +248,7 @@ export function AskAi() {
                 }
               }}
               placeholder="Ask about your tickets, timesheets or changes… (/ for capabilities, Enter to send)"
-              className="max-h-40 min-h-[2.75rem] flex-1 resize-none border-0 bg-transparent focus-visible:ring-0"
+              className="max-h-40 min-h-11 flex-1 resize-none border-0 bg-transparent focus-visible:ring-0"
               aria-label="Ask AI"
             />
             <Button variant="ai" onClick={submit} disabled={prompt.trim().length < 3 || ask.isPending} aria-label="Ask">
@@ -269,7 +269,7 @@ export function AskAi() {
   function EmptyState() {
     return (
       <div className="grid gap-5 py-16 text-center">
-        <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-primary/15 to-info/15">
+        <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-linear-to-br from-primary/15 to-info/15">
           <Sparkles className="h-7 w-7 text-primary" />
         </div>
         <div>
@@ -320,7 +320,7 @@ function DaySeparator({ current, previous }: { current: string; previous?: strin
 function UserBubble({ text }: { text: string }) {
   return (
     <div className="flex justify-end">
-      <p className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground">
+      <p className="max-w-[80%] whitespace-pre-wrap wrap-break-word rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground">
         {text}
       </p>
     </div>
@@ -332,7 +332,7 @@ function UserBubble({ text }: { text: string }) {
 function AssistantRow({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex items-start gap-2.5">
-      <div className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-primary/20 to-info/20 text-primary">
+      <div className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-linear-to-br from-primary/20 to-info/20 text-primary">
         <Sparkles className="h-4 w-4" />
       </div>
       <div className="min-w-0 flex-1">{children}</div>
@@ -345,9 +345,9 @@ function Exchange({ row }: { row: AiAskExchangeRow }) {
     <div className="grid gap-3">
       <UserBubble text={row.prompt} />
       <AssistantRow>
-        <div className={cn("grid gap-2.5 rounded-2xl rounded-tl-md border bg-card px-4 py-3 shadow-sm", row.error ? "border-destructive/30" : "border-border/70")}>
+        <div className={cn("grid gap-2.5 rounded-2xl rounded-tl-md border bg-card px-4 py-3 shadow-xs", row.error ? "border-destructive/30" : "border-border/70")}>
           {row.error ? (
-            <p className="flex min-w-0 items-start gap-2 break-words text-sm text-destructive">
+            <p className="flex min-w-0 items-start gap-2 wrap-break-word text-sm text-destructive">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               {row.error}
             </p>

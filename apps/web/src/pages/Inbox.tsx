@@ -352,7 +352,7 @@ function DailyBriefCard({ loading, data }: Readonly<{ loading: boolean; data?: i
                   s.tone === "attention"
                     ? "border-warning/40 bg-warning/5"
                     : "border-border bg-muted/30",
-                  s.link && "hover:border-primary/50 hover:shadow-sm"
+                  s.link && "hover:border-primary/50 hover:shadow-xs"
                 )}
               >
                 <span
@@ -375,7 +375,7 @@ function DailyBriefCard({ loading, data }: Readonly<{ loading: boolean; data?: i
               </div>
             );
             return s.link ? (
-              <Link key={s.key} to={s.link} className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-lg">
+              <Link key={s.key} to={s.link} className="block focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded-lg">
                 {body}
               </Link>
             ) : (
@@ -418,7 +418,7 @@ function InboxRow({
       id={`inbox-row-${item.id}`}
       className={cn(
         "animate-fade-in rounded-lg border bg-card transition-all duration-200",
-        selected ? "border-primary/60 shadow-sm" : "hover:border-primary/30",
+        selected ? "border-primary/60 shadow-xs" : "hover:border-primary/30",
         item.handledAt && "opacity-70"
       )}
     >

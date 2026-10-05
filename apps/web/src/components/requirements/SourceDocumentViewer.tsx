@@ -26,7 +26,7 @@ import { requirementsDocApi } from "../../services/api";
 /** The .docx conversion's own prose styling — mammoth emits a small fixed tag vocabulary, and this
  *  gives it the same typography the rest of the app's rendered content has. */
 const DOCX_PROSE = [
-  "prose-sm max-w-none break-words text-sm leading-relaxed",
+  "prose-sm max-w-none wrap-break-word text-sm leading-relaxed",
   "[&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-base [&_h1]:font-bold",
   "[&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-sm [&_h2]:font-bold",
   "[&_h3]:mb-1.5 [&_h3]:mt-3 [&_h3]:text-sm [&_h3]:font-semibold",

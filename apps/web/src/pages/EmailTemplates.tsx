@@ -226,7 +226,7 @@ export function EmailTemplatesPage() {
                   key={row.key}
                   type="button"
                   onClick={() => setEditing(row)}
-                  className="grid gap-2.5 rounded-lg border border-border bg-card p-4 text-left shadow-sm transition hover:border-primary/40 hover:shadow-md"
+                  className="grid gap-2.5 rounded-lg border border-border bg-card p-4 text-left shadow-xs transition hover:border-primary/40 hover:shadow-md"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
@@ -414,7 +414,7 @@ function AnalyticsTab({ data, loading }: { data?: EmailAnalytics; loading: boole
       {/* min-w-0 on the grid ITEMS, not just the container: a grid item's default min-width is
           auto, which is the other half of the recharts shrink-deadlock documented on the chart
           wrappers below. */}
-      <div className="grid gap-4 lg:grid-cols-2 [&>*]:min-w-0">
+      <div className="grid gap-4 lg:grid-cols-2 *:min-w-0">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Delivered vs. failed</CardTitle>
@@ -656,7 +656,7 @@ function TemplateBreakdownCard({ rows }: { rows: EmailTemplateVolumeRow[] }) {
                         <span className="text-xs text-muted-foreground">never sent</span>
                       ) : (
                         <div className="flex items-center gap-2">
-                          <div className="h-1.5 w-full max-w-[6.5rem] overflow-hidden rounded-full bg-muted">
+                          <div className="h-1.5 w-full max-w-26 overflow-hidden rounded-full bg-muted">
                             <div
                               className={`h-full ${rate !== null && rate < 0.9 ? "bg-destructive" : "bg-success"}`}
                               style={{ width: `${Math.round((rate ?? 0) * 100)}%` }}
@@ -820,7 +820,7 @@ function FailureBreakdownCard() {
                           onClick={() => setDetailId(reason.id)}
                           title="Open details and actions"
                         >
-                          <TableCell className="max-w-[26rem]">
+                          <TableCell className="max-w-104">
                             <p className="text-sm font-medium">{triage.title}</p>
                             <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                               <Badge variant={TONE_BADGE[triage.tone]} className="px-1.5 py-0 text-[10px]">
@@ -980,7 +980,7 @@ function FailureDetailDialog({
 
           <div className="grid gap-1">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Raw SMTP message</p>
-            <p className="break-words rounded-md bg-muted/50 p-2 font-mono text-xs">{reason.sample}</p>
+            <p className="wrap-break-word rounded-md bg-muted/50 p-2 font-mono text-xs">{reason.sample}</p>
           </div>
 
           {reason.domains.length > 0 && (
@@ -1211,7 +1211,7 @@ function DomainDeliveryCard() {
                                   {/* Not the Progress component: this bar is a judged ratio, and its
                                       color must carry the verdict (healthy vs bleeding), which
                                       Progress's single primary fill can't express. */}
-                                  <div className="h-1.5 w-full max-w-[6.5rem] overflow-hidden rounded-full bg-muted">
+                                  <div className="h-1.5 w-full max-w-26 overflow-hidden rounded-full bg-muted">
                                     <div
                                       className={`h-full ${row.successRate !== null && row.successRate < 0.9 ? "bg-destructive" : "bg-success"}`}
                                       style={{ width: `${Math.round((row.successRate ?? 0) * 100)}%` }}

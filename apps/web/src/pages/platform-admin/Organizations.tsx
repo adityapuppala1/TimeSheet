@@ -54,7 +54,7 @@ const PAGE_SIZES = [10, 20, 50, 100];
  * the eye no baseline to scan. The kit's pills take no `className`, so the width floor goes on a
  * wrapper that stretches whatever badge it contains.
  */
-const PILL_SLOT = "inline-flex [&>*]:w-full [&>*]:justify-center";
+const PILL_SLOT = "inline-flex *:w-full *:justify-center";
 
 /** The edit dialog's status labels. GRACE resolves like ACTIVE and is shut everywhere past
  *  authentication — the state a lapsed trial or a failed renewal sits in. It was missing from the
@@ -214,10 +214,10 @@ export function PlatformAdminOrganizations() {
               <TableRow className="hover:bg-transparent">
                 <SortHeader label="Name" column="name" sort={sort} onSort={toggleSort} />
                 <SortHeader label="Slug" column="slug" sort={sort} onSort={toggleSort} />
-                <SortHeader label="Status" column="status" sort={sort} onSort={toggleSort} className="w-[9rem]" />
-                <SortHeader label="Plan" column="planTier" sort={sort} onSort={toggleSort} className="w-[8rem]" />
+                <SortHeader label="Status" column="status" sort={sort} onSort={toggleSort} className="w-36" />
+                <SortHeader label="Plan" column="planTier" sort={sort} onSort={toggleSort} className="w-32" />
                 <SortHeader label="Database" column="database" sort={sort} onSort={toggleSort} />
-                <TableHead className="w-[12rem] text-right">Actions</TableHead>
+                <TableHead className="w-48 text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -226,12 +226,12 @@ export function PlatformAdminOrganizations() {
                   <TableCell className="font-medium text-foreground">{org.name}</TableCell>
                   <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">{org.slug}</TableCell>
                   <TableCell>
-                    <span className={cn(PILL_SLOT, "w-[7rem]")}>
+                    <span className={cn(PILL_SLOT, "w-28")}>
                       <OrgStatusPill status={org.status} />
                     </span>
                   </TableCell>
                   <TableCell>
-                    <span className={cn(PILL_SLOT, "w-[6rem]")}>
+                    <span className={cn(PILL_SLOT, "w-24")}>
                       <TierPill tier={org.planTier} />
                     </span>
                   </TableCell>
@@ -352,7 +352,7 @@ function RowActions({
   const unprovisioned = org.status === "PROVISIONING";
   return (
     <div className="flex items-center justify-end gap-2">
-      <div className="w-[6.5rem] shrink-0">
+      <div className="w-26 shrink-0">
         {unprovisioned ? (
           <Button size="sm" className={cn("w-full", PRIMARY_BTN)} onClick={onProvision}>
             Provision

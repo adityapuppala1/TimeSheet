@@ -53,7 +53,7 @@ export const TabsList = React.forwardRef<
       // justify-start, not justify-center: flexbox "unsafe" centering clips the start of
       // overflowing content in a scroll container (a well-known CSS footgun) — start-aligned
       // avoids that while looking identical for any TabsList that fits without overflowing.
-      "inline-flex h-10 max-w-full items-center justify-start gap-1 overflow-x-auto whitespace-nowrap rounded-md bg-muted p-1 text-muted-foreground [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+      "inline-flex h-10 max-w-full items-center justify-start gap-1 overflow-x-auto whitespace-nowrap rounded-md bg-muted p-1 text-muted-foreground scrollbar-none [&::-webkit-scrollbar]:hidden",
       className
     )}
     {...props}
@@ -69,7 +69,7 @@ export const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      "focus-ring inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
+      "focus-ring inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-xs",
       className
     )}
     {...props}

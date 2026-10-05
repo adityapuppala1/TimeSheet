@@ -146,7 +146,7 @@ function TemplateList({ rows, selected, onSelect }: { rows: PlatformEmailTemplat
               type="button"
               onClick={() => onSelect(t.key)}
               className={cn(
-                "focus-ring grid w-full min-h-[3.75rem] grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-lg border px-3 py-2 text-left transition-colors",
+                "focus-ring grid w-full min-h-15 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-lg border px-3 py-2 text-left transition-colors",
                 selected === t.key ? "border-accent/60 bg-accent/10" : "border-transparent hover:bg-muted"
               )}
             >
@@ -622,8 +622,8 @@ export function PlatformAdminEmails() {
                           <Num>
                             <RateBadge rate={d.successRate} />
                           </Num>
-                          <TableCell className="max-w-[22rem] text-xs text-muted-foreground">
-                            {d.topFailures.length === 0 ? "—" : <span className="line-clamp-2 break-words">{d.topFailures[0].reason}{d.topFailures[0].count > 1 && ` (×${d.topFailures[0].count})`}</span>}
+                          <TableCell className="max-w-88 text-xs text-muted-foreground">
+                            {d.topFailures.length === 0 ? "—" : <span className="line-clamp-2 wrap-break-word">{d.topFailures[0].reason}{d.topFailures[0].count > 1 && ` (×${d.topFailures[0].count})`}</span>}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -698,7 +698,7 @@ export function PlatformAdminEmails() {
                   <ul className="grid min-w-0 gap-2.5 text-sm">
                     {analytics.data.failureReasons.map((f) => (
                       <li key={f.reason} className="flex items-start justify-between gap-3 border-b border-border pb-2.5 last:border-0 last:pb-0">
-                        <span className="min-w-0 break-words text-foreground">
+                        <span className="min-w-0 wrap-break-word text-foreground">
                           {f.reason}
                           <span className="mt-0.5 block text-xs text-muted-foreground">last {shortDateTime(f.lastAt)}</span>
                         </span>

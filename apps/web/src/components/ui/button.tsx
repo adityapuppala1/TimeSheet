@@ -8,16 +8,16 @@ export const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground shadow-sm hover:brightness-110 active:brightness-95",
-        destructive: "bg-destructive text-destructive-foreground shadow-sm hover:brightness-110 active:brightness-95",
-        success: "bg-success text-success-foreground shadow-sm hover:brightness-110 active:brightness-95",
+        default: "bg-primary text-primary-foreground shadow-xs hover:brightness-110 active:brightness-95",
+        destructive: "bg-destructive text-destructive-foreground shadow-xs hover:brightness-110 active:brightness-95",
+        success: "bg-success text-success-foreground shadow-xs hover:brightness-110 active:brightness-95",
         outline: "border border-input bg-background hover:bg-muted hover:text-foreground",
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-muted hover:text-foreground",
         link: "text-primary underline-offset-4 hover:underline",
         /* Marks a control that SPENDS A MODEL CALL when pressed. Distinct from `.ai-glow`, which
            means the model is working on that box right now — see the AI effect layer in index.css. */
-        ai: "ai-specular shadow-sm"
+        ai: "ai-specular shadow-xs"
       },
       /*
        * Heights in ABSOLUTE PIXELS, not rem utilities — and this is the one place in the app where

@@ -395,7 +395,7 @@ export function Login() {
           {/* Below lg this half IS the page, so it keeps a visible pair of orbs. At lg and up only
               the faint cool wash survives, echoing the panel rather than competing with it. */}
           <div className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-primary/20 blur-3xl lg:opacity-40" />
-          <div className="absolute -right-24 bottom-0 h-[28rem] w-[28rem] rounded-full bg-info/20 blur-3xl lg:opacity-40" />
+          <div className="absolute -right-24 bottom-0 h-112 w-md rounded-full bg-info/20 blur-3xl lg:opacity-40" />
         </div>
 
         <div className="w-full max-w-md motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 motion-safe:duration-500">
@@ -419,7 +419,7 @@ export function Login() {
                 <img
                   src={workspaceLogo}
                   alt={workspaceName}
-                  className="mb-6 hidden h-11 max-w-[13rem] object-contain object-left lg:block"
+                  className="mb-6 hidden h-11 max-w-52 object-contain object-left lg:block"
                 />
               )}
               <h1 className="text-2xl font-black tracking-tight">Welcome back</h1>
@@ -509,7 +509,7 @@ export function Login() {
                       onClick={() => chooseLocalMethod(option.id)}
                       className={`focus-ring inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition-all duration-200 ${
                         localMethod === option.id
-                          ? "bg-card text-foreground shadow-sm"
+                          ? "bg-card text-foreground shadow-xs"
                           : "text-muted-foreground hover:text-foreground"
                       }`}
                     >

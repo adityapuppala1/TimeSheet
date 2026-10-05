@@ -910,7 +910,7 @@ function DocumentViewer({
         </CardHeader>
         <CardContent className="grid gap-6">
           {canWrite && (
-            <div className="flex flex-wrap gap-2 rounded-lg border border-primary/30 bg-primary/[0.03] p-3">
+            <div className="flex flex-wrap gap-2 rounded-lg border border-primary/30 bg-primary/3 p-3">
               <CreateProjectButton title={title} problem={s.problem} />
               <Button size="sm" variant="outline" onClick={() => setTicketsOpen(true)}>
                 <Ticket className="mr-2 h-3.5 w-3.5" />
@@ -1012,7 +1012,7 @@ function renderSection(key: string, s: NonNullable<ReturnType<typeof requirement
     case "stakeholders":
       return (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[28rem] text-sm">
+          <table className="w-full min-w-md text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs text-muted-foreground">
                 <th className="pb-1.5 pr-3 font-medium">Name</th>

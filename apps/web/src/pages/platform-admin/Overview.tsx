@@ -101,7 +101,7 @@ export function PlatformAdminOverview() {
       {overview.isLoading && (
         <KpiGrid>
           {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-20 w-full sm:h-[6.5rem]" />
+            <Skeleton key={i} className="h-20 w-full sm:h-26" />
           ))}
         </KpiGrid>
       )}
@@ -204,7 +204,7 @@ export function PlatformAdminOverview() {
                   tiered so the plot stays near 2:1 on a phone and near 3:1 on a tablet rather than
                   flattening into a letterbox at one fixed height. Root font here is 14px, so these
                   read 154 / 224 / 210 CSS px. */}
-              <div className="h-full min-h-[11rem] w-full min-w-0 sm:min-h-[16rem] lg:min-h-[15rem]">
+              <div className="h-full min-h-44 w-full min-w-0 sm:min-h-64 lg:min-h-60">
                 {/* BARS, not areas: a week's signups are a count, and an area smoothed between weeks
                     drew fractional workspaces on the days in between. The Y axis is whole numbers. */}
                 <ResponsiveContainer width="100%" height="100%">

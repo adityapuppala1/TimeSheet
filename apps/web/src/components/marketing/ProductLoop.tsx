@@ -71,7 +71,7 @@ export function ProductLoop({ className, compact = false }: { className?: string
         viewBox="0 0 320 320"
         role="img"
         aria-labelledby="product-loop-title product-loop-desc"
-        className="h-auto w-full max-w-[22rem]"
+        className="h-auto w-full max-w-88"
       >
         <title id="product-loop-title">One loop: plan, tickets, hours, approval, proof</title>
         <desc id="product-loop-desc">

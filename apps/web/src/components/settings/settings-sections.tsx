@@ -114,7 +114,7 @@ export function SectionBoard({
             onClick={() => onPick(entry.id)}
             style={{ animationDelay: `${Math.min(i, 11) * 40}ms` }}
             data-board-tile={entry.id}
-            className="group flex animate-fade-in items-start gap-3 rounded-xl border border-border bg-card p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transform-none motion-reduce:animate-none motion-reduce:transition-none"
+            className="group flex animate-fade-in items-start gap-3 rounded-xl border border-border bg-card p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-soft focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transform-none motion-reduce:animate-none motion-reduce:transition-none"
           >
             <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
               <entry.Icon className="h-[18px] w-[18px]" />
@@ -190,7 +190,7 @@ export function SettingsSection({
               onClick={onToggle}
               aria-expanded={open}
               aria-controls={`${prefix}-body-${id}`}
-              className="text-left after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
+              className="text-left after:absolute after:inset-0 after:rounded-lg focus-visible:outline-hidden focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
             >
               {name}
             </button>

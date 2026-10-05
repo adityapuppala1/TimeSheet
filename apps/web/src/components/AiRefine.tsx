@@ -259,7 +259,7 @@ export function AiRefinePanel({ state, className }: { state: AiRefineState; clas
             type="button"
             onClick={state.dismiss}
             aria-label="Dismiss the AI refinement"
-            className="rounded-sm p-0.5 text-muted-foreground transition hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="rounded-sm p-0.5 text-muted-foreground transition hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
           >
             <X className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
@@ -272,7 +272,7 @@ export function AiRefinePanel({ state, className }: { state: AiRefineState; clas
         <>
           <div className="grid gap-3 sm:grid-cols-2">
             <Comparison title="Yours">
-              <p className="whitespace-pre-wrap break-words">{state.result.original}</p>
+              <p className="whitespace-pre-wrap wrap-break-word">{state.result.original}</p>
             </Comparison>
             <Comparison title="AI suggestion" highlight>
               {state.result.format === "html" && state.result.refinedHtml ? (
@@ -280,9 +280,9 @@ export function AiRefinePanel({ state, className }: { state: AiRefineState; clas
                 // reads exactly the way the content will once accepted — including code blocks.
                 // `.tiptap` itself can't be reused here; it carries the editor's own min-height
                 // and padding.
-                <div className="prose-sm break-words" dangerouslySetInnerHTML={safeHtml(state.result.refinedHtml)} />
+                <div className="prose-sm wrap-break-word" dangerouslySetInnerHTML={safeHtml(state.result.refinedHtml)} />
               ) : (
-                <p className="whitespace-pre-wrap break-words">{state.result.refined}</p>
+                <p className="whitespace-pre-wrap wrap-break-word">{state.result.refined}</p>
               )}
             </Comparison>
           </div>
@@ -361,7 +361,7 @@ function RefiningLines({ label, reduced }: { label: string; reduced: boolean }) 
           <div key={width} className={cn("relative h-2.5 overflow-hidden rounded-full bg-muted", width)}>
             {!reduced && (
               <span
-                className="absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-primary/40 to-transparent"
+                className="absolute inset-0 -translate-x-full animate-shimmer bg-linear-to-r from-transparent via-primary/40 to-transparent"
                 style={{ animationDelay: `${index * 0.18}s` }}
               />
             )}

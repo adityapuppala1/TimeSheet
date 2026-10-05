@@ -234,7 +234,7 @@ export function SprintsPage() {
               const isSelected = selected?.id === s.id;
               const action = nextSprintAction(s.status);
               return (
-                <div key={s.id} data-sprint-row className={cn("rounded-lg border bg-card p-3 transition-colors", isSelected ? "border-primary/60 shadow-sm" : "hover:border-primary/30")}>
+                <div key={s.id} data-sprint-row className={cn("rounded-lg border bg-card p-3 transition-colors", isSelected ? "border-primary/60 shadow-xs" : "hover:border-primary/30")}>
                   <button type="button" className="w-full text-left" onClick={() => setSelectedId(s.id)} aria-pressed={isSelected}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-semibold">{s.name}</span>

@@ -772,7 +772,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           <CardDescription>
             Bring your own GitHub OAuth App (Settings → Developer settings → OAuth Apps on GitHub — set its
             "Authorization callback URL" to{" "}
-            <code className="break-all rounded bg-muted px-1 py-0.5 text-xs [overflow-wrap:anywhere]">
+            <code className="break-all rounded bg-muted px-1 py-0.5 text-xs wrap-anywhere">
               {`${SERVER_ORIGIN || window.location.origin}/api/git/callback`}
             </code>
             ). Once connected, the ticket Dev tab can pick a live branch/PR instead of typing one in.

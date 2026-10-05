@@ -219,7 +219,7 @@ export function PlatformAdminSignups() {
                       <TableRow key={`${f.at}-${f.domain}`}>
                         <TableCell className="whitespace-nowrap text-sm">{shortDateTime(f.at)}</TableCell>
                         <TableCell className="text-sm">{f.domain ?? "—"}</TableCell>
-                        <TableCell className="break-words font-mono text-xs text-muted-foreground">{f.detail ?? "—"}</TableCell>
+                        <TableCell className="wrap-break-word font-mono text-xs text-muted-foreground">{f.detail ?? "—"}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

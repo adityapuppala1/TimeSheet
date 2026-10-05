@@ -96,7 +96,7 @@ export function RichTextEditor({
     content: value,
     editorProps: {
       attributes: {
-        class: cn("tiptap focus:outline-none", minHeight),
+        class: cn("tiptap focus:outline-hidden", minHeight),
         "aria-label": ariaLabel ?? "Rich text editor"
       },
       handlePaste: (_view, event) => handleSmartPaste(editorRef.current?.isDestroyed ? null : editorRef.current, event)
@@ -469,7 +469,7 @@ function Btn({
       title={label}
       className={cn(
         "inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground transition hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50",
-        active && "bg-background text-primary shadow-sm"
+        active && "bg-background text-primary shadow-xs"
       )}
     >
       {children}

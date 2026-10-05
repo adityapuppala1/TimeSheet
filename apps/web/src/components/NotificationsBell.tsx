@@ -78,7 +78,7 @@ export function NotificationsBell() {
         <Button variant="ghost" size="icon" aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"} className="relative">
           <Bell className="h-4 w-4" />
           {unread > 0 && (
-            <span className="absolute right-1 top-1 grid h-4 min-w-[1rem] place-items-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground">
+            <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground">
               {unread > 9 ? "9+" : unread}
             </span>
           )}
@@ -111,7 +111,7 @@ export function NotificationsBell() {
             const content = (
               <>
                 <div className="flex items-start justify-between gap-3">
-                  <p className="min-w-0 flex-1 break-words text-sm font-semibold">{item.title}</p>
+                  <p className="min-w-0 flex-1 wrap-break-word text-sm font-semibold">{item.title}</p>
                   {!item.readAt && <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary" aria-hidden />}
                 </div>
                 <p className="mt-1 line-clamp-3 text-xs text-muted-foreground">{item.body}</p>

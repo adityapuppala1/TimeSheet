@@ -97,7 +97,7 @@ export function PlatformAdminAlerts() {
       {alerts.isLoading && (
         <KpiGrid>
           {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-[6.5rem] w-full rounded-xl" />
+            <Skeleton key={i} className="h-26 w-full rounded-xl" />
           ))}
         </KpiGrid>
       )}

@@ -434,7 +434,7 @@ export function Dashboard() {
             value={range}
             onChange={setRange}
             allowAllTime={false}
-            className="w-full sm:w-[15rem]"
+            className="w-full sm:w-60"
             dayAnnotations={dayAnnotations}
           />
           {isAdmin && (
@@ -632,7 +632,7 @@ function FocusLane({
   if (loading) return <Skeleton className="h-[112px] w-full rounded-md" />;
 
   return (
-    <section aria-labelledby="focus-lane-title" className="overflow-hidden rounded-md border border-border bg-card shadow-sm">
+    <section aria-labelledby="focus-lane-title" className="overflow-hidden rounded-md border border-border bg-card shadow-xs">
       <div className="grid lg:grid-cols-[minmax(0,1.25fr)_repeat(3,minmax(0,.72fr))]">
         <div className="relative flex min-h-[108px] flex-col justify-between overflow-hidden border-b border-border p-4 lg:border-b-0 lg:border-r">
           <div className="absolute inset-y-0 left-0 w-1 bg-primary" aria-hidden />
@@ -1428,7 +1428,7 @@ function DayTimeline({
 
               {/* Capped at ~4 lanes tall; beyond that the card scrolls internally rather than
                   growing — this is the "many users" case the expand dialog exists for. */}
-              <div className="max-h-[13.5rem] space-y-2 overflow-y-auto pr-1" data-testid="day-timeline-track">
+              <div className="max-h-54 space-y-2 overflow-y-auto pr-1" data-testid="day-timeline-track">
                 {lanes.map((lane) => (
                   <TimelineLane
                     key={lane.key}

@@ -109,7 +109,7 @@ export const CONSOLE_NAV: Array<{ heading?: string; items: ConsoleNavItem[] }> =
 function BrandMark({ compact = false }: { compact?: boolean }) {
   return (
     <div className={cn("flex min-w-0 items-center gap-2.5", !compact && "px-2")}>
-      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-foreground shadow-sm">
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-foreground shadow-xs">
         <ShieldCheck className="h-4 w-4" />
       </span>
       <div className="min-w-0 leading-tight">
@@ -442,7 +442,7 @@ export function PlatformAdminLayout() {
           `hidden` — `hidden` would turn the aside into a scroll container. */}
       <aside className="hidden w-64 min-w-0 shrink-0 grow-0 flex-col overflow-x-clip border-r border-border bg-card lg:flex">
         {/* The amber band: the one thing that says "this is the control plane" in both themes. */}
-        <div className="h-1 w-full bg-gradient-to-r from-accent via-accent/70 to-accent/20" aria-hidden />
+        <div className="h-1 w-full bg-linear-to-r from-accent via-accent/70 to-accent/20" aria-hidden />
         <div className="flex min-w-0 flex-1 flex-col gap-6 p-4">
           <BrandMark />
           {/* A palette nobody knows about is not a feature. This is the discovery affordance, shaped

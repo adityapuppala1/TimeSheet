@@ -121,7 +121,7 @@ function RefinableText({
         placeholder={placeholder}
         ariaLabel={refineLabel}
         toolbar={variant}
-        minHeight={variant === "inline" ? "min-h-[2.75rem]" : `min-h-${Math.max(rows, 3) * 8}`}
+        minHeight={variant === "inline" ? "min-h-11" : `min-h-${Math.max(rows, 3) * 8}`}
         maxHeight={variant === "inline" ? "max-h-32" : "max-h-96"}
       />
       <AiRefinePanel state={refine} />
@@ -191,7 +191,7 @@ function BulletEditor({
 function InitiativeTable({ rows, nextStepFor }: { rows: PracticeInitiative[]; nextStepFor: (id: string) => string }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[46rem] text-sm">
+      <table className="w-full min-w-184 text-sm">
         <thead>
           <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
             <th className="py-1.5 pr-3 font-semibold">Initiative</th>

@@ -98,7 +98,7 @@ export function UserFilterBar({
       />
 
       <Select value={filters.roleId} onValueChange={(v) => set("roleId", v)}>
-        <SelectTrigger className="h-9 w-[9.5rem]"><SelectValue placeholder="Any role" /></SelectTrigger>
+        <SelectTrigger className="h-9 w-38"><SelectValue placeholder="Any role" /></SelectTrigger>
         <SelectContent>
           <SelectItem value={ANY}>Any role</SelectItem>
           {roles.map((r) => (
@@ -108,7 +108,7 @@ export function UserFilterBar({
       </Select>
 
       <Select value={filters.designation} onValueChange={(v) => set("designation", v)}>
-        <SelectTrigger className="h-9 w-[10.5rem]"><SelectValue placeholder="Any job title" /></SelectTrigger>
+        <SelectTrigger className="h-9 w-42"><SelectValue placeholder="Any job title" /></SelectTrigger>
         <SelectContent>
           <SelectItem value={ANY}>Any job title</SelectItem>
           {designations.map((d) => (
@@ -118,7 +118,7 @@ export function UserFilterBar({
       </Select>
 
       <Select value={filters.status} onValueChange={(v) => set("status", v)}>
-        <SelectTrigger className="h-9 w-[9rem]"><SelectValue placeholder="Any status" /></SelectTrigger>
+        <SelectTrigger className="h-9 w-36"><SelectValue placeholder="Any status" /></SelectTrigger>
         <SelectContent>
           <SelectItem value={ANY}>Any status</SelectItem>
           <SelectItem value="ACTIVE">Active</SelectItem>
@@ -128,7 +128,7 @@ export function UserFilterBar({
       </Select>
 
       <Select value={filters.online} onValueChange={(v) => set("online", v)}>
-        <SelectTrigger className="h-9 w-[8.5rem]"><SelectValue placeholder="Anyone" /></SelectTrigger>
+        <SelectTrigger className="h-9 w-34"><SelectValue placeholder="Anyone" /></SelectTrigger>
         <SelectContent>
           <SelectItem value={ANY}>Online or not</SelectItem>
           <SelectItem value="online">Online now</SelectItem>
@@ -340,7 +340,7 @@ export function TablePager({
       </p>
       <div className="flex items-center gap-2">
         <Select value={String(pageSize)} onValueChange={(v) => onPageSize(Number(v))}>
-          <SelectTrigger className="h-8 w-[6.5rem]"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="h-8 w-26"><SelectValue /></SelectTrigger>
           <SelectContent>
             {sizes.map((n) => (
               <SelectItem key={n} value={String(n)}>{n} / page</SelectItem>

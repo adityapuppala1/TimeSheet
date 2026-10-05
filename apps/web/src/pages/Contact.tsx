@@ -398,7 +398,7 @@ export function Contact() {
               </CardHeader>
               <CardContent className="grid gap-2">
                 {REASSURANCE.map((item) => (
-                  <details key={item.id} className="group rounded-lg border border-border p-3 transition open:shadow-sm hover:border-primary/40">
+                  <details key={item.id} className="group rounded-lg border border-border p-3 transition open:shadow-xs hover:border-primary/40">
                     <summary className="focus-ring cursor-pointer list-none rounded text-sm font-semibold marker:content-none">{item.q}</summary>
                     <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{item.a}</p>
                   </details>

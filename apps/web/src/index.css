@@ -1,6 +1,268 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+@utility container {
+  margin-inline: auto;
+  padding-inline: 1rem;
+  @media (width >= --theme(--breakpoint-sm)) {
+    max-width: none;
+  }
+  @media (width >= 1400px) {
+    max-width: 1400px;
+  }
+}
+
+@theme {
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-destructive-ink: hsl(var(--destructive-ink));
+
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  --color-success-ink: hsl(var(--success-ink));
+
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-warning-ink: hsl(var(--warning-ink));
+
+  --color-info: hsl(var(--info));
+  --color-info-foreground: hsl(var(--info-foreground));
+  --color-info-ink: hsl(var(--info-ink));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --color-plan-lane: hsl(var(--plan-lane));
+  --color-plan-lane-alt: hsl(var(--plan-lane-alt));
+  --color-plan-bar: hsl(var(--plan-bar));
+  --color-plan-bar-fg: hsl(var(--plan-bar-fg));
+  --color-plan-bar-parent: hsl(var(--plan-bar-parent));
+  --color-plan-baseline: hsl(var(--plan-baseline));
+  --color-plan-dependency: hsl(var(--plan-dependency));
+  --color-plan-today: hsl(var(--plan-today));
+  --color-plan-critical: hsl(var(--plan-critical));
+  --color-plan-grid: hsl(var(--plan-grid));
+
+  --color-capacity-0: hsl(var(--capacity-0));
+  --color-capacity-1: hsl(var(--capacity-1));
+  --color-capacity-2: hsl(var(--capacity-2));
+  --color-capacity-3: hsl(var(--capacity-3));
+  --color-capacity-4: hsl(var(--capacity-4));
+
+  --color-risk-green: hsl(var(--risk-green));
+  --color-risk-amber: hsl(var(--risk-amber));
+  --color-risk-red: hsl(var(--risk-red));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  --font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    Segoe UI, sans-serif;
+
+  --shadow-soft: 0 18px 70px rgba(15, 23, 42, 0.1);
+  --shadow-glow:
+    0 0 0 1px hsl(var(--primary) / 0.18),
+    0 18px 60px -20px hsl(var(--primary) / 0.45);
+
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+  --animate-fade-in: fade-in 0.25s ease-out both;
+  --animate-shimmer: shimmer 1.8s linear infinite;
+  --animate-enter: enter 0.45s ease-out both;
+  --animate-wobble: wobble 2.6s ease-in-out infinite;
+  --animate-drift: drift 20s ease-in-out infinite;
+  --animate-grow-x: grow-x 0.8s ease-out both;
+
+  @keyframes accordion-down {
+    from {
+      height: 0;
+    }
+    to {
+      height: var(--radix-accordion-content-height);
+    }
+  }
+  @keyframes accordion-up {
+    from {
+      height: var(--radix-accordion-content-height);
+    }
+    to {
+      height: 0;
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+  @keyframes enter {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes wobble {
+    0%,
+    100% {
+      transform: rotate(0deg);
+    }
+    33% {
+      transform: rotate(-14deg);
+    }
+    66% {
+      transform: rotate(8deg);
+    }
+  }
+  @keyframes drift {
+    0%,
+    100% {
+      transform: translate(0, 0);
+    }
+    50% {
+      transform: translate(var(--drift-x, 0px), var(--drift-y, 0px));
+    }
+  }
+  @keyframes grow-x {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}
+
+@utility focus-ring {
+  @apply focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+}
+
+@utility scrollbar-thin {
+  /*
+   * The opt-in narrow variant, for dense panels that would look heavy with the 10px default.
+   * It keeps its own width but takes the same thumb colour as the global rule — it previously
+   * used `bg-border`, which on the light theme is 86% lightness against a 98% background and so
+   * read as no thumb at all.
+   */
+  &::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.35);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.6);
+  }
+}
+
+@utility tiptap {
+  /* Tiptap content baseline */
+  @apply min-h-32 w-full rounded-md px-3 py-2 text-sm leading-relaxed outline-hidden;
+  & p {
+    @apply my-1;
+  }
+  & p.is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    @apply pointer-events-none float-left h-0 text-muted-foreground;
+  }
+  & ul {
+    @apply ml-5 list-disc;
+  }
+  & ol {
+    @apply ml-5 list-decimal;
+  }
+  & a {
+    @apply text-primary underline underline-offset-4;
+  }
+  & code {
+    @apply rounded bg-muted px-1.5 py-0.5 text-xs;
+  }
+  & blockquote {
+    @apply my-2 border-l-4 border-border pl-3 italic text-muted-foreground;
+  }
+  & h1 {
+    @apply mb-1 mt-3 text-xl font-bold;
+  }
+  & h2 {
+    @apply mb-1 mt-3 text-lg font-bold;
+  }
+  & h3 {
+    @apply mb-1 mt-2 text-base font-bold;
+  }
+}
+
+@utility is-editor-empty {
+  .tiptap &p:first-child::before {
+    content: attr(data-placeholder);
+    @apply pointer-events-none float-left h-0 text-muted-foreground;
+  }
+}
+
+@utility rdp-root {
+  /* React DayPicker shadcn-style overrides */
+  --rdp-cell-size: 36px;
+  --rdp-accent-color: hsl(var(--primary));
+}
 
 @layer base {
   :root {
@@ -418,65 +680,6 @@
   textarea {
     font: inherit;
   }
-}
-
-@layer components {
-  .focus-ring {
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
-  }
-
-  /*
-   * The opt-in narrow variant, for dense panels that would look heavy with the 10px default.
-   * It keeps its own width but takes the same thumb colour as the global rule — it previously
-   * used `bg-border`, which on the light theme is 86% lightness against a 98% background and so
-   * read as no thumb at all.
-   */
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: hsl(var(--muted-foreground) / 0.35);
-    border-radius: 9999px;
-    border: 2px solid transparent;
-    background-clip: content-box;
-  }
-  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    background-color: hsl(var(--muted-foreground) / 0.6);
-  }
-
-  /* Tiptap content baseline */
-  .tiptap {
-    @apply min-h-32 w-full rounded-md px-3 py-2 text-sm leading-relaxed outline-none;
-  }
-  .tiptap p {
-    @apply my-1;
-  }
-  .tiptap p.is-editor-empty:first-child::before {
-    content: attr(data-placeholder);
-    @apply pointer-events-none float-left h-0 text-muted-foreground;
-  }
-  .tiptap ul {
-    @apply ml-5 list-disc;
-  }
-  .tiptap ol {
-    @apply ml-5 list-decimal;
-  }
-  .tiptap a {
-    @apply text-primary underline underline-offset-4;
-  }
-  .tiptap code {
-    @apply rounded bg-muted px-1.5 py-0.5 text-xs;
-  }
-  .tiptap blockquote {
-    @apply my-2 border-l-4 border-border pl-3 italic text-muted-foreground;
-  }
-  .tiptap h1 { @apply mb-1 mt-3 text-xl font-bold; }
-  .tiptap h2 { @apply mb-1 mt-3 text-lg font-bold; }
-  .tiptap h3 { @apply mb-1 mt-2 text-base font-bold; }
-
-  /* React DayPicker shadcn-style overrides */
-  .rdp-root { --rdp-cell-size: 36px; --rdp-accent-color: hsl(var(--primary)); }
 }
 
 /* Its own keyframe rather than Tailwind's `fade-in`: that one is only emitted while some utility

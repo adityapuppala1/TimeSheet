@@ -934,14 +934,14 @@ export function Landing() {
             {/* The two blurred orbs stay UNDERNEATH the canvas deliberately: they are the floor for
                 anyone the aurora does not mount for — reduced motion, no WebGL, a blocked context —
                 so that case reads as a designed gradient rather than a flat band. */}
-            <div className="absolute -left-32 -top-32 h-[30rem] w-[30rem] rounded-full bg-primary/20 blur-3xl motion-safe:[transform:translate3d(0,calc(var(--parallax,0)*70px),0)]" />
+            <div className="absolute -left-32 -top-32 h-120 w-120 rounded-full bg-primary/20 blur-3xl motion-safe:transform-[translate3d(0,calc(var(--parallax,0)*70px),0)]" />
             {/* This was `bg-accent/20`. Nobody had ever seen it — see the stacking-context note above
                 — and the first render after the fix showed why it could not stay: the accent is
                 amber, and amber at 20% over a near-white page is khaki, which put a dirty smudge on
                 the right of the hero. Both orbs now sit on the same two stops as the aurora and the
                 gradient headline, which is the palette this page is documented to use. */}
-            <div className="absolute -right-24 top-12 h-[30rem] w-[30rem] rounded-full bg-info/15 blur-3xl motion-safe:[transform:translate3d(0,calc(var(--parallax,0)*-90px),0)]" />
-            <AuroraBackdrop className="absolute inset-0 motion-safe:[transform:translate3d(0,calc(var(--parallax,0)*30px),0)]" intensity={0.9} />
+            <div className="absolute -right-24 top-12 h-120 w-120 rounded-full bg-info/15 blur-3xl motion-safe:transform-[translate3d(0,calc(var(--parallax,0)*-90px),0)]" />
+            <AuroraBackdrop className="absolute inset-0 motion-safe:transform-[translate3d(0,calc(var(--parallax,0)*30px),0)]" intensity={0.9} />
           </div>
           <div className="mx-auto max-w-6xl px-4 py-14 text-center sm:px-5 sm:py-20">
             <Badge
@@ -956,7 +956,7 @@ export function Landing() {
               {/* Teal→blue only. Running the gradient through `accent` (amber) meant that when the
                   phrase wrapped, the second line ended gold — which reads as a warning state, not
                   emphasis. A two-stop ramp survives wrapping at any width. */}
-              <span className="bg-gradient-to-r from-primary to-info bg-clip-text text-transparent">what actually happened</span>.
+              <span className="bg-linear-to-r from-primary to-info bg-clip-text text-transparent">what actually happened</span>.
             </h1>
             {/* THIRTY-ONE WORDS. It was 74, and the four sentences it took to get there were the
                 page's own thesis stated three times before the first button. What the long version
@@ -1023,7 +1023,7 @@ export function Landing() {
               <div className="mx-auto max-w-5xl">
                 <ProductStack
                   shots={HERO_SHOTS}
-                  className="aspect-[16/9]"
+                  className="aspect-video"
                   fallback={
                     <div className="transition-transform duration-500 motion-safe:hover:-translate-y-1">
                       <ScreenshotFrame
@@ -1460,7 +1460,7 @@ export function Landing() {
               <Reveal key={item.q} delay={index * 50}>
                 {/* Native <details>: it is keyboard- and screen-reader-correct for free, and it
                     still works if the JS chunk for this route never arrives. */}
-                <details className="group rounded-lg border border-border bg-card p-4 transition open:shadow-sm hover:border-primary/40">
+                <details className="group rounded-lg border border-border bg-card p-4 transition open:shadow-xs hover:border-primary/40">
                   <summary className="focus-ring cursor-pointer list-none rounded text-sm font-bold marker:content-none">
                     <span className="flex items-center justify-between gap-3">
                       {item.q}
@@ -1478,7 +1478,7 @@ export function Landing() {
         </Section>
 
         {/* ----------------------------------------------------------- CTA */}
-        <section className="border-t border-border bg-gradient-to-br from-primary via-info to-accent">
+        <section className="border-t border-border bg-linear-to-br from-primary via-info to-accent">
           <div className="mx-auto max-w-4xl px-4 py-16 text-center text-primary-foreground sm:px-5">
             <img
               src="/marketing/team-spirit.png"

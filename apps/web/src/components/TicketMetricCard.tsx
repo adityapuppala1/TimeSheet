@@ -132,7 +132,7 @@ export function TicketMetricCard({
       className={cn(
         "group relative flex flex-col overflow-hidden rounded-xl border border-border bg-card p-3 text-left",
         "transition-all duration-200 hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:hover:translate-y-0",
+        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring motion-reduce:hover:translate-y-0",
         active && "ring-2",
         active && TONE_ACTIVE_RING_CLASS[tone]
       )}

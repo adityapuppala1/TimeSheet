@@ -1080,7 +1080,7 @@ export function Tickets() {
                           openTicket(row.id);
                         }
                       }}
-                      className={cn("focus-ring grid cursor-pointer gap-2 rounded-lg border border-border border-l-4 bg-card p-3 text-left text-sm shadow-sm", TONE_BORDER_CLASS[STATUS_VARIANT[row.status] ?? "muted"])}
+                      className={cn("focus-ring grid cursor-pointer gap-2 rounded-lg border border-border border-l-4 bg-card p-3 text-left text-sm shadow-xs", TONE_BORDER_CLASS[STATUS_VARIANT[row.status] ?? "muted"])}
                       data-ticket-card
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -1964,7 +1964,7 @@ function TicketDetailSheet({
               <div className="text-xs font-mono text-muted-foreground">{ticket.key}</div>
               <SheetTitle className="flex items-start gap-2 text-xl">
                 <TypeIcon className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 break-words">{ticket.title}</span>
+                <span className="min-w-0 wrap-break-word">{ticket.title}</span>
               </SheetTitle>
               <div className="flex flex-wrap items-center gap-2 pt-1">
                 <Badge variant={PRIORITY_VARIANT[ticket.priority]}>{ticket.priority}</Badge>
@@ -2935,7 +2935,7 @@ function AttachmentsPanel({
         {attachments.length === 0 && <p className="text-sm text-muted-foreground">No attachments yet.</p>}
         {attachments.map((a) => (
           <li key={a.id} className="flex min-w-0 items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm">
-            <a href={fileUrl(a.url)} target="_blank" rel="noreferrer" className="min-w-0 [overflow-wrap:anywhere] text-primary hover:underline">
+            <a href={fileUrl(a.url)} target="_blank" rel="noreferrer" className="min-w-0 wrap-anywhere text-primary hover:underline">
               {a.fileName}
             </a>
             {(canManage || a.uploadedBy?.id === currentUserId) && (
@@ -2958,7 +2958,7 @@ function AttachmentsPanel({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove this attachment?</AlertDialogTitle>
-            <AlertDialogDescription className="break-words">{removing?.fileName} will be removed from this ticket.</AlertDialogDescription>
+            <AlertDialogDescription className="wrap-break-word">{removing?.fileName} will be removed from this ticket.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={remove.isPending}>Cancel</AlertDialogCancel>

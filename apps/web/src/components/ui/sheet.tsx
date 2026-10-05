@@ -32,7 +32,7 @@ export const SheetOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/55 backdrop-blur-sm motion-safe:data-[state=open]:animate-in motion-safe:data-[state=closed]:animate-out motion-safe:data-[state=closed]:fade-out-0 motion-safe:data-[state=open]:fade-in-0",
+      "fixed inset-0 z-50 bg-black/55 backdrop-blur-xs motion-safe:data-[state=open]:animate-in motion-safe:data-[state=closed]:animate-out motion-safe:data-[state=closed]:fade-out-0 motion-safe:data-[state=open]:fade-in-0",
       className
     )}
     {...props}
@@ -224,7 +224,7 @@ export function SheetResizeHandle({ state, label = "Resize panel" }: Readonly<{ 
       // `touch-none` stops a touch drag from scrolling the panel instead of resizing it.
       className={cn(
         "group absolute inset-y-0 left-0 z-20 w-1.5 -translate-x-1/2 cursor-col-resize touch-none",
-        "focus-visible:outline-none"
+        "focus-visible:outline-hidden"
       )}
     >
       <span

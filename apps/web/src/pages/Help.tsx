@@ -125,7 +125,7 @@ export function HelpPage() {
       />
 
       {/* Sticky, because on a page this long the search box IS the navigation. */}
-      <div className="sticky top-16 z-10 -mx-2 grid gap-2.5 rounded-xl border border-border bg-background/95 p-3 backdrop-blur">
+      <div className="sticky top-16 z-10 -mx-2 grid gap-2.5 rounded-xl border border-border bg-background/95 p-3 backdrop-blur-sm">
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" aria-hidden />
           <Input

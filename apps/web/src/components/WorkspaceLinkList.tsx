@@ -16,7 +16,7 @@ export function WorkspaceLinkList({ workspaces }: { workspaces: SignupWorkspaceL
         <a
           key={workspace.slug}
           href={`${workspace.url}/login`}
-          className="focus-ring flex items-center justify-between gap-3 rounded-lg border border-border bg-card p-3.5 text-left transition hover:border-primary/40 hover:shadow-sm"
+          className="focus-ring flex items-center justify-between gap-3 rounded-lg border border-border bg-card p-3.5 text-left transition hover:border-primary/40 hover:shadow-xs"
         >
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold">{workspace.name}</span>

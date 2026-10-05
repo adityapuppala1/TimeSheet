@@ -320,7 +320,7 @@ export function Team() {
                 {(escalations.data ?? []).map((row: any) => {
                   const avatarSrc = fileUrl(row.timesheet?.user?.avatarUrl);
                   return (
-                    <div key={row.id} className="grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
+                    <div key={row.id} className="grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-xs">
                       <div className="flex items-center gap-2">
                         <Avatar className="h-7 w-7">
                           {avatarSrc ? <AvatarImage src={avatarSrc} alt={row.timesheet?.user?.name ?? ""} /> : null}
@@ -370,7 +370,7 @@ export function Team() {
                 (reports.data ?? []).map((person) => {
                   const avatarSrc = fileUrl(person.avatarUrl);
                   return (
-                    <div key={person.id} className="grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
+                    <div key={person.id} className="grid gap-2 rounded-lg border border-border bg-card p-3 text-sm shadow-xs">
                       <div className="flex items-center gap-3">
                         <Avatar>
                           {avatarSrc ? <AvatarImage src={avatarSrc} alt={person.name} /> : null}

@@ -64,7 +64,7 @@ export function ReactivatePage() {
 
   return (
     <div className="grid min-h-screen place-items-center bg-background px-4 py-12">
-      <div className="w-full max-w-lg rounded-xl border border-border bg-card p-8 shadow-sm">
+      <div className="w-full max-w-lg rounded-xl border border-border bg-card p-8 shadow-xs">
         {done?.restored || done?.alreadyActive ? (
           <div className="grid gap-4 text-center">
             <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-success/15 text-success-ink">

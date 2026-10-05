@@ -257,7 +257,7 @@ export function PlatformAdminBackups() {
                           {f.id}
                         </span>
                       </TableCell>
-                      <TableCell className="max-w-[14rem]">
+                      <TableCell className="max-w-56">
                         {f.organizationName ? (
                           <>
                             <span className="block truncate font-medium text-foreground">{f.organizationName}</span>

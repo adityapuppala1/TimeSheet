@@ -73,7 +73,7 @@ export function MermaidDiagram({ source }: { source: string }) {
   // height and letting the width follow keeps a diagram diagram-sized whatever its shape.
   return (
     <div
-      className="overflow-auto rounded-md border border-border bg-white p-3 [&_svg]:mx-auto [&_svg]:!h-auto [&_svg]:max-h-[420px] [&_svg]:!w-auto [&_svg]:max-w-full"
+      className="overflow-auto rounded-md border border-border bg-white p-3 [&_svg]:mx-auto [&_svg]:h-auto! [&_svg]:max-h-[420px] [&_svg]:w-auto! [&_svg]:max-w-full"
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   );

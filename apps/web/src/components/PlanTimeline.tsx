@@ -349,7 +349,7 @@ export function PlanTimeline({
                   key={item.id}
                   className={cn(
                     "flex items-center gap-1 border-b border-border/50 px-2 text-sm",
-                    item.isCritical && !showCriticalOnly && "bg-destructive/[0.04]"
+                    item.isCritical && !showCriticalOnly && "bg-destructive/4"
                   )}
                   style={{ height: ROW_HEIGHT, paddingLeft: 8 + item.depth * 14 }}
                 >

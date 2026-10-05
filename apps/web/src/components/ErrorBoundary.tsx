@@ -56,7 +56,7 @@ export class ErrorBoundary extends Component<Props, State> {
               </p>
               {/* The message only; never the stack. A stack trace in the UI is noise to a user and
                   can leak internal paths/identifiers. The full trace goes to the console. */}
-              <p className="mt-3 break-words rounded-md border border-border bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
+              <p className="mt-3 wrap-break-word rounded-md border border-border bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
                 {error.message || "Unknown error"}
               </p>
               <div className="mt-4 flex flex-wrap gap-2">

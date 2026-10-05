@@ -104,7 +104,7 @@ export function PracticeUpdateHistory() {
             key={row.id}
             type="button"
             onClick={() => setPreviewing(row.id)}
-            className="focus-ring grid gap-2 rounded-lg border border-border bg-card p-3.5 text-left transition hover:border-primary/40 hover:shadow-sm"
+            className="focus-ring grid gap-2 rounded-lg border border-border bg-card p-3.5 text-left transition hover:border-primary/40 hover:shadow-xs"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="inline-flex items-center gap-2 text-sm font-semibold">

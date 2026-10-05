@@ -474,7 +474,7 @@ function RunTraceDialog({ runId, onClose }: { runId: string | null; onClose: () 
 
   return (
     <Dialog open={Boolean(runId)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[90dvh] w-[calc(100vw-2rem)] max-w-2xl overflow-y-auto break-words">
+      <DialogContent className="max-h-[90dvh] w-[calc(100vw-2rem)] max-w-2xl overflow-y-auto wrap-break-word">
         <DialogHeader>
           <DialogTitle className="flex flex-wrap items-center gap-2">
             <Bot className="h-4 w-4 text-primary" />
@@ -631,7 +631,7 @@ function TraceStep({ step }: { step: AgentRunStepRow }) {
       {body && (
         <>
           <div className={cn("overflow-x-auto rounded bg-muted/40 p-2 font-mono text-[11px] leading-relaxed", !open && "max-h-24 overflow-hidden")}>
-            <pre className="whitespace-pre-wrap break-words">{body}</pre>
+            <pre className="whitespace-pre-wrap wrap-break-word">{body}</pre>
           </div>
           {body.length > 200 && (
             <button type="button" onClick={() => setOpen((v) => !v)} className="focus-ring w-fit rounded text-[11px] font-medium text-primary hover:underline">

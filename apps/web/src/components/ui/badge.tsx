@@ -3,7 +3,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "../../lib/utils";
 
 const badgeVariants = cva(
-  "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+  "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-2",
   {
     variants: {
       variant: {
@@ -29,5 +29,11 @@ export interface BadgeProps
     VariantProps<typeof badgeVariants> {}
 
 export function Badge({ className, variant, ...props }: BadgeProps) {
-  return <span className={cn(badgeVariants({ variant }), className)} {...props} />;
+  // A badge given a pixel size (`text-[10px]`, 39 of them) INHERITED its parent's line height under
+  // Tailwind 3 — tailwind-merge dropped `text-xs`, and an arbitrary size set no line height. Tailwind 4's
+  // arbitrary sizes bring their own, so those badges came out ~3px shorter and shifted every table
+  // row holding one. v3 inherited the surrounding text-sm line (1.25rem); v4 would inherit a RATIO, so
+  // the 1.25rem is set outright. Badges without an override are untouched.
+  const pixelSized = typeof className === "string" && /(^|\s)text-\[\d/.test(className);
+  return <span className={cn(badgeVariants({ variant }), className, pixelSized && "leading-5")} {...props} />;
 }

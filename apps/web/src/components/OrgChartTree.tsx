@@ -264,7 +264,7 @@ export function OrgChartTree({ roots }: { roots: OrgChartNode[] }) {
                   <button
                     type="button"
                     onClick={() => childCount > 0 && toggleCollapse(node.id)}
-                    className={`grid h-full w-full grid-cols-[auto_1fr] items-center gap-2 rounded-lg border-2 bg-card p-2.5 text-left shadow-sm transition hover:shadow-md ${
+                    className={`grid h-full w-full grid-cols-[auto_1fr] items-center gap-2 rounded-lg border-2 bg-card p-2.5 text-left shadow-xs transition hover:shadow-md ${
                       childCount > 0 ? "cursor-pointer" : "cursor-default"
                     } ${collapsed ? "ring-1 ring-primary/30" : ""} ${roleStyle.ring}`}
                   >

@@ -12,7 +12,7 @@
  * ── HOW THE SPOTLIGHT WORKS ─────────────────────────────────────────────────────────────────
  * Four panels are drawn AROUND the target rect (above, below, left, right) rather than one overlay
  * with a hole punched in it. That's deliberate: `clip-path` can cut a hole but cannot blur, and the
- * requirement is that everything except the target is blurred. Four `backdrop-blur` panels leave
+ * requirement is that everything except the target is blurred. Four `backdrop-blur-sm` panels leave
  * the target untouched and readable while everything else goes soft, with no compositing tricks.
  *
  * ── WHEN IT RUNS ────────────────────────────────────────────────────────────────────────────
@@ -208,7 +208,7 @@ export function ProductTour({ running, onClose }: { running: boolean; onClose: (
   const card = placeCard(spot, step.placement);
 
   return createPortal(
-    <div className="fixed inset-0 z-[95]" role="dialog" aria-modal="true" aria-labelledby="tour-title">
+    <div className="fixed inset-0 z-95" role="dialog" aria-modal="true" aria-labelledby="tour-title">
       {spot ? (
         // Four panels AROUND the target — see the header note on why not one overlay with a hole.
         <>
@@ -285,7 +285,7 @@ export function ProductTour({ running, onClose }: { running: boolean; onClose: (
 /** One quadrant of the blurred surround. `pointer-events-auto` so clicks outside the spotlight
  *  can't reach the app mid-tour and navigate away from the step being explained. */
 function Panel({ style }: { style: React.CSSProperties }) {
-  return <div aria-hidden className="pointer-events-auto absolute bg-background/70 backdrop-blur-sm" style={style} />;
+  return <div aria-hidden className="pointer-events-auto absolute bg-background/70 backdrop-blur-xs" style={style} />;
 }
 
 /**

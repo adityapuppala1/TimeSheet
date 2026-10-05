@@ -268,7 +268,7 @@ export function PitchDeck() {
             <Badge variant="info" className="w-fit">Enterprise timesheets, ticketing &amp; governed AI</Badge>
             <h1 className="mt-5 max-w-4xl text-3xl font-black leading-tight tracking-tight sm:text-5xl">
               {/* Two-stop ramp for the same reason as Landing's hero — see the comment there. */}
-              The work happened. <span className="bg-gradient-to-r from-primary to-info bg-clip-text text-transparent">Prove it.</span>
+              The work happened. <span className="bg-linear-to-r from-primary to-info bg-clip-text text-transparent">Prove it.</span>
             </h1>
             {/* One sentence. The three cards under it already carry the rest, and a cover slide
                 that argues before it has shown anything is the slide people talk over. */}
@@ -298,7 +298,7 @@ export function PitchDeck() {
               Both are original: the shots are generated from the running app, the loop is
               hand-authored SVG. See marketing/ProductStack.tsx. */}
           <ProductStack
-            className="mx-auto hidden aspect-[4/3] w-full max-w-md lg:block"
+            className="mx-auto hidden aspect-4/3 w-full max-w-md lg:block"
             shots={DECK_SHOTS}
             fallback={<ProductLoop className="mx-auto" compact />}
           />
@@ -648,7 +648,7 @@ export function PitchDeck() {
         </Slide>
 
         {/* -------------------------------------------------------- Close */}
-        <section id="close" className="scroll-mt-32 break-inside-avoid border-t border-border bg-gradient-to-br from-primary via-info to-accent">
+        <section id="close" className="scroll-mt-32 break-inside-avoid border-t border-border bg-linear-to-br from-primary via-info to-accent">
           <div className="mx-auto max-w-4xl px-4 py-16 text-center text-primary-foreground sm:px-5">
             <p className="text-xs font-bold uppercase tracking-[0.2em] opacity-80">{slideNumber("close")} — In one line</p>
             <h2 className="mt-4 text-2xl font-black leading-tight tracking-tight sm:text-4xl">
@@ -724,8 +724,8 @@ function Slide({
     >
       {backdrop && (
         <div className="pointer-events-none absolute inset-0 -z-10">
-          <div className="absolute -left-32 -top-24 h-[26rem] w-[26rem] rounded-full bg-primary/15 blur-3xl" />
-          <div className="absolute -right-24 top-0 h-[26rem] w-[26rem] rounded-full bg-info/15 blur-3xl" />
+          <div className="absolute -left-32 -top-24 h-104 w-104 rounded-full bg-primary/15 blur-3xl" />
+          <div className="absolute -right-24 top-0 h-104 w-104 rounded-full bg-info/15 blur-3xl" />
           <AuroraBackdrop className="absolute inset-0" intensity={0.75} />
         </div>
       )}

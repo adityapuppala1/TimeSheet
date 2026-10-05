@@ -84,7 +84,7 @@ export function OnboardingGate() {
       role="alertdialog"
       aria-modal="true"
       aria-labelledby="onboarding-gate-title"
-      className="fixed inset-0 z-[90] grid place-items-center bg-background/85 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-90 grid place-items-center bg-background/85 p-4 backdrop-blur-xs"
     >
       <div className="w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-lg">
         <h2 id="onboarding-gate-title" className="text-lg font-black tracking-tight">

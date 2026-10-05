@@ -129,7 +129,7 @@ export function IntelligenceCenterPage() {
         actions={canAsk && <><AiReportBuilder /><Button asChild variant="outline"><Link to="/app/ask-ai"><Sparkles className="h-4 w-4" />Ask anything</Link></Button></>}
       />
 
-      <section className="overflow-hidden rounded-md border border-border bg-card shadow-sm" aria-labelledby="attention-title">
+      <section className="overflow-hidden rounded-md border border-border bg-card shadow-xs" aria-labelledby="attention-title">
         <div className={cn("grid", canSeeRisk ? "lg:grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,.65fr))]" : "lg:grid-cols-[minmax(0,1.4fr)_repeat(2,minmax(0,.65fr))]")}>
           <div className="relative min-h-[126px] border-b border-border p-5 lg:border-b-0 lg:border-r">
             <span className="absolute inset-y-0 left-0 w-1 bg-primary" aria-hidden />

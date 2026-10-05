@@ -249,7 +249,7 @@ export function PortfolioScene({ projects, onOpen }: Readonly<{ projects: SceneP
         <p className="absolute left-3 top-3 text-xs text-muted-foreground">3D is not available in this browser; the table below has everything.</p>
       )}
       {hover && (
-        <div className="pointer-events-none absolute left-3 top-3 rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs shadow-sm" data-scene-hover>
+        <div className="pointer-events-none absolute left-3 top-3 rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs shadow-xs" data-scene-hover>
           <span className="font-mono text-muted-foreground">{hover.code}</span> <span className="font-medium">{hover.name}</span>
           <span className="text-muted-foreground"> · {hover.openCount} open · {hover.progressPct}% done</span>
         </div>

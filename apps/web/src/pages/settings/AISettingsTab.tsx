@@ -799,7 +799,7 @@ function AIQualityCard({ enabled, captureOn }: { enabled: boolean; captureOn: bo
                   {cardLayout && (
                     <div className="grid gap-1.5">
                       {quality.data.features.map((f) => (
-                        <div key={f.feature} className="grid gap-1 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
+                        <div key={f.feature} className="grid gap-1 rounded-lg border border-border bg-card p-3 text-sm shadow-xs">
                           <span className="font-medium">{f.feature}</span>
                           <span className="text-xs text-muted-foreground">
                             {f.interactions} calls · unusable {pct(f.parseFailureRate)} · rated {f.rated} ({pct(f.coverage)} coverage)

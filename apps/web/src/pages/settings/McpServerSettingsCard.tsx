@@ -131,7 +131,7 @@ function ToolDescription({ text }: { text: string }) {
         <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden />
         <span>{first}</span>
       </summary>
-      <p className="mt-1 pl-[1.125rem]">{rest}</p>
+      <p className="mt-1 pl-4.5">{rest}</p>
     </details>
   );
 }
@@ -451,7 +451,7 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
                   </Alert>
                 )}
                 <Input
-                  className="min-w-[12rem] flex-1"
+                  className="min-w-48 flex-1"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   placeholder="Credential name (e.g. Priya's Claude Desktop)"

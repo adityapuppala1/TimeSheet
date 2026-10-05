@@ -175,9 +175,9 @@ export function FlowCanvas({
   const triggerNode = { x: 24, y: (first?.at.y ?? LANE_Y) + NODE_H / 2 - 28 };
 
   return (
-    <div className="relative overflow-hidden rounded-lg border bg-muted/20 bg-[radial-gradient(circle,hsl(var(--muted-foreground)/0.18)_1px,transparent_1px)] [background-size:18px_18px]">
+    <div className="relative overflow-hidden rounded-lg border bg-muted/20 bg-[radial-gradient(circle,hsl(var(--muted-foreground)/0.18)_1px,transparent_1px)] bg-size-[18px_18px]">
       {/* Zoom controls, mirroring n8n's corner rail. */}
-      <div className="absolute right-3 top-3 z-10 flex flex-col gap-1 rounded-md border bg-background/90 p-1 shadow-sm backdrop-blur">
+      <div className="absolute right-3 top-3 z-10 flex flex-col gap-1 rounded-md border bg-background/90 p-1 shadow-xs backdrop-blur-sm">
         <button type="button" className="grid h-7 w-7 place-items-center rounded text-sm hover:bg-muted" onClick={() => setZoom((z) => Math.min(1.6, +(z + 0.15).toFixed(2)))} aria-label="Zoom in">
           +
         </button>
@@ -284,7 +284,7 @@ export function FlowCanvas({
               form, not on the canvas — but drawn so the graph reads like n8n: a thing that starts it. */}
           <div
             style={{ left: triggerNode.x, top: triggerNode.y, width: 56, height: 56 }}
-            className="absolute grid place-items-center rounded-full border-2 border-primary/60 bg-primary/10 shadow-sm"
+            className="absolute grid place-items-center rounded-full border-2 border-primary/60 bg-primary/10 shadow-xs"
             title={trigger?.label ?? "Trigger"}
           >
             <Play className="h-5 w-5 fill-primary text-primary" aria-hidden />
@@ -317,7 +317,7 @@ export function FlowCanvas({
                 }}
                 style={{ left: at.x, top: at.y, width: NODE_W, minHeight: NODE_H }}
                 className={cn(
-                  "absolute rounded-xl border-2 bg-card shadow-sm transition-shadow hover:shadow-md",
+                  "absolute rounded-xl border-2 bg-card shadow-xs transition-shadow hover:shadow-md",
                   meta.ring,
                   selected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
                   !readOnly && "cursor-grab active:cursor-grabbing"

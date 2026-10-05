@@ -114,7 +114,7 @@ function RunbookSection({ title, hint, addLabel, disabled, count, onAdd, childre
       </header>
 
       <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full min-w-[44rem] text-sm">{children}</table>
+        <table className="w-full min-w-176 text-sm">{children}</table>
       </div>
 
       {!disabled && (
@@ -158,7 +158,7 @@ function CellInput({
 
   return (
     <input
-      className="w-full rounded border border-transparent bg-transparent px-1.5 py-1 text-sm outline-none transition-colors hover:border-border focus:border-ring focus:bg-background disabled:cursor-default disabled:hover:border-transparent"
+      className="w-full rounded border border-transparent bg-transparent px-1.5 py-1 text-sm outline-hidden transition-colors hover:border-border focus:border-ring focus:bg-background disabled:cursor-default disabled:hover:border-transparent"
       value={draft}
       disabled={disabled}
       placeholder={placeholder}

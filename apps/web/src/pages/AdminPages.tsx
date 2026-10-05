@@ -2803,7 +2803,7 @@ export function ApprovalsPage() {
         cell: ({ row }) => (
           <button
             type="button"
-            className="focus-ring max-w-[12rem] rounded text-left"
+            className="focus-ring max-w-48 rounded text-left"
             onClick={() => setDetail(row.original)}
             title="Open the full entry"
           >

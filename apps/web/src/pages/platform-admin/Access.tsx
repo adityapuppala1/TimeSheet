@@ -137,7 +137,7 @@ export function PlatformAdminAccess() {
                     <div className="flex items-center gap-2">
                       <Badge variant={ROLE_VARIANT[a.role] ?? "muted"}>{a.role.replace("_", " ")}</Badge>
                       <Select value={a.role} onValueChange={(role) => setRole.mutate({ id: a.id, role: role as PlatformRole })} disabled={setRole.isPending}>
-                        <SelectTrigger className="h-7 w-[9.5rem] text-xs">
+                        <SelectTrigger className="h-7 w-38 text-xs">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>

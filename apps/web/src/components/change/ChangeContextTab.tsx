@@ -91,7 +91,7 @@ export function ChangeContextTab({ changeId }: { changeId: string }) {
         <section className="grid gap-2">
           <h3 className="text-sm font-semibold">Tickets delivered</h3>
           <div className="overflow-x-auto rounded-lg border border-border">
-            <table className="w-full min-w-[34rem] text-sm">
+            <table className="w-full min-w-136 text-sm">
               <thead className="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2 font-medium">Key</th>

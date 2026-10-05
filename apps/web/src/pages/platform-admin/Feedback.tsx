@@ -14,7 +14,7 @@
  *  - a response is a two-column block only from `md`; below that it stacks with the metadata
  *    first, because a verbatim answer beside a 220px column of chrome is unreadable on a phone.
  *    Answers keep `whitespace-pre-wrap` (a stranger's line breaks are part of what they said) and
- *    add `break-words` so one long unbroken URL cannot push the page sideways.
+ *    add `wrap-break-word` so one long unbroken URL cannot push the page sideways.
  */
 import { useQuery } from "@tanstack/react-query";
 import { MessageSquareHeart, MessageSquareQuote, Star, ThumbsUp, Undo2 } from "lucide-react";
@@ -234,7 +234,7 @@ export function PlatformAdminFeedback() {
                     {/* `items-start` so the status pill and the would-return badge keep their own
                         width — as flex children they would otherwise stretch across the column. */}
                     <div className="flex min-w-0 flex-col items-start gap-1.5">
-                      <span className="break-words font-medium text-foreground">{r.organization.name}</span>
+                      <span className="wrap-break-word font-medium text-foreground">{r.organization.name}</span>
                       <span className="flex flex-wrap items-center gap-1.5">
                         <span className="break-all font-mono text-[11px] text-muted-foreground">{r.organization.slug}</span>
                         <OrgStatusPill status={r.organization.status} />
@@ -249,19 +249,19 @@ export function PlatformAdminFeedback() {
                       {r.liked && (
                         <div className="min-w-0">
                           <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">What worked</dt>
-                          <dd className="whitespace-pre-wrap break-words text-foreground">{r.liked}</dd>
+                          <dd className="whitespace-pre-wrap wrap-break-word text-foreground">{r.liked}</dd>
                         </div>
                       )}
                       {r.missing && (
                         <div className="min-w-0">
                           <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">What got in the way</dt>
-                          <dd className="whitespace-pre-wrap break-words text-foreground">{r.missing}</dd>
+                          <dd className="whitespace-pre-wrap wrap-break-word text-foreground">{r.missing}</dd>
                         </div>
                       )}
                       {r.comment && (
                         <div className="min-w-0">
                           <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Anything else</dt>
-                          <dd className="whitespace-pre-wrap break-words text-foreground">{r.comment}</dd>
+                          <dd className="whitespace-pre-wrap wrap-break-word text-foreground">{r.comment}</dd>
                         </div>
                       )}
                       {!r.liked && !r.missing && !r.comment && <dd className="text-muted-foreground">Rating only.</dd>}

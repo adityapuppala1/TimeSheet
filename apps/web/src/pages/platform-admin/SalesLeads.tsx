@@ -121,8 +121,8 @@ function LeadRow({ lead }: { lead: SalesLeadRow }) {
       <TableRow className="border-t-2 border-t-border">
         <TableCell className="whitespace-nowrap align-top text-muted-foreground">{shortDateTime(lead.createdAt)}</TableCell>
         <TableCell className="align-top">
-          <span className="block break-words font-semibold text-foreground">{lead.company}</span>
-          <span className="block break-words text-xs text-muted-foreground">
+          <span className="block wrap-break-word font-semibold text-foreground">{lead.company}</span>
+          <span className="block wrap-break-word text-xs text-muted-foreground">
             {lead.name}
             {lead.role ? ` · ${lead.role}` : ""}
           </span>
@@ -151,7 +151,7 @@ function LeadRow({ lead }: { lead: SalesLeadRow }) {
         </TableCell>
         <TableCell className="align-top">
           <Select value={lead.status} onValueChange={(value) => save.mutate({ status: value as SalesLeadStatus })} disabled={save.isPending}>
-            <SelectTrigger className={cn("h-8 w-[9.5rem] font-semibold", STATUS_TEXT[lead.status])}>
+            <SelectTrigger className={cn("h-8 w-38 font-semibold", STATUS_TEXT[lead.status])}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -173,8 +173,8 @@ function LeadRow({ lead }: { lead: SalesLeadRow }) {
           <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:gap-6">
             <div className="min-w-0">
               {/* `whitespace-pre-wrap` because a stranger's line breaks are part of what they said;
-                  `break-words` because one unbroken URL must not push the table sideways. */}
-              <p className="whitespace-pre-wrap break-words rounded-lg border border-border bg-muted/30 p-3 text-sm text-foreground">{lead.message}</p>
+                  `wrap-break-word` because one unbroken URL must not push the table sideways. */}
+              <p className="whitespace-pre-wrap wrap-break-word rounded-lg border border-border bg-muted/30 p-3 text-sm text-foreground">{lead.message}</p>
               {codes.length > 0 && (
                 <p className="mt-2 flex flex-wrap gap-1.5">
                   {codes.map((code) => (
@@ -184,7 +184,7 @@ function LeadRow({ lead }: { lead: SalesLeadRow }) {
                   ))}
                 </p>
               )}
-              <p className="mt-2 break-words text-xs text-muted-foreground">
+              <p className="mt-2 wrap-break-word text-xs text-muted-foreground">
                 {[lead.country, lead.phone, lead.sourcePage, lead.referrer, [lead.utmSource, lead.utmMedium, lead.utmCampaign].filter(Boolean).join(" / ")]
                   .map((part) => part?.trim())
                   .filter(Boolean)

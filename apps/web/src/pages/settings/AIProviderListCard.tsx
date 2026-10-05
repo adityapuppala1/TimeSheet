@@ -381,7 +381,7 @@ function SuggestedOrderPanel({
   const alreadyInOrder = data.suggestedOrderIds.length === currentOrder.length && data.suggestedOrderIds.every((id, i) => id === currentOrder[i]);
 
   return (
-    <div className="rounded-lg border border-primary/30 bg-primary/[0.03] p-3">
+    <div className="rounded-lg border border-primary/30 bg-primary/3 p-3">
       <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Suggested order — last 30 days</p>
       <ol className="mt-2 space-y-1.5">
         {data.suggestedOrderIds.map((id, index) => {

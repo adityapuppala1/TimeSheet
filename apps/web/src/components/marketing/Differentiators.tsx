@@ -66,7 +66,7 @@ function TiltCard({ item }: { item: Differentiator }) {
       ref={ref}
       onPointerMove={onMove}
       onPointerLeave={onLeave}
-      className="tilt-card group relative h-full rounded-2xl border border-border bg-card/80 p-5 shadow-soft backdrop-blur"
+      className="tilt-card group relative h-full rounded-2xl border border-border bg-card/80 p-5 shadow-soft backdrop-blur-sm"
       data-tilt-card
     >
       {/* The light that follows the pointer. Invisible until hover so the resting card is calm. */}

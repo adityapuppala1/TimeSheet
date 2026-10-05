@@ -376,7 +376,7 @@ export function ApiPerformancePanel() {
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <LiveControls live={live} onToggle={toggleLive} onRefresh={refreshNow} refreshing={refreshing} updatedAgo={updatedAgo} />
           <Select value={hours} onValueChange={setHours}>
-            <SelectTrigger className="h-9 w-[9.5rem]"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-9 w-38"><SelectValue /></SelectTrigger>
             <SelectContent>
               {WINDOWS.map((w) => (
                 <SelectItem key={w.value} value={w.value}>{w.label}</SelectItem>
@@ -631,8 +631,8 @@ export function ApiPerformancePanel() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="min-w-[12rem]">Host / pod</TableHead>
-                        <TableHead className="min-w-[10rem]">OS</TableHead>
+                        <TableHead className="min-w-48">Host / pod</TableHead>
+                        <TableHead className="min-w-40">OS</TableHead>
                         <TableHead className="text-right">Requests</TableHead>
                         <TableHead className="text-right">Avg</TableHead>
                         <TableHead className="text-right">p95</TableHead>
@@ -683,7 +683,7 @@ export function ApiPerformancePanel() {
                     value={drilldown.method ?? "all"}
                     onValueChange={(value) => setDrilldown({ ...drilldown, method: value === "all" ? undefined : value })}
                   >
-                    <SelectTrigger className="h-9 w-[7.5rem]"><SelectValue placeholder="Method" /></SelectTrigger>
+                    <SelectTrigger className="h-9 w-30"><SelectValue placeholder="Method" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Any method</SelectItem>
                       {["GET", "POST", "PATCH", "PUT", "DELETE"].map((method) => (
@@ -697,7 +697,7 @@ export function ApiPerformancePanel() {
                       setDrilldown({ ...drilldown, statusClass: value === "all" ? undefined : Number(value) })
                     }
                   >
-                    <SelectTrigger className="h-9 w-[8.5rem]"><SelectValue placeholder="Status" /></SelectTrigger>
+                    <SelectTrigger className="h-9 w-34"><SelectValue placeholder="Status" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Any status</SelectItem>
                       <SelectItem value="2">2xx succeeded</SelectItem>
@@ -710,7 +710,7 @@ export function ApiPerformancePanel() {
                     value={drilldown.hostname ?? "all"}
                     onValueChange={(value) => setDrilldown({ ...drilldown, hostname: value === "all" ? undefined : value })}
                   >
-                    <SelectTrigger className="h-9 w-[11rem]"><SelectValue placeholder="Host" /></SelectTrigger>
+                    <SelectTrigger className="h-9 w-44"><SelectValue placeholder="Host" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Any host</SelectItem>
                       {[...new Set(data.hosts.map((h) => h.hostname))].map((hostname) => (
@@ -722,7 +722,7 @@ export function ApiPerformancePanel() {
                     value={drilldown.sort ?? "slowest"}
                     onValueChange={(value) => setDrilldown({ ...drilldown, sort: value as "slowest" | "recent" })}
                   >
-                    <SelectTrigger className="h-9 w-[9.5rem]"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="h-9 w-38"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="slowest">Slowest first</SelectItem>
                       <SelectItem value="recent">Most recent</SelectItem>
@@ -755,7 +755,7 @@ export function ApiPerformancePanel() {
                         value={String(drilldown.limit ?? 50)}
                         onValueChange={(value) => setDrilldownRaw({ ...drilldown, limit: Number(value), offset: 0 })}
                       >
-                        <SelectTrigger className="h-8 w-[6.5rem]"><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="h-8 w-26"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {[25, 50, 100, 200].map((n) => (
                             <SelectItem key={n} value={String(n)}>{n} per page</SelectItem>
@@ -797,13 +797,13 @@ export function ApiPerformancePanel() {
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead className="min-w-[7rem]">When</TableHead>
+                          <TableHead className="min-w-28">When</TableHead>
                           <TableHead className="min-w-[16rem]">Endpoint</TableHead>
-                          <TableHead className="min-w-[10rem]">User</TableHead>
+                          <TableHead className="min-w-40">User</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead className="text-right">Total</TableHead>
                           <TableHead className="text-right">Database</TableHead>
-                          <TableHead className="min-w-[10rem]">Served by</TableHead>
+                          <TableHead className="min-w-40">Served by</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>

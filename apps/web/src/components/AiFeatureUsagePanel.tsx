@@ -165,7 +165,7 @@ export function AiFeatureUsagePanel() {
             setPage(1);
           }}
         >
-          <SelectTrigger className="h-9 w-[9.5rem] shrink-0"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="h-9 w-38 shrink-0"><SelectValue /></SelectTrigger>
           <SelectContent>
             {[7, 14, 30, 60, 90].map((d) => (
               <SelectItem key={d} value={String(d)}>Last {d} days</SelectItem>

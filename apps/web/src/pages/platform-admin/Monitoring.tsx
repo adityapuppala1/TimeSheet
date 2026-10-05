@@ -156,7 +156,7 @@ function PanelError({ message }: { message: string }) {
   return (
     <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-      <span className="min-w-0 break-words text-muted-foreground">{message}</span>
+      <span className="min-w-0 wrap-break-word text-muted-foreground">{message}</span>
     </div>
   );
 }
@@ -371,7 +371,7 @@ function FleetRow({ row, largest, onOpen }: { row: FleetHealthRow; largest: numb
           <OrgStatusPill status={row.status as OrgStatus} />
         </div>
       </TableCell>
-      <TableCell className="min-w-[9rem]">
+      <TableCell className="min-w-36">
         {row.reachable ? (
           <>
             <p className="font-mono text-xs tabular-nums text-foreground">{formatBytes(row.totalBytes)}</p>

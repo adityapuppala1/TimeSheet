@@ -32,7 +32,7 @@ export function BackendHealthGate() {
     return (
       <div
         role="status"
-        className="fixed inset-x-0 bottom-0 z-[80] flex flex-wrap items-center justify-center gap-2 border-t border-primary/40 bg-primary/10 px-4 py-2.5 text-sm backdrop-blur-sm sm:bottom-4 sm:left-1/2 sm:right-auto sm:inset-x-auto sm:-translate-x-1/2 sm:rounded-full sm:border sm:px-4 sm:shadow-lg"
+        className="fixed inset-x-0 bottom-0 z-80 flex flex-wrap items-center justify-center gap-2 border-t border-primary/40 bg-primary/10 px-4 py-2.5 text-sm backdrop-blur-xs sm:bottom-4 sm:left-1/2 sm:right-auto sm:inset-x-auto sm:-translate-x-1/2 sm:rounded-full sm:border sm:px-4 sm:shadow-lg"
       >
         <Sparkles className="h-4 w-4 shrink-0 text-primary" />
         <span className="min-w-0">
@@ -82,7 +82,7 @@ export function BackendHealthGate() {
       role="alertdialog"
       aria-modal="true"
       aria-labelledby="backend-down-title"
-      className="fixed inset-0 z-[100] grid place-items-center bg-background/80 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-100 grid place-items-center bg-background/80 p-4 backdrop-blur-xs"
     >
       <div className="w-full max-w-md rounded-lg border border-destructive/40 bg-card p-6 shadow-lg">
         <div className="flex items-start gap-3">

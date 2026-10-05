@@ -19,7 +19,7 @@ export function ToolEvidence({ calls }: { calls: AiAskExchangeRow["toolCalls"] }
               {call.references.map((reference) => (
                 <li key={`${reference.kind}:${reference.id}`}>
                   <Link title={`${reference.key}: ${reference.title}`} className="focus-ring inline-flex min-h-[44px] max-w-full flex-wrap items-center rounded-md text-primary underline underline-offset-2" to={`/app/tickets?open=${encodeURIComponent(reference.id)}`}>
-                    Open {reference.key}: <span className="ml-1 break-words">{reference.title}</span>
+                    Open {reference.key}: <span className="ml-1 wrap-break-word">{reference.title}</span>
                   </Link>
                 </li>
               ))}

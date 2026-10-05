@@ -105,7 +105,7 @@ export function ConsoleSection({
   return (
     /* `overflow-hidden` only when flush: it is what keeps full-bleed content inside the rounded
        corners, but it also clips focus rings at the card edge, so a padded body does without. */
-    <section className={cn("min-w-0 rounded-xl border border-border bg-card shadow-sm", flush && "overflow-hidden", className)}>
+    <section className={cn("min-w-0 rounded-xl border border-border bg-card shadow-xs", flush && "overflow-hidden", className)}>
       <header className="flex flex-col gap-2 border-b border-border px-5 py-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between sm:gap-3">
         {/* `sm:`-gated for the same reason as ConsolePage's title block above: in the phone's
             column direction a basis is a height, not a width. */}
@@ -283,7 +283,7 @@ export function SwitchField({
   return (
     <label
       className={cn(
-        "flex min-h-[5.5rem] min-w-0 cursor-pointer items-center justify-between gap-3 rounded-lg border p-3 transition-colors",
+        "flex min-h-22 min-w-0 cursor-pointer items-center justify-between gap-3 rounded-lg border p-3 transition-colors",
         armed ? "border-destructive/40 bg-destructive/5" : "border-border",
         disabled && "cursor-not-allowed opacity-60",
         className
@@ -340,7 +340,7 @@ export function SegmentedControl<T extends string>({
             onClick={() => onChange(opt.value)}
             className={cn(
               "focus-ring inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-semibold capitalize transition-colors",
-              active ? "bg-accent text-accent-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              active ? "bg-accent text-accent-foreground shadow-xs" : "text-muted-foreground hover:bg-muted hover:text-foreground"
             )}
           >
             {opt.label ?? opt.value}
@@ -426,7 +426,7 @@ export function KpiCard({
     <Enter
       delay={delay}
       duration={0.3}
-      className="flex min-w-0 items-center gap-3 rounded-xl border border-border bg-card p-3 shadow-sm sm:gap-4 sm:p-4"
+      className="flex min-w-0 items-center gap-3 rounded-xl border border-border bg-card p-3 shadow-xs sm:gap-4 sm:p-4"
     >
       <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg sm:h-11 sm:w-11", toneClass)}>
         <Icon className="h-4 w-4 sm:h-5 sm:w-5" />

@@ -201,7 +201,7 @@ export function PlatformAdminOrgProfile() {
       {usage.isLoading && (
         <KpiGrid>
           {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-[6.5rem] w-full rounded-xl" />
+            <Skeleton key={i} className="h-26 w-full rounded-xl" />
           ))}
         </KpiGrid>
       )}
@@ -469,10 +469,10 @@ export function PlatformAdminOrgProfile() {
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="flex flex-wrap items-center gap-2">
-                    <span className="min-w-0 break-words text-sm font-medium text-foreground">{entry.title}</span>
+                    <span className="min-w-0 wrap-break-word text-sm font-medium text-foreground">{entry.title}</span>
                     <Badge variant="muted">{TIMELINE_LABEL[entry.kind]}</Badge>
                   </p>
-                  {entry.detail && <p className="mt-0.5 break-words text-xs text-muted-foreground">{entry.detail}</p>}
+                  {entry.detail && <p className="mt-0.5 wrap-break-word text-xs text-muted-foreground">{entry.detail}</p>}
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {shortDateTime(entry.at)}
                     {entry.actor ? ` · ${entry.actor}` : ""}

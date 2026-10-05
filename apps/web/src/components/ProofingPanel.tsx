@@ -165,7 +165,7 @@ export function ProofingPanel({ attachments }: { attachments: TicketAttachmentRo
                 setOpenThreadId(null);
               }}
             >
-              <span className="max-w-[12rem] truncate">{a.fileName}</span>
+              <span className="max-w-48 truncate">{a.fileName}</span>
             </Button>
           ))}
         </div>
@@ -200,7 +200,7 @@ export function ProofingPanel({ attachments }: { attachments: TicketAttachmentRo
                 setOpenThreadId(a.id === openThreadId ? null : a.id);
               }}
               style={{ left: `${a.x * 100}%`, top: `${a.y * 100}%` }}
-              className={`absolute grid h-6 w-6 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 text-[11px] font-semibold shadow-sm transition ${
+              className={`absolute grid h-6 w-6 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 text-[11px] font-semibold shadow-xs transition ${
                 a.resolvedAt
                   ? "border-border bg-muted text-muted-foreground"
                   : "border-background bg-primary text-primary-foreground"
@@ -268,7 +268,7 @@ export function ProofingPanel({ attachments }: { attachments: TicketAttachmentRo
                   <span className="truncate text-xs font-medium">{authorLabel(a)}</span>
                   {a.resolvedAt && <span className="ml-auto text-[11px] text-muted-foreground">Resolved</span>}
                 </span>
-                <span className="whitespace-pre-wrap break-words">{a.body}</span>
+                <span className="whitespace-pre-wrap wrap-break-word">{a.body}</span>
               </button>
 
               {(a.replies?.length ?? 0) > 0 && (
@@ -276,7 +276,7 @@ export function ProofingPanel({ attachments }: { attachments: TicketAttachmentRo
                   {a.replies!.map((r) => (
                     <div key={r.id} className="text-xs">
                       <span className="font-medium">{authorLabel(r)}</span>{" "}
-                      <span className="whitespace-pre-wrap break-words text-muted-foreground">{r.body}</span>
+                      <span className="whitespace-pre-wrap wrap-break-word text-muted-foreground">{r.body}</span>
                     </div>
                   ))}
                 </div>

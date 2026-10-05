@@ -675,12 +675,12 @@ function EmailChannelsCard({ readOnly }: { readOnly: boolean }) {
           // Horizontal scroll is contained HERE rather than on the page: seven columns cannot fit
           // a phone, and letting the page scroll sideways breaks every other card on the tab.
           <div className="overflow-x-auto rounded-lg border border-border">
-            <table className="w-full min-w-[46rem] border-collapse text-sm">
+            <table className="w-full min-w-184 border-collapse text-sm">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
                   <th
                     scope="col"
-                    className="sticky left-0 z-10 bg-muted/40 px-4 py-2 text-left align-bottom font-semibold backdrop-blur"
+                    className="sticky left-0 z-10 bg-muted/40 px-4 py-2 text-left align-bottom font-semibold backdrop-blur-sm"
                   >
                     Email template
                   </th>

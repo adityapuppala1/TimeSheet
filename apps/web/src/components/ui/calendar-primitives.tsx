@@ -95,7 +95,7 @@ const cellClass = ({
   inRange?: boolean;
 }) =>
   cn(
-    "relative grid h-9 w-9 cursor-pointer select-none place-items-center rounded-full text-sm outline-none transition",
+    "relative grid h-9 w-9 cursor-pointer select-none place-items-center rounded-full text-sm outline-hidden transition",
     "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
     !isSelected && !inRange && "hover:bg-muted",
     // Days from the neighbouring month are shown but muted: hiding them makes the grid ragged, and
@@ -148,11 +148,11 @@ function DayAnnotationOverlay({ annotation }: { annotation: CalendarDayAnnotatio
     <>
       <span
         aria-hidden
-        className="absolute bottom-[3px] left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-primary group-data-[selected]:bg-primary-foreground/90"
+        className="absolute bottom-[3px] left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-primary group-data-selected:bg-primary-foreground/90"
       />
       <div
         aria-hidden
-        className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 hidden w-max min-w-[8.5rem] -translate-x-1/2 rounded-lg border border-border bg-popover p-2 text-left shadow-lg group-hover:block group-focus-visible:block"
+        className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 hidden w-max min-w-34 -translate-x-1/2 rounded-lg border border-border bg-popover p-2 text-left shadow-lg group-hover:block group-focus-visible:block"
       >
         <p className="text-[11px] font-semibold text-popover-foreground">{annotation.title}</p>
         <div className="mt-1 space-y-0.5">
@@ -192,7 +192,7 @@ function DayAnnotationOverlay({ annotation }: { annotation: CalendarDayAnnotatio
  * the wobble; WebKit's stability check timed out on it, but only under load, which made it read
  * as flake instead of geometry. 15rem = 6 x 2.25rem rows + the header row, with a little slack.
  */
-const GRID_MIN_HEIGHT = "min-h-[15rem]";
+const GRID_MIN_HEIGHT = "min-h-60";
 
 /** One month of a single-date calendar. */
 export function CalendarMonthGrid({ annotations }: { annotations?: CalendarDayAnnotations }) {

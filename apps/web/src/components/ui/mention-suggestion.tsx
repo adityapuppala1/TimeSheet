@@ -43,7 +43,7 @@ class MentionList {
     this.el.setAttribute("aria-label", "Mention a person");
     this.el.dataset.mentionList = "";
     this.el.className =
-      "fixed z-[60] min-w-[200px] max-w-[280px] overflow-hidden rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-md";
+      "fixed z-60 min-w-[200px] max-w-[280px] overflow-hidden rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-md";
     document.body.appendChild(this.el);
     this.update(props);
   }

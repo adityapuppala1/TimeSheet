@@ -137,7 +137,7 @@ export function SavedViewsBar({
             }}
           >
             {v.scope === "SHARED" && <Users className="h-3 w-3 text-muted-foreground" />}
-            <span className="max-w-[10rem] truncate">{v.name}</span>
+            <span className="max-w-40 truncate">{v.name}</span>
           </Button>
           {v.ownerId === user?.id && (
             <Button

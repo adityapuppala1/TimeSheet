@@ -114,7 +114,7 @@ export function FingerprintSignIn({
         aria-label={label}
         className={cn(
           "group relative grid h-24 w-24 shrink-0 place-items-center rounded-full",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-4 focus-visible:ring-offset-background",
+          "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-4 focus-visible:ring-offset-background",
           "disabled:cursor-not-allowed",
           state === "error" && "seal-shake"
         )}
@@ -160,7 +160,7 @@ export function FingerprintSignIn({
           {busy && (
             <span
               aria-hidden
-              className={cn("seal-sweep pointer-events-none absolute inset-x-0 h-6 bg-gradient-to-b from-transparent to-transparent", RING[tone].sweep)}
+              className={cn("seal-sweep pointer-events-none absolute inset-x-0 h-6 bg-linear-to-b from-transparent to-transparent", RING[tone].sweep)}
             />
           )}
         </span>

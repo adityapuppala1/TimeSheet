@@ -66,8 +66,8 @@ export function AiReportBuilder() {
         {matchesInputs && report.data?.error && <p role="alert" className="text-sm text-destructive">{report.data.error}</p>}
         {hasReport && report.data?.answer && <section className="min-w-0 overflow-x-auto border-t border-border pt-4" aria-label="Generated report">
           <dl aria-label="Report context" className="mb-4 grid gap-3 border-b border-border pb-4 text-sm sm:grid-cols-3">
-            <div className="min-w-0"><dt className="text-xs text-muted-foreground">Report recorded</dt><dd className="break-words">{hasRecordedAt ? <time dateTime={recordedAt.toISOString()}>{recordedAt.toLocaleString()}</time> : "Unavailable"}</dd></div>
-            <div className="min-w-0"><dt className="text-xs text-muted-foreground">Requested period</dt><dd className="break-words">{from || "Start of this month"} to {to || "Today"}</dd></div>
+            <div className="min-w-0"><dt className="text-xs text-muted-foreground">Report recorded</dt><dd className="wrap-break-word">{hasRecordedAt ? <time dateTime={recordedAt.toISOString()}>{recordedAt.toLocaleString()}</time> : "Unavailable"}</dd></div>
+            <div className="min-w-0"><dt className="text-xs text-muted-foreground">Requested period</dt><dd className="wrap-break-word">{from || "Start of this month"} to {to || "Today"}</dd></div>
             <div className="min-w-0"><dt className="text-xs text-muted-foreground">Grouped by</dt><dd className="capitalize">{group}</dd></div>
           </dl>
           <AiMarkdown content={report.data.answer} />

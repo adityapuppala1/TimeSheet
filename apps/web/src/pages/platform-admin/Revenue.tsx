@@ -144,7 +144,7 @@ export function PlatformAdminRevenue() {
         <>
           <KpiGrid>
             {[0, 1, 2, 3].map((i) => (
-              <Skeleton key={i} className="h-[6.5rem] w-full rounded-xl" />
+              <Skeleton key={i} className="h-26 w-full rounded-xl" />
             ))}
           </KpiGrid>
           <Skeleton className="h-64 w-full rounded-xl" />
@@ -403,7 +403,7 @@ function Loaded({ data }: { data: RevenueOverview }) {
                   {row.cells.map((cell) => (
                     <Num key={cell.monthOffset} className="p-1">
                       <span
-                        className={cn("inline-flex h-7 w-full min-w-[3rem] items-center justify-center rounded text-xs tabular-nums", cohortTone(cell))}
+                        className={cn("inline-flex h-7 w-full min-w-12 items-center justify-center rounded text-xs tabular-nums", cohortTone(cell))}
                         title={cell.percent === null ? "No snapshot covers this month" : `${cell.retained} of ${row.signedUp} still active`}
                       >
                         {cell.percent === null ? "·" : `${Math.round(cell.percent)}%`}

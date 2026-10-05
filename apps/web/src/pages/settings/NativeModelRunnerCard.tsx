@@ -210,8 +210,8 @@ function Fact({ icon, label, value, detail }: { icon: React.ReactNode; label: st
         {icon}
         {label}
       </p>
-      <p className="mt-0.5 break-words text-sm font-medium">{value}</p>
-      {detail && <p className="mt-0.5 break-words text-xs text-muted-foreground">{detail}</p>}
+      <p className="mt-0.5 wrap-break-word text-sm font-medium">{value}</p>
+      {detail && <p className="mt-0.5 wrap-break-word text-xs text-muted-foreground">{detail}</p>}
     </div>
   );
 }
@@ -577,7 +577,7 @@ function SystemStrip({
         <p className="text-sm font-medium">Your system</p>
         {/* min-w-0 on the grid AND on each Fact: a grid item defaults to `min-width: auto`, so a
             long CPU model or disk path sets a min-content floor that stretches every ancestor
-            past a phone viewport instead of wrapping. `break-words` alone does not lower that
+            past a phone viewport instead of wrapping. `wrap-break-word` alone does not lower that
             floor — only a zero min-width does. */}
         <div className="mt-3 grid min-w-0 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Fact
@@ -717,7 +717,7 @@ function RuntimeStrip({
             <p
               key={message.kind}
               className={cn(
-                "mt-2 flex items-start gap-2 break-words text-xs",
+                "mt-2 flex items-start gap-2 wrap-break-word text-xs",
                 message.kind === "lastError" ? "text-destructive" : "text-muted-foreground"
               )}
             >
@@ -960,7 +960,7 @@ function EngineInstallProgress({ install, progress }: { install: NativeEngineIns
           {install.sha256 && <span className="break-all font-mono text-[10px]">sha256 {install.sha256.slice(0, 16)}…</span>}
         </p>
         {install.versionOutput && (
-          <p className="mt-1 break-words font-mono text-[10px] text-muted-foreground">it answered: {install.versionOutput.split("\n")[0]}</p>
+          <p className="mt-1 wrap-break-word font-mono text-[10px] text-muted-foreground">it answered: {install.versionOutput.split("\n")[0]}</p>
         )}
       </div>
     );
@@ -968,7 +968,7 @@ function EngineInstallProgress({ install, progress }: { install: NativeEngineIns
 
   if (install.status === "failed" || install.status === "cancelled") {
     return (
-      <p className="mt-2 flex items-start gap-2 break-words text-xs">
+      <p className="mt-2 flex items-start gap-2 wrap-break-word text-xs">
         <AlertTriangle className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", install.status === "failed" ? "text-destructive" : "text-muted-foreground")} />
         <span className={install.status === "failed" ? "text-destructive" : "text-muted-foreground"}>
           {engineInstallStatusLabel(install.status)}
@@ -1048,7 +1048,7 @@ function ModelRow({
 
   return (
     <div
-      className={cn("flex min-w-0 flex-col rounded-lg border p-3 transition-shadow hover:shadow-soft", isRunning ? "border-primary/50 bg-primary/[0.03]" : "border-border")}
+      className={cn("flex min-w-0 flex-col rounded-lg border p-3 transition-shadow hover:shadow-soft", isRunning ? "border-primary/50 bg-primary/3" : "border-border")}
       data-native-model={entry.id}
     >
       {/* Title and badges on the left, the actions on the right; `basis-40` on the title keeps the
@@ -1248,7 +1248,7 @@ function DownloadProgress({ download, progress }: { download: NativeModelDownloa
 
   if (download.status === "failed" || download.status === "cancelled") {
     return (
-      <p className="mt-2 flex items-start gap-2 break-words text-xs">
+      <p className="mt-2 flex items-start gap-2 wrap-break-word text-xs">
         <AlertTriangle className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", download.status === "failed" ? "text-destructive" : "text-muted-foreground")} />
         <span className={download.status === "failed" ? "text-destructive" : "text-muted-foreground"}>
           {downloadStatusLabel(download.status)}
@@ -1341,7 +1341,7 @@ export function NativeRuntimeTuningControls({
           type="number"
           min={1}
           max={ceiling.max}
-          className="max-w-[10rem]"
+          className="max-w-40"
           value={threads}
           disabled={disabled}
           onChange={(event) => onThreadsChange(event.target.value)}
@@ -1434,7 +1434,7 @@ function TuningHint({ folded, lead, children }: { folded: boolean; lead: ReactNo
         <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden />
         <span>{lead}</span>
       </summary>
-      <p className="mt-1.5 pl-[1.125rem]">{children}</p>
+      <p className="mt-1.5 pl-4.5">{children}</p>
     </details>
   );
 }

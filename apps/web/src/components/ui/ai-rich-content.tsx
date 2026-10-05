@@ -321,7 +321,7 @@ function splitCallouts(markdown: string): Block[] {
 /** Shared typography for every rendered chunk, so a heading in an Ask AI answer and a heading in a
  *  generated PRD read as the same product rather than two. */
 const PROSE = [
-  "prose-sm max-w-none break-words text-sm leading-relaxed",
+  "prose-sm max-w-none wrap-break-word text-sm leading-relaxed",
   "[&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-base [&_h1]:font-bold [&_h1]:tracking-tight",
   "[&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-sm [&_h2]:font-bold",
   "[&_h3]:mb-1.5 [&_h3]:mt-3 [&_h3]:text-sm [&_h3]:font-semibold",

@@ -116,7 +116,7 @@ export function MaintenancePage() {
       {/* Ambient layer — same visual family as the login page, but alive: the orbs drift. */}
       <div className="pointer-events-none absolute inset-0" aria-hidden>
         <Orb className="-left-32 -top-32 h-96 w-96 bg-primary/20" duration={18} dx={40} dy={28} />
-        <Orb className="-right-24 bottom-0 h-[28rem] w-[28rem] bg-accent/25" duration={22} dx={-36} dy={-24} />
+        <Orb className="-right-24 bottom-0 h-112 w-md bg-accent/25" duration={22} dx={-36} dy={-24} />
         <Orb className="left-1/2 top-1/2 h-72 w-72 -translate-x-1/2 -translate-y-1/2 bg-warning/10" duration={26} dx={24} dy={-32} />
         {/* Faint blueprint grid — "under construction" texture with zero assets. */}
         <div
@@ -132,7 +132,7 @@ export function MaintenancePage() {
       </div>
 
       <main className="relative w-full max-w-xl">
-        <Enter delay={0} className="rounded-2xl border bg-card/95 p-8 shadow-2xl backdrop-blur sm:p-10">
+        <Enter delay={0} className="rounded-2xl border bg-card/95 p-8 shadow-2xl backdrop-blur-sm sm:p-10">
           <div className="flex flex-col items-center text-center">
             <Enter delay={0.05}>
               <WorkingGears />
@@ -176,7 +176,7 @@ export function MaintenancePage() {
                     <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                       {/* Width is the value; the grow-in is a transform, so it never forces a layout. */}
                       <div className="h-full" style={{ width: `${progressPct}%` }}>
-                        <div className="h-full origin-left rounded-full bg-gradient-to-r from-primary to-warning motion-safe:animate-grow-x" />
+                        <div className="h-full origin-left rounded-full bg-linear-to-r from-primary to-warning motion-safe:animate-grow-x" />
                       </div>
                     </div>
                     <p className="mt-1.5 text-[11px] tabular-nums text-muted-foreground">~{progressPct}% of the window elapsed</p>

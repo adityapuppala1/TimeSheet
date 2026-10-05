@@ -281,7 +281,7 @@ function OperationDialog({
 function FragmentationCell({ table }: { table: TenantTableRow }) {
   const percent = (table.fragmentation ?? 0) * 100;
   return (
-    <TableCell className="min-w-[8rem]">
+    <TableCell className="min-w-32">
       <p className="font-mono text-xs tabular-nums text-foreground">
         {percent.toFixed(0)}% <span className="text-muted-foreground">({formatBytes(table.freeBytes)})</span>
       </p>
@@ -370,7 +370,7 @@ export function SchemaPanel({ orgId, metrics }: { orgId: string; metrics: Tenant
                   <Num>{table.indexCount}</Num>
                   <FragmentationCell table={table} />
                   {showKeyHeadroom && (
-                    <TableCell className="min-w-[7rem]">
+                    <TableCell className="min-w-28">
                       {table.autoIncrementUsePercent === null ? (
                         <span className="text-xs text-muted-foreground" title="This table has no integer auto-increment key.">
                           n/a
@@ -674,7 +674,7 @@ export function AdvisorPanel({ orgId, days }: { orgId: string; days: number }) {
               {(history.data?.advice ?? []).slice(1).map((row) => (
                 <TableRow key={row.id}>
                   <TableCell className="whitespace-nowrap text-sm text-muted-foreground">{shortDateTime(row.createdAt)}</TableCell>
-                  <TableCell className="max-w-[26rem]">
+                  <TableCell className="max-w-104">
                     <p className="truncate text-sm text-foreground">{row.summary || "—"}</p>
                     {row.decisionNote && <p className="truncate text-xs text-muted-foreground">{row.decisionNote}</p>}
                   </TableCell>

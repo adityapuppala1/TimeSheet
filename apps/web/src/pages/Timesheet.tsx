@@ -115,7 +115,7 @@ function TicketPicker({
           </Button>
         </FormControl>
       </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+      <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
         <Command>
           <CommandInput placeholder="Search by key or title…" />
           <CommandList>

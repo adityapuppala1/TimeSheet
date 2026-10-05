@@ -3,7 +3,7 @@ import type { CSSProperties, ElementType, HTMLAttributes } from "react";
 import { cn } from "../../lib/utils";
 
 /**
- * A staggered entrance — fade up 14px — in CSS (the `enter` keyframe in tailwind.config.ts).
+ * A staggered entrance — fade up 14px — in CSS (the `enter` keyframe in src/index.css).
  *
  * Replaces the framer-motion `initial/animate/transition` entrances (removed 2026-10-06, ~39 KB gzipped
  * that the Dashboard and the sign-in recovery pages loaded for exactly this). `motion-safe:` means a

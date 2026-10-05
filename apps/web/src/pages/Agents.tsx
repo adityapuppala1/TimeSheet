@@ -267,7 +267,7 @@ export function AgentsPage() {
                       aria-pressed={active}
                       onClick={() => setGalleryCategory(c)}
                       className={cn(
-                        "min-h-[44px] rounded-md px-3 py-1.5 text-sm font-medium transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+                        "min-h-[44px] rounded-md px-3 py-1.5 text-sm font-medium transition-colors duration-150 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-primary",
                         active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
                       )}
                     >
@@ -530,7 +530,7 @@ function TemplateCard({ template, busy, onInstall }: Readonly<{ template: AgentT
     <div
       className={cn(
         "flex flex-col gap-3 rounded-xl border p-4 transition-all duration-200",
-        template.installed ? "bg-muted/40" : "hover:border-primary/40 hover:shadow-sm"
+        template.installed ? "bg-muted/40" : "hover:border-primary/40 hover:shadow-xs"
       )}
     >
       <div className="flex items-start justify-between gap-2">
@@ -790,7 +790,7 @@ function AgentCard({
                 disabled={busy}
                 onCheckedChange={onToggle}
                 aria-label={`Enable ${entry.name}`}
-                className="relative after:absolute after:-inset-[14px] after:content-[''] sm:after:hidden"
+                className="relative after:absolute after:inset-[-14px] after:content-[''] sm:after:hidden"
               />
             </div>
           )}
@@ -844,7 +844,7 @@ function AgentCard({
                       )}
                     >
                       {c.actsOnUntrustedInput && <ShieldAlert className="h-3 w-3 text-warning-foreground" />}
-                      <span className={cn("break-words font-medium", !c.runnable && "line-through decoration-1")}>{c.title}</span>
+                      <span className={cn("wrap-break-word font-medium", !c.runnable && "line-through decoration-1")}>{c.title}</span>
                       <Badge variant={copy.tone} className="ml-0.5 px-1 py-0 text-[9px]">
                         {copy.label}
                       </Badge>

@@ -143,7 +143,7 @@ function MailServerCard({ settings }: { settings: PlatformMailSettings }) {
         <ServerCog className="h-4 w-4 shrink-0 text-muted-foreground" />
         {eff.configured ? (
           <>
-            <span className="min-w-0 break-words">
+            <span className="min-w-0 wrap-break-word">
               Sending through <span className="font-mono">{eff.host}:{eff.port}</span> as <span className="font-mono">{eff.from}</span>
             </span>
             <Badge variant={eff.source === "database" ? "info" : "muted"}>{eff.source === "database" ? "from these settings" : "from apps/api/.env"}</Badge>
@@ -269,7 +269,7 @@ function SignupSettingsCard({ view }: { view: PlatformSignupSettingsView }) {
     >
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 p-3 text-sm">
         <DoorOpen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-        <span className="min-w-0 break-words">Right now, the public signup page is</span>
+        <span className="min-w-0 wrap-break-word">Right now, the public signup page is</span>
         <Badge variant={availability.open ? "success" : "muted"}>{availability.open ? "open" : "closed"}</Badge>
         {view.settings.updatedBy && (
           <span className="text-xs text-muted-foreground">
@@ -677,7 +677,7 @@ function SessionsCard() {
                     <Icon className="h-4 w-4" />
                   </span>
                   {/* The raw header on the title, so the parse is a reading and not a claim. */}
-                  <div className="min-w-0 flex-1 basis-[15rem]" title={ua.raw || undefined}>
+                  <div className="min-w-0 flex-1 basis-60" title={ua.raw || undefined}>
                     <p className="flex min-w-0 flex-wrap items-center gap-1.5 text-sm">
                       <span className="truncate font-medium text-foreground">{ua.browser}</span>
                       {ua.os && <span className="text-muted-foreground">on {ua.os}</span>}
@@ -774,7 +774,7 @@ function AuditCard() {
       actions={
         <Toolbar>
           <Select value={actorType} onValueChange={(v) => setFilter(() => setActorType(v))}>
-            <SelectTrigger className="h-8 w-[9.5rem] text-xs" aria-label="Filter by who acted">
+            <SelectTrigger className="h-8 w-38 text-xs" aria-label="Filter by who acted">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -785,7 +785,7 @@ function AuditCard() {
             </SelectContent>
           </Select>
           <Select value={entity} onValueChange={(v) => setFilter(() => setEntity(v))}>
-            <SelectTrigger className="h-8 w-[11rem] text-xs" aria-label="Filter by entity">
+            <SelectTrigger className="h-8 w-44 text-xs" aria-label="Filter by entity">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

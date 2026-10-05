@@ -120,7 +120,7 @@ export function ServiceStatusPage() {
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
-            <SelectTrigger className="h-9 w-[8.5rem]"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-9 w-34"><SelectValue /></SelectTrigger>
             <SelectContent>
               {[30, 60, 90, 180].map((d) => (
                 <SelectItem key={d} value={String(d)}>{d} days</SelectItem>
@@ -279,7 +279,7 @@ function PastIncidents({ incidents }: { incidents: StatusIncident[] }) {
         <details
           key={month.key}
           open={index === 0}
-          className="group rounded-lg border border-border bg-card open:shadow-sm"
+          className="group rounded-lg border border-border bg-card open:shadow-xs"
           data-incident-month={month.key}
         >
           <summary className="focus-ring flex cursor-pointer list-none flex-wrap items-center gap-2 rounded-lg px-3 py-2.5 text-sm hover:bg-muted/50 [&::-webkit-details-marker]:hidden">

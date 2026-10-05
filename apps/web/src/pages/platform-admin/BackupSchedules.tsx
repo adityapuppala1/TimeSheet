@@ -703,7 +703,7 @@ export function BackupSchedulesTab() {
               const p = w.policy;
               return (
                 <TableRow key={w.organizationId}>
-                  <TableCell className="max-w-[15rem]">
+                  <TableCell className="max-w-60">
                     <span className="block truncate font-medium text-foreground">{w.name}</span>
                     <span className="flex flex-wrap items-center gap-1.5">
                       <span className="truncate font-mono text-[11px] text-muted-foreground">{w.slug}</span>
@@ -730,7 +730,7 @@ export function BackupSchedulesTab() {
                       <span className="text-muted-foreground">{p ? "Paused" : "Not configured"}</span>
                     )}
                   </TableCell>
-                  <TableCell className="max-w-[12rem] truncate text-xs text-muted-foreground">{p?.destinationName ?? "—"}</TableCell>
+                  <TableCell className="max-w-48 truncate text-xs text-muted-foreground">{p?.destinationName ?? "—"}</TableCell>
                   <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
                     {p
                       ? p.retentionMode === "COUNT"
@@ -802,9 +802,9 @@ export function BackupSchedulesTab() {
                 return (
                   <TableRow key={r.id}>
                     <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">{shortDateTime(r.startedAt)}</TableCell>
-                    <TableCell className="max-w-[13rem] truncate text-sm">{r.organizationName}</TableCell>
+                    <TableCell className="max-w-52 truncate text-sm">{r.organizationName}</TableCell>
                     <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{r.kind.toLowerCase().replace("_", " ")}</TableCell>
-                    <TableCell className="max-w-[11rem] truncate text-xs text-muted-foreground">{r.destinationName ?? "—"}</TableCell>
+                    <TableCell className="max-w-44 truncate text-xs text-muted-foreground">{r.destinationName ?? "—"}</TableCell>
                     <Num>{formatBytes(r.bytes)}</Num>
                     <TableCell>
                       <span className="flex flex-col gap-0.5">
@@ -812,7 +812,7 @@ export function BackupSchedulesTab() {
                           <Badge variant={RUN_VARIANT[r.status] ?? "muted"}>{r.status.toLowerCase()}</Badge>
                           {r.retentionTag && <Badge variant="muted">{r.retentionTag.toLowerCase()}</Badge>}
                         </span>
-                        {r.errorMessage && <span className="line-clamp-2 max-w-[22rem] text-[11px] text-destructive">{r.errorMessage}</span>}
+                        {r.errorMessage && <span className="line-clamp-2 max-w-88 text-[11px] text-destructive">{r.errorMessage}</span>}
                       </span>
                     </TableCell>
                     <TableCell className="text-right">

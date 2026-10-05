@@ -391,7 +391,7 @@ export function TimeField({
       <AriaDateInput
         className={cn(
           "focus-within:ring-ring flex h-[44px] w-full items-center rounded-md border border-input bg-background px-3 py-2 text-sm",
-          "focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-offset-background",
+          "focus-within:outline-hidden focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-offset-background",
           disabled && "cursor-not-allowed opacity-60"
         )}
       >
@@ -399,7 +399,7 @@ export function TimeField({
           <AriaDateSegment
             segment={segment}
             className={cn(
-              "rounded px-0.5 tabular-nums outline-none",
+              "rounded px-0.5 tabular-nums outline-hidden",
               "focus:bg-primary focus:text-primary-foreground",
               // React Aria renders unfilled segments as placeholder text; without this they look
               // like real values and people submit "hh:mm".
