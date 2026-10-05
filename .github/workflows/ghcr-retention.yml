@@ -49,6 +49,9 @@ jobs:
     # A failed CD run has nothing new to displace, and pruning after one would only add risk.
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     permissions:
+      # contents: read is what actions/checkout needs once the repo is private; a job-level
+      # `permissions` block drops every scope it does not name, so packages alone 404s the clone.
+      contents: read
       packages: write
     strategy:
       fail-fast: false

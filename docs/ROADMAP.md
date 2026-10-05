@@ -437,6 +437,16 @@ Every row above governs cost/usage the same way `GlobalAISettings.monthlyBudgetU
 `AIUsageLog` already do for existing AI features — no new governance model needed, just new
 things flowing through the existing meter.
 
+## Dependency advisories, triaged 2026-10-05
+
+After 6.1.0's `npm audit fix`, `npm audit --omit=dev` reports **0**. One Dependabot alert stays open:
+**#93 `braces` ≤ 3.0.3 (high, stack-exhaustion DoS)** — there is no patched version; 3.0.3 is the
+latest. It is dev-only, reached through `tailwindcss@3` → `chokidar`/`micromatch`, and the only
+patterns it ever expands are the two fixed content globs in `apps/web/tailwind.config`, at build
+time. No user input reaches it and it never ships to a server or browser. Dismiss as tolerable risk;
+the real removal is the **Tailwind 3 → 4 migration** (Tailwind 4's scanner does not use braces),
+which is its own unit of work, not a release patch.
+
 ## Dependency advisories, triaged 2026-09-17
 
 GitHub reported six open Dependabot alerts. Each was traced to the package that actually pulls it
