@@ -19,7 +19,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "../components/PageHeader";
-import { motion } from "framer-motion";
+import { Enter } from "../components/ui/enter";
 import {
   AlertTriangle,
   ArrowRight,
@@ -536,14 +536,9 @@ export function Dashboard() {
       {isAdmin && (
         <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-5">
           {adminStats.map((stat, index) => (
-            <motion.div
-              key={stat.label}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25, delay: index * 0.05 }}
-            >
+            <Enter key={stat.label} delay={index * 0.05} duration={0.25}>
               <StatCard label={stat.label} value={stat.value} tone={stat.tone} trend={stat.trend} trendLabel={stat.trendLabel} hint={stat.hint} />
-            </motion.div>
+            </Enter>
           ))}
         </div>
       )}
@@ -698,9 +693,9 @@ function FocusSignal({ icon: Icon, label, value, to, tone }: { icon: typeof Cloc
 
 function HeroCard({ children, delay, className }: { children: React.ReactNode; delay: number; className?: string }) {
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay }} className={className}>
+    <Enter delay={delay} duration={0.3} className={className}>
       {children}
-    </motion.div>
+    </Enter>
   );
 }
 

@@ -7,8 +7,8 @@
  * "your request to join was approved" email (`#joinApproved`), whose link carries `welcome=1`: the same
  * single-use token machinery, for someone choosing their FIRST password — so it says "set", not "reset".
  */
+import { Enter } from "../components/ui/enter";
 import { useMutation } from "@tanstack/react-query";
-import { motion } from "framer-motion";
 import { CheckCircle2, KeyRound } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
@@ -66,12 +66,7 @@ export function ResetPassword() {
         <div className="absolute -left-32 top-1/4 h-80 w-80 rounded-full bg-primary/15 blur-3xl" />
         <div className="absolute -right-24 bottom-10 h-80 w-80 rounded-full bg-accent/20 blur-3xl" />
       </div>
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: "easeOut" }}
-        className="w-full max-w-md"
-      >
+      <Enter duration={0.4} className="w-full max-w-md">
         <Card>
           <CardContent className="pt-6">
             <h1 className="text-2xl font-black tracking-tight">{copy.title}</h1>
@@ -153,7 +148,7 @@ export function ResetPassword() {
             </Link>
           </CardContent>
         </Card>
-      </motion.div>
+      </Enter>
     </div>
   );
 }

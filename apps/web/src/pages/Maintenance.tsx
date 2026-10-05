@@ -9,18 +9,18 @@
  * countdown ticks client-side every second in between, and the progress bar is derived from
  * the window bounds — so the page feels alive without hammering the server.
  * DESIGN NOTES: counter-rotating gears + drifting ambient orbs say "work in progress" without a
- * single image asset; every entrance is staggered via framer-motion (already in the bundle for
- * the dashboard); the e2e-asserted strings ("Scheduled maintenance in progress", "Estimated
+ * single image asset; every entrance is staggered in CSS (components/ui/enter.tsx), and the
+ * gears, orbs and progress bar are CSS keyframes; the e2e-asserted strings ("Scheduled maintenance in progress", "Estimated
  * time remaining", "We're back online") are load-bearing — tests/e2e/maintenance.spec.ts.
  * WHO routes here: `services/api.ts`'s response interceptor (any 503 with code MAINTENANCE),
  * and `Login.tsx` when a sign-in attempt is refused for the same reason.
  */
 import { useQuery } from "@tanstack/react-query";
-import { motion } from "framer-motion";
 import { CalendarClock, Clock, Cog, LogIn, RadioTower, ShieldCheck, Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { Button } from "../components/ui/button";
+import { Enter } from "../components/ui/enter";
 import { maintenanceApi } from "../services/api";
 
 /** "2h 14m 09s" — zero-padded only where it reads naturally. Negative clamps to zero so a
@@ -46,27 +46,15 @@ function formatWindowTime(iso: string | null): string | null {
 function WorkingGears() {
   return (
     <div className="relative h-24 w-24" aria-hidden>
-      <motion.div
-        className="absolute left-0 top-0 text-warning"
-        animate={{ rotate: 360 }}
-        transition={{ duration: 14, repeat: Infinity, ease: "linear" }}
-      >
+      <div className="absolute left-0 top-0 text-warning motion-safe:animate-spin" style={{ animationDuration: "14s" }}>
         <Cog className="h-14 w-14" strokeWidth={1.5} />
-      </motion.div>
-      <motion.div
-        className="absolute bottom-0 right-0 text-primary"
-        animate={{ rotate: -360 }}
-        transition={{ duration: 10, repeat: Infinity, ease: "linear" }}
-      >
+      </div>
+      <div className="absolute bottom-0 right-0 text-primary motion-safe:animate-spin" style={{ animationDuration: "10s", animationDirection: "reverse" }}>
         <Cog className="h-10 w-10" strokeWidth={1.5} />
-      </motion.div>
-      <motion.div
-        className="absolute -bottom-1 left-1 text-foreground/70"
-        animate={{ rotate: [0, -14, 8, 0] }}
-        transition={{ duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
-      >
+      </div>
+      <div className="absolute -bottom-1 left-1 text-foreground/70 motion-safe:animate-wobble">
         <Wrench className="h-8 w-8" strokeWidth={1.75} />
-      </motion.div>
+      </div>
     </div>
   );
 }
@@ -74,20 +62,13 @@ function WorkingGears() {
 /** Slow-drifting ambient orb. Motion runs transform-only, so this costs nothing measurable. */
 function Orb({ className, duration, dx, dy }: { className: string; duration: number; dx: number; dy: number }) {
   return (
-    <motion.div
-      className={`absolute rounded-full blur-3xl ${className}`}
-      animate={{ x: [0, dx, 0], y: [0, dy, 0] }}
-      transition={{ duration, repeat: Infinity, ease: "easeInOut" }}
+    <div
+      className={`absolute rounded-full blur-3xl motion-safe:animate-drift ${className}`}
+      style={{ animationDuration: `${duration}s`, ["--drift-x" as string]: `${dx}px`, ["--drift-y" as string]: `${dy}px` }}
       aria-hidden
     />
   );
 }
-
-const enter = (delay: number) => ({
-  initial: { opacity: 0, y: 14 },
-  animate: { opacity: 1, y: 0 },
-  transition: { duration: 0.45, delay, ease: "easeOut" as const }
-});
 
 export function MaintenancePage() {
   const navigate = useNavigate();
@@ -151,39 +132,39 @@ export function MaintenancePage() {
       </div>
 
       <main className="relative w-full max-w-xl">
-        <motion.div {...enter(0)} className="rounded-2xl border bg-card/95 p-8 shadow-2xl backdrop-blur sm:p-10">
+        <Enter delay={0} className="rounded-2xl border bg-card/95 p-8 shadow-2xl backdrop-blur sm:p-10">
           <div className="flex flex-col items-center text-center">
-            <motion.div {...enter(0.05)}>
+            <Enter delay={0.05}>
               <WorkingGears />
-            </motion.div>
+            </Enter>
 
-            <motion.p {...enter(0.12)} className="mt-4 text-sm font-semibold uppercase tracking-widest text-primary">
+            <Enter as="p" delay={0.12} className="mt-4 text-sm font-semibold uppercase tracking-widest text-primary">
               TimeSphere
-            </motion.p>
+            </Enter>
 
             {reopened ? (
               <>
-                <motion.h1 {...enter(0.18)} className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">
+                <Enter as="h1" delay={0.18} className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">
                   We're back online
-                </motion.h1>
-                <motion.p {...enter(0.24)} className="mt-3 text-muted-foreground">
+                </Enter>
+                <Enter as="p" delay={0.24} className="mt-3 text-muted-foreground">
                   Maintenance is finished — taking you to the sign-in page…
-                </motion.p>
+                </Enter>
               </>
             ) : (
               <>
-                <motion.h1 {...enter(0.18)} className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">
+                <Enter as="h1" delay={0.18} className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">
                   Scheduled maintenance in progress
-                </motion.h1>
-                <motion.p {...enter(0.24)} className="mt-3 max-w-md text-muted-foreground">
+                </Enter>
+                <Enter as="p" delay={0.24} className="mt-3 max-w-md text-muted-foreground">
                   We're making improvements behind the scenes. The workspace is temporarily unavailable and
                   signing in is paused until the window ends.
-                </motion.p>
+                </Enter>
               </>
             )}
 
             {!reopened && remainingMs !== null && remainingMs > 0 && (
-              <motion.div {...enter(0.3)} className="mt-6 w-full rounded-xl border bg-muted/40 px-6 py-4">
+              <Enter delay={0.3} className="mt-6 w-full rounded-xl border bg-muted/40 px-6 py-4">
                 <p className="flex items-center justify-center gap-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   <Clock className="h-3.5 w-3.5" aria-hidden /> Estimated time remaining
                 </p>
@@ -193,29 +174,27 @@ export function MaintenancePage() {
                 {progressPct !== null && (
                   <div className="mt-3">
                     <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                      <motion.div
-                        className="h-full rounded-full bg-gradient-to-r from-primary to-warning"
-                        initial={{ width: 0 }}
-                        animate={{ width: `${progressPct}%` }}
-                        transition={{ duration: 0.8, ease: "easeOut" }}
-                      />
+                      {/* Width is the value; the grow-in is a transform, so it never forces a layout. */}
+                      <div className="h-full" style={{ width: `${progressPct}%` }}>
+                        <div className="h-full origin-left rounded-full bg-gradient-to-r from-primary to-warning motion-safe:animate-grow-x" />
+                      </div>
                     </div>
                     <p className="mt-1.5 text-[11px] tabular-nums text-muted-foreground">~{progressPct}% of the window elapsed</p>
                   </div>
                 )}
-              </motion.div>
+              </Enter>
             )}
 
             {!reopened && (windowStart || windowEnd) && (
-              <motion.p
-                {...enter(0.36)}
+              <Enter as="p"
+                delay={0.36}
                 className="mt-4 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm text-muted-foreground"
               >
                 <CalendarClock className="h-4 w-4 shrink-0" aria-hidden />
                 {windowStart && <span>{windowStart}</span>}
                 {windowStart && windowEnd && <span aria-hidden>→</span>}
                 {windowEnd && <span>{windowEnd}</span>}
-              </motion.p>
+              </Enter>
             )}
 
             {/* WHO armed it, when it was platform operations rather than this workspace. A person
@@ -223,23 +202,23 @@ export function MaintenancePage() {
                 is a deployment-wide one, that administrator cannot lift it either, and saying so
                 here saves a support round-trip that ends in "we can't". A role, never a person. */}
             {!reopened && status?.managedByPlatform && (
-              <motion.p {...enter(0.4)} className="mt-4 text-sm text-muted-foreground">
+              <Enter as="p" delay={0.4} className="mt-4 text-sm text-muted-foreground">
                 Scheduled by {status.managedByLabel ?? "platform operations"} as part of planned maintenance across the service — your own
                 administrators cannot bring this forward.
-              </motion.p>
+              </Enter>
             )}
 
             {/* The admin's own words, if they left any — plain text rendering, React escapes it. */}
             {!reopened && status?.message && (
-              <motion.div
-                {...enter(0.42)}
+              <Enter
+                delay={0.42}
                 className="mt-5 w-full rounded-lg border-l-4 border-warning bg-warning/10 px-4 py-3 text-left text-sm text-foreground"
               >
                 {status.message}
-              </motion.div>
+              </Enter>
             )}
 
-            <motion.div {...enter(0.48)} className="mt-8 flex w-full flex-col items-center gap-3">
+            <Enter delay={0.48} className="mt-8 flex w-full flex-col items-center gap-3">
               {reopened ? (
                 <Button size="lg" className="w-full sm:w-auto" onClick={() => navigate("/login", { replace: true })}>
                   <LogIn className="mr-2 h-4 w-4" aria-hidden /> Go to sign in
@@ -254,17 +233,17 @@ export function MaintenancePage() {
                   Live — this page checks automatically and lets you back in the moment we're done. No need to refresh.
                 </p>
               )}
-            </motion.div>
+            </Enter>
           </div>
-        </motion.div>
+        </Enter>
 
-        <motion.p
-          {...enter(0.55)}
+        <Enter as="p"
+          delay={0.55}
           className="mt-6 flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground"
         >
           <ShieldCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
           Your data is safe. Unsaved changes from before the window may need to be re-entered.
-        </motion.p>
+        </Enter>
       </main>
     </div>
   );

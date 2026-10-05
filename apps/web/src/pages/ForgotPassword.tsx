@@ -11,8 +11,8 @@
  * and the login page already hides the link; this covers a bookmarked or typed URL. Read from the
  * same public `sso-methods` answer the login page uses, so the two can never disagree.
  */
+import { Enter } from "../components/ui/enter";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { motion } from "framer-motion";
 import { ArrowLeft, Mail, Send } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
@@ -41,12 +41,7 @@ export function ForgotPassword() {
         <div className="absolute -left-32 top-1/4 h-80 w-80 rounded-full bg-primary/15 blur-3xl" />
         <div className="absolute -right-24 bottom-10 h-80 w-80 rounded-full bg-accent/20 blur-3xl" />
       </div>
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: "easeOut" }}
-        className="w-full max-w-md"
-      >
+      <Enter duration={0.4} className="w-full max-w-md">
         <Card>
           <CardContent className="pt-6">
             <h1 className="text-2xl font-black tracking-tight">Reset password</h1>
@@ -107,7 +102,7 @@ export function ForgotPassword() {
             )}
           </CardContent>
         </Card>
-      </motion.div>
+      </Enter>
     </div>
   );
 }

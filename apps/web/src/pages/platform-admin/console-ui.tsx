@@ -24,7 +24,8 @@
  *   - the primary action is `PRIMARY_BTN` (amber) and every secondary action is
  *     `<Button variant="outline">` — there is deliberately no `ConsoleButton` to fork.
  */
-import { motion, useReducedMotion } from "framer-motion";
+import { Enter } from "../../components/ui/enter";
+import { usePrefersReducedMotion as useReducedMotion } from "../../lib/use-motion";
 import { RefreshCw, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge } from "../../components/ui/badge";
@@ -54,9 +55,8 @@ export const PRIMARY_BTN = "bg-accent text-accent-foreground hover:bg-accent/90"
 /* ----------------------------------------------------------------------------------------- */
 
 export function ConsolePage({ title, description, eyebrow, actions, children }: { title: string; description?: ReactNode; eyebrow?: string; actions?: ReactNode; children: ReactNode }) {
-  const reduce = useReducedMotion();
   return (
-    <motion.div initial={reduce ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, ease: "easeOut" }} className="grid min-w-0 grid-cols-1 gap-6">
+    <Enter duration={0.28} className="grid min-w-0 grid-cols-1 gap-6">
       {/* Two columns that WRAP rather than collide: the title block is `flex-1` over a basis wide
           enough to keep a real sentence readable, so once the actions no longer fit beside it the
           whole cluster drops to its own line instead of squeezing the heading to one word a line.
@@ -79,7 +79,7 @@ export function ConsolePage({ title, description, eyebrow, actions, children }: 
         {actions && <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-2 sm:justify-end">{actions}</div>}
       </div>
       {children}
-    </motion.div>
+    </Enter>
   );
 }
 
@@ -413,7 +413,6 @@ export function KpiCard({
   delay?: number;
 }) {
   const shown = useCountUp(value);
-  const reduce = useReducedMotion();
   const toneClass = {
     default: "bg-muted text-foreground",
     accent: "bg-accent/15 text-accent",
@@ -424,10 +423,9 @@ export function KpiCard({
   return (
     /* Everything steps down one notch at 2-up-on-a-phone width: a smaller badge, smaller value
        type, and every line truncating — a tile that overflows is worse than a tile that elides. */
-    <motion.div
-      initial={reduce ? false : { opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, delay, ease: "easeOut" }}
+    <Enter
+      delay={delay}
+      duration={0.3}
       className="flex min-w-0 items-center gap-3 rounded-xl border border-border bg-card p-3 shadow-sm sm:gap-4 sm:p-4"
     >
       <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg sm:h-11 sm:w-11", toneClass)}>
@@ -438,7 +436,7 @@ export function KpiCard({
         <p className="truncate text-xl font-black tabular-nums tracking-tight text-foreground sm:text-2xl">{format(shown)}</p>
         {hint && <p className="mt-0.5 truncate text-xs text-muted-foreground">{hint}</p>}
       </div>
-    </motion.div>
+    </Enter>
   );
 }
 

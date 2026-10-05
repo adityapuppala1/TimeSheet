@@ -125,13 +125,36 @@ export default {
         },
         shimmer: {
           "100%": { transform: "translateX(100%)" }
+        },
+        // The entrances and ambient motion framer-motion used to provide (removed 2026-10-06): plain
+        // CSS, always behind `motion-safe:` at the call site, delays and durations set inline.
+        enter: {
+          from: { opacity: "0", transform: "translateY(14px)" },
+          to: { opacity: "1", transform: "translateY(0)" }
+        },
+        wobble: {
+          "0%, 100%": { transform: "rotate(0deg)" },
+          "33%": { transform: "rotate(-14deg)" },
+          "66%": { transform: "rotate(8deg)" }
+        },
+        drift: {
+          "0%, 100%": { transform: "translate(0, 0)" },
+          "50%": { transform: "translate(var(--drift-x, 0px), var(--drift-y, 0px))" }
+        },
+        "grow-x": {
+          from: { transform: "scaleX(0)" },
+          to: { transform: "scaleX(1)" }
         }
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
         "fade-in": "fade-in 0.25s ease-out both",
-        shimmer: "shimmer 1.8s linear infinite"
+        shimmer: "shimmer 1.8s linear infinite",
+        enter: "enter 0.45s ease-out both",
+        wobble: "wobble 2.6s ease-in-out infinite",
+        drift: "drift 20s ease-in-out infinite",
+        "grow-x": "grow-x 0.8s ease-out both"
       }
     }
   },
