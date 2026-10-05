@@ -1,0 +1,2 @@
+# AGENTS.md is the single source of agent instructions for this repo; Aider loads it read-only.
+read: AGENTS.md

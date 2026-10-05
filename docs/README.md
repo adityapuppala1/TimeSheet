@@ -86,7 +86,7 @@ The **Type** column follows [Diátaxis](https://diataxis.fr/): a *how-to* gets a
 | [.github/SECURITY.md](../.github/SECURITY.md) | How to report a vulnerability privately, the protections already in place, and two design points to understand before deploying |
 | [.github/pull_request_template.md](../.github/pull_request_template.md) | What a PR states about its verification and the docs it updated |
 | [.github/ISSUE_TEMPLATE/](../.github/ISSUE_TEMPLATE/) | Bug report and feature request forms |
-| [CLAUDE.md](../CLAUDE.md) | Instructions Claude Code loads automatically: the knowledge-graph commands and the ship-feature pointer |
+| [AGENTS.md](../AGENTS.md) | The ONE set of instructions every AI coding agent loads: the knowledge-graph commands and the ship-feature pointer. Read natively by Codex, OpenCode, Cursor, Windsurf, Zed, Copilot, Antigravity, Kimi, Amp, Jules and others; `CLAUDE.md`, `GEMINI.md` (+ `.gemini/settings.json`), `.github/copilot-instructions.md`, `.amazonq/rules/`, `.kiro/steering/` and `.aider.conf.yml` only point at it — edit AGENTS.md, never the pointers |
 
 ## Where new documentation goes
 

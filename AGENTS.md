@@ -1,3 +1,10 @@
+# Agent instructions
+
+The single source of instructions for every AI coding agent in this repo (Claude Code, Codex,
+OpenCode, Cursor, Copilot, Gemini/Antigravity, Windsurf, Zed, Kiro/Amazon Q, Aider, Kimi, ...).
+Tool-specific files (`CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.amazonq/rules/`,
+`.kiro/steering/`, `.aider.conf.yml`) only point here — change this file, never those.
+
 ## graphify
 
 This project has a knowledge graph at `graphify-out/` with god nodes, community structure, and
@@ -18,7 +25,8 @@ Rules:
 - After modifying code, run `python -m graphify update .` to keep the graph current (AST-only,
   no LLM cost). The installed `post-commit` git hook already does this automatically after every
   commit, detached, so a normal commit-based workflow needs no manual step. Docs/markdown
-  changes are NOT covered by the hook — re-run `/graphify . --update` for those.
+  changes are NOT covered by the hook — re-run `/graphify . --update` (the graphify skill; an agent
+  without it leaves that to a session that has it) for those.
 - `.graphifyignore` deliberately excludes vendored `.agents/` skill docs, generated Prisma
   clients, and build output. Without that, ~70% of the graph's markdown was third-party rule
   files and the real architecture was buried. Add new generated/vendored paths there rather than
