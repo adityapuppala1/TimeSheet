@@ -29,6 +29,7 @@ import { resolveDashboard, WIDGET_CATALOGUE, WIDGET_TYPES } from "../services/da
 import { getPlanningQuota } from "../services/plan-limits.service.js";
 import { dashboardProjectIds } from "../services/dashboard-scope.service.js";
 import { isChangeManagementOn } from "../services/change.service.js";
+import { teamScopeUserIds } from "./timesheet.controller.js";
 
 export const dashboardRouter = Router();
 dashboardRouter.use(requireAuth);
@@ -329,6 +330,12 @@ const pct = (part: number, whole: number): number | null => (whole > 0 ? Math.ro
  */
 dashboardRouter.get("/my-month", async (req, res) => {
   const userId = req.user!.id;
+  // `?scope=team` widens the HOURS to the people the viewer is entitled to see — everyone for an
+  // admin, their direct reports for a manager — the same set the home page's day timeline draws
+  // (teamScopeUserIds). Without it an admin's home page built every card from their own, usually
+  // empty, hours beside a timeline full of the team's. Only a reports:view holder may widen.
+  const wide = req.query.scope === "team" && req.user!.permissions.includes(permissions.REPORTS_VIEW);
+  const entryUsers = wide ? await teamScopeUserIds(req.user!) : userId;
   const window = parseDayWindow(req.query);
   // The current month on the PLATFORM's calendar, not UTC's: from 00:00 to 05:30 IST on the 1st,
   // UTC is still in last month, and the card showed last month under "this month".
@@ -350,7 +357,7 @@ dashboardRouter.get("/my-month", async (req, res) => {
   const [entries, assignments] = await Promise.all([
     // Every entry in the month, uncapped — this is the whole point of the route.
     prisma.timesheet.findMany({
-      where: { userId, deletedAt: null, workDate: { gte: monthStart, lt: monthEnd } },
+      where: { userId: entryUsers, deletedAt: null, workDate: { gte: monthStart, lt: monthEnd } },
       select: { projectId: true, totalHours: true, status: true, workDate: true }
     }),
     prisma.userProjectAssignment.findMany({ where: { userId }, select: { projectId: true } })

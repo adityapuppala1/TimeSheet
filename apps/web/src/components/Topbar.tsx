@@ -21,6 +21,7 @@ import { ShortcutsDialog, useGlobalShortcuts } from "./ShortcutsDialog";
 import { ProductTour, shouldAutoStartTour, useTourController } from "./ProductTour";
 import { authApi, fileUrl } from "../services/api";
 import { useAuthStore } from "../store/auth";
+import { rememberTheme } from "../lib/remember-theme";
 
 export function Topbar() {
   const user = useAuthStore((s) => s.user);
@@ -91,7 +92,7 @@ export function Topbar() {
             <NotificationsBell />
           </span>
 
-          <AnimatedThemeToggler />
+          <AnimatedThemeToggler onChange={rememberTheme} />
 
           {/* modal={false}: a menu doesn't need to freeze page scroll, and the scroll lock is
               what interacted badly with sticky positioning (see index.css's html comment). */}

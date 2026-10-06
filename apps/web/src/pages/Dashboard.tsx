@@ -165,9 +165,37 @@ function periodPhrase(label: string): string {
   return span.length === 2 ? `between ${span[0]} and ${span[1]}` : `on ${label}`;
 }
 
+/**
+ * WHOSE hours the overview cards count. A reports:view holder (admin, manager, team lead) is
+ * looking at the people they oversee, so the cards follow the same role-scoped set as the day
+ * timeline — everyone for an admin, their reports for a manager. Counting only the viewer's own
+ * entries left an admin who logs no time with a row of 0.0h cards directly above a timeline full
+ * of the team's hours. Everyone else still sees exactly their own.
+ *
+ * `cardAudience` is what the cards are told: whose hours they hold, or null for the viewer's own.
+ */
+function overviewScope(permissionList: readonly string[] | undefined) {
+  const teamView = Boolean(permissionList?.includes("reports:view"));
+  const audience = permissionList?.includes("users:manage") ? "the workspace" : "your team";
+  const cardAudience = teamView ? audience : null;
+  const hoursWhat = cardAudience ? `the hours for ${cardAudience}` : "your hours for this period";
+  return { teamView, cardAudience, hoursWhat };
+}
+
+/** The team's figures and their request, or the viewer's own — whichever `overviewScope` chose. */
+function pickOverview<D, Q extends { isError: boolean; data?: unknown }>(
+  teamView: boolean,
+  team: { derived: D; source: Q },
+  own: { derived: D; source: Q }
+) {
+  const pick = teamView ? team : own;
+  return { shown: pick.derived, shownSource: pick.source, shownFailed: pick.source.isError && !pick.source.data };
+}
+
 export function Dashboard() {
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.permissions.includes("reports:view");
+  const { teamView, cardAudience, hoursWhat } = overviewScope(user?.permissions);
   // The sidebar's own planning-settings read (shared cache), not a second request.
   const workingDays = useWorkingDays();
 
@@ -183,6 +211,7 @@ export function Dashboard() {
   const [range, setRange] = useState<DateRangeValue>(thisWeekRange);
   const periodLabel = describeRange(range);
   const rangeParams = { from: range.from, to: range.to };
+  const myMonthParams = teamView ? { ...rangeParams, scope: "team" as const } : rangeParams;
   /** What every delta on the page is measured against: the same weekdays, whole weeks earlier — the
    *  rule the server's admin summary uses too (utils/date-window.ts), so the label is true of both. */
   const comparison = likeForLikeWindow(range.from, range.to, new Date());
@@ -229,7 +258,10 @@ export function Dashboard() {
   });
   // Counted server-side and UNCAPPED. The list above is capped, which silently dropped projects
   // from the rollup on any busy account — see dashboardApi.myMonth.
-  const myMonth = useQuery({ queryKey: ["dashboard", "my-month", range.from, range.to], queryFn: () => dashboardApi.myMonth(rangeParams) });
+  const myMonth = useQuery({
+    queryKey: ["dashboard", "my-month", range.from, range.to, teamView],
+    queryFn: () => dashboardApi.myMonth(myMonthParams)
+  });
   /**
    * TODAY, whatever range the page is showing. The banner says "Today's timesheet is logged" or "No
    * entry for today yet" and drives the SLA warning, so it must not be asked about a week: given the
@@ -260,6 +292,12 @@ export function Dashboard() {
   const timelineEntries = useQuery({
     queryKey: ["timesheets", "timeline", range.from, range.to],
     queryFn: () => timesheetApi.list({ ...rangeParams, scope: "team" })
+  });
+  /** The same role-scoped set for the comparison window — the team view's "vs last week". */
+  const previousTeam = useQuery({
+    queryKey: ["timesheets", "timeline", comparison?.from, comparison?.to],
+    queryFn: () => timesheetApi.list({ from: comparison!.from, to: comparison!.to, scope: "team" }),
+    enabled: Boolean(teamView && comparison)
   });
   const myTickets = useQuery({
     queryKey: ["tickets", "for-dashboard", user?.id],
@@ -317,6 +355,22 @@ export function Dashboard() {
       }),
     [allForCalendar, previous.data, range.from, range.to, user?.id, workingDays]
   );
+  /** The team view's figures: the timeline's own rows (already role-scoped and range-bounded), with
+   *  no owner filter. Never merged with the unscoped `recent` page, which for a manager would add
+   *  people outside their team. */
+  const derivedTeam = useMemo(
+    () =>
+      summarisePersonalPeriod({
+        rows: Array.isArray(timelineEntries.data) ? (timelineEntries.data as TimesheetRowLite[]) : [],
+        prevRows: Array.isArray(previousTeam.data) ? (previousTeam.data as TimesheetRowLite[]) : undefined,
+        from: range.from,
+        to: range.to,
+        userId: undefined,
+        workingDays
+      }),
+    [timelineEntries.data, previousTeam.data, range.from, range.to, workingDays]
+  );
+  const { shown, shownSource, shownFailed } = pickOverview(teamView, { derived: derivedTeam, source: timelineEntries }, { derived, source: timesheets });
 
   /** The timeline's rows grouped by calendar day, from its own role-scoped request. Kept separate
    *  from `derived.entriesByDate` (which is deliberately wider, so the calendars can mark days
@@ -472,38 +526,42 @@ export function Dashboard() {
       {/* ---- Hero band: week at a glance / activity / progress ---- */}
       {/* Your hours did not load: a dash and a Retry in place of three cards that would otherwise all
           read "0.0h" — a claim that you logged nothing. */}
-      {personalFailed && <QueryError what="your hours for this period" onRetry={() => timesheets.refetch()} />}
-      {!personalFailed && (
+      {shownFailed && <QueryError what={hoursWhat} onRetry={() => shownSource.refetch()} />}
+      {!shownFailed && (
       <div data-tour="dashboard-overview" className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <HeroCard delay={0}>
           <WeekAtAGlance
-            loading={timesheets.isLoading}
-            hours={derived.loggedHours}
-            byStatus={derived.byStatus}
-            projects={derived.rangeProjects}
-            pendingCount={derived.pendingCount}
-            daysLogged={derived.daysLogged}
-            workingDaysToDate={derived.workingDaysToDate}
-            trend={derived.trend}
+            loading={shownSource.isLoading}
+            hours={shown.loggedHours}
+            byStatus={shown.byStatus}
+            projects={shown.rangeProjects}
+            pendingCount={shown.pendingCount}
+            daysLogged={shown.daysLogged}
+            workingDaysToDate={shown.workingDaysToDate}
+            trend={shown.trend}
             periodLabel={periodLabel}
             periodIn={periodIn}
+            audience={cardAudience}
           />
         </HeroCard>
         <HeroCard delay={0.05}>
           <ActivityCard
-            loading={timesheets.isLoading}
-            trend={derived.trend}
-            hours={derived.loggedHours}
-            prevHours={derived.prevLoggedHours}
+            loading={shownSource.isLoading}
+            trend={shown.trend}
+            hours={shown.loggedHours}
+            prevHours={shown.prevLoggedHours}
             comparisonLabel={comparisonLabel}
             periodLabel={periodLabel}
+            audience={cardAudience}
           />
         </HeroCard>
         <HeroCard delay={0.1} className="md:col-span-2 xl:col-span-1">
           <ProgressCard
-            loading={timesheets.isLoading}
-            hours={derived.loggedHours}
-            workingDays={derived.workingDaysToDate}
+            loading={shownSource.isLoading}
+            hours={shown.loggedHours}
+            people={cardAudience ? Math.max(1, shown.people) : 1}
+            audience={cardAudience}
+            workingDays={shown.workingDaysToDate}
             periodLabel={periodIn}
             completion={myMonth.data?.completion}
             totals={myMonth.data?.totals}
@@ -536,7 +594,7 @@ export function Dashboard() {
       {isAdmin && (
         <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-5">
           {adminStats.map((stat, index) => (
-            <Enter key={stat.label} delay={index * 0.05} duration={0.25}>
+            <Enter key={stat.label} delay={index * 0.05} duration={0.25} className="h-full [&>*]:h-full">
               <StatCard label={stat.label} value={stat.value} tone={stat.tone} trend={stat.trend} trendLabel={stat.trendLabel} hint={stat.hint} />
             </Enter>
           ))}
@@ -556,15 +614,17 @@ export function Dashboard() {
             <CardTitle className="flex items-center gap-2 text-base">
               <TrendingUp className="h-4 w-4 text-primary" /> Productivity
             </CardTitle>
-            <CardDescription>Your logged hours (submitted and approved), {periodLabel}.</CardDescription>
+            <CardDescription>
+              {teamView ? `Logged hours (submitted and approved) across ${cardAudience}` : "Your logged hours (submitted and approved)"}, {periodLabel}.
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            {personalFailed ? (
-              <QueryError what="your hours for this period" onRetry={() => timesheets.refetch()} compact />
+            {shownFailed ? (
+              <QueryError what={hoursWhat} onRetry={() => shownSource.refetch()} compact />
             ) : (
-            <div className="h-64" role="img" aria-label={trendSummary(derived.trend, periodLabel)}>
+            <div className="h-64" role="img" aria-label={trendSummary(shown.trend, periodLabel)}>
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={derived.trend} accessibilityLayer>
+                <AreaChart data={shown.trend} accessibilityLayer>
                   <defs>
                     <linearGradient id="primaryGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.4} />
@@ -604,7 +664,7 @@ export function Dashboard() {
       </div>
 
       {/* ---- Per-project rollup — the Trackline "Project List", from data already loaded ---- */}
-      <ProjectRollup rollup={myMonth.data} loading={myMonth.isLoading} periodLabel={periodLabel} />
+      <ProjectRollup rollup={myMonth.data} loading={myMonth.isLoading} periodLabel={periodLabel} audience={cardAudience} />
     </div>
   );
 }
@@ -720,9 +780,12 @@ function WeekAtAGlance({
   trend,
   projects,
   periodLabel,
-  periodIn
+  periodIn,
+  audience
 }: {
   loading: boolean;
+  /** Whose hours these are when they are not only the viewer's ("the workspace", "your team"). */
+  audience: string | null;
   /** LOGGED hours — submitted plus approved. Drafts and rejected hours have their own rows below
    *  and are never part of this number. */
   hours: number;
@@ -771,7 +834,7 @@ function WeekAtAGlance({
           <Clock className="h-4 w-4 text-primary" />
           <span className="first-letter:uppercase">{periodLabel}</span>
         </CardTitle>
-        <CardDescription>Your logged hours by state, {periodLabel}.</CardDescription>
+        <CardDescription>{audience ? `Logged hours by state across ${audience}` : "Your logged hours by state"}, {periodLabel}.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="flex items-baseline justify-between">
@@ -829,7 +892,7 @@ function WeekAtAGlance({
             numbers, and the labels stay readable at a phone width. */}
         {projects.length > 0 && (
           <div className="grid gap-2 border-t border-border pt-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Where your hours went</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{audience ? "Where the hours went" : "Where your hours went"}</p>
             {topProjects.map((p) => (
               <div key={p.label} className="grid gap-1">
                 <div className="flex items-baseline justify-between gap-2 text-sm">
@@ -881,9 +944,11 @@ function ActivityCard({
   hours,
   prevHours,
   comparisonLabel,
-  periodLabel
+  periodLabel,
+  audience
 }: {
   loading: boolean;
+  audience: string | null;
   trend: Array<{ day: string; hours: number }>;
   hours: number;
   /** Null when none of the previous period was loaded. Distinct from 0 on purpose: "nothing to
@@ -909,7 +974,9 @@ function ActivityCard({
               <TrendingUp className="h-4 w-4 text-primary" />
               Daily rhythm
             </CardTitle>
-            <CardDescription>Logged hours (submitted and approved) per day, {periodLabel}.</CardDescription>
+            <CardDescription>
+              Logged hours (submitted and approved) per day{audience ? ` across ${audience}` : ""}, {periodLabel}.
+            </CardDescription>
           </div>
           {delta && (
             <span className="flex shrink-0 flex-col items-end gap-0.5">
@@ -956,12 +1023,18 @@ function ActivityCard({
 function ProgressCard({
   loading,
   hours,
+  people,
+  audience,
   workingDays,
   periodLabel,
   completion,
   totals
 }: {
   loading: boolean;
+  /** People whose hours are counted — the target is per person, so a team's target is one
+   *  person's times the people who logged. 1 for the personal view. */
+  people: number;
+  audience: string | null;
   /** The signed-in person's LOGGED hours (submitted + approved) in the range. */
   hours: number;
   /** Mon–Fri days in the selected range UP TO TODAY. The target scales against this rather than a
@@ -976,7 +1049,9 @@ function ProgressCard({
   if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
   // No working day yet (a range that starts today on a weekend) has no target to be measured
   // against: a dash, not 0% and not 100%.
-  const target = workingDays * 8;
+  const target = workingDays * 8 * people;
+  const peopleNote = people > 1 ? people + " people · " : "";
+  const whose = audience ? "these" : "your";
   const targetPct = target > 0 ? Math.min(100, Math.round((hours / target) * 100)) : null;
   // The caption and the percentage come from the SAME server rollup, so "Xh of Yh" can never again
   // describe a different population from the percentage beside it.
@@ -995,7 +1070,7 @@ function ProgressCard({
       </CardHeader>
       <CardContent className="grid gap-5">
         <TickMeter
-          label={`Target to date (${target}h · ${workingDays} working ${workingDays === 1 ? "day" : "days"})`}
+          label={`Target to date (${target}h · ${peopleNote}${workingDays} working ${workingDays === 1 ? "day" : "days"})`}
           percent={targetPct}
           detail={formatHours(hours) + " logged " + periodLabel}
           tone="primary"
@@ -1014,7 +1089,7 @@ function ProgressCard({
           label="Tickets closed"
           percent={completion?.ticketPct ?? null}
           detail={
-            totals ? `${totals.tickets.closed} of ${totals.tickets.total} on your projects` : "Counting…"
+            totals ? `${totals.tickets.closed} of ${totals.tickets.total} on ${whose} projects` : "Counting…"
           }
           tone="info"
         />
@@ -1024,7 +1099,7 @@ function ProgressCard({
           <TickMeter
             label="Changes closed"
             percent={completion?.changePct ?? null}
-            detail={`${totals.changes.closed} of ${totals.changes.raised} raised on your projects`}
+            detail={`${totals.changes.closed} of ${totals.changes.raised} raised on ${whose} projects`}
             tone="warning"
           />
         )}
@@ -1584,7 +1659,18 @@ const ROLLUP_PAGE_SIZE = 10;
  * yet. "None of your tickets here are done" and "you have no tickets here" are different facts, and a
  * dashboard that renders both as 0% is the kind that gets quoted in a meeting.
  */
-function ProjectRollup({ rollup, loading, periodLabel }: { rollup: MyMonthRollup | undefined; loading: boolean; periodLabel: string }) {
+function ProjectRollup({
+  rollup,
+  loading,
+  periodLabel,
+  audience
+}: {
+  rollup: MyMonthRollup | undefined;
+  loading: boolean;
+  periodLabel: string;
+  /** Set when the hours are a team's rather than the viewer's — see `teamView` on the page. */
+  audience: string | null;
+}) {
   // Cards or table — only one of them is rendered. See useCardLayout for the measurement.
   const cardLayout = useCardLayout();
   const [page, setPage] = useState(1);
@@ -1601,10 +1687,12 @@ function ProjectRollup({ rollup, loading, periodLabel }: { rollup: MyMonthRollup
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
           <FolderKanban className="h-4 w-4 text-primary" />
-          My projects, <span className="lowercase">{periodLabel}</span>
+          {audience ? "Projects" : "My projects"}, <span className="lowercase">{periodLabel}</span>
         </CardTitle>
         <CardDescription>
-          Every project you are assigned to or have logged against {periodPhrase(periodLabel)} — hours, approval progress, how each
+          {audience
+            ? `Every project you are assigned to or ${audience} logged against ${periodPhrase(periodLabel)} — hours across ${audience},`
+            : `Every project you are assigned to or have logged against ${periodPhrase(periodLabel)} — hours,`} approval progress, how each
           project&apos;s tickets stand{showChanges ? ", and the changes raised against it" : ""}. Counted server-side over
           the whole period, so a busy one cannot push a project off the list. Ticket
           {showChanges ? " and change" : ""} counts are a snapshot of now, not of the period.
@@ -1640,8 +1728,8 @@ function ProjectRollup({ rollup, loading, periodLabel }: { rollup: MyMonthRollup
                       <th className="p-2 text-right font-medium">Done</th>
                       {showChanges && <th className="p-2 text-right font-medium">Changes</th>}
                       {showChanges && <th className="p-2 text-right font-medium">CM done</th>}
-                      <th className="p-2 font-medium">Last entry</th>
-                      <th className="w-[20%] p-2 font-medium">Approved</th>
+                      <th className="whitespace-nowrap p-2 pl-5 text-right font-medium">Last entry</th>
+                      <th className="w-[20%] p-2 pl-6 font-medium">Approved</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1651,7 +1739,7 @@ function ProjectRollup({ rollup, loading, periodLabel }: { rollup: MyMonthRollup
                       const donePct = ticketTotal > 0 ? Math.round((row.tickets.closed / ticketTotal) * 100) : null;
                       const cmDonePct = row.changes && row.changes.raised > 0 ? Math.round((row.changes.closed / row.changes.raised) * 100) : null;
                       return (
-                        <tr key={row.id} className="border-t border-border">
+                        <tr key={row.id} className="border-t border-border align-middle">
                           <td className="p-2">
                             <span className="font-medium">{row.name}</span>
                             {row.code && <span className="ml-2 font-mono text-xs text-muted-foreground">{row.code}</span>}
@@ -1704,8 +1792,8 @@ function ProjectRollup({ rollup, loading, periodLabel }: { rollup: MyMonthRollup
                               {cmDonePct === null ? <span className="font-normal text-muted-foreground">—</span> : `${cmDonePct}%`}
                             </td>
                           )}
-                          <td className="p-2 text-muted-foreground">{formatDate(row.lastDate)}</td>
-                          <td className="p-2">
+                          <td className="whitespace-nowrap p-2 pl-5 text-right tabular-nums text-muted-foreground">{formatDate(row.lastDate)}</td>
+                          <td className="p-2 pl-6">
                             <div className="flex items-center gap-2">
                               <Progress value={approvedPct ?? 0} className="h-1.5" />
                               <span className="w-9 text-right text-xs font-semibold tabular-nums">

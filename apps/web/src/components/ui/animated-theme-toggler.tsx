@@ -15,10 +15,11 @@
 import { useRef, useSyncExternalStore } from "react";
 import { Moon, Sun } from "lucide-react";
 import { Button } from "./button";
-import { centreOf, currentTheme, subscribeTheme, toggleTheme } from "../../lib/theme";
+import { centreOf, currentTheme, subscribeTheme, toggleTheme, type Theme } from "../../lib/theme";
 import { cn } from "../../lib/utils";
 
-export function AnimatedThemeToggler({ className }: { className?: string }) {
+/** `onChange` gets the theme now showing — the tenant top bar saves it to the profile with it. */
+export function AnimatedThemeToggler({ className, onChange }: { className?: string; onChange?: (theme: Theme) => void }) {
   const ref = useRef<HTMLButtonElement | null>(null);
   const theme = useSyncExternalStore(subscribeTheme, currentTheme, () => "light");
   const dark = theme === "dark";
@@ -29,7 +30,12 @@ export function AnimatedThemeToggler({ className }: { className?: string }) {
       variant="ghost"
       size="icon"
       className={cn("relative overflow-hidden", className)}
-      onClick={() => toggleTheme(centreOf(ref.current))}
+      onClick={() => {
+        // Toggle FIRST and unconditionally — `onChange?.(toggleTheme())` would skip the toggle
+        // itself wherever no onChange is passed, since an optional call never evaluates its arguments.
+        const next = toggleTheme(centreOf(ref.current));
+        onChange?.(next);
+      }}
       aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
       title={dark ? "Switch to light mode" : "Switch to dark mode"}
     >

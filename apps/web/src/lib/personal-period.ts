@@ -183,6 +183,9 @@ export function summarisePersonalPeriod<Row extends PersonalRow>({
   const pendingCount = inRange.filter((row) => row.status === "SUBMITTED").length;
 
   let loggedHours = 0;
+  /** Distinct people with logged hours in the range — 1 for a personal view, the head count behind
+   *  a team view's target (one person's 8h/day target against a whole team's hours read 600%). */
+  const people = new Set<string>();
   /** Logged hours per project. Keyed by the DISPLAY LABEL rather than the id, so entries whose
    *  project was removed collapse into one honest "No project" row. */
   const byProjectLabel = new Map<string, number>();
@@ -193,6 +196,7 @@ export function summarisePersonalPeriod<Row extends PersonalRow>({
     const hours = Number(row.totalHours ?? 0);
     loggedHours += hours;
     daysLogged.add(key);
+    people.add(ownerOf(row) ?? "");
     const offsetDays = daysBetweenInclusive(rangeStart, isoToLocalDate(key)!) - 1;
     buckets[Math.min(bucketCount - 1, Math.floor(offsetDays / bucketDays))].hours += hours;
     const projectLabel = row.project?.code ?? row.project?.name ?? "No project";
@@ -220,6 +224,7 @@ export function summarisePersonalPeriod<Row extends PersonalRow>({
      *  target scales against. Counting the days still to come would make every Thursday look behind. */
     workingDaysToDate: countWorkingDays(rangeStart, rangeEnd < todayLocal ? rangeEnd : todayLocal, workingDays),
     daysLogged: daysLogged.size,
+    people: people.size,
     loggedHours,
     prevLoggedHours,
     pendingCount,

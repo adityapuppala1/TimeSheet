@@ -74,6 +74,7 @@ import { usePlanningFeatures } from "../lib/use-planning";
 import { askAiApi, authApi, searchApi, type PlanningEffective } from "../services/api";
 import { toast } from "./ui/toaster";
 import { toggleTheme as switchTheme } from "../lib/theme";
+import { rememberTheme } from "../lib/remember-theme";
 import { SIGN_OUT_UNCONFIRMED, signOut } from "../lib/sign-out";
 
 function serverMessage(err: any, fallback: string) {
@@ -201,6 +202,7 @@ export function CommandPalette({ open, onOpenChange, onOpenShortcuts }: Props) {
      change rather than inventing a centre — see lib/theme.ts. */
   function handleToggleTheme() {
     const next = switchTheme();
+    rememberTheme(next);
     force((value) => value + 1);
     onOpenChange(false);
     toast.success(`Switched to ${next} mode`);

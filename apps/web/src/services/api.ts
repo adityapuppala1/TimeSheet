@@ -6148,7 +6148,7 @@ export const dashboardApi = {
    * busy account the older half of the month falls off the end and the projects only worked on early
    * in the month disappear from the card. It looked right in development and wrong in production.
    */
-  myMonth: async (params?: DateWindow) => (await api.get<MyMonthRollup>("/dashboards/my-month", { params })).data,
+  myMonth: async (params?: DateWindow & { scope?: "team" }) => (await api.get<MyMonthRollup>("/dashboards/my-month", { params })).data,
   list: async () => (await api.get<DashboardRow[]>("/dashboards")).data,
   /** Layout plus resolved data in one request — a grid of eight tiles fetched separately would be
    *  eight round trips on every page load. */
