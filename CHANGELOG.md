@@ -10,6 +10,11 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 6.3.0 — your week drafted for you, two-factor for everyone, and the platform brought current — 2026-10-06
+
+Draft my week, an approver brief, close-without-fix, sprint carry-over and two-factor sign-in; framer-motion
+gone, Tailwind 4 and Prisma 7 under it. Nothing to configure: upgrade with the usual update script.
+
 ### ✨ Features: your week drafted for you, and a brief for whoever approves it
 
 - **Draft my week** (Log timesheet): one press turns the tickets you updated or commented on into
