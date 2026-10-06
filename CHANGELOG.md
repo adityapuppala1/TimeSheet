@@ -10,6 +10,22 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 6.3.2 — an admin's home page shows the team's hours, and the theme you pick stays picked — 2026-10-06
+
+Two fixes people could see. Nothing to configure.
+
+### 🐛 Fixes
+
+- **Home page cards read 0.0h for admins** while the day timeline below was full: This week, Daily rhythm,
+  Progress, Productivity and the projects table counted only the signed-in person's own entries. Admins now see
+  the whole workspace and managers their direct reports — the same people the timeline shows — and the cards
+  say so. The hours target scales with the people who logged. Everyone else still sees exactly their own.
+- **The theme switched back after a refresh** when changed from the top bar or the command palette: those only
+  remembered it in the browser, and the theme saved on your profile won on reload. Every switch now saves to
+  your profile, as the Profile page always did.
+- **Projects table:** *Last entry* no longer runs into *CM done*; the stat tiles under the workforce snapshot are
+  one height.
+
 ## 6.3.1 — server telemetry no longer drops its first sample — 2026-10-06
 
 A one-line fix for an error printed shortly after the API starts. Nothing to configure.
