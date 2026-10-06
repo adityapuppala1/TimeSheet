@@ -125,7 +125,11 @@ async function refreshSnapshot(): Promise<void> {
 
   let eventLoopLagMs: number | null = null;
   if (loopDelay) {
-    eventLoopLagMs = Math.round((loopDelay.mean / 1e6) * 10) / 10;
+    // A histogram with no samples yet (the first refresh after boot) reports a NaN mean. MySQL has
+    // no NaN: Prisma 7's MariaDB adapter sends it as-is and the insert fails "out of range", where
+    // Prisma 6's engine had quietly coerced it. Not measured yet is null.
+    const lag = Math.round((loopDelay.mean / 1e6) * 10) / 10;
+    eventLoopLagMs = Number.isFinite(lag) ? lag : null;
     // Reset so each snapshot reports the lag since the previous one; without this a startup spike
     // would sit in the mean forever and every row would inherit it.
     loopDelay.reset();

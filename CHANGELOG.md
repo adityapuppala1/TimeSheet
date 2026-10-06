@@ -10,6 +10,17 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 6.3.1 — server telemetry no longer drops its first sample — 2026-10-06
+
+A one-line fix for an error printed shortly after the API starts. Nothing to configure.
+
+### 🐛 Fixes
+
+- **`Out of range value for column 'eventLoopLagMs'`** in the API log after a start: the first health
+  snapshot has no event-loop measurement yet, and Node reports that as `NaN`. Prisma 6 quietly coerced it;
+  Prisma 7's MariaDB driver sends it to MySQL, which rejects it, so the first telemetry batch was dropped.
+  An unmeasured reading is now stored as empty. No data was lost beyond that one batch.
+
 ## 6.3.0 — your week drafted for you, two-factor for everyone, and the platform brought current — 2026-10-06
 
 Draft my week, an approver brief, close-without-fix, sprint carry-over and two-factor sign-in; framer-motion
