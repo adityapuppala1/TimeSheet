@@ -39,6 +39,17 @@ A new card on the home page, and an update to the libraries behind the API. Noth
 - **API:** `GET /timesheets/team-roster` returns the people a viewer's team views cover, with their manager — an
   unfilled day is the absence of rows, so entries alone could never show it.
 
+### 📋 Timesheets: entries can only be logged a week back
+
+- **A timesheet entry can no longer be dated more than 7 days before today** — today and the seven days before
+  it are fine, older days are greyed out in the calendar, and the server refuses them with a message naming the
+  earliest date you can use. "Today" is your own calendar day, from your profile's time zone.
+- **It applies to creating an entry (as a draft or a submission, from the app or the assistant), to moving an
+  entry onto another date, and to submitting a draft** — so a draft left until it is more than a week old can no
+  longer be submitted; submit it in time or delete it. Correcting the hours or project of an entry that is
+  already saved, without changing its date, is still allowed.
+- **Entries already older than a week are untouched** — nothing is removed or re-dated.
+
 ### 🔒 Security: 16 high and critical advisories cleared
 
 - `dompurify` (one critical), `undici`, `body-parser`, `multer` and `follow-redirects` are updated within their

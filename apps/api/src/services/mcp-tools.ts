@@ -499,9 +499,9 @@ const TOOLS: readonly McpToolRegistration[] = [
       "2 hours on WEB this morning for the login bug'. Creates a DRAFT entry only; the person " +
       "still opens TimeSphere and submits it themselves, because submitting starts an approval " +
       "SLA clock and, in workspaces that require it, an identity check. Times are the acting " +
-      "user's working clock in 24-hour HH:MM. Overlapping an existing entry, a future date, or a " +
-      "project they are not assigned to will all be refused — do not retry with adjusted times " +
-      "to get around a refusal, report it instead.",
+      "user's working clock in 24-hour HH:MM. Overlapping an existing entry, a future date, a date " +
+      "more than 7 days in the past, or a project they are not assigned to will all be refused — " +
+      "do not retry with adjusted times or dates to get around a refusal, report it instead.",
     inputSchema: {
       projectCode: z.string().min(1).max(20).describe("Project code from list_projects, e.g. \"WEB\""),
       moduleName: z.string().min(1).max(190).describe("Module name from list_projects"),

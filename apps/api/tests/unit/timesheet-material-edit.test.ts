@@ -20,6 +20,13 @@ import request from "supertest";
 import type { PrismaClient } from "@prisma/client";
 import { runInTenant } from "../helpers/tenant-context.js";
 
+/**
+ * A recent day, built from now. These fixtures used to hard-code a September date; once that date was
+ * more than a week old the back-date limit (utils/timesheet-window.ts) correctly refused it, so the
+ * tests would have started failing on the calendar rather than on anything they test.
+ */
+const recentDay = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+
 const AUTHOR = { id: "author-1", name: "Ava Author", email: "ava@x.io", role: "EMPLOYEE", permissions: ["timesheets:write"] };
 const MANAGER = { id: "mgr-1", name: "Mo Manager", email: "mo@x.io", role: "MANAGER", permissions: ["timesheets:write", "timesheets:approve"] };
 let actor: typeof AUTHOR = AUTHOR;
@@ -80,7 +87,7 @@ function fakeClient(status: string): PrismaClient {
     activityType: "Development",
     taskDescription: "<p>Original description of the work</p>",
     notes: "",
-    workDate: new Date("2026-09-28T00:00:00.000Z"),
+    workDate: new Date(`${recentDay(2)}T00:00:00.000Z`),
     startTime: "09:00",
     endTime: "12:00",
     totalHours: 3,
@@ -172,7 +179,7 @@ describe("a material change to a SUBMITTED entry", () => {
   });
 
   it("restarts the approval deadline", async () => {
-    await patch({ workDate: "2026-09-29" });
+    await patch({ workDate: recentDay(1) });
     expect(updateData()?.approvalDeadline).toEqual(new Date("2026-10-04T00:00:00.000Z"));
   });
 
@@ -222,7 +229,7 @@ describe("module ownership on create", () => {
         moduleId: MODULE_A,
         activityType: "Development",
         taskDescription: "Did some real work today",
-        workDate: "2026-09-28",
+        workDate: recentDay(2),
         startTime: "09:00",
         endTime: "10:00",
         ...body
@@ -245,5 +252,69 @@ describe("module ownership on create", () => {
   it("accepts a module of the chosen project", async () => {
     const res = await draft({});
     expect(res.status, JSON.stringify(res.body)).toBe(201);
+  });
+});
+
+/**
+ * The one-week back-date limit at the three places the controller enforces it. The exact boundary is
+ * pinned in timesheet-backdate-window.test.ts; these use 6 and 9 days back, which are on the same side
+ * of it whatever zone "today" is read in, so they cannot flake around midnight UTC.
+ */
+describe("the one-week back-date limit", () => {
+  const body = {
+    projectId: PROJECT_A,
+    moduleId: MODULE_A,
+    activityType: "Development",
+    taskDescription: "Did some real work that day",
+    startTime: "09:00",
+    endTime: "10:00"
+  };
+  const create = (workDate: string, path = "draft") => request(buildApp()).post(`/api/timesheets/${path}`).send({ ...body, workDate });
+
+  /** The row the harness returns, re-dated — so the entry on the books is older than a week. */
+  async function ageTheEntry(daysAgo: number) {
+    const current = await client.timesheet.findFirst({} as never);
+    vi.mocked(client.timesheet.findFirst).mockResolvedValue({ ...(current as object), workDate: new Date(`${recentDay(daysAgo)}T00:00:00.000Z`) } as never);
+  }
+
+  it("creates an entry up to a week back", async () => {
+    const res = await create(recentDay(6));
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+  });
+
+  it("refuses to create a draft more than a week back, and writes nothing", async () => {
+    const res = await create(recentDay(9));
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("TIMESHEET_TOO_OLD");
+    expect(client.timesheet.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses to SUBMIT directly with an old date too", async () => {
+    const res = await create(recentDay(9), "submit");
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("TIMESHEET_TOO_OLD");
+    expect(client.timesheet.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses to move an entry onto a date more than a week back", async () => {
+    const res = await patch({ workDate: recentDay(9) });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("TIMESHEET_TOO_OLD");
+    expect(client.timesheet.update).not.toHaveBeenCalled();
+  });
+
+  it("still lets an author correct an entry that is already older than a week, if the date stays put", async () => {
+    await ageTheEntry(20);
+    const res = await patch({ startTime: "08:00", endTime: "12:00" });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  });
+
+  it("refuses to submit a draft that has aged past the limit, and leaves it untouched", async () => {
+    client = fakeClient("DRAFT");
+    await ageTheEntry(20);
+    const res = await request(buildApp()).post(`/api/timesheets/${ID}/submit`).send({});
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("TIMESHEET_TOO_OLD");
+    expect(client.timesheet.update).not.toHaveBeenCalled();
   });
 });

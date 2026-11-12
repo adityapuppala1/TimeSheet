@@ -1334,9 +1334,9 @@ sequenceDiagram
   participant API as REST API (saveTimesheet)
   participant DB as MySQL
   Employee->>UI: Select project/module/activity and time
-  UI->>UI: Validate overlap, future date, max hours
+  UI->>UI: Validate overlap, future date, max 7 days back, max hours
   UI->>API: Submit timesheet
-  API->>API: RBAC + DTO validation, no future date, 12h cap per entry
+  API->>API: RBAC + DTO validation, no future date, no date older than 7 days (author's calendar), 12h cap per entry
   API->>API: Identity gate (face check, when required) + project assignment
   API->>DB: Serializable transaction — overlap re-check + insert
   API->>DB: Audit log

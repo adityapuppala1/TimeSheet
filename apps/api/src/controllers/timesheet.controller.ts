@@ -39,6 +39,7 @@ import {
   unbindTimesheetVerification
 } from "../services/face.service.js";
 import { parseDayWindow, workDateFilter } from "../utils/date-window.js";
+import { assertWorkDateInWindow } from "../utils/timesheet-window.js";
 import { userClock } from "../services/user-clock.service.js";
 import {
   approvalScopeWhere,
@@ -602,7 +603,12 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
   const [year, month, day] = String(req.body.workDate).split("-").map(Number);
   const workDate = new Date(Date.UTC(year, month - 1, day));
   // "Future" on the AUTHOR's calendar, not the server's — see services/user-clock.service.ts.
-  if (workDate > (await userClock(req.user.id)).today) throw new AppError(422, "Future dates are not allowed");
+  const authorToday = (await userClock(req.user.id)).today;
+  if (workDate > authorToday) throw new AppError(422, "Future dates are not allowed");
+  // And not more than a week back, on the same calendar. This is the one function every way of
+  // creating an entry goes through — the web form, file uploads, the MCP client — so the limit
+  // cannot be bypassed by a quieter door. See utils/timesheet-window.ts.
+  assertWorkDateInWindow(workDate, authorToday);
   if (hours <= 0) throw new AppError(422, "End time must be after start time");
   if (hours > 12) throw new AppError(422, "A single entry cannot exceed 12 hours");
   // Before the identity gate, so a refused pairing does not spend somebody's face check.
@@ -1239,6 +1245,12 @@ timesheetRouter.post("/:id/submit", requirePermission(permissions.TIMESHEETS_WRI
     );
   }
 
+  // A draft that has aged past the one-week limit cannot be submitted: submitting is the moment it
+  // stops being private working state and becomes a claim an approver signs off, and the limit exists
+  // so that claim is made while the day can still be remembered. The author's own calendar decides.
+  // Checked before the identity gate so a refusal does not spend somebody's face check.
+  assertWorkDateInWindow(existing.workDate, (await userClock(existing.userId)).today);
+
   // The identity gate, on the SUBMITTER, exactly as the create path applies it — a draft is
   // private working state, and this is the moment it becomes something an approver signs off.
   // Checked before any write, so a failed check leaves the draft untouched.
@@ -1353,7 +1365,13 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
   const [year, month, day] = next.workDate.split("-").map(Number);
   const workDate = new Date(Date.UTC(year, month - 1, day));
   // The entry's AUTHOR's calendar decides what "future" means, whoever is editing it.
-  if (workDate > (await userClock(existing.userId)).today) throw new AppError(422, "Future dates are not allowed");
+  const authorToday = (await userClock(existing.userId)).today;
+  if (workDate > authorToday) throw new AppError(422, "Future dates are not allowed");
+  // The one-week limit applies when the date MOVES. An edit that leaves the date alone is a
+  // correction to a record already on the books (a typo in the hours, the wrong module), and refusing
+  // it would send the author to their approver over a spelling mistake. What it must not allow is
+  // re-dating an entry onto a day that could not have been created directly.
+  if (workDate.getTime() !== existing.workDate.getTime()) assertWorkDateInWindow(workDate, authorToday);
 
   // The module has to belong to the project, and the ticket too — the same pairing check the
   // create path runs (see assertModuleBelongs).

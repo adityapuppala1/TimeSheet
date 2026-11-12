@@ -29,6 +29,13 @@ import request from "supertest";
 import type { PrismaClient } from "@prisma/client";
 import { runInTenant } from "../helpers/tenant-context.js";
 
+/**
+ * A recent day, built from now. These fixtures used to hard-code a September date; once that date was
+ * more than a week old the back-date limit (utils/timesheet-window.ts) correctly refused it, so the
+ * tests would have started failing on the calendar rather than on anything they test.
+ */
+const recentDay = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+
 const AUTHOR = { id: "author-1", name: "Ava Author", email: "ava@x.io", role: "EMPLOYEE", permissions: ["timesheets:write"] };
 const MANAGER = {
   id: "mgr-1",
@@ -86,7 +93,7 @@ function entryIn(status: string) {
     activityType: "Development",
     taskDescription: "<p>Original description of the work</p>",
     notes: "",
-    workDate: new Date("2026-08-10T00:00:00.000Z"),
+    workDate: new Date(`${recentDay(2)}T00:00:00.000Z`),
     startTime: "09:00",
     endTime: "12:00",
     totalHours: 3,

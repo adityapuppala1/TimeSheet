@@ -10,7 +10,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { PageHeader } from "../components/PageHeader";
 import { WeekDraftPanel } from "../components/WeekDraftPanel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { calculateHours } from "@timesheet/shared";
+import { calculateHours, earliestLoggableDate } from "@timesheet/shared";
 import { AlertTriangle, CalendarClock, Check, ChevronsUpDown, Eraser, Save, Send, Sparkles, Ticket } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
@@ -582,6 +582,9 @@ export function Timesheet() {
                           value={field.value ?? ""}
                           onChange={field.onChange}
                           maxValue={todayKey()}
+                          // A week back at most — the server refuses an older date, so the calendar
+                          // simply does not offer it (earliestLoggableDate is the shared definition).
+                          minValue={earliestLoggableDate(todayKey())}
                           placeholder="Pick the work date"
                         />
                       </FormControl>

@@ -366,7 +366,13 @@ the same `projects:manage` right.
   entry, through the same processing pipeline (WebP re-encode, gzip, structured filename) the
   create path uses.
 - `POST /timesheets/draft`
-- `POST /timesheets/submit`
+- `POST /timesheets/submit` — both (and their `-with-files` forms, and the MCP `log_timesheet_entry` tool,
+  which share one function) refuse a `workDate` in the future **or more than 7 days before the author's
+  today** with `422`. The past limit carries `code: "TIMESHEET_TOO_OLD"` and names the earliest accepted
+  date; "today" is the author's own calendar (their profile time zone), not the server's. The same limit
+  applies when `PATCH /timesheets/:id` **changes** `workDate` and when `POST /timesheets/:id/submit` is
+  called on a draft whose date has aged past it. A `PATCH` that leaves the date alone is a correction and
+  is not refused. The window is `TIMESHEET_BACKDATE_DAYS` in `@timesheet/shared`.
 - `PATCH /timesheets/:id/approve`
 - `PATCH /timesheets/:id/reject`
 

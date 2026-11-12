@@ -1205,6 +1205,27 @@ export const SELF_SERVE_TRIAL_TIER: PlanTier = "TEAM";
  */
 export const PLANNED_HOURS_PER_WORKING_DAY = 8;
 
+/**
+ * How far back a timesheet entry may be dated: this many calendar days before the author's today,
+ * with today itself being day 0. Seven means "today and the seven days before it" — on a Tuesday the
+ * earliest loggable day is last Tuesday.
+ *
+ * Shared because the server refuses an older date and the date pickers grey it out, and the two must
+ * never disagree: a picker that offers a day the server then rejects is an error message the form
+ * could have prevented, and a picker that hides a day the server would accept is a rule nobody wrote.
+ */
+export const TIMESHEET_BACKDATE_DAYS = 7;
+
+/**
+ * The earliest `YYYY-MM-DD` an entry may carry, given the author's today as a `YYYY-MM-DD` key.
+ * Pure calendar arithmetic on the key (done in UTC, so a daylight-saving change cannot shift it by a
+ * day) — the caller decides whose "today" it is, which is the author's own calendar, not the server's.
+ */
+export function earliestLoggableDate(todayKey: string, backdateDays: number = TIMESHEET_BACKDATE_DAYS): string {
+  const [year, month, day] = todayKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day - backdateDays)).toISOString().slice(0, 10);
+}
+
 export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
   STARTER: {
     seatLimit: 10,
