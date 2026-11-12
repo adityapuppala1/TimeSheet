@@ -10,6 +10,38 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 6.3.3 — see who has logged their time, day by day, and a security update to what production runs — 2026-11-12
+
+A new card on the home page, and an update to the libraries behind the API. Nothing to configure.
+
+### ✨ Features: Daily logging status
+
+- **A new card under the Day timeline** shows one row per person and one cell per day of the date range at the top
+  of the page. Green with a number means something was logged that day (the number is the entries — one is
+  enough); red means a working day passed with nothing logged. Days off in your workspace's working week and days
+  that haven't happened yet stay grey, so red only ever means "should have logged and didn't".
+- **Hover, tap or tab to a cell** for that person's activities that day — project, activity, time range, duration
+  and the day's total. The last column shows days filled, hours logged out of planned hours (8h for each working
+  day so far) and the percentage; it can pass 100%.
+- **It follows the page's date range**, and the expanded view of both this card and the Day timeline carries the
+  same date picker, so you can change the period without closing it.
+- **Only the people you may see:** employees see themselves, managers themselves and their direct reports, admins
+  everyone — decided on the server, the same rule the timeline uses.
+- **For workspaces with many managers** (admins only): a strip of team chips — people, hours against plan, how many
+  have gaps — that doubles as a manager filter, a searchable manager picker in the expanded view, and a roll-up row
+  per team showing how many of the team logged each day. Large workspaces open with teams collapsed; people load
+  25 at a time in the card and 60 in the expanded view.
+- **API:** `GET /timesheets/team-roster` returns the people a viewer's team views cover, with their manager — an
+  unfilled day is the absence of rows, so entries alone could never show it.
+
+### 🔒 Security: 16 high and critical advisories cleared
+
+- `dompurify` (one critical), `undici`, `body-parser`, `multer` and `follow-redirects` are updated within their
+  ranges, and **zod moves from 3 to 4** — the only version with the fix for a memory-exhaustion advisory in
+  oversized collections. Zod 4 asks for an explicit key type, so the 17 `z.record(value)` schemas became
+  `z.record(z.string(), value)`; validation behaves the same. The production audit now reports no high or critical
+  advisory.
+
 ## 6.3.2 — an admin's home page shows the team's hours, and the theme you pick stays picked — 2026-10-06
 
 Two fixes people could see. Nothing to configure.

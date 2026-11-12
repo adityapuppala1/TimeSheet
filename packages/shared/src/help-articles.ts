@@ -388,6 +388,22 @@ export const HELP_ARTICLES: HelpArticle[] = [
     keywords: ["dashboard", "home", "date filter", "cards", "timeline", "week", "overview"]
   },
   {
+    id: "daily-logging-status",
+    category: "Dashboards & reports",
+    title: "Seeing who has logged their time",
+    where: "Sidebar → Home, the Daily logging status card just below the Day timeline",
+    when: "You want to know, day by day, who has filled their timesheet and who hasn't — for yourself, your team, or the whole workspace.",
+    steps: [
+      "The card follows the date range at the top of the page, so it opens on this week and changes when you pick another range. The expand button opens a larger version that has its own copy of the same date picker.",
+      "Each row is a person and each cell is a day. Green with a number means something was logged that day — the number is how many entries, and one entry is enough. Red means a working day has passed with nothing logged. Grey means a day off in your workspace's working week, or a day that hasn't happened yet.",
+      "Hover, tap or tab to a cell to list that person's activities for the day: project, activity, time range and duration, with the number of entries and the total hours underneath.",
+      "The last column reads days filled out of working days so far, hours logged out of planned hours (8 hours for each working day so far), and the percentage. It can pass 100% when someone works extra or on a day off.",
+      "You only see the people you are entitled to: employees see themselves, managers see themselves and their direct reports, and admins see everyone.",
+      "Admins in a workspace with several managers also get a strip of team chips above the grid — people, hours against plan and how many have gaps. Click a chip, or use the manager picker in the expanded view, to narrow the grid to one team. Each team has a roll-up row showing how many of the team logged on each day; click it to collapse or expand the team. Large workspaces start with the teams collapsed, and Show more loads further people."
+    ],
+    keywords: ["logging status", "who has logged", "missing timesheet", "unfilled", "gaps", "manager", "team", "compliance", "daily", "planned hours", "home"]
+  },
+  {
     id: "insights-reports",
     category: "Dashboards & reports",
     title: "Insights, exports and scheduled reports",

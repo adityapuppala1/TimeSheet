@@ -334,6 +334,12 @@ the same `projects:manage` right.
 ## Timesheets
 
 - `GET /timesheets?from=&to=&userId=&projectId=&status=`
+- `GET /timesheets/team-roster` — **who the viewer's team views cover**, for the home page's Daily logging
+  status card. Returns `[{ id, name, managerId, managerName }]` for active, non-agent people, ordered by name.
+  Scope is the same `teamScopeUserIds` rule as `GET /timesheets?scope=team`: everyone for `users:manage`,
+  otherwise the caller plus their direct reports (for someone who manages nobody, just themselves). It exists
+  because entries alone cannot show someone who logged nothing — an unfilled day is the absence of rows.
+  Registered ahead of `/:id` so it is not read as an entry id.
 - `GET /timesheets/:id` — **one entry in full**: project/module/submodule, the linked ticket, the
   author, the reviewer, every attachment (with a signed download URL) and the identity badge. Your
   own entries always; anyone's with `reports:view` or `timesheets:approve`. A 404 — never a 403 —
