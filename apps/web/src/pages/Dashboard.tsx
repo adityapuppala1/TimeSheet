@@ -595,6 +595,7 @@ export function Dashboard() {
       <DayFillGrid
         rows={Array.isArray(timelineEntries.data) ? (timelineEntries.data as TimesheetRowLite[]) : []}
         roster={teamRoster.data}
+        groupable={Boolean(user?.permissions.includes("users:manage"))}
         rangeFrom={range.from}
         rangeTo={range.to}
         todayKey={derived.todayKey}

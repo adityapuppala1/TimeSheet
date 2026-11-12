@@ -883,9 +883,17 @@ export interface WeekDraft {
   suggestions: WeekDraftSuggestion[];
 }
 
+/** A person in the viewer's team scope, with their reporting line — what the logging-status grid groups by. */
+export interface TeamRosterPerson {
+  id: string;
+  name: string;
+  managerId: string | null;
+  managerName: string | null;
+}
+
 export const timesheetApi = {
   /** Active people in the viewer's team scope — lets the filled/not-filled grid show people with no entries. */
-  teamRoster: async () => (await api.get<Array<{ id: string; name: string }>>("/timesheets/team-roster")).data,
+  teamRoster: async () => (await api.get<TeamRosterPerson[]>("/timesheets/team-roster")).data,
   /** "Draft my week": suggested rows from the caller's ticket activity. Read-only. */
   weekDraft: async (weekStart: string) => (await api.get<WeekDraft>("/timesheets/week-draft", { params: { weekStart } })).data,
   /** With a window, the server filters AND raises its row cap. Without one it returns the newest

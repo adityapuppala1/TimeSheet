@@ -149,13 +149,16 @@ export async function teamScopeUserIds(user: { id: string; permissions: string[]
  * Active humans only — agents and deactivated accounts are not expected to fill a timesheet.
  */
 timesheetRouter.get("/team-roster", async (req, res) => {
-  const scoped = req.user!.permissions.includes(permissions.REPORTS_VIEW) ? await teamScopeUserIds(req.user!) : { in: [req.user!.id] };
+  // The SAME scope the entries request uses (`scope=team`): everyone for users:manage, otherwise
+  // self plus direct reports (which for someone who manages nobody is just themselves). One
+  // function, so the people shown and the entries shown can never disagree about who is visible.
+  const scoped = await teamScopeUserIds(req.user!);
   const users = await prisma.user.findMany({
     where: { id: scoped, deletedAt: null, status: "ACTIVE", isAgent: false },
-    select: { id: true, name: true },
+    select: { id: true, name: true, managerId: true, manager: { select: { name: true } } },
     orderBy: { name: "asc" }
   });
-  res.json(users);
+  res.json(users.map((u) => ({ id: u.id, name: u.name, managerId: u.managerId, managerName: u.manager?.name ?? null })));
 });
 
 timesheetRouter.get("/", async (req, res) => {
