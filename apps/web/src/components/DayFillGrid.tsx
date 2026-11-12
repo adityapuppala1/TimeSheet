@@ -93,6 +93,34 @@ function plannedPercent(p: PersonRow): string {
   return planned > 0 ? `${Math.round((p.hours / planned) * 100)}%` : "—";
 }
 
+const STATE_BADGE: Record<CellState, "success" | "destructive" | "muted"> = {
+  filled: "success",
+  missing: "destructive",
+  off: "muted",
+  upcoming: "muted"
+};
+
+const STATE_EMPTY_TEXT: Record<CellState, string> = {
+  filled: "",
+  missing: "Nothing was logged on this working day.",
+  off: "Not a working day — nothing expected.",
+  upcoming: "This day has not happened yet."
+};
+
+/** "2 entries, 5.00 hours" for the cell's accessible name; empty when nothing was logged. */
+function entriesNote(rows: FillRow[]): string {
+  if (rows.length === 0) return "";
+  const noun = rows.length === 1 ? "entry" : "entries";
+  return `, ${rows.length} ${noun}, ${hoursOf(rows).toFixed(2)} hours`;
+}
+
+/** What sits inside a cell: the entry count, a minus for a missed working day, nothing otherwise. */
+function cellContent(state: CellState, rows: FillRow[]): React.ReactNode {
+  if (state === "filled") return rows.length;
+  if (state === "missing") return <Minus className="h-3.5 w-3.5" aria-hidden />;
+  return null;
+}
+
 function hoursOf(rows: FillRow[]): number {
   return rows.reduce((sum, r) => sum + Number(r.totalHours ?? 0), 0);
 }
@@ -114,7 +142,7 @@ function CellDetail({ person, col, rows, state }: { person: PersonRow; col: DayC
           <p className="truncate font-semibold">{person.name}</p>
           <p className="text-xs text-muted-foreground">{col.longLabel}</p>
         </div>
-        <Badge variant={state === "filled" ? "success" : state === "missing" ? "destructive" : "muted"} className="shrink-0">
+        <Badge variant={STATE_BADGE[state]} className="shrink-0">
           {STATE_WORDS[state]}
         </Badge>
       </div>
@@ -141,13 +169,7 @@ function CellDetail({ person, col, rows, state }: { person: PersonRow; col: DayC
           </div>
         </>
       ) : (
-        <p className="text-xs text-muted-foreground">
-          {state === "missing"
-            ? "Nothing was logged on this working day."
-            : state === "off"
-              ? "Not a working day — nothing expected."
-              : "This day has not happened yet."}
-        </p>
+        <p className="text-xs text-muted-foreground">{STATE_EMPTY_TEXT[state]}</p>
       )}
     </div>
   );
@@ -172,7 +194,7 @@ function FillCell({ person, col, rows, size }: { person: PersonRow; col: DayCol;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setOpen(false), 120);
   };
-  const label = `${person.name}, ${col.longLabel}: ${STATE_WORDS[state]}${rows.length ? `, ${rows.length} ${rows.length === 1 ? "entry" : "entries"}, ${hoursOf(rows).toFixed(2)} hours` : ""}`;
+  const label = `${person.name}, ${col.longLabel}: ${STATE_WORDS[state]}${entriesNote(rows)}`;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverAnchor asChild>
@@ -193,7 +215,7 @@ function FillCell({ person, col, rows, size }: { person: PersonRow; col: DayCol;
             CELL_TONE[state]
           )}
         >
-          {state === "filled" ? rows.length : state === "missing" ? <Minus className="h-3.5 w-3.5" aria-hidden /> : null}
+          {cellContent(state, rows)}
         </button>
       </PopoverAnchor>
       <PopoverContent className="w-80" side="top" onMouseEnter={show} onMouseLeave={hide} onOpenAutoFocus={(e) => e.preventDefault()}>
@@ -384,11 +406,31 @@ export function DayFillGrid({
     .filter((p) => !onlyMissing || missingOf(p) > 0)
     .sort((a, b) => (sort === "missing" ? missingOf(b) - missingOf(a) || a.name.localeCompare(b.name) : a.name.localeCompare(b.name)));
 
+  let gapsNote = "";
+  if (peopleWithGaps > 0) gapsNote = ` · ${peopleWithGaps} with unfilled working days`;
+  else if (people.length > 0) gapsNote = " · everyone is up to date";
+
+  let body: React.ReactNode;
+  if (loading) {
+    body = <Skeleton className="h-28 w-full" />;
+  } else if (people.length === 0) {
+    body = <EmptyState compact title="No one to show yet" />;
+  } else {
+    body = (
+      <>
+        <div className="max-h-64 overflow-y-auto pr-1" data-testid="day-fill-grid">
+          <Grid people={people} cols={cols} size="sm" />
+        </div>
+        <Legend />
+      </>
+    );
+  }
+
   const summary = (
     <>
       {people.length} {people.length === 1 ? "person" : "people"} · {totalEntries} {totalEntries === 1 ? "entry" : "entries"} across {cols.length}{" "}
       {cols.length === 1 ? "day" : "days"}
-      {peopleWithGaps > 0 ? ` · ${peopleWithGaps} with unfilled working days` : people.length > 0 ? " · everyone is up to date" : ""}
+      {gapsNote}
     </>
   );
 
@@ -420,18 +462,7 @@ export function DayFillGrid({
         </div>
       </CardHeader>
       <CardContent className="grid gap-3">
-        {loading ? (
-          <Skeleton className="h-28 w-full" />
-        ) : people.length === 0 ? (
-          <EmptyState compact title="No one to show yet" />
-        ) : (
-          <>
-            <div className="max-h-64 overflow-y-auto pr-1" data-testid="day-fill-grid">
-              <Grid people={people} cols={cols} size="sm" />
-            </div>
-            <Legend />
-          </>
-        )}
+        {body}
       </CardContent>
 
       <Dialog
