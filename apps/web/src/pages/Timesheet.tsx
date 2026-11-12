@@ -10,7 +10,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { PageHeader } from "../components/PageHeader";
 import { WeekDraftPanel } from "../components/WeekDraftPanel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { calculateHours, earliestLoggableDate } from "@timesheet/shared";
+import { calculateHours } from "@timesheet/shared";
+import { useEarliestLoggableDate } from "../hooks/use-timesheet-backdate";
 import { AlertTriangle, CalendarClock, Check, ChevronsUpDown, Eraser, Save, Send, Sparkles, Ticket } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
@@ -228,6 +229,9 @@ export function Timesheet() {
   /** Today on the PROFILE's calendar, the day the server checks a work date against — see
    *  lib/local-date.ts. Read at each use, so a form left open past midnight still caps correctly. */
   const todayKey = () => localDateKey(new Date(), currentUser?.timezone);
+  /** The earliest day the calendar offers — the workspace admin's back-date window, or undefined for
+   *  "no restriction" (see hooks/use-timesheet-backdate.ts). The server refuses an older date either way. */
+  const earliestDate = useEarliestLoggableDate(todayKey());
   /**
    * The activity list, from the workspace's own catalog rather than the frozen twelve-item array
    * in `@timesheet/shared`. A super admin edits it on the Projects screen; this picker is what
@@ -582,9 +586,9 @@ export function Timesheet() {
                           value={field.value ?? ""}
                           onChange={field.onChange}
                           maxValue={todayKey()}
-                          // A week back at most — the server refuses an older date, so the calendar
-                          // simply does not offer it (earliestLoggableDate is the shared definition).
-                          minValue={earliestLoggableDate(todayKey())}
+                          // As far back as the workspace allows — the server refuses an older date, so
+                          // the calendar simply does not offer it.
+                          minValue={earliestDate}
                           placeholder="Pick the work date"
                         />
                       </FormControl>

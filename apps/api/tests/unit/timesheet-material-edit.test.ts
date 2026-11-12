@@ -14,7 +14,7 @@
  * And the module/submodule must belong to the project on CREATE too: the PATCH comment admitted the
  * create path trusted the UI's cascading pickers, which an API or MCP caller never sees.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import express from "express";
 import request from "supertest";
 import type { PrismaClient } from "@prisma/client";
@@ -31,6 +31,8 @@ const AUTHOR = { id: "author-1", name: "Ava Author", email: "ava@x.io", role: "E
 const MANAGER = { id: "mgr-1", name: "Mo Manager", email: "mo@x.io", role: "MANAGER", permissions: ["timesheets:write", "timesheets:approve"] };
 let actor: typeof AUTHOR = AUTHOR;
 
+// The back-date window is a workspace setting read from the database; these tests are about something else, so it is the default (7 days).
+vi.mock("../../src/services/timesheet-policy.service.js", () => ({ getTimesheetBackdateDays: vi.fn().mockResolvedValue(7) }));
 vi.mock("../../src/middleware/auth.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/middleware/auth.js")>("../../src/middleware/auth.js");
   return {
@@ -63,6 +65,7 @@ const { errorHandler } = await import("../../src/middleware/error.js");
 const face = await import("../../src/services/face.service.js");
 const { audit } = await import("../../src/services/audit.service.js");
 const sla = await import("../../src/services/sla.service.js");
+const policy = await import("../../src/services/timesheet-policy.service.js");
 
 const ID = "11111111-1111-4111-8111-111111111111";
 const PROJECT_A = "22222222-2222-4222-8222-222222222222";
@@ -316,5 +319,53 @@ describe("the one-week back-date limit", () => {
     expect(res.status).toBe(422);
     expect(res.body.code).toBe("TIMESHEET_TOO_OLD");
     expect(client.timesheet.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The window is the WORKSPACE ADMIN's setting (Workspace Settings -> Ticketing), read through
+ * getTimesheetBackdateDays. These prove the server follows the setting rather than a constant: a wider
+ * window accepts what 7 days refused, "no limit" (null) accepts anything, and 0 means today only.
+ * Dates are far enough from each boundary to be safe whichever zone "today" is read in.
+ */
+describe("the back-date window follows the workspace setting", () => {
+  const body = {
+    projectId: PROJECT_A,
+    moduleId: MODULE_A,
+    activityType: "Development",
+    taskDescription: "Did some real work that day",
+    startTime: "09:00",
+    endTime: "10:00"
+  };
+  const create = (workDate: string) => request(buildApp()).post("/api/timesheets/draft").send({ ...body, workDate });
+  const setWindow = (days: number | null) => vi.mocked(policy.getTimesheetBackdateDays).mockResolvedValue(days);
+
+  afterEach(() => setWindow(7));
+
+  it("accepts 20 days back when the admin widened the window to 30", async () => {
+    setWindow(30);
+    const res = await create(recentDay(20));
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+  });
+
+  it("still refuses 40 days back with a 30-day window, and says 30 in the message", async () => {
+    setWindow(30);
+    const res = await create(recentDay(40));
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("TIMESHEET_TOO_OLD");
+    expect(res.body.message).toContain("up to 30 days back");
+  });
+
+  it("accepts any past date when the admin chose no limit", async () => {
+    setWindow(null);
+    const res = await create(recentDay(400));
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+  });
+
+  it("with today-only (0), refuses even two days back", async () => {
+    setWindow(0);
+    const res = await create(recentDay(2));
+    expect(res.status).toBe(422);
+    expect(res.body.message).toContain("for today only");
   });
 });

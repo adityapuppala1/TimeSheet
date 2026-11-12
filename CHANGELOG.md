@@ -10,9 +10,33 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 6.3.4 — timesheet entries can only be dated so far back, and your workspace decides how far — 2026-11-12
+
+One policy, set by a super admin. Run the usual update step so the new setting's column exists; nothing else to configure.
+
+### 📋 Timesheets: how far back an entry can be dated is now your workspace's decision
+
+- **A timesheet entry can no longer be dated further back than your workspace allows — 7 days by default.**
+  Today and the seven days before it are fine, older days are greyed out in the calendar, and the server refuses
+  them with a message naming the earliest date you can use. "Today" is your own calendar day, from your profile's
+  time zone.
+- **A super admin sets the window** under **Workspace Settings → Ticketing → Timesheet back-dating**: any number
+  of days from 0 to 365 (0 is today only), or switch the limit off for no limit at all. The change takes effect
+  straight away for everyone, with a preview showing the earliest date it would give today. Workspaces that never
+  touch it keep the 7-day default.
+- **It applies to creating an entry (as a draft or a submission, from the app or the assistant), to moving an
+  entry onto another date, and to submitting a draft** — so a draft left until it is older than the window can no
+  longer be submitted; submit it in time or delete it. Correcting the hours or project of an entry that is
+  already saved, without changing its date, is still allowed.
+- **Entries already older than the window are untouched** — nothing is removed or re-dated, and shortening the
+  window later does not change entries already on the books.
+- **Upgrade note:** this adds one nullable column, `GlobalTicketSettings.timesheetBackdateDays` (default 7),
+  applied by the usual migration step. `PATCH /settings/ticketing` accepts it and `GET /settings/effective-flags`
+  returns it so every role's date picker can follow it.
+
 ## 6.3.3 — see who has logged their time, day by day, and a security update to what production runs — 2026-11-12
 
-A new card on the home page, and an update to the libraries behind the API. Nothing to configure.
+A new card on the home page, the same grid in the Monday digest, and an update to the libraries behind the API. Nothing to configure.
 
 ### ✨ Features: Daily logging status
 
@@ -38,17 +62,6 @@ A new card on the home page, and an update to the libraries behind the API. Noth
   the approved hours elsewhere in the email; the email says so.
 - **API:** `GET /timesheets/team-roster` returns the people a viewer's team views cover, with their manager — an
   unfilled day is the absence of rows, so entries alone could never show it.
-
-### 📋 Timesheets: entries can only be logged a week back
-
-- **A timesheet entry can no longer be dated more than 7 days before today** — today and the seven days before
-  it are fine, older days are greyed out in the calendar, and the server refuses them with a message naming the
-  earliest date you can use. "Today" is your own calendar day, from your profile's time zone.
-- **It applies to creating an entry (as a draft or a submission, from the app or the assistant), to moving an
-  entry onto another date, and to submitting a draft** — so a draft left until it is more than a week old can no
-  longer be submitted; submit it in time or delete it. Correcting the hours or project of an entry that is
-  already saved, without changing its date, is still allowed.
-- **Entries already older than a week are untouched** — nothing is removed or re-dated.
 
 ### 🔒 Security: 16 high and critical advisories cleared
 

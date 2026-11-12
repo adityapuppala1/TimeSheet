@@ -48,6 +48,8 @@ const MANAGER = {
 /** Swapped per test — the routes read `req.user`, so this is the whole identity surface. */
 let actor: typeof AUTHOR = AUTHOR;
 
+// The back-date window is a workspace setting read from the database; these tests are about something else, so it is the default (7 days).
+vi.mock("../../src/services/timesheet-policy.service.js", () => ({ getTimesheetBackdateDays: vi.fn().mockResolvedValue(7) }));
 vi.mock("../../src/middleware/auth.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/middleware/auth.js")>("../../src/middleware/auth.js");
   return {

@@ -2262,13 +2262,16 @@ export const billingApi = {
     ).data
 };
 
-/** The three workspace flags ordinary (non-super-admin) pages are allowed to read — see
+/** The few workspace flags ordinary (non-super-admin) pages are allowed to read — see
  *  settings.controller.ts's `/effective-flags` doc comment for why this projection is deliberately
  *  tiny. Everything else under `settingsApi` requires SUPER_ADMIN and will 403 for other roles. */
 export interface EffectiveWorkspaceFlags {
   autoTriageAutoApply: boolean;
   enableCostAnalytics: boolean;
   enableLeaderboard: boolean;
+  /** How many days back a timesheet entry may be dated (0 = today only), or null for no limit —
+   *  what the date pickers grey out against. Set on Workspace Settings → Ticketing. */
+  timesheetBackdateDays: number | null;
 }
 
 /** Mirrors api/src/config/storage-paths.ts#DirectoryProbe — probed live on every GET, so

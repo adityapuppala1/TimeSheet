@@ -40,6 +40,7 @@ import {
 } from "../services/face.service.js";
 import { parseDayWindow, workDateFilter } from "../utils/date-window.js";
 import { assertWorkDateInWindow } from "../utils/timesheet-window.js";
+import { getTimesheetBackdateDays } from "../services/timesheet-policy.service.js";
 import { userClock } from "../services/user-clock.service.js";
 import {
   approvalScopeWhere,
@@ -605,10 +606,11 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
   // "Future" on the AUTHOR's calendar, not the server's — see services/user-clock.service.ts.
   const authorToday = (await userClock(req.user.id)).today;
   if (workDate > authorToday) throw new AppError(422, "Future dates are not allowed");
-  // And not more than a week back, on the same calendar. This is the one function every way of
-  // creating an entry goes through — the web form, file uploads, the MCP client — so the limit
+  // And not further back than the workspace allows (7 days unless an admin changed it on Workspace
+  // Settings → Ticketing; null is no limit), on the same calendar. This is the one function every way
+  // of creating an entry goes through — the web form, file uploads, the MCP client — so the limit
   // cannot be bypassed by a quieter door. See utils/timesheet-window.ts.
-  assertWorkDateInWindow(workDate, authorToday);
+  assertWorkDateInWindow(workDate, authorToday, await getTimesheetBackdateDays());
   if (hours <= 0) throw new AppError(422, "End time must be after start time");
   if (hours > 12) throw new AppError(422, "A single entry cannot exceed 12 hours");
   // Before the identity gate, so a refused pairing does not spend somebody's face check.
@@ -1249,7 +1251,7 @@ timesheetRouter.post("/:id/submit", requirePermission(permissions.TIMESHEETS_WRI
   // stops being private working state and becomes a claim an approver signs off, and the limit exists
   // so that claim is made while the day can still be remembered. The author's own calendar decides.
   // Checked before the identity gate so a refusal does not spend somebody's face check.
-  assertWorkDateInWindow(existing.workDate, (await userClock(existing.userId)).today);
+  assertWorkDateInWindow(existing.workDate, (await userClock(existing.userId)).today, await getTimesheetBackdateDays());
 
   // The identity gate, on the SUBMITTER, exactly as the create path applies it — a draft is
   // private working state, and this is the moment it becomes something an approver signs off.
@@ -1371,7 +1373,7 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
   // correction to a record already on the books (a typo in the hours, the wrong module), and refusing
   // it would send the author to their approver over a spelling mistake. What it must not allow is
   // re-dating an entry onto a day that could not have been created directly.
-  if (workDate.getTime() !== existing.workDate.getTime()) assertWorkDateInWindow(workDate, authorToday);
+  if (workDate.getTime() !== existing.workDate.getTime()) assertWorkDateInWindow(workDate, authorToday, await getTimesheetBackdateDays());
 
   // The module has to belong to the project, and the ticket too — the same pairing check the
   // create path runs (see assertModuleBelongs).

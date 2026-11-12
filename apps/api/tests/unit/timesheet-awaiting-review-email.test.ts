@@ -29,6 +29,8 @@ const recentDay = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_00
 const AUTHOR = { id: "author-1", name: "Ava <b>Author</b> & Co", email: "ava@x.io", role: "ADMIN", permissions: ["timesheets:write"] };
 const MANAGER = { id: "mgr-1", name: "Mo Manager", email: "mo@x.io" };
 
+// The back-date window is a workspace setting read from the database; these tests are about something else, so it is the default (7 days).
+vi.mock("../../src/services/timesheet-policy.service.js", () => ({ getTimesheetBackdateDays: vi.fn().mockResolvedValue(7) }));
 vi.mock("../../src/middleware/auth.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/middleware/auth.js")>("../../src/middleware/auth.js");
   return {

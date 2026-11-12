@@ -1271,6 +1271,18 @@ model GlobalTicketSettings {
   /// the moment it matters.
   virusScanEnabled Boolean @default(false)
 
+  /// --- Timesheet back-dating limit (see utils/timesheet-window.ts) -------------------------
+  /// How many calendar days before the author's today a timesheet entry may still be dated. 7 means
+  /// today and the seven days before it; 0 means today only; NULL means no limit at all.
+  ///
+  /// NULLABLE, and NULL IS "NO LIMIT" rather than a big number, so an organisation that does want
+  /// back-filling is saying so plainly instead of typing 9999. DEFAULT 7 so every existing workspace
+  /// keeps the behaviour it shipped with. Lives here, on the Ticketing tab's settings row, because
+  /// that is where the workspace admin was asked to find it; it is read by the timesheet routes and
+  /// projected to every role through `/settings/effective-flags` so the date pickers can grey out
+  /// the days the server would refuse.
+  timesheetBackdateDays Int? @default(7)
+
   updatedAt   DateTime @updatedAt
   updatedById String?
 }

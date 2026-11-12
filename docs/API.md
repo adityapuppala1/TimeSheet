@@ -367,12 +367,18 @@ the same `projects:manage` right.
   create path uses.
 - `POST /timesheets/draft`
 - `POST /timesheets/submit` — both (and their `-with-files` forms, and the MCP `log_timesheet_entry` tool,
-  which share one function) refuse a `workDate` in the future **or more than 7 days before the author's
-  today** with `422`. The past limit carries `code: "TIMESHEET_TOO_OLD"` and names the earliest accepted
-  date; "today" is the author's own calendar (their profile time zone), not the server's. The same limit
-  applies when `PATCH /timesheets/:id` **changes** `workDate` and when `POST /timesheets/:id/submit` is
-  called on a draft whose date has aged past it. A `PATCH` that leaves the date alone is a correction and
-  is not refused. The window is `TIMESHEET_BACKDATE_DAYS` in `@timesheet/shared`.
+  which share one function) refuse a `workDate` in the future **or older than the workspace's back-date
+  window** with `422`. The window is `GlobalTicketSettings.timesheetBackdateDays`, set by a super admin on
+  Workspace Settings → Ticketing → Timesheet back-dating: a number of days (default **7**; `0` is today only)
+  or `null` for **no limit**. `PATCH /settings/ticketing` accepts `timesheetBackdateDays` as an integer
+  `0–365` or `null` (not a string — `null` is "no limit", and coercing it would give `0`). Every role's date
+  picker reads the value from `GET /settings/effective-flags` (`timesheetBackdateDays`). The past limit
+  carries `code: "TIMESHEET_TOO_OLD"` and names the earliest accepted date; "today" is the author's own
+  calendar (their profile time zone), not the server's. The same limit applies when
+  `PATCH /timesheets/:id` **changes** `workDate` and when `POST /timesheets/:id/submit` is called on a draft
+  whose date has aged past it. A `PATCH` that leaves the date alone is a correction and is not refused. A
+  workspace whose settings row does not exist yet has the default 7; a row with a null column has no limit.
+  `TIMESHEET_BACKDATE_DAYS` (the default) and `TIMESHEET_BACKDATE_MAX_DAYS` (365) are in `@timesheet/shared`.
 - `PATCH /timesheets/:id/approve`
 - `PATCH /timesheets/:id/reject`
 

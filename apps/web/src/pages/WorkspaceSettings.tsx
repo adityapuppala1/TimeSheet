@@ -91,6 +91,7 @@ import {
 } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { ChatIntegrationsSettingsCard } from "./settings/ChatIntegrationsSettingsCard";
+import { backdateTile, TimesheetBackdateCard } from "./settings/TimesheetBackdateCard";
 import { MailServerSettingsCard } from "./settings/MailServerSettingsCard";
 import { PublicApiSettingsCard } from "./settings/PublicApiSettingsCard";
 import { McpServerSettingsCard } from "./settings/McpServerSettingsCard";
@@ -957,6 +958,9 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
     onSuccess: () => {
       toast.success("Saved");
       runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "ticketing"] }));
+      // The date pickers read the back-date window from the all-roles projection, so refresh that too:
+      // an admin who changes it and opens the timesheet form should see the new window, not a cached one.
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "effective-flags"] }));
     },
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });
@@ -1006,6 +1010,7 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
   const labelCount = labels.data?.length ?? 0;
   const labelsV = liveOrError(labels.isError, labelCount > 0, "In use", "None yet", labels.data ? countOf(labelCount, "label") : undefined);
   const rulesV = liveOrOff(ruleCount > 0, "Running on new tickets", "None yet", rules.data ? countOf(ruleCount, "rule") : undefined);
+  const backdateV = backdateTile(settings);
   const board: BoardEntry[] = [
     {
       id: "sla",
@@ -1016,6 +1021,7 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
       state: settings.isError ? "attention" : "live",
       stateLabel: settings.isError ? "Could not load" : "In force"
     },
+    { id: "backdate", name: "Timesheet back-dating", blurb: "How far back an entry can be dated — today only, a week, a month, or no limit.", Icon: CalendarClock, value: backdateV.value, state: backdateV.state, stateLabel: backdateV.label },
     { id: "types", name: "Ticket types", blurb: "Bug, task, improvement — and your own.", Icon: Tag, value: typesV.value, state: typesV.state, stateLabel: typesV.label },
     { id: "labels", name: "Labels", blurb: "Cross-cutting tags: regression, customer-reported…", Icon: Tags, value: labelsV.value, state: labelsV.state, stateLabel: labelsV.label },
     { id: "rules", name: "Automation rules", blurb: "The first matching rule assigns, labels and notifies a new ticket.", Icon: Workflow, value: rules.isError ? "Retry in section" : rulesV.value, state: rules.isError ? "attention" : rulesV.state, stateLabel: rules.isError ? "Could not load" : rulesV.label }
@@ -1032,7 +1038,7 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
         summary="How tickets are timed, typed, labelled and routed. Pick an area to open it."
         entries={board}
         onPick={(id) => sections.reveal(id, "ticketing")}
-        columns={4}
+        columns={3}
       />
 
       <SettingsSection {...shell("sla")}>
@@ -1192,6 +1198,15 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
           )}
         </CardContent>
       </Card>
+      </SettingsSection>
+
+      <SettingsSection {...shell("backdate")}>
+        <TimesheetBackdateCard
+          settings={settings}
+          readOnly={readOnly}
+          saving={update.isPending}
+          onSave={(days) => update.mutate({ timesheetBackdateDays: days })}
+        />
       </SettingsSection>
 
       <SettingsSection {...shell("types")}>

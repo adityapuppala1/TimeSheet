@@ -30,6 +30,8 @@ const ADMIN = { id: "admin-1", name: "Ada Admin", email: "ada@x.io", role: "ADMI
 
 let actor: { id: string; name: string; email: string; role: string; permissions: string[] } = AUTHOR;
 
+// The back-date window is a workspace setting read from the database; these tests are about something else, so it is the default (7 days).
+vi.mock("../../src/services/timesheet-policy.service.js", () => ({ getTimesheetBackdateDays: vi.fn().mockResolvedValue(7) }));
 vi.mock("../../src/middleware/auth.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/middleware/auth.js")>("../../src/middleware/auth.js");
   return {

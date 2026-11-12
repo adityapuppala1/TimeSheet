@@ -68,7 +68,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { toast } from "./ui/toaster";
 import { runInBackground } from "../lib/run-in-background";
 import { localDateKey } from "../lib/local-date";
-import { earliestLoggableDate } from "@timesheet/shared";
+import { useEarliestLoggableDate } from "../hooks/use-timesheet-backdate";
 
 const STATUS_VARIANT: Record<string, "success" | "warning" | "destructive" | "muted"> = {
   APPROVED: "success",
@@ -558,6 +558,8 @@ function EntryEditForm({
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const activityTypes = useQuery({ queryKey: ["activity-types"], queryFn: () => activityTypeApi.list() });
   const currentUser = useAuthStore((s) => s.user);
+  /** The earliest day the calendar offers: the workspace's back-date window, or undefined for no restriction. */
+  const earliestDate = useEarliestLoggableDate(localDateKey(new Date(), currentUser?.timezone));
 
   const [form, setForm] = useState({
     projectId: entry.projectId,
@@ -689,10 +691,10 @@ function EntryEditForm({
             // The editor's profile day (lib/local-date.ts). The server checks the AUTHOR's, which
             // this browser does not know for somebody else's entry; it still answers a refusal.
             maxValue={localDateKey(new Date(), currentUser?.timezone)}
-            // A week back at most, matching what the server accepts for a MOVED date. An entry that is
-            // already older keeps its date and can still be corrected; it just cannot be re-dated
-            // onto another day that old.
-            minValue={earliestLoggableDate(localDateKey(new Date(), currentUser?.timezone))}
+            // As far back as the workspace allows, matching what the server accepts for a MOVED date.
+            // An entry that is already older keeps its date and can still be corrected; it just cannot
+            // be re-dated onto another day that old.
+            minValue={earliestDate}
           />
         </div>
         <div className="grid gap-1.5">

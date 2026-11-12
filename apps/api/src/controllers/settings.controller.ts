@@ -9,7 +9,7 @@
  */
 import { Router } from "express";
 import { z } from "zod";
-import { nativeKvCacheTypes, notificationPreferenceKeys, permissions, roles, type NativeKvCacheType } from "@timesheet/shared";
+import { nativeKvCacheTypes, notificationPreferenceKeys, permissions, roles, TIMESHEET_BACKDATE_MAX_DAYS, type NativeKvCacheType } from "@timesheet/shared";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
@@ -144,7 +144,10 @@ settingsRouter.get("/effective-flags", async (_req, res) => {
   res.json({
     autoTriageAutoApply: ai.aiEnabled && ai.autoTriageEnabled && ai.autoTriageAutoApply,
     enableCostAnalytics: ticketing.enableCostAnalytics,
-    enableLeaderboard: ticketing.enableLeaderboard
+    enableLeaderboard: ticketing.enableLeaderboard,
+    // Every role logs time, so every role's date picker needs the window to grey out the days the
+    // server would refuse. One integer (or null = no limit); nothing else about the ticketing policy.
+    timesheetBackdateDays: ticketing.timesheetBackdateDays
   });
 });
 
@@ -271,7 +274,11 @@ const ticketingSchema = z.object({
       enableAttestations: z.boolean().optional(),
       enableAttestationSharing: z.boolean().optional(),
       // Malware scanning on upload — see services/virus-scan.service.ts.
-      virusScanEnabled: z.boolean().optional()
+      virusScanEnabled: z.boolean().optional(),
+      // How many days back a timesheet entry may be dated: 0 = today only, null = no limit. NOT
+      // `z.coerce` — coercing null gives 0, which would turn "no limit" into "today only". The web
+      // sends a JSON number or null, so the plain number schema is the honest one.
+      timesheetBackdateDays: z.number().int().min(0).max(TIMESHEET_BACKDATE_MAX_DAYS).nullable().optional()
     })
     .strict()
 });

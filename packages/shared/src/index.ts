@@ -783,6 +783,12 @@ export interface GlobalTicketSettings {
   /** Off by default, and separate from enableAttestations on purpose: publishing an attestation
    *  to a public unauthenticated URL is a different risk decision from producing one internally. */
   enableAttestationSharing: boolean;
+  /**
+   * How many calendar days before the author's today a timesheet entry may still be dated. 7 = today
+   * and the seven days before it; 0 = today only; null = no limit. The workspace admin sets it on
+   * Workspace Settings → Ticketing. See `earliestLoggableDate` and api/src/utils/timesheet-window.ts.
+   */
+  timesheetBackdateDays: number | null;
   updatedAt: string;
   updatedById: string | null;
 }
@@ -1206,15 +1212,20 @@ export const SELF_SERVE_TRIAL_TIER: PlanTier = "TEAM";
 export const PLANNED_HOURS_PER_WORKING_DAY = 8;
 
 /**
- * How far back a timesheet entry may be dated: this many calendar days before the author's today,
- * with today itself being day 0. Seven means "today and the seven days before it" — on a Tuesday the
- * earliest loggable day is last Tuesday.
+ * The DEFAULT for how far back a timesheet entry may be dated: this many calendar days before the
+ * author's today, with today itself being day 0. Seven means "today and the seven days before it" —
+ * on a Tuesday the earliest loggable day is last Tuesday. A workspace admin changes it on Workspace
+ * Settings → Ticketing (`GlobalTicketSettings.timesheetBackdateDays`); this is what a workspace has
+ * until they do.
  *
  * Shared because the server refuses an older date and the date pickers grey it out, and the two must
  * never disagree: a picker that offers a day the server then rejects is an error message the form
  * could have prevented, and a picker that hides a day the server would accept is a rule nobody wrote.
  */
 export const TIMESHEET_BACKDATE_DAYS = 7;
+
+/** The largest window an admin can set — a year. Past that, "no limit" is the honest answer. */
+export const TIMESHEET_BACKDATE_MAX_DAYS = 365;
 
 /**
  * The earliest `YYYY-MM-DD` an entry may carry, given the author's today as a `YYYY-MM-DD` key.
@@ -1224,6 +1235,15 @@ export const TIMESHEET_BACKDATE_DAYS = 7;
 export function earliestLoggableDate(todayKey: string, backdateDays: number = TIMESHEET_BACKDATE_DAYS): string {
   const [year, month, day] = todayKey.split("-").map(Number);
   return new Date(Date.UTC(year, month - 1, day - backdateDays)).toISOString().slice(0, 10);
+}
+
+/**
+ * The same, for a workspace setting that may be "no limit": `null` means there is no earliest date,
+ * so callers get `null` back rather than inventing one. The one place that decides what null means,
+ * so the server and the date pickers cannot read it differently.
+ */
+export function earliestLoggableDateFor(todayKey: string, backdateDays: number | null): string | null {
+  return backdateDays === null ? null : earliestLoggableDate(todayKey, backdateDays);
 }
 
 export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {

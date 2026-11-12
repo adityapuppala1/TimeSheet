@@ -156,12 +156,12 @@ export const HELP_ARTICLES: HelpArticle[] = [
     when: "Daily, for the work you actually did — entries feed approvals, utilisation and the client-facing record.",
     steps: [
       "Pick the project, then module and submodule — the pickers only offer what you are assigned to.",
-      "Set the date, start time and hours. You can log for today and up to 7 days back — older days are greyed out in the calendar — and not for a future day. Overlapping another of your entries is flagged before you save.",
+      "Set the date, start time and hours. You can log for today and back as far as your workspace allows (7 days unless your admin changed it) — older days are greyed out in the calendar — and not for a future day. Overlapping another of your entries is flagged before you save.",
       "Describe the task. “Refine with AI” tightens grammar and clarity only — it will not add facts or change numbers, because an approver signs this text.",
       "Attach evidence if useful (files are scanned first when scanning is on), then save. The entry starts as a draft.",
       "Submit it to start the review clock — your manager sees it instantly."
     ],
-    notes: "A daily-cap warning appears when your own hours for that day (rejected ones aside) pass 12 — it is a warning on this form, not a rule. “Today” is your own calendar day, from your profile's time zone, and the 7-day limit counts back from it: on a Tuesday the earliest day you can log is last Tuesday. The limit applies when you create an entry, when you move one to another date, and when you submit a draft — a draft left until it is more than a week old can no longer be submitted, so submit or delete it in time. Correcting the hours or project of an entry that is already saved does not move its date and is still allowed. The dashboard's “No entry for today yet” banner is the shortcut back here.",
+    notes: "A daily-cap warning appears when your own hours for that day (rejected ones aside) pass 12 — it is a warning on this form, not a rule. “Today” is your own calendar day, from your profile's time zone, and the back-date limit counts back from it: with the default 7 days, on a Tuesday the earliest day you can log is last Tuesday. A super admin sets the window — a number of days, today only, or no limit — under Workspace Settings → Ticketing → Timesheet back-dating. The limit applies when you create an entry, when you move one to another date, and when you submit a draft — a draft left until it is older than the window can no longer be submitted, so submit or delete it in time. Correcting the hours or project of an entry that is already saved does not move its date and is still allowed. The dashboard's “No entry for today yet” banner is the shortcut back here.",
     screenshot: "timesheet.png",
     keywords: ["log", "time", "timesheet", "entry", "hours", "submit", "draft", "task", "attachment"]
   },
