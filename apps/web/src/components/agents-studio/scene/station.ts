@@ -12,7 +12,7 @@
 import * as THREE from "three";
 import { AGENT_PALETTE, hashSeed, MOOD_INTENSITY, mulberry32, type Mood, type StationSlot } from "../studio-model";
 import { buildCharacter, MOOD_COLOR, type Character } from "./character";
-import { buildSim, type Sim } from "./sims";
+import { buildSim, type Sim } from "./sims/index";
 import type { StudioAgent, StudioTheme } from "./types";
 
 const PLATFORM_RADIUS = 2.1;

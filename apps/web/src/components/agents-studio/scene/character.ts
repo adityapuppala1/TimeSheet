@@ -12,9 +12,9 @@
  * charming and "machine" at once. It also makes `off` legible without a prop — it settles to the
  * platform with its head down.
  *
- * ACCESSORIES are what tell the six jobs apart at a glance (the triage bot holds an inbox tray). An
- * archetype without one yet wears its emoji as a floating badge, so every agent is distinguishable
- * from the first frame and the others can be filled in without touching this rig.
+ * ACCESSORIES are what tell the jobs apart at a glance (scene/accessories/: the triage bot holds an inbox
+ * tray, the planner wears a hard hat ...). One file per archetype, registered in accessories/index.ts, so
+ * a new character never touches this rig. An archetype with none wears its emoji as a floating badge.
  *
  * LOADED ONLY VIA A DYNAMIC IMPORT (components/agents-studio/AgentStudio.tsx → scene/engine.ts), so
  * three.js never reaches a default page load.
@@ -22,6 +22,7 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { MOOD_HEX, type Archetype, type Mood } from "../studio-model";
+import { buildAccessory } from "./accessories";
 
 /** One palette for every surface that shows a mood — see studio-model.ts. */
 export const MOOD_COLOR = MOOD_HEX;
@@ -77,11 +78,9 @@ const EASED: ReadonlyArray<keyof Pose> = ["sink", "eyeOpen", "pitch", "yaw", "ro
 /** How fast the status light pulses, per mood (radians of the clock) — a table, not a ternary chain. */
 const PULSE_SPEED: Readonly<Record<Mood, number>> = { off: 0, idle: 3.2, working: 11, attention: 3.2, celebrating: 3.2 };
 const TIP_SPEED: Readonly<Record<Mood, number>> = { off: 0, idle: 4, working: 4, attention: 12, celebrating: 4 };
-/** How much the held tray sloshes, per mood. */
-const TRAY_SORT: Readonly<Record<Mood, number>> = { off: 0, idle: 0.15, working: 1, attention: 0.3, celebrating: 0 };
 
 /** What a mood asks the body to do: a pure function of the mood, the clock and where the viewer is looking. */
-function targetsFor(mood: Mood, s: number, lookX: number, lookY: number, holdsTray: boolean): Targets {
+function targetsFor(mood: Mood, s: number, lookX: number, lookY: number): Targets {
   const t: Targets = {
     sink: 0,
     eyeOpen: 1,
@@ -121,11 +120,6 @@ function targetsFor(mood: Mood, s: number, lookX: number, lookY: number, holdsTr
       break;
     default:
       t.pitch = -lookY * 0.18;
-  }
-  if (holdsTray && (mood === "idle" || mood === "working" || mood === "attention")) {
-    // The tray is held in both hands, forward and level; only a tremor of work shows in the arms.
-    const tremor = mood === "working" ? Math.sin(s * 9) * 0.04 : 0;
-    Object.assign(t, { armLx: -1.25 + tremor, armRx: -1.25 - tremor, armLz: 0.06, armRz: -0.06 });
   }
   return t;
 }
@@ -234,26 +228,11 @@ export function buildCharacter(archetype: Archetype, tint: number, emoji: string
   const armR = makeArm(-1);
 
   // ---- accessories ------------------------------------------------------------------------------
-  let holdsTray = false;
-  let tray: THREE.Group | undefined;
+  // What this agent carries or wears (a tray, a hard hat, a shield ...). An archetype with none wears its
+  // emoji as a floating badge so it is still told apart.
+  const accessory = buildAccessory(archetype, { rig, neck, armL, armR, body, head, trim, tint, track });
   let badge: THREE.Sprite | undefined;
-  if (archetype === "triage") {
-    holdsTray = true;
-    tray = new THREE.Group();
-    tray.position.set(0, 0.97, 0.56);
-    const trayMat = track(new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 }));
-    const base = new THREE.Mesh(track(new RoundedBoxGeometry(1.1, 0.06, 0.55, 3, 0.03)), trayMat);
-    tray.add(base);
-    const paperMat = track(new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.8 }));
-    const paperGeo = track(new THREE.BoxGeometry(0.32, 0.012, 0.24));
-    for (let i = 0; i < 4; i += 1) {
-      const paper = new THREE.Mesh(paperGeo, paperMat);
-      paper.position.set(-0.22 + i * 0.015, 0.04 + i * 0.012, 0.02 - i * 0.01);
-      paper.rotation.y = (i - 1.5) * 0.12;
-      tray.add(paper);
-    }
-    rig.add(tray);
-  } else {
+  if (!accessory?.replacesBadge) {
     const spriteMat = track(new THREE.SpriteMaterial({ map: track(glyphTexture(emoji, "#ffffff")), transparent: true, depthWrite: false }));
     badge = new THREE.Sprite(spriteMat);
     badge.scale.set(0.5, 0.5, 0.5);
@@ -318,12 +297,7 @@ export function buildCharacter(archetype: Archetype, tint: number, emoji: string
 
   /** The props and glyphs that depend on the mood: the tray, the badge, the "!" and the "z". */
   function dressProps(mood: Mood, lift: number, s: number, t: number) {
-    if (tray) {
-      const sort = TRAY_SORT[mood];
-      tray.rotation.z = Math.sin(s * 3.1) * 0.13 * sort;
-      tray.rotation.x = Math.sin(s * 2.3 + 1) * 0.05 * sort;
-      tray.visible = mood !== "off" && mood !== "celebrating";
-    }
+    accessory?.update(mood, s, t, lift);
     if (badge) {
       badge.position.y = 2.95 + lift * 0.5 + Math.sin(s * 1.4) * 0.05;
       (badge.material as THREE.SpriteMaterial).opacity = mood === "off" ? 0.45 : 1;
@@ -341,7 +315,8 @@ export function buildCharacter(archetype: Archetype, tint: number, emoji: string
   function update(mood: Mood, t: number, dt: number, lookX: number, lookY: number) {
     const k = 1 - Math.exp(-dt * 7);
     const s = t + phase;
-    const goal = targetsFor(mood, s, lookX, lookY, holdsTray);
+    const goal = targetsFor(mood, s, lookX, lookY);
+    Object.assign(goal, accessory?.arms?.(mood, s) ?? {});
     for (const key of EASED) pose[key] = ease(pose[key], goal[key], k);
 
     const lift = pose.sink + Math.sin(s * goal.bobSpeed) * goal.bobAmp + goal.jump;

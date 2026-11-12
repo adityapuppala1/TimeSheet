@@ -1,77 +1,10 @@
 /**
- * WHAT: the little world each agent works in — the "simulation in the background". A `Sim` is a
- * three.js group plus an `update(t, dt, intensity)` that animates it, and a caption saying what it is
- * illustrating this second.
- *
- * WHY THESE ARE ILLUSTRATIONS AND SAY SO: the figures that move here (ticket titles, priorities, a
- * duplicate caught) are made up by a seeded generator, because an agent's real run data is neither
- * streamed to the page nor something a decoration should pretend to be. What IS real is `intensity`:
- * it comes from the agent's actual mood, so a switched-off agent's world is still and a working
- * agent's is busy. The HUD labels the caption "simulated" wherever it shows one.
- *
- * WHY SEEDED: the same agent runs the same shift every visit. Fresh randomness per load would make the
- * scene look like it was inventing a new life each reload and would make screenshots unrepeatable.
- *
- * TRIAGE is built out in full (the flagship). The other archetypes share `ambientSim` — a calm holo
- * ring and a data screen — until their own worlds land; the engine picks by archetype, so replacing
- * one is a change to `buildSim` and nothing else.
+ * TRIAGE's world: an inbox conveyor. Tickets ride the belt, a scan beam reads each one and colours it by
+ * priority, and it flies into the matching bin; the occasional duplicate is spotted and merged away.
  */
 import * as THREE from "three";
-import { hashSeed, mulberry32, type Archetype } from "../studio-model";
-
-export interface Sim {
-  group: THREE.Group;
-  /** `intensity` is 0 (still) to 1 (flat out), derived from the agent's real mood. */
-  update(t: number, dt: number, intensity: number): void;
-  /** What the simulation is illustrating right now, in a sentence. */
-  caption(): string;
-  dispose(): void;
-}
-
-/* ------------------------------------------------------------------ shared pieces */
-
-/** A floating screen of scrolling "data" rows — drawn once into a tall texture and scrolled, so it
- *  costs one uniform per frame instead of a canvas redraw. */
-function makeScreen(accent: string, seed: number, track: <T extends { dispose(): void }>(x: T) => T) {
-  const rand = mulberry32(seed);
-  const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 512;
-  const ctx = canvas.getContext("2d");
-  if (ctx) {
-    ctx.fillStyle = "#0b1220";
-    ctx.fillRect(0, 0, 256, 512);
-    for (let y = 8; y < 512; y += 22) {
-      ctx.fillStyle = "rgba(148,163,184,0.18)";
-      ctx.fillRect(10, y, 14, 9);
-      ctx.fillStyle = rand() > 0.82 ? accent : "rgba(226,232,240,0.55)";
-      ctx.fillRect(32, y, 40 + rand() * 150, 9);
-    }
-  }
-  const texture = track(new THREE.CanvasTexture(canvas));
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(1, 0.5);
-  const material = track(new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 0.92 }));
-  const frameMat = track(new THREE.MeshBasicMaterial({ color: 0x1e293b }));
-  const group = new THREE.Group();
-  const frame = new THREE.Mesh(track(new THREE.PlaneGeometry(0.98, 0.62)), frameMat);
-  frame.position.z = -0.005;
-  const face = new THREE.Mesh(track(new THREE.PlaneGeometry(0.9, 0.54)), material);
-  group.add(frame, face);
-  return { group, scroll: (amount: number) => (texture.offset.y = (texture.offset.y + amount) % 1) };
-}
-
-function disposer() {
-  const items: Array<{ dispose(): void }> = [];
-  const track = <T extends { dispose(): void }>(item: T): T => {
-    items.push(item);
-    return item;
-  };
-  return { track, disposeAll: () => items.forEach((i) => i.dispose()) };
-}
-
-/* ------------------------------------------------------------------ triage */
+import { mulberry32 } from "../../studio-model";
+import { disposer, makeScreen, type Sim } from "./shared";
 
 const TITLES = [
   "Checkout fails on Safari",
@@ -114,7 +47,7 @@ const READ_X = -0.35;
 const BIN_X = 1.35;
 const BIN_ZS = [-0.1, 0.4, 0.9, 1.4];
 
-function triageSim(seed: number): Sim {
+export function triageSim(seed: number): Sim {
   const { track, disposeAll } = disposer();
   const rand = mulberry32(seed);
   const group = new THREE.Group();
@@ -336,65 +269,3 @@ function triageSim(seed: number): Sim {
   return { group, update, caption: () => caption, dispose: disposeAll };
 }
 
-/* ------------------------------------------------------------------ the others (until built out) */
-
-const AMBIENT_CAPTION: Readonly<Record<Archetype, string>> = {
-  triage: "Watching the inbox",
-  planner: "Laying out the plan",
-  risk: "Watching the risk score",
-  security: "Screening findings",
-  reporter: "Drafting the recap",
-  balancer: "Checking who has room",
-  assistant: "Standing by"
-};
-
-function ambientSim(archetype: Archetype, seed: number, accent: number): Sim {
-  const { track, disposeAll } = disposer();
-  const rand = mulberry32(seed);
-  const group = new THREE.Group();
-
-  const ringMat = track(new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
-  const ring = new THREE.Mesh(track(new THREE.TorusGeometry(1.05, 0.025, 8, 64)), ringMat);
-  ring.rotation.x = Math.PI / 2;
-  ring.position.set(0.5, 0.5, 0.9);
-  group.add(ring);
-
-  const orbGeo = track(new THREE.OctahedronGeometry(0.1));
-  const orbMat = track(new THREE.MeshBasicMaterial({ color: accent }));
-  const orbs = Array.from({ length: 6 }, (_, i) => {
-    const orb = new THREE.Mesh(orbGeo, orbMat);
-    group.add(orb);
-    return { orb, offset: (i / 6) * Math.PI * 2, lift: rand() * 0.3 };
-  });
-
-  const screen = makeScreen("#" + accent.toString(16).padStart(6, "0"), seed, track);
-  screen.group.position.set(-1.25, 2.05, -0.6);
-  screen.group.rotation.y = 0.35;
-  group.add(screen.group);
-
-  let caption = AMBIENT_CAPTION[archetype];
-  return {
-    group,
-    update(t, dt, intensity) {
-      const moving = intensity > 0.05;
-      ring.rotation.z += dt * (0.3 + intensity * 1.6);
-      ringMat.opacity = 0.12 + intensity * 0.5;
-      for (const o of orbs) {
-        const a = t * (0.5 + intensity * 1.5) + o.offset;
-        o.orb.position.set(0.5 + Math.cos(a) * 1.05, 0.55 + o.lift + Math.sin(a * 2) * 0.12, 0.9 + Math.sin(a) * 1.05);
-        o.orb.rotation.y += dt * 2;
-        o.orb.visible = moving;
-      }
-      screen.scroll(moving ? dt * (0.04 + intensity * 0.2) : 0);
-      caption = moving ? AMBIENT_CAPTION[archetype] : "Switched off";
-    },
-    caption: () => caption,
-    dispose: disposeAll
-  };
-}
-
-export function buildSim(archetype: Archetype, agentId: string, accent: number): Sim {
-  const seed = hashSeed(agentId);
-  if (archetype === "triage") return triageSim(seed);
-  return ambientSim(archetype, seed, accent);
-}
