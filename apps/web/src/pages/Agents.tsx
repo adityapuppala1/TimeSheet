@@ -56,6 +56,8 @@ import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 import { agentRosterApi, type AgentCapabilityRow, type AgentRosterEntry, type AgentTemplateRow } from "../services/api";
 import { runInBackground } from "../lib/run-in-background";
+import { AgentStudio } from "../components/agents-studio/AgentStudio";
+import { agentTintIndex } from "../components/agents-studio/studio-model";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -98,6 +100,8 @@ export function AgentsPage() {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [galleryCategory, setGalleryCategory] = useState<string>("All");
   const [building, setBuilding] = useState(false);
+  /** The agent picked in the Studio (or on its card) — the stage dollies to it and its card is ringed. */
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
   const roster = useQuery({ queryKey: ["agents"], queryFn: agentRosterApi.list, retry: false });
   const ledger = useQuery({ queryKey: ["agents", "ledger"], queryFn: agentRosterApi.ledger, retry: false });
@@ -202,6 +206,20 @@ export function AgentsPage() {
             <StatCard label="Spent today" value={usd(spentToday)} icon={<Coins className="h-4 w-4" />} />
           </div>
 
+          {entries.length > 0 && (
+            <AgentStudio
+              entries={entries}
+              selectedId={selectedAgentId}
+              onSelect={setSelectedAgentId}
+              canManage={isSuperAdmin}
+              busy={toggle.isPending}
+              onToggle={(id, enabled) => toggle.mutate({ id, enabled })}
+              onOpenDetails={(id) => {
+                document.getElementById(`agent-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+              }}
+            />
+          )}
+
           {entries.length === 0 ? (
             <Card className="animate-fade-in">
               <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
@@ -228,6 +246,8 @@ export function AgentsPage() {
                 <AgentCard
                   key={entry.id}
                   entry={entry}
+                  selected={entry.id === selectedAgentId}
+                  onSelect={() => setSelectedAgentId(entry.id === selectedAgentId ? null : entry.id)}
                   canManage={isSuperAdmin}
                   busy={toggle.isPending || retire.isPending}
                   onToggle={(enabled) => toggle.mutate({ id: entry.id, enabled })}
@@ -515,9 +535,8 @@ const AVATAR_TINTS = [
 ];
 
 export function agentTint(key: string): string {
-  let hash = 0;
-  for (const ch of key) hash = (hash * 31 + ch.charCodeAt(0)) % 997;
-  return AVATAR_TINTS[hash % AVATAR_TINTS.length];
+  // The hash lives in the Studio's model so a card's tint and its 3D character's body cannot drift.
+  return AVATAR_TINTS[agentTintIndex(key)];
 }
 
 /**
@@ -720,14 +739,42 @@ function CustomAgentDialog({
   );
 }
 
+/**
+ * The card's avatar, which is also its handle on the stage: pressing it picks this agent in the Studio
+ * (the camera dollies to its station), and pressing it again lets go.
+ */
+function AgentAvatarButton({ entry, selected, onSelect }: Readonly<{ entry: AgentRosterEntry; selected: boolean; onSelect: () => void }>) {
+  const verb = selected ? "Leave" : "Find";
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      aria-label={`${verb} ${entry.name} in the studio`}
+      title={selected ? "Back to the whole studio" : "Find it in the studio"}
+      className={cn(
+        "focus-ring grid h-10 w-10 shrink-0 place-items-center rounded-lg text-xl transition-all duration-200 hover:scale-110 active:scale-95",
+        agentTint(entry.templateKey ?? entry.id)
+      )}
+    >
+      <span aria-hidden>{entry.emoji}</span>
+    </button>
+  );
+}
+
 function AgentCard({
   entry,
+  selected,
+  onSelect,
   canManage,
   busy,
   onToggle,
   onRetire
 }: Readonly<{
   entry: AgentRosterEntry;
+  /** Picked in the Studio (or here) — ringed so the stage and the list read as one thing. */
+  selected: boolean;
+  onSelect: () => void;
   canManage: boolean;
   busy: boolean;
   onToggle: (enabled: boolean) => void;
@@ -739,19 +786,18 @@ function AgentCard({
       : null;
 
   return (
-    <Card className={cn("animate-fade-in transition-shadow duration-200 hover:shadow-md", !entry.enabled && "opacity-80")}>
+    <Card
+      id={`agent-${entry.id}`}
+      className={cn(
+        "animate-fade-in scroll-mt-24 transition-all duration-200 hover:shadow-md",
+        !entry.enabled && "opacity-80",
+        selected && "opacity-100 ring-2 ring-primary/60 shadow-md"
+      )}
+    >
       <CardHeader className="gap-2 pb-3">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="flex min-w-0 items-start gap-2.5">
-            <span
-              className={cn(
-                "grid h-10 w-10 shrink-0 place-items-center rounded-lg text-xl transition-colors",
-                agentTint(entry.templateKey ?? entry.id)
-              )}
-              aria-hidden
-            >
-              {entry.emoji}
-            </span>
+            <AgentAvatarButton entry={entry} selected={selected} onSelect={onSelect} />
             <div className="min-w-0">
               <CardTitle className="flex flex-wrap items-center gap-1.5 text-base">
                 {entry.name}
