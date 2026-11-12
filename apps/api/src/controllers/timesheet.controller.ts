@@ -142,6 +142,22 @@ export async function teamScopeUserIds(user: { id: string; permissions: string[]
   return { in: [user.id, ...reports.map((r) => r.id)] };
 }
 
+/**
+ * GET /timesheets/team-roster — the people the viewer's team views cover (same scope as
+ * `scope=team`), so the home page's "filled / not filled" grid can show someone who logged
+ * NOTHING in the window. Entries alone can never say that: a person with no rows is invisible.
+ * Active humans only — agents and deactivated accounts are not expected to fill a timesheet.
+ */
+timesheetRouter.get("/team-roster", async (req, res) => {
+  const scoped = req.user!.permissions.includes(permissions.REPORTS_VIEW) ? await teamScopeUserIds(req.user!) : { in: [req.user!.id] };
+  const users = await prisma.user.findMany({
+    where: { id: scoped, deletedAt: null, status: "ACTIVE", isAgent: false },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" }
+  });
+  res.json(users);
+});
+
 timesheetRouter.get("/", async (req, res) => {
   const canViewAll = req.user!.permissions.includes(permissions.REPORTS_VIEW);
   const requestedUserId = typeof req.query.userId === "string" && req.query.userId ? req.query.userId : undefined;

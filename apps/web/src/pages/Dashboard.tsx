@@ -67,6 +67,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard, TrendBadge } from "../components/ui/stat-card";
 import { ProjectUtilizationChart } from "../components/ProjectUtilizationChart";
+import { DayFillGrid } from "../components/DayFillGrid";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
 import { computeTrend, type Trend } from "../lib/trend";
 import { cn } from "../lib/utils";
@@ -292,6 +293,13 @@ export function Dashboard() {
   const timelineEntries = useQuery({
     queryKey: ["timesheets", "timeline", range.from, range.to],
     queryFn: () => timesheetApi.list({ ...rangeParams, scope: "team" })
+  });
+  /** Who is expected to log (same scope as the timeline) — entries alone cannot show someone who logged nothing. */
+  const teamRoster = useQuery({
+    queryKey: ["timesheets", "team-roster"],
+    queryFn: timesheetApi.teamRoster,
+    staleTime: 5 * 60_000,
+    retry: false
   });
   /** The same role-scoped set for the comparison window — the team view's "vs last week". */
   const previousTeam = useQuery({
@@ -578,6 +586,23 @@ export function Dashboard() {
         rangeTo={range.to}
         periodLabel={periodLabel}
         loading={timelineEntries.isLoading}
+        rangeControl={
+          <DateRangePicker id="timeline-dialog-range" value={range} onChange={setRange} allowAllTime={false} className="w-60" dayAnnotations={dayAnnotations} />
+        }
+      />
+
+      {/* ---- Daily logging status — who filled which day, same range and same people as above ---- */}
+      <DayFillGrid
+        rows={Array.isArray(timelineEntries.data) ? (timelineEntries.data as TimesheetRowLite[]) : []}
+        roster={teamRoster.data}
+        rangeFrom={range.from}
+        rangeTo={range.to}
+        todayKey={derived.todayKey}
+        workingDays={workingDays}
+        loading={timelineEntries.isLoading}
+        rangeControl={
+          <DateRangePicker id="fill-dialog-range" value={range} onChange={setRange} allowAllTime={false} className="w-60" dayAnnotations={dayAnnotations} />
+        }
       />
 
       {/* Admin / manager: workforce daily logging snapshot */}
@@ -1262,8 +1287,11 @@ function DayTimeline({
   rangeFrom,
   rangeTo,
   periodLabel,
-  loading
+  loading,
+  rangeControl
 }: {
+  /** The page's calendar filter, rendered again inside the expanded dialog (same state). */
+  rangeControl?: React.ReactNode;
   entriesByDate: Map<string, TimesheetRowLite[]>;
   todayKey: string;
   /** The page's selected window. The timeline lives INSIDE it: its stepper and calendar cannot
@@ -1573,6 +1601,7 @@ function DayTimeline({
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-wrap items-center gap-2">
+            {rangeControl}
             <Input
               value={laneSearch}
               onChange={(e) => setLaneSearch(e.target.value)}
