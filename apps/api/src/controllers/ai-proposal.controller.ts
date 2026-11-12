@@ -308,7 +308,7 @@ aiProposalRouter.patch(
   validate(
     z.object({
       params: z.object({ id: z.string().uuid() }),
-      body: z.object({ decisions: z.record(z.boolean()) }).strict()
+      body: z.object({ decisions: z.record(z.string(), z.boolean()) }).strict()
     })
   ),
   async (req, res) => {
@@ -339,7 +339,7 @@ aiProposalRouter.post(
   validate(
     z.object({
       params: z.object({ id: z.string().uuid() }),
-      body: z.object({ decisions: z.record(z.boolean()).optional() }).strict()
+      body: z.object({ decisions: z.record(z.string(), z.boolean()).optional() }).strict()
     })
   ),
   async (req, res) => {

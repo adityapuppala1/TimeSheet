@@ -114,7 +114,7 @@ const submitSchema = z.object({
     .object({
       submitterName: z.string().max(160).optional(),
       submitterEmail: z.string().email().max(255).optional(),
-      answers: z.record(z.unknown())
+      answers: z.record(z.string(), z.unknown())
     })
     .strict()
 });
@@ -270,7 +270,7 @@ requestFormPublicRouter.post("/:token", validate(submitSchema), async (req, res)
  *  engine in the browser to stay in step with what the server will accept. */
 requestFormPublicRouter.post(
   "/:token/visible",
-  validate(z.object({ params: z.object({ token: z.string().min(20).max(120) }), body: z.object({ answers: z.record(z.unknown()) }).strict() })),
+  validate(z.object({ params: z.object({ token: z.string().min(20).max(120) }), body: z.object({ answers: z.record(z.string(), z.unknown()) }).strict() })),
   async (req, res) => {
     const form = await loadPublishedForm(String(req.params.token));
     const schema = form.schema as unknown as RequestFormSchema;

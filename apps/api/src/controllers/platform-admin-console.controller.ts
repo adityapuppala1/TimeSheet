@@ -333,7 +333,7 @@ platformAdminConsoleRouter.delete("/email-templates/:key", operate, validate(tem
 platformAdminConsoleRouter.post(
   "/email-templates/:key/preview",
   support,
-  validate(z.object({ params: z.object({ key: z.string() }), body: z.object({ subject: z.string().optional(), bodyHtml: z.string().optional(), vars: z.record(z.string()).optional() }).strict() })),
+  validate(z.object({ params: z.object({ key: z.string() }), body: z.object({ subject: z.string().optional(), bodyHtml: z.string().optional(), vars: z.record(z.string(), z.string()).optional() }).strict() })),
   async (req, res) => {
     const key = requireKey(String(req.params.key));
     const def = platformTemplateDef(key)!;
@@ -1377,9 +1377,9 @@ const destinationBody = z.object({
   name: z.string().min(2).max(120),
   kind: z.enum(["LOCAL", "S3", "AZURE_BLOB", "GOOGLE_DRIVE", "ONEDRIVE", "SFTP"]),
   organizationId: z.string().nullable().optional(),
-  config: z.record(z.string()).default({}),
+  config: z.record(z.string(), z.string()).default({}),
   /** Write-only. Only the keys present are changed, so a save that leaves a field blank keeps it. */
-  secrets: z.record(z.string()).optional(),
+  secrets: z.record(z.string(), z.string()).optional(),
   prefix: z.string().max(255).nullable().optional(),
   isDefault: z.boolean().optional()
 });

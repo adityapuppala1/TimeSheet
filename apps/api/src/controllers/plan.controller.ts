@@ -565,9 +565,9 @@ const savedViewSchema = z.object({
       name: z.string().min(1).max(120),
       scope: z.enum(savedViewScopes).optional(),
       viewType: z.enum(planViewTypes).optional(),
-      filters: z.record(z.unknown()).nullable().optional(),
+      filters: z.record(z.string(), z.unknown()).nullable().optional(),
       columns: z.array(z.string()).nullable().optional(),
-      sort: z.record(z.unknown()).nullable().optional(),
+      sort: z.record(z.string(), z.unknown()).nullable().optional(),
       isDefault: z.boolean().optional()
     })
     .strict()

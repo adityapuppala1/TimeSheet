@@ -41,7 +41,7 @@ const itemSchema: z.ZodType<any> = z.object({
   estimatedHours: z.number().min(0).max(100_000).optional(),
   parentIndex: z.number().int().min(0).optional(),
   dependsOn: z.array(z.number().int().min(0)).max(50).optional(),
-  customFields: z.record(z.unknown()).optional(),
+  customFields: z.record(z.string(), z.unknown()).optional(),
   moduleName: z.string().max(120).optional()
 });
 

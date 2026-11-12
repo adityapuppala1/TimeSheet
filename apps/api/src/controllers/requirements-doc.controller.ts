@@ -180,7 +180,7 @@ requirementsDocRouter.patch(
         .object({
           title: z.string().min(3).max(200).optional(),
           docType: DOC_TYPE.optional(),
-          sections: z.record(z.unknown()).optional(),
+          sections: z.record(z.string(), z.unknown()).optional(),
           status: z.enum(["DRAFTING", "READY", "ARCHIVED"]).optional()
         })
         .strict()

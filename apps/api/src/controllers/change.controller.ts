@@ -619,7 +619,7 @@ const detailShape = {
 
   impact: z.enum(changeBands).optional(),
   likelihood: z.enum(changeBands).optional(),
-  riskInputs: z.record(z.enum(changeBands)).optional(),
+  riskInputs: z.record(z.string(), z.enum(changeBands)).optional(),
   affectedServices: z.array(z.string().max(160)).max(60).optional(),
   affectedApplications: z.array(z.string().max(160)).max(60).optional(),
   affectedCustomers: z.array(z.string().max(160)).max(60).optional(),

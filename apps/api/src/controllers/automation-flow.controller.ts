@@ -51,7 +51,7 @@ async function assertStudioAllowed() {
 const stepSchema = z.object({
   kind: z.enum(["ACTION", "CAPABILITY", "HUMAN_GATE", "BRANCH"]),
   capability: z.string().max(60).nullish(),
-  config: z.record(z.unknown()).optional()
+  config: z.record(z.string(), z.unknown()).optional()
 });
 
 const bodySchema = z.object({
@@ -61,7 +61,7 @@ const bodySchema = z.object({
       description: z.string().max(2000).nullish(),
       emoji: z.string().min(1).max(16).optional(),
       trigger: z.enum(["EVENT", "SCHEDULE", "FORM_SUBMISSION", "MANUAL"]).optional(),
-      triggerConfig: z.record(z.unknown()).optional(),
+      triggerConfig: z.record(z.string(), z.unknown()).optional(),
       agentProfileId: z.string().uuid().nullish(),
       // 20 steps is not a technical limit — it is the point past which nobody reviews a flow, and an
       // unreviewable flow with write authority is the thing this whole phase is careful about.

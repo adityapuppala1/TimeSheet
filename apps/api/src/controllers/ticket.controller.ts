@@ -1759,7 +1759,7 @@ ticketRouter.get("/:id/custom-fields", requirePermission(permissions.TICKETS_VIE
 const customFieldValuesSchema = z.object({
   body: z.object({
     /** `{ fieldKey: rawValue }` — the service normalises each value by its field's type. */
-    values: z.record(z.unknown())
+    values: z.record(z.string(), z.unknown())
   })
 });
 

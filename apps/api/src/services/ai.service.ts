@@ -4422,7 +4422,7 @@ export async function draftPostImplementationReview(input: {
  * ------------------------------------------------------------------ */
 
 const AskActionSchema = z.union([
-  z.object({ action: z.literal("tool"), tool: z.string().min(1), args: z.record(z.unknown()).optional() }),
+  z.object({ action: z.literal("tool"), tool: z.string().min(1), args: z.record(z.string(), z.unknown()).optional() }),
   z.object({ action: z.literal("answer"), markdown: z.string().min(1) }),
   // No payload on purpose — see ASK_OUT_OF_SCOPE below. The model decides THAT a question is out of
   // scope; it never gets to decide what the refusal says.
@@ -5937,7 +5937,7 @@ const AgentDecisionSchema: z.ZodType<AgentDecision> = z.union([
   z.object({
     action: z.literal("tool"),
     tool: z.string().min(1),
-    args: z.record(z.unknown()),
+    args: z.record(z.string(), z.unknown()),
     why: z.string().max(300).optional()
   }),
   z.object({ action: z.literal("finish"), summary: z.string().min(1) })
