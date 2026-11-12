@@ -16,6 +16,7 @@
  * Colour is never the only channel: filled cells carry the count, missing cells carry a minus, and
  * the popover spells the state out in words.
  */
+import { PLANNED_HOURS_PER_WORKING_DAY } from "@timesheet/shared";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { CalendarCheck2, ChevronDown, ChevronRight, Maximize2, Minus, Search } from "lucide-react";
 import { Badge } from "./ui/badge";
@@ -89,8 +90,8 @@ const STATE_WORDS: Record<CellState, string> = {
   upcoming: "Not yet"
 };
 
-/** The same 8h/day target the rest of the dashboard measures utilisation against. */
-const PLANNED_HOURS_PER_DAY = 8;
+/** The 8h/day plan, shared with the Monday digest email so the card and the email agree. */
+const PLANNED_HOURS_PER_DAY = PLANNED_HOURS_PER_WORKING_DAY;
 
 /** Hours logged as a share of planned hours (working days so far × 8h). Can pass 100% — overtime
  *  or weekend work is shown, not capped. "—" when no working day has elapsed yet. */

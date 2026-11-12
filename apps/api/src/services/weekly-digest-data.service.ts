@@ -27,6 +27,7 @@
  */
 import { prisma } from "../config/prisma.js";
 import { emailBlocks } from "./mail-templates.js";
+import { dailyStatusTables, type FillScope } from "./weekly-digest-daily-status.service.js";
 
 const { dataTable, periodStrip, share, escape } = emailBlocks;
 
@@ -408,8 +409,21 @@ export async function buildDigestTables(params: {
   userId: string;
   periods: DigestPeriods;
   scope: DigestScope;
+  /**
+   * Whose DAILY logging status goes in the email — see weekly-digest-daily-status.service.ts. It is a
+   * separate dimension from `scope` on purpose: `scope` is keyed on `reports:view` (which managers hold
+   * too), while "everyone" for the daily grid means `users:manage`, the same rule the home page uses.
+   * Omitted, the section is left out — the digest as it was.
+   */
+  fillScope?: FillScope;
 }): Promise<string> {
   let html = await personalTables(params.userId, params.periods);
+
+  // Straight after the personal figures: which days each person in view filled and which they did
+  // not is the first thing the reader wants, and it reads as part of "your week", not an appendix.
+  if (params.fillScope) {
+    html += await dailyStatusTables({ userId: params.userId, period: params.periods.week, scope: params.fillScope });
+  }
 
   // A WORKSPACE recipient still gets their team section when they have reports — the workspace
   // table is 12 rows of everybody and does not answer "did MY people file this week".

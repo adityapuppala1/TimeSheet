@@ -399,9 +399,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Hover, tap or tab to a cell to list that person's activities for the day: project, activity, time range and duration, with the number of entries and the total hours underneath.",
       "The last column reads days filled out of working days so far, hours logged out of planned hours (8 hours for each working day so far), and the percentage. It can pass 100% when someone works extra or on a day off.",
       "You only see the people you are entitled to: employees see themselves, managers see themselves and their direct reports, and admins see everyone.",
-      "Admins in a workspace with several managers also get a strip of team chips above the grid — people, hours against plan and how many have gaps. Click a chip, or use the manager picker in the expanded view, to narrow the grid to one team. Each team has a roll-up row showing how many of the team logged on each day; click it to collapse or expand the team. Large workspaces start with the teams collapsed, and Show more loads further people."
+      "Admins in a workspace with several managers also get a strip of team chips above the grid — people, hours against plan and how many have gaps. Click a chip, or use the manager picker in the expanded view, to narrow the grid to one team. Each team has a roll-up row showing how many of the team logged on each day; click it to collapse or expand the team. Large workspaces start with the teams collapsed, and Show more loads further people.",
+      "The Monday weekly digest email carries the same grid for the week just finished — one cell per day, green for logged and red for a working day with nothing — with days filled, hours against plan and the percentage. Employees get their own week, managers get themselves and their team, and admins get everyone, with a by-team table and the people who missed the most days listed first (up to 40 rows). Hours in that grid include drafts and pending entries, so they can be higher than the approved hours elsewhere in the email."
     ],
-    keywords: ["logging status", "who has logged", "missing timesheet", "unfilled", "gaps", "manager", "team", "compliance", "daily", "planned hours", "home"]
+    keywords: ["logging status", "who has logged", "missing timesheet", "unfilled", "gaps", "manager", "team", "compliance", "daily", "planned hours", "home", "weekly digest", "monday email", "digest"]
   },
   {
     id: "insights-reports",

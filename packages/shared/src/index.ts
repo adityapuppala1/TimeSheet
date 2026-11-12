@@ -1195,6 +1195,16 @@ export interface PlanTierLimits {
 export const SELF_SERVE_TRIAL_DAYS = 15;
 export const SELF_SERVE_TRIAL_TIER: PlanTier = "TEAM";
 
+/**
+ * Hours planned for one working day — what "plan" means wherever logged hours are compared with it.
+ *
+ * Shared because two surfaces state the same figure and must not drift: the Daily logging status card
+ * on the home page and the same section of the Monday digest email. A person's plan for a period is
+ * this times the working days in it (the workspace's own working week), so a six-day workspace plans
+ * more hours than a five-day one without either surface knowing the difference.
+ */
+export const PLANNED_HOURS_PER_WORKING_DAY = 8;
+
 export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
   STARTER: {
     seatLimit: 10,

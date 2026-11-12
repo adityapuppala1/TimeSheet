@@ -30,6 +30,7 @@ import { permissions } from "@timesheet/shared";
 import { generateWeeklyDigest, getGlobalAISettings } from "../services/ai.service.js";
 import { templates } from "../services/mail-templates.js";
 import { buildDigestTables, buildPeriods, type DigestScope } from "../services/weekly-digest-data.service.js";
+import { fillScopeFor } from "../services/weekly-digest-daily-status.service.js";
 import { loadRequestUser } from "../services/principal.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
@@ -201,7 +202,11 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
       }
     }
 
-    const tablesHtml = await buildDigestTables({ userId: user.id, periods, scope });
+    // Whose daily logging status the email carries: themselves, their team, or everyone. Keyed on
+    // `users:manage` and the reporting line — NOT on `scope` above, which `reports:view` (also held by
+    // managers) would turn into "everyone" for a manager.
+    const fillScope = fillScopeFor(actor?.permissions ?? [], user._count.reports);
+    const tablesHtml = await buildDigestTables({ userId: user.id, periods, scope, fillScope });
 
     await dispatchNotification({
       userId: user.id,

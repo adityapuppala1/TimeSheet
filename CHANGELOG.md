@@ -31,6 +31,11 @@ A new card on the home page, and an update to the libraries behind the API. Noth
   have gaps — that doubles as a manager filter, a searchable manager picker in the expanded view, and a roll-up row
   per team showing how many of the team logged each day. Large workspaces open with teams collapsed; people load
   25 at a time in the card and 60 in the expanded view.
+- **The Monday weekly digest now carries it too:** last week as a grid — one cell per day, green for logged and red
+  for a working day with nothing — with days filled, hours against plan and the percentage. Employees get their
+  own week, managers themselves and their team, admins everyone, with a by-team table and the people who missed
+  the most days first (up to 40 rows). Hours in the grid include drafts and pending entries, so they can exceed
+  the approved hours elsewhere in the email; the email says so.
 - **API:** `GET /timesheets/team-roster` returns the people a viewer's team views cover, with their manager — an
   unfilled day is the absence of rows, so entries alone could never show it.
 
