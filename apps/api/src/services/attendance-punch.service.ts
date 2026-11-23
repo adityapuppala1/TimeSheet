@@ -105,6 +105,7 @@ export function publicRecord(record: (AttendanceRecord & { sourceRef?: { name: s
     id: record.id,
     workDate: record.workDate.toISOString().slice(0, 10),
     punchInAt: record.punchInAt.toISOString(),
+    punchOutAt: record.punchOutAt?.toISOString() ?? null,
     source: record.source,
     // A named integration ("Front door biometric") says more than its kind ever could.
     sourceLabel: record.sourceRef?.name ?? SOURCE_LABELS[record.source],
@@ -298,4 +299,68 @@ export async function punchIn(input: PunchInInput): Promise<{ created: boolean; 
     flagged
   });
   return { created: true, record: publicRecord(record)! };
+}
+
+export interface PunchOutInput {
+  userId: string;
+  now?: Date;
+}
+
+/**
+ * Punch out: stamps today's record with the time, through the same ingest path as every other
+ * source (a WEB event, logged and merged by attendance-ingest.service.ts). Same gates as punch-in
+ * (module on, web punching not OFF). Idempotent: a second call keeps the first punch-out. Refused
+ * (409) when there is no punch-in today, or when today's record belongs to another source — a
+ * biometric device owns its own punch-out and must not be overwritten from the browser.
+ */
+export async function punchOut(input: PunchOutInput): Promise<{ updated: boolean; record: NonNullable<ReturnType<typeof publicRecord>> }> {
+  await assertAttendanceOn();
+  const now = input.now ?? new Date();
+  const settings = await getAttendanceSettings();
+  if (settings.punchInMode === "OFF") {
+    throw new AppError(403, "Punching from the web is not enabled for this workspace.");
+  }
+  const user = await loadUser(input.userId);
+  const dateKey = todayKeyFor(now, user.timezone, serverTimezone);
+  const workDate = new Date(`${dateKey}T00:00:00Z`);
+  const include = { sourceRef: { select: { name: true } } } as const;
+  const existing = await prisma.attendanceRecord.findUnique({ where: { userId_workDate: { userId: input.userId, workDate } }, include });
+  if (!existing) throw new AppError(409, "You have not punched in today, so there is nothing to punch out of.");
+  if (existing.punchOutAt) return { updated: false, record: publicRecord(existing)! };
+  if (existing.source !== "WEB") {
+    throw new AppError(409, `Today's punch came from ${publicRecord(existing)!.sourceLabel}; its punch-out is recorded there.`);
+  }
+  await ingestPunch({
+    kind: "WEB",
+    userId: input.userId,
+    person: { id: input.userId, timezone: user.timezone },
+    punchInAt: existing.punchInAt,
+    punchOutAt: now,
+    now,
+    gateChecked: true
+  });
+  const record = await prisma.attendanceRecord.findUnique({ where: { userId_workDate: { userId: input.userId, workDate } }, include });
+  if (!record) throw new AppError(409, "Your punch-out could not be recorded. Please try again.");
+  await audit(input.userId, "attendance.punched_out", "AttendanceRecord", record.id, { workDate: dateKey, source: "WEB" });
+  return { updated: true, record: publicRecord(record)! };
+}
+
+/** The person's holiday list (own calendar, else the default) over [from, to], for the Holidays screen. */
+export async function getMyHolidays(userId: string, from: string, to: string) {
+  const user = await loadUser(userId);
+  const calendar = user.holidayCalendarId
+    ? await prisma.holidayCalendar.findUnique({ where: { id: user.holidayCalendarId }, select: { id: true, name: true } })
+    : await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true, name: true } });
+  if (!calendar) return { calendar: null, from, to, holidays: [] };
+  const rows = await prisma.holiday.findMany({
+    where: { calendarId: calendar.id, date: { gte: new Date(`${from}T00:00:00Z`), lte: new Date(`${to}T00:00:00Z`) } },
+    orderBy: { date: "asc" },
+    select: { id: true, date: true, name: true, isOptional: true }
+  });
+  return {
+    calendar,
+    from,
+    to,
+    holidays: rows.map((h) => ({ id: h.id, date: h.date.toISOString().slice(0, 10), name: h.name, isOptional: h.isOptional }))
+  };
 }

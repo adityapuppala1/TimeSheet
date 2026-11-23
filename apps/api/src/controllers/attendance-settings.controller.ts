@@ -15,6 +15,7 @@ import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
+import { COUNTED_PEOPLE } from "../services/people-visibility.service.js";
 import {
   AI_INSIGHT_KEYS,
   assertAttendanceEntitled,
@@ -53,6 +54,11 @@ attendanceSettingsRouter.get("/settings", async (_req, res) => {
     // The AND, computed server-side so the client never offers what the API would refuse.
     effective: settings.attendanceEnabled && entitlements.attendanceEnabled
   });
+});
+
+/** How many people a workspace-wide attendance change touches — the settings confirm names it. */
+attendanceSettingsRouter.get("/impact", async (_req, res) => {
+  res.json({ people: await prisma.user.count({ where: COUNTED_PEOPLE }) });
 });
 
 attendanceSettingsRouter.put("/settings", validate(z.object({ body: attendanceSettingsBody })), async (req, res) => {

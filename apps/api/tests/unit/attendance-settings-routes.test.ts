@@ -45,6 +45,7 @@ vi.mock("../../src/config/prisma.js", () => ({
   prisma: {
     globalAttendanceSettings: { upsert: (...a: unknown[]) => upsert(...a), findUnique: async () => ({ id: "global", missedDayReasonEnabled: reasonSettingOn }) },
     holidayCalendar: { findUnique: (...a: unknown[]) => calendarFindUnique(...a), findMany: vi.fn().mockResolvedValue([]) },
+    user: { count: async () => 42 },
     holiday: { create: (...a: unknown[]) => holidayCreate(...a) },
     missedReasonOption: {
       findMany: vi.fn().mockResolvedValue([]),
@@ -114,6 +115,13 @@ describe("attendance settings validation", () => {
 });
 
 describe("/api/attendance/admin permissions and entitlement", () => {
+  it("/impact names how many people a change touches, for super admins only", async () => {
+    currentRole = "SUPER_ADMIN";
+    expect((await request(app()).get("/a/impact").expect(200)).body).toEqual({ people: 42 });
+    currentRole = "EMPLOYEE";
+    await request(app()).get("/a/impact").expect(403);
+  });
+
   it("refuses anyone who is not a super admin", async () => {
     currentRole = "EMPLOYEE";
     await request(app()).get("/a/settings").expect(403);

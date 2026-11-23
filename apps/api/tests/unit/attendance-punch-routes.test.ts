@@ -337,3 +337,45 @@ describe("POST /punch-in", () => {
     expect(consume).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /punch-out", () => {
+  it("403s when attendance is off or web punching is OFF", async () => {
+    settings.attendanceEnabled = false;
+    expect((await request(app()).post("/att/punch-out")).status).toBe(403);
+    settings.attendanceEnabled = true;
+    settings.punchInMode = "OFF";
+    expect((await request(app()).post("/att/punch-out")).status).toBe(403);
+  });
+
+  it("409s with no punch-in today", async () => {
+    recordFindUnique.mockResolvedValue(null);
+    const res = await request(app()).post("/att/punch-out");
+    expect(res.status).toBe(409);
+    expect(res.body.message).toMatch(/not punched in/);
+  });
+
+  it("stamps today's WEB punch through the ingest path and audits it; a body time is ignored", async () => {
+    recordFindUnique.mockResolvedValue(existing());
+    const res = await request(app()).post("/att/punch-out").send({ punchOutAt: "2020-01-01T00:00:00Z" });
+    expect(res.status).toBe(201);
+    expect(res.body.updated).toBe(true);
+    expect(recordCreate).not.toHaveBeenCalled();
+    expect(auditFn.mock.calls[0].slice(0, 3)).toEqual(["u-1", "attendance.punched_out", "AttendanceRecord"]);
+  });
+
+  it("is idempotent: a second punch-out keeps the first", async () => {
+    recordFindUnique.mockResolvedValue(existing({ punchOutAt: new Date("2026-11-23T17:00:00Z") }));
+    const res = await request(app()).post("/att/punch-out");
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ updated: false, record: { punchOutAt: "2026-11-23T17:00:00.000Z" } });
+    expect(auditFn).not.toHaveBeenCalled();
+  });
+
+  it("will not overwrite another source's punch from the browser", async () => {
+    recordFindUnique.mockResolvedValue(existing({ source: "WEBHOOK", sourceRef: { name: "Biometric" } }));
+    const res = await request(app()).post("/att/punch-out");
+    expect(res.status).toBe(409);
+    expect(res.body.message).toMatch(/Biometric/);
+    expect(auditFn).not.toHaveBeenCalled();
+  });
+});

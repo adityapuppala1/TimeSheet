@@ -50,6 +50,7 @@ import {
   accrualDueThrough,
   addDaysKey,
   countLeaveDays,
+  excludedDays,
   findClash,
   leaveYearBounds,
   halfLabel,
@@ -670,6 +671,136 @@ export async function applyLeave(input: ApplyInput): Promise<ApplyResult> {
 }
 
 /* ------------------------------------------------------------------ *
+ * Preview — "what would this request cost?" without writing anything
+ * ------------------------------------------------------------------ */
+
+export const previewQuery = z
+  .object({
+    typeId: z.string().trim().min(1).max(64),
+    start: isoDate,
+    end: isoDate,
+    startHalf: half.optional(),
+    endHalf: half.optional()
+  })
+  .passthrough();
+
+export interface LeavePreview {
+  /** True when applyLeave would accept this exact request right now. */
+  ok: boolean;
+  /** Why not, in the same `code`s applyLeave throws. The first is the one to show. */
+  problems: Array<{ code: string; message: string }>;
+  days: number;
+  excluded: ReturnType<typeof excludedDays>;
+  balanceBefore: number | null;
+  balanceAfter: number | null;
+  allowNegative: boolean;
+  overlap: { requestId: string; startDate: string; endDate: string } | null;
+  documentRequired: boolean;
+  requiresApproval: boolean;
+  approver: { id: string; name: string; avatarUrl: string | null } | null;
+}
+
+/**
+ * Read-only mirror of applyLeave's checks, for the Apply screen's live summary. It reuses the same
+ * pure functions (spanErrors, countLeaveDays, findClash) so the number shown is the number charged.
+ * It returns `problems` instead of throwing for a bad request, and never writes.
+ */
+export async function previewLeave(userId: string, q: z.infer<typeof previewQuery>, now: Date = new Date()): Promise<LeavePreview> {
+  const type = await prisma.leaveType.findUnique({ where: { id: q.typeId } });
+  if (!type || !type.enabled) throw new AppError(422, "That leave type is not available.", { code: "LEAVE_TYPE_UNAVAILABLE" });
+  const span: { startDate: string; endDate: string; startHalf: LeaveHalf; endHalf: LeaveHalf } = {
+    startDate: q.start,
+    endDate: q.end,
+    startHalf: q.startHalf ?? "FULL",
+    endHalf: q.endHalf ?? q.startHalf ?? "FULL"
+  };
+  if (span.startDate === span.endDate && !q.endHalf) span.endHalf = span.startHalf;
+  const problems: LeavePreview["problems"] = [];
+  const shape = spanErrors(span, type.allowHalfDay);
+  if (shape.length) problems.push({ code: "LEAVE_INVALID_SPAN", message: shape[0] });
+
+  const person = await prisma.user.findFirst({
+    where: { id: userId, status: "ACTIVE", deletedAt: null },
+    select: { id: true, timezone: true, holidayCalendarId: true, managerId: true, createdAt: true }
+  });
+  if (!person) throw new AppError(404, "User not found");
+  const settings = await getAttendanceSettings();
+  const startMonth = settings.leaveYearStartMonth ?? 1;
+  const today = todayKeyFor(now, person.timezone, serverTimezone);
+  let leaveYear = leaveYearOf(q.start, startMonth);
+  if (!shape.length) {
+    try {
+      leaveYear = assertSpanAllowed(span, today, startMonth, false);
+    } catch (error) {
+      if (!(error instanceof AppError)) throw error;
+      problems.push({ code: String(error.code ?? "LEAVE_OUT_OF_RANGE"), message: error.message });
+    }
+  }
+  const base = {
+    allowNegative: type.allowNegative,
+    documentRequired: false,
+    requiresApproval: type.requiresApproval,
+    approver: null as LeavePreview["approver"]
+  };
+  if (problems.length) {
+    return { ok: false, days: 0, excluded: [], balanceBefore: null, balanceAfter: null, overlap: null, ...base, problems };
+  }
+
+  const [planning, holidayOf, existing, facts, pending, manager] = await Promise.all([
+    getPlanningSettings(),
+    loadHolidays([person.holidayCalendarId], span.startDate, span.endDate),
+    prisma.leaveRequest.findMany({
+      where: {
+        userId,
+        status: { in: ["PENDING", "APPROVED"] },
+        startDate: { lte: new Date(`${span.endDate}T00:00:00Z`) },
+        endDate: { gte: new Date(`${span.startDate}T00:00:00Z`) }
+      },
+      select: { id: true, startDate: true, endDate: true, startHalf: true, endHalf: true }
+    }),
+    ledgerFacts(prisma, userId, leaveYear, type.id),
+    pendingDays(prisma, userId, leaveYear, type.id),
+    person.managerId
+      ? prisma.user.findFirst({ where: { id: person.managerId, ...NOT_DEACTIVATED }, select: { id: true, name: true, avatarUrl: true } })
+      : Promise.resolve(null)
+  ]);
+  const isHoliday = (d: string) => Boolean(holidayOf(person.holidayCalendarId, d));
+  const days = countLeaveDays(span, { workingDays: planning.workingDays, isHoliday });
+  const excluded = excludedDays(span, {
+    workingDays: planning.workingDays,
+    isHoliday,
+    holidayName: (d) => holidayOf(person.holidayCalendarId, d)?.name ?? null
+  });
+  if (days <= 0) problems.push({ code: "LEAVE_NO_WORKING_DAYS", message: "Those dates are all weekends or holidays — there is nothing to take leave from." });
+
+  const clash = findClash(
+    span,
+    existing.map((e) => ({ id: e.id, startDate: toKey(e.startDate), endDate: toKey(e.endDate), startHalf: e.startHalf, endHalf: e.endHalf }))
+  );
+  if (clash) problems.push({ code: "LEAVE_OVERLAP", message: `This overlaps your leave from ${clash.startDate} to ${clash.endDate}.` });
+
+  const f = facts.get(type.id);
+  const due = dueAccrual(type, leaveYear, startMonth, span.startDate < today ? today : span.startDate, person.createdAt);
+  const available = r2((f?.ledgerSum ?? 0) + Math.max(0, due - (f?.accrued ?? 0)) - (pending.get(type.id) ?? 0));
+  if (!type.allowNegative && days > 0 && available < days) {
+    problems.push({ code: "LEAVE_INSUFFICIENT_BALANCE", message: `Not enough ${type.name}: ${available} day(s) available, ${days} requested.` });
+  }
+  return {
+    ok: problems.length === 0,
+    problems,
+    days,
+    excluded,
+    balanceBefore: available,
+    balanceAfter: r2(available - days),
+    allowNegative: type.allowNegative,
+    overlap: clash ? { requestId: clash.id, startDate: clash.startDate, endDate: clash.endDate } : null,
+    documentRequired: type.requiresDocumentAfterDays != null && days > type.requiresDocumentAfterDays,
+    requiresApproval: type.requiresApproval,
+    approver: manager ? { id: manager.id, name: manager.name, avatarUrl: manager.avatarUrl ?? null } : null
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * Notifications
  * ------------------------------------------------------------------ */
 
@@ -993,7 +1124,36 @@ export async function listInbox(
       include: REQUEST_INCLUDE
     })
   ]);
-  return { total, page, pageSize, items: rows.map(publicRequest) };
+  const after = await balanceAfterFor(rows);
+  return { total, page, pageSize, items: rows.map((r) => ({ ...publicRequest(r), balanceAfter: after.get(r.id) ?? null })) };
+}
+
+/**
+ * For each PENDING row: what the requester will have left of this type if it is approved (balance
+ * counting accrual due by the start date, minus this request). One ledger read per distinct
+ * person-type-year on the page, so a page of fifty is a few queries, not fifty.
+ */
+async function balanceAfterFor(rows: ReadonlyArray<RequestRow>): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const pending = rows.filter((r) => r.status === "PENDING");
+  if (pending.length === 0) return out;
+  const settings = await getAttendanceSettings();
+  const startMonth = settings.leaveYearStartMonth ?? 1;
+  const people = await prisma.user.findMany({ where: { id: { in: [...new Set(pending.map((r) => r.userId))] } }, select: { id: true, createdAt: true } });
+  const joined = new Map(people.map((u) => [u.id, u.createdAt]));
+  const types = new Map<string, LeaveType>();
+  for (const t of await prisma.leaveType.findMany({ where: { id: { in: [...new Set(pending.map((r) => r.leaveTypeId))] } } })) types.set(t.id, t);
+  const facts = new Map<string, Awaited<ReturnType<typeof ledgerFacts>>>();
+  for (const r of pending) {
+    const type = types.get(r.leaveTypeId);
+    if (!type) continue;
+    const key = r.userId + "|" + r.leaveYear;
+    if (!facts.has(key)) facts.set(key, await ledgerFacts(prisma, r.userId, r.leaveYear));
+    const f = facts.get(key)!.get(type.id);
+    const due = dueAccrual(type, r.leaveYear, startMonth, toKey(r.startDate), joined.get(r.userId) ?? null);
+    out.set(r.id, r2((f?.ledgerSum ?? 0) + Math.max(0, due - (f?.accrued ?? 0)) - num(r.days)));
+  }
+  return out;
 }
 
 /** A person's own request by id (404 for anyone else's — it is theirs, not an approver view). */

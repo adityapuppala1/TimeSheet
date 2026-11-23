@@ -122,6 +122,13 @@ describe("/api/leave employee + approver flow", () => {
     expect(ledger.body.items.map((l: { kind: string }) => l.kind).sort()).toEqual(["ACCRUAL", "DEBIT"]);
   });
 
+  it("the inbox tells the approver what the requester will have left", async () => {
+    await request(app()).post("/leave/me/requests").send(future);
+    as("mgr");
+    const inbox = await request(app()).get("/leave/inbox");
+    expect(inbox.body.items[0]).toMatchObject({ days: 3, balanceAfter: 9 });
+  });
+
   it("days are never taken from the client", async () => {
     const res = await request(app()).post("/leave/me/requests").send({ ...future, days: 0.5 });
     expect(res.status).toBe(422);
@@ -158,6 +165,49 @@ describe("/api/leave employee + approver flow", () => {
     const res = await request(app()).get("/leave/team?from=2027-01-01&to=2027-01-31");
     expect(res.body.items).toHaveLength(1);
     expect(JSON.stringify(res.body)).not.toContain("private");
+  });
+});
+
+describe("GET /api/leave/me/preview", () => {
+  const q = (o: Record<string, string> = {}) => new URLSearchParams({ typeId: "type-PL", start: "2027-01-04", end: "2027-01-10", ...o }).toString();
+
+  it("counts working days, lists the weekend it skipped, and shows the balance before and after", async () => {
+    const res = await request(app()).get(`/leave/me/preview?${q()}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, days: 5, balanceBefore: 12, balanceAfter: 7, requiresApproval: true });
+    expect(res.body.excluded).toEqual([
+      { date: "2027-01-09", reason: "WEEKEND", label: "Saturday" },
+      { date: "2027-01-10", reason: "WEEKEND", label: "Sunday" }
+    ]);
+    expect(res.body.approver).toMatchObject({ id: "mgr" });
+    expect(world.leaveRequest).toHaveLength(0);
+  });
+
+  it("names a holiday and charges nothing for it", async () => {
+    world.holidayCalendar.push({ id: "cal", name: "India", isDefault: true });
+    world.holiday.push({ id: "h1", calendarId: "cal", date: new Date("2027-01-05T00:00:00Z"), name: "Festival", isOptional: false });
+    const res = await request(app()).get(`/leave/me/preview?${q({ end: "2027-01-06" })}`);
+    expect(res.body.days).toBe(2);
+    expect(res.body.excluded).toEqual([{ date: "2027-01-05", reason: "HOLIDAY", label: "Festival" }]);
+  });
+
+  it("reports problems instead of throwing, with applyLeave's codes", async () => {
+    const half = await request(app()).get(`/leave/me/preview?${q({ end: "2027-01-06", startHalf: "FIRST_HALF" })}`);
+    expect(half.body).toMatchObject({ ok: false, days: 0 });
+    expect(half.body.problems[0].code).toBe("LEAVE_INVALID_SPAN");
+    const big = await request(app()).get(`/leave/me/preview?${q({ end: "2027-01-31" })}`);
+    expect(big.body.ok).toBe(false);
+    expect(big.body.problems[0].message).toMatch(/Not enough/);
+    expect(big.body.balanceAfter).toBeLessThan(0);
+  });
+
+  it("flags an overlap with an existing request and is gated like every leave route", async () => {
+    await request(app()).post("/leave/me/requests").send(future);
+    const res = await request(app()).get(`/leave/me/preview?${q({ start: "2027-01-05", end: "2027-01-05" })}`);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.overlap).toMatchObject({ startDate: "2027-01-04", endDate: "2027-01-06" });
+    world.settings.leaveEnabled = false;
+    expect((await request(app()).get(`/leave/me/preview?${q()}`)).status).toBe(403);
   });
 });
 

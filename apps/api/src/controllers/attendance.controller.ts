@@ -14,7 +14,7 @@ import { z } from "zod";
 import { aiRateLimit } from "../middleware/ai-rate-limit.js";
 import { requireAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
-import { assertAttendanceOn, getMyToday, punchIn } from "../services/attendance-punch.service.js";
+import { assertAttendanceOn, getMyHolidays, getMyToday, punchIn, punchOut } from "../services/attendance-punch.service.js";
 import { isoDate } from "../services/attendance-settings.service.js";
 import { listEnabledMissedReasonOptions, missedDayReasonState } from "../services/missed-day-reason.service.js";
 import { userClock } from "../services/user-clock.service.js";
@@ -70,6 +70,19 @@ attendanceRouter.post("/punch-in", requireAuth, validate(z.object({ body: punchI
     userAgent: typeof ua === "string" ? ua : null
   });
   res.status(result.created ? 201 : 200).json(result);
+});
+
+/** Punch out of today's web punch. No body: the server stamps the time, so a client cannot backdate it. */
+attendanceRouter.post("/punch-out", requireAuth, async (req, res) => {
+  const result = await punchOut({ userId: req.user!.id });
+  res.status(result.updated ? 201 : 200).json(result);
+});
+
+/** The signed-in person's holiday calendar over a window (max 400 days): the Holidays screen and .ics. */
+attendanceRouter.get("/me/holidays", requireAuth, async (req, res) => {
+  await assertAttendanceOn();
+  const { from, to } = rangeQuery(req.query, 400);
+  res.json(await getMyHolidays(req.user!.id, from, to));
 });
 
 /**

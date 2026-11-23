@@ -46,6 +46,8 @@ import {
   listLeaveTypes,
   listMyRequests,
   listTeamLeave,
+  previewLeave,
+  previewQuery,
   publicLeaveType
 } from "../services/leave.service.js";
 import { runLeaveAccrual } from "../workers/leave-accrual.worker.js";
@@ -99,6 +101,12 @@ leaveRouter.get("/me/requests", requireAuth, async (req, res) => {
   await assertLeaveOn();
   const q = z.object({ status: STATUS.optional(), year: z.string().regex(/^\d{4}$/).optional() }).passthrough().parse(req.query);
   res.json({ items: await listMyRequests(req.user!.id, { status: q.status, year: q.year ? Number(q.year) : undefined }) });
+});
+
+/** The Apply screen live summary: days, excluded days, balance before/after, overlap, approver. Writes nothing. */
+leaveRouter.get("/me/preview", requireAuth, async (req, res) => {
+  await assertLeaveOn();
+  res.json(await previewLeave(req.user!.id, previewQuery.parse(req.query)));
 });
 
 leaveRouter.get("/me/requests/:id", requireAuth, async (req, res) => {

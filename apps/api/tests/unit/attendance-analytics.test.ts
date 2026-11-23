@@ -191,6 +191,14 @@ describe("summariseSelf", () => {
   });
 });
 
+describe("dailyTrend", () => {
+  it("is presence per day, skipping pending days, never 0% for an unjudged day", () => {
+    const a = personFacts("a", [day("2026-11-02", {}), day("2026-11-03", { status: "PENDING" })]);
+    const b = personFacts("b", [absent("2026-11-02"), day("2026-11-03", { status: "PENDING" })]);
+    expect(svc.dailyTrend([a, b])).toEqual([{ date: "2026-11-02", presenceRate: 0.5, absenceRate: 0.5, present: 1, absent: 1 }]);
+  });
+});
+
 describe("driftMinutesPerWeek", () => {
   it("is +7 min/week for a punch 1 minute later every calendar day", () => {
     const pts = ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06"].map((date, i) => ({ date, minute: 540 + i }));

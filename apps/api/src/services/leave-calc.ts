@@ -320,3 +320,29 @@ export function expectedHours(input: ExpectedHoursInput): ExpectedHours {
     expectedHours: round2(expectedDays * (perWeek > 0 ? input.weeklyCapacityHours / perWeek : 0))
   };
 }
+
+export interface ExcludedDay {
+  date: string;
+  reason: "WEEKEND" | "HOLIDAY";
+  /** The holiday's name, or the weekday for a weekend ("Saturday"). */
+  label: string;
+}
+
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/**
+ * The preview's "why is it 3 days, not 5": every day in the span that costs nothing, with the reason.
+ * Same rules as countLeaveDays (a non-working weekday first, then a holiday), so the two never drift.
+ */
+export function excludedDays(span: LeaveSpan, rules: DayRules & { holidayName: (dateKey: string) => string | null }): ExcludedDay[] {
+  const out: ExcludedDay[] = [];
+  for (const d of dayPortions(span).keys()) {
+    const weekday = weekdayOf(d);
+    if (!rules.workingDays.includes(weekday)) {
+      out.push({ date: d, reason: "WEEKEND", label: WEEKDAY_NAMES[weekday] });
+    } else if (rules.isHoliday(d)) {
+      out.push({ date: d, reason: "HOLIDAY", label: rules.holidayName(d) ?? "Holiday" });
+    }
+  }
+  return out;
+}

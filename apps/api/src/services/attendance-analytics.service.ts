@@ -578,6 +578,40 @@ function integrationHealth(
   });
 }
 
+/**
+ * The org trend: presence and absence per calendar day across everyone (PRESENT ÷ (PRESENT + ABSENT),
+ * pending days are no verdict). Only for a group already past k-anonymity; a day nobody was judged on
+ * is null, never 0%. Pure.
+ */
+export function dailyTrend(people: ReadonlyArray<PersonFacts>): Array<{ date: string; presenceRate: number | null; absenceRate: number | null; present: number; absent: number }> {
+  const byDate = new Map<string, { present: number; absent: number }>();
+  for (const person of people) {
+    for (const d of person.days) {
+      if (d.status !== "PRESENT" && d.status !== "ABSENT") continue;
+      const row = byDate.get(d.date) ?? { present: 0, absent: 0 };
+      if (d.status === "PRESENT") row.present += 1;
+      else row.absent += 1;
+      byDate.set(d.date, row);
+    }
+  }
+  return [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, r]) => ({ date, presenceRate: ratio(r.present, r.present + r.absent), absenceRate: ratio(r.absent, r.present + r.absent), present: r.present, absent: r.absent }));
+}
+
+/** Average logged vs expected hours per person for the range (k-anonymous groups only). */
+function orgHours(people: ReadonlyArray<PersonFacts>, opts: AnalyticsOptions): { logged: number; expected: number } {
+  let logged = 0;
+  let expected = 0;
+  for (const p of people) {
+    const h = summariseSelf(p, opts).hours;
+    logged += h.logged;
+    expected += h.expected;
+  }
+  const n = Math.max(1, people.length);
+  return { logged: Math.round((logged / n) * 10) / 10, expected: Math.round((expected / n) * 10) / 10 };
+}
+
 export async function getOrgAnalytics(actor: { id: string; role: string }, range: AnalyticsRange, now: Date = new Date()) {
   assertOrgScope(actor.role);
   const loaded = await teamPeople(actor);
@@ -604,6 +638,7 @@ export async function getOrgAnalytics(actor: { id: string; role: string }, range
     })
   ]);
 
+  const overall = summariseGroup(people, opts);
   const byManager = groupByManager(people, new Map(managers.map((m) => [m.id, m.name])), opts);
   const { bySource, face } = sourceAndFace(people, opts.minGroupSize);
   const zoneOf = new Map(loaded.map((p) => [p.id, p.timezone]));
@@ -619,7 +654,9 @@ export async function getOrgAnalytics(actor: { id: string; role: string }, range
     range: rangeOut(range, workingDayCount(people)),
     minGroupSize: opts.minGroupSize,
     lateness: { enabled: opts.latenessEnabled, expectedStartMinute: opts.expectedStartMinute },
-    overall: summariseGroup(people, opts),
+    overall,
+    trend: overall.suppressed ? null : dailyTrend(people),
+    hours: overall.suppressed ? null : orgHours(people, opts),
     byManager,
     bySource,
     face,
