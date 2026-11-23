@@ -83,21 +83,21 @@ images in `apps/web/public/product/` feed the landing page and the in-app Help m
 
 ## By the numbers
 
-Counted from the tree on branch V13-signup-domains (recounted 2026-10-02), not estimated — regenerate any of these with the one-liners in
+Counted from the tree on branch V16-agents-3d (recounted 2026-11-23), not estimated — regenerate any of these with the one-liners in
 [CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
 that looks stale.
 
 | | |
 |---|---|
-| REST routes | **571** across 61 controllers |
-| Prisma models / enums | **136** / 48, plus **125** tenant migrations and 25 control-plane migrations |
-| Services / cron workers | **158** / 33 |
-| Web pages | **106** |
-| Unit tests | **3,593** across 240 files (`npm test -w apps/api`), plus **382** in `apps/web` |
+| REST routes | **585** across 61 controllers |
+| Prisma models / enums | **137** / 48, plus **138** tenant migrations and 34 control-plane migrations |
+| Services / cron workers | **191** / 35 |
+| Web pages | **108** |
+| Unit tests | **4,827** across 365 files (`npm test -w apps/api`), plus **714** in `apps/web` |
 | End-to-end specs | **33** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
-| Editable email templates | **44**, every one of them with preview, test send, revert and per-template delivery analytics |
+| Editable email templates | **47**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **20**, over 5 roles — plus **5** platform-console capabilities over 5 operator roles |
-| Lint | **0 errors**, **696** warnings held under a per-rule ceiling that can only fall — see below |
+| Lint | **0 errors**, **672** warnings held under a per-rule ceiling that can only fall — see below |
 
 **On the two permission counts.** They are two separate authority models and adding them together
 would describe a role nobody holds. The **20** are the tenant RBAC keys in `packages/shared`
@@ -107,7 +107,7 @@ the operator console in the control plane, and which no workspace user holds at 
 **38** for four releases; the figure was never counted, and the one-liner meant to check it scanned
 the whole file rather than the object, so it agreed with nothing. Both are counted now, separately.
 
-**On the lint number.** The repo runs ESLint with `sonarjs` and sits at 699 warnings and
+**On the lint number.** The repo runs ESLint with `sonarjs` and sits at 672 warnings and
 zero errors. That is the healthy state, not a backlog: the warnings are overwhelmingly
 `no-nested-conditional` and `cognitive-complexity` on code where the nesting is the clearest form,
 and "fixing" the count by mechanically extracting ternaries has previously made the code worse.
