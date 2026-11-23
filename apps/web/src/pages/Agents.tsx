@@ -56,7 +56,7 @@ import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 import { agentRosterApi, type AgentCapabilityRow, type AgentRosterEntry, type AgentTemplateRow } from "../services/api";
 import { runInBackground } from "../lib/run-in-background";
-import { AgentStudio } from "../components/agents-studio/AgentStudio";
+import { AgentOffice } from "../components/agents-office/AgentOffice";
 import { agentTintIndex } from "../components/agents-studio/studio-model";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
@@ -207,7 +207,7 @@ export function AgentsPage() {
           </div>
 
           {entries.length > 0 && (
-            <AgentStudio
+            <AgentOffice
               entries={entries}
               selectedId={selectedAgentId}
               onSelect={setSelectedAgentId}

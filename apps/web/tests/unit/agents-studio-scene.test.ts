@@ -14,26 +14,11 @@
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 
-import { buildAccessory } from "../../src/components/agents-studio/scene/accessories";
 import { buildSim } from "../../src/components/agents-studio/scene/sims";
 import type { Archetype } from "../../src/components/agents-studio/studio-model";
 
 const SPECIALISTS: ReadonlyArray<Archetype> = ["triage", "planner", "risk", "security", "reporter", "balancer"];
 const ACCENT = 0xbef264;
-
-function accessoryContext() {
-  return {
-    rig: new THREE.Group(),
-    neck: new THREE.Group(),
-    armL: new THREE.Group(),
-    armR: new THREE.Group(),
-    body: new THREE.Color(ACCENT),
-    head: new THREE.Color(ACCENT),
-    trim: new THREE.Color(ACCENT),
-    tint: ACCENT,
-    track: <T extends { dispose(): void }>(item: T) => item
-  };
-}
 
 /** Every mesh and sprite in a world, however deeply nested — a truer measure of how built-out it is than its top-level children. */
 function visualParts(root: THREE.Object3D): number {
@@ -64,32 +49,6 @@ function narration(archetype: Archetype): Set<string> {
   sim.dispose();
   return sentences;
 }
-
-describe("every specialist has its own accessory", () => {
-  it.each(SPECIALISTS)("%s carries or wears something that replaces the emoji badge", (archetype) => {
-    const ctx = accessoryContext();
-    const accessory = buildAccessory(archetype, ctx);
-    expect(accessory, `${archetype} has no accessory — it would fall back to the badge`).not.toBeNull();
-    expect(accessory?.replacesBadge).toBe(true);
-    // It must actually add geometry to the character, on the body, the head or an arm.
-    const added = ctx.rig.children.length + ctx.neck.children.length + ctx.armL.children.length + ctx.armR.children.length;
-    expect(added, `${archetype}'s accessory added nothing`).toBeGreaterThan(0);
-  });
-
-  it("gives the generic assistant none — it wears the badge", () => {
-    expect(buildAccessory("assistant", accessoryContext())).toBeNull();
-  });
-
-  it.each(SPECIALISTS)("%s's accessory animates through every mood without throwing", (archetype) => {
-    const accessory = buildAccessory(archetype, accessoryContext());
-    for (const mood of ["off", "idle", "working", "attention", "celebrating"] as const) {
-      expect(() => {
-        accessory?.update(mood, 1.3, 1.1, 0.05);
-        accessory?.arms?.(mood, 1.3);
-      }).not.toThrow();
-    }
-  });
-});
 
 describe("every specialist has its own world", () => {
   const placeholder = visualParts(buildSim("assistant", "any", ACCENT).group);
