@@ -68,6 +68,7 @@ import { automationFlowRouter } from "./controllers/automation-flow.controller.j
 import { changeRouter } from "./controllers/change.controller.js";
 import { attendanceSettingsRouter } from "./controllers/attendance-settings.controller.js";
 import { attendanceRouter } from "./controllers/attendance.controller.js";
+import { leaveRouter } from "./controllers/leave.controller.js";
 import { attendanceSourcesRouter } from "./controllers/attendance-sources.controller.js";
 import { attendanceWebhookRouter } from "./controllers/attendance-webhook.controller.js";
 import { WEBHOOK_BODY_LIMIT } from "./services/attendance-webhook.service.js";
@@ -601,6 +602,8 @@ app.use("/api/integrations/attendance", attendanceWebhookRouter);
 // to cover a whole office behind one NAT arriving at 9:00 — 120 a minute does, and still stops a loop.
 app.use("/api/attendance/punch-in", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true }));
 app.use("/api/attendance", attendanceRouter);
+// V17 Phase B leave: employee, approver and super-admin routes, all behind the leave gate.
+app.use("/api/leave", leaveRouter);
 // The inbox is a personal surface: no permission, no entitlement, every route scoped to the
 // caller's own rows. It sits beside /notifications rather than inside it because the bell is a
 // glance and the inbox is a queue with triage state — see controllers/inbox.controller.ts.

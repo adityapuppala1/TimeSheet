@@ -28,7 +28,9 @@ const h = vi.hoisted(() => ({
   planAllows: true,
   queries: 0,
   userWheres: [] as any[],
-  extraPeople: [] as Person[]
+  extraPeople: [] as Person[],
+  // V17 Phase B: approved leave rows, read only when leaveEnabled is on.
+  leave: [] as Array<{ userId: string; date: string; half: string }>
 }));
 
 vi.mock("../../src/config/prisma.js", () => {
@@ -62,6 +64,20 @@ vi.mock("../../src/config/prisma.js", () => {
             .filter(([u, d]) => where.userId.in.includes(u) && days.includes(d))
             .map(([u, d]) => ({ userId: u, workDate: new Date(`${d}T00:00:00Z`) }));
         })
+      },
+      leaveRequest: {
+        findMany: counted(({ where }: any) =>
+          h.leave
+            .filter((l) => where.userId.in.includes(l.userId))
+            .map((l) => ({
+              userId: l.userId,
+              startDate: new Date(`${l.date}T00:00:00Z`),
+              endDate: new Date(`${l.date}T00:00:00Z`),
+              startHalf: l.half,
+              endHalf: l.half,
+              leaveType: { code: "PL" }
+            }))
+        )
       },
       holidayCalendar: { findFirst: counted(() => ({ id: "cal" })) },
       holiday: {
@@ -103,6 +119,7 @@ beforeEach(() => {
   h.queries = 0;
   h.userWheres = [];
   h.extraPeople = [];
+  h.leave = [];
   h.attendance = { attendanceEnabled: true, punchInReminderEnabled: true, punchInMode: "OPTIONAL", punchInReminderHour: 11 };
 });
 
@@ -289,3 +306,26 @@ describe("the punch-in reminder has no N+1", () => {
     expect(h.queries).toBe(few);
   });
 });
+
+describe("V17 Phase B: approved leave", () => {
+  it("no punch-in reminder on a FULL day of approved leave", async () => {
+    h.attendance = { ...h.attendance, leaveEnabled: true };
+    h.leave = [{ userId: "asha", date: "2026-11-18", half: "FULL" }];
+    await inTenant(() => runPunchInReminders(IST_11));
+    expect(punchRecipients()).toEqual([]);
+  });
+
+  it("a HALF day of leave still owes a punch, so the reminder still goes", async () => {
+    h.attendance = { ...h.attendance, leaveEnabled: true };
+    h.leave = [{ userId: "asha", date: "2026-11-18", half: "SECOND_HALF" }];
+    await inTenant(() => runPunchInReminders(IST_11));
+    expect(punchRecipients()).toEqual(["asha"]);
+  });
+
+  it("with leave switched off, leave rows are not even read", async () => {
+    h.leave = [{ userId: "asha", date: "2026-11-18", half: "FULL" }];
+    await inTenant(() => runPunchInReminders(IST_11));
+    expect(punchRecipients()).toEqual(["asha"]);
+  });
+});
+

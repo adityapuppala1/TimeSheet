@@ -47,6 +47,7 @@ import { htmlToText } from "../utils/sanitize.js";
 import { assertIngestAllowed, ingestPunch } from "./attendance-ingest.service.js";
 import { isPunchInFaceRequired, publicRecord } from "./attendance-punch.service.js";
 import { getAttendanceSettings } from "./attendance-settings.service.js";
+import { applyLeave, assertLeaveOn, getBalances, listMyRequests, withoutPrivateText } from "./leave.service.js";
 
 /** The subset of GlobalMcpSettings the enablement rules read. Structural rather than the Prisma
  *  row type so tests can build one without a database. */
@@ -775,6 +776,114 @@ const TOOLS: readonly McpToolRegistration[] = [
         select: { date: true, name: true, isOptional: true }
       });
       return { calendar: calendar?.name ?? null, holidays: holidays.map((h) => ({ ...h, date: h.date.toISOString().slice(0, 10) })) };
+    }
+  },
+
+  /* ---- Leave (V17 Phase B). Always the caller's own leave: there is no "who" parameter. ---- */
+  {
+    name: "apply_leave",
+    title: "Apply for leave",
+    description:
+      "Call this ONLY when the acting user explicitly asks to apply for / book leave — 'take Friday " +
+      "off as casual leave', 'apply for sick leave Monday to Wednesday'. It files a leave request " +
+      "for THEM (there is no parameter for anyone else); their manager is notified and decides it, " +
+      "unless the leave type needs no approval. The server counts the working days (weekends and " +
+      "their holidays excluded) and refuses overlaps, too little balance, or a type that needs a " +
+      "supporting document (tell the user to apply in the web app then). Use get_leave_balance " +
+      "first to find the type code. Confirm the dates and type with the user before calling it.",
+    inputSchema: {
+      leaveType: z.string().min(1).max(20).describe("Leave type code, e.g. PL, CL, SL"),
+      startDate: ISO_DATE.describe("First day, yyyy-mm-dd"),
+      endDate: ISO_DATE.describe("Last day, yyyy-mm-dd (same as startDate for one day)"),
+      startHalf: z.enum(["FULL", "FIRST_HALF", "SECOND_HALF"]).optional().describe("FULL, or the half of the first day taken"),
+      endHalf: z.enum(["FULL", "FIRST_HALF", "SECOND_HALF"]).optional().describe("FULL, or FIRST_HALF to come back after lunch on the last day"),
+      reason: z.string().max(2000).optional()
+    },
+    permission: null,
+    mutating: true,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx, args) => {
+      await assertLeaveOn();
+      const result = await applyLeave({
+        userId: ctx.user.id,
+        leaveTypeCode: args.leaveType,
+        startDate: args.startDate,
+        endDate: args.endDate,
+        startHalf: args.startHalf,
+        endHalf: args.endHalf,
+        reason: args.reason ?? null,
+        source: "MCP",
+        actorId: ctx.user.id
+      });
+      // The reason is the person's own words; the assistant just heard it, it need not echo it.
+      return { autoApproved: result.autoApproved, request: withoutPrivateText(result.request) };
+    }
+  },
+
+  {
+    name: "get_leave_balance",
+    title: "My leave balance",
+    description:
+      "Call this when the acting user asks how much leave THEY have — 'how many PL days do I have', " +
+      "'what leave types can I take'. Returns, per enabled leave type, the balance, pending days, " +
+      "what is available now, and what will expire at the end of the leave year. Always scoped to them.",
+    inputSchema: {},
+    permission: null,
+    mutating: false,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx) => {
+      await assertLeaveOn();
+      const b = await getBalances(ctx.user.id);
+      return {
+        leaveYear: b.leaveYear,
+        from: b.from,
+        to: b.to,
+        balances: b.balances.map((x) => ({
+          type: x.leaveType.code,
+          name: x.leaveType.name,
+          allowHalfDay: x.leaveType.allowHalfDay,
+          requiresApproval: x.leaveType.requiresApproval,
+          balance: x.balance,
+          pending: x.pending,
+          available: x.available,
+          expiringAtYearEnd: x.expiringAtYearEnd
+        }))
+      };
+    }
+  },
+
+  {
+    name: "list_my_leave",
+    title: "My leave requests",
+    description:
+      "Call this when the acting user asks about THEIR leave requests — 'is my leave approved', " +
+      "'what leave have I taken this year'. Always scoped to them; optionally filter by status.",
+    inputSchema: {
+      status: z.enum(["PENDING", "APPROVED", "REJECTED", "CANCELLED"]).optional()
+    },
+    permission: null,
+    mutating: false,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx, args) => {
+      await assertLeaveOn();
+      const items = await listMyRequests(ctx.user.id, { status: args.status });
+      return {
+        count: items.length,
+        requests: items.slice(0, 100).map((r) => ({
+          id: r.id,
+          type: r.leaveType.code,
+          startDate: r.startDate,
+          endDate: r.endDate,
+          startHalf: r.startHalf,
+          endHalf: r.endHalf,
+          days: r.days,
+          status: r.status,
+          decidedAt: r.decidedAt
+        }))
+      };
     }
   }
 ];

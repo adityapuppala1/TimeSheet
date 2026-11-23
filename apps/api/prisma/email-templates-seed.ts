@@ -417,6 +417,50 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
     })
   },
 
+  "leave.requested": {
+    subject: "{{employeeName}} requested {{days}} day(s) of {{leaveType}}",
+    bodyHtml: shell({
+      preheader: "A leave request is waiting for your decision.",
+      accent: COLORS.accent,
+      body: [
+        heading("Hi {{approverName}}, a leave request needs your decision"),
+        lead("<strong>{{employeeName}}</strong> has asked for {{leaveType}}."),
+        infoCard(
+          [
+            { label: "Dates", value: "{{dates}}", emphasize: true },
+            { label: "Days", value: "{{days}}" },
+            { label: "Reason", value: "{{reason}}" }
+          ],
+          COLORS.accent
+        ),
+        button("Review the request", "{{appUrl}}/app/attendance", COLORS.accent)
+      ].join("\n"),
+      footerNote: "You are receiving this because you approve leave for this person in TimeSphere."
+    })
+  },
+
+  "leave.decided": {
+    subject: "Your {{leaveType}} request was {{decision}}",
+    bodyHtml: shell({
+      preheader: "Your leave request has been decided.",
+      accent: COLORS.accent,
+      body: [
+        heading("Hi {{name}}, your leave request was {{decision}}"),
+        lead("Your request for {{leaveType}} has been <strong>{{decision}}</strong> by {{decidedBy}}."),
+        infoCard(
+          [
+            { label: "Dates", value: "{{dates}}", emphasize: true },
+            { label: "Days", value: "{{days}}" },
+            { label: "Note", value: "{{note}}" }
+          ],
+          COLORS.accent
+        ),
+        button("Open TimeSphere", "{{appUrl}}/app/attendance", COLORS.accent)
+      ].join("\n"),
+      footerNote: "Sent when a leave request you made is approved or rejected."
+    })
+  },
+
   "reminder.escalation.manager": {
     subject: "{{employeeName}} missed yesterday's timesheet",
     bodyHtml: shell({

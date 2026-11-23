@@ -567,14 +567,20 @@ export const outboundWebhookEvents = [
   "ticket.status_changed",
   "ticket.closed",
   "timesheet.submitted",
-  "timesheet.approved"
+  "timesheet.approved",
+  /* V17 Phase B leave lifecycle. */
+  "leave.requested",
+  "leave.approved",
+  "leave.rejected",
+  "leave.cancelled"
 ] as const;
 export type OutboundWebhookEvent = (typeof outboundWebhookEvents)[number];
 export const apiKeyScopes = ["READ", "WRITE"] as const;
 export type ApiKeyScope = (typeof apiKeyScopes)[number];
 /** Granular grants layered on top of READ/WRITE (V17 A3). A key holds none unless an admin ticks
  *  them, so every key issued before they existed keeps exactly its old reach. */
-export const apiKeyGrants = ["attendance:read", "attendance:write"] as const;
+/** V17 Phase B adds leave:read / leave:write — like the attendance grants, READ/WRITE never imply them. */
+export const apiKeyGrants = ["attendance:read", "attendance:write", "leave:read", "leave:write"] as const;
 export type ApiKeyGrant = (typeof apiKeyGrants)[number];
 
 export interface TicketInput {
@@ -601,6 +607,9 @@ export interface NotificationPreferences {
   emailDailyEscalation: boolean;
   /** V17 A4: the punch-in reminder. Fires only with attendance on and its reminder enabled. */
   emailPunchInReminder: boolean;
+  /** V17 Phase B: a leave request waiting on its approver / the requester hears the decision. */
+  emailLeaveRequested: boolean;
+  emailLeaveDecided: boolean;
   emailTicketAssigned: boolean;
   emailTicketStatusChanged: boolean;
   emailTicketCommented: boolean;
@@ -676,6 +685,8 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailDailyReminder",
   "emailDailyEscalation",
   "emailPunchInReminder",
+  "emailLeaveRequested",
+  "emailLeaveDecided",
   "emailTicketAssigned",
   "emailTicketStatusChanged",
   "emailTicketCommented",

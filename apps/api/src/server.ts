@@ -34,6 +34,7 @@ import { startPracticeUpdateWorker } from "./workers/practice-update.worker.js";
 import { startSecurityWeeklyDigestWorker } from "./workers/security-weekly-digest.worker.js";
 import { startVerificationSweepWorker } from "./workers/verification-sweep.worker.js";
 import { startFaceRetentionWorker } from "./workers/face-retention.worker.js";
+import { startLeaveAccrualWorker } from "./workers/leave-accrual.worker.js";
 import { startWebhookRetryWorker } from "./workers/webhook-retry.worker.js";
 import { startBugPatternDigestWorker } from "./workers/bug-pattern-digest.worker.js";
 import { startAIEvalWorker } from "./workers/ai-eval.worker.js";
@@ -248,6 +249,7 @@ server.on("listening", async () => {
   startSecurityWeeklyDigestWorker();
   startVerificationSweepWorker();
   startFaceRetentionWorker();
+  startLeaveAccrualWorker();
   startIdentityWeeklyDigestWorker();
   startWebhookRetryWorker();
   startBugPatternDigestWorker();

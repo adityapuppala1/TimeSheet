@@ -32,6 +32,9 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "reminder.escalation.manager": ["managerName", "employeeName", "missedDate", "employeeEmail", "appUrl"],
   // V17 A4 attendance
   "reminder.punch_in": ["name", "date", "appUrl"],
+  // V17 Phase B leave
+  "leave.requested": ["approverName", "employeeName", "leaveType", "dates", "days", "reason", "appUrl"],
+  "leave.decided": ["name", "leaveType", "decision", "decidedBy", "dates", "days", "note", "appUrl"],
 
   // Ticketing
   "ticket.assigned": ["assigneeName", "ticketKey", "title", "priority", "assignedBy", "type", "module", "description", "appUrl"],
@@ -92,6 +95,8 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "reminder.daily": "Daily 4 PM nudge to log today's timesheet (weekdays only).",
   "reminder.escalation.employee": "Next-morning escalation reminder to the employee for a missed log day.",
   "reminder.escalation.manager": "Next-morning notification to the manager when a report missed yesterday's log.",
+  "leave.requested": "Sent to the approver (the person's manager, or the admin pool when they have none) when a leave request needs a decision.",
+  "leave.decided": "Sent to the person who asked for leave when their request is approved or rejected.",
   "reminder.punch_in":
     "Punch-in reminder at the hour set under Attendance & Leave (11:00 by default), in each person's timezone — only on their working days, never on a holiday, and only when no punch has arrived from any source.",
 
@@ -230,6 +235,14 @@ export function sampleVariables(key: string): Record<string, string> {
       managerName: "Mira Kapoor", appUrl: "https://timesphere.local"
     },
     "reminder.punch_in": { name: "Aanya Sharma", date: "2026-05-27", appUrl: "https://timesphere.local" },
+    "leave.requested": {
+      approverName: "Mira Kapoor", employeeName: "Aanya Sharma", leaveType: "Privilege leave",
+      dates: "2026-06-01 to 2026-06-03", days: "3", reason: "Family wedding", appUrl: "https://timesphere.local"
+    },
+    "leave.decided": {
+      name: "Aanya Sharma", leaveType: "Privilege leave", decision: "approved", decidedBy: "Mira Kapoor",
+      dates: "2026-06-01 to 2026-06-03", days: "3", note: "Enjoy!", appUrl: "https://timesphere.local"
+    },
     "reminder.escalation.manager": {
       managerName: "Mira Kapoor", employeeName: "Aanya Sharma",
       employeeEmail: "aanya@example.com", missedDate: "2026-05-26",
@@ -527,6 +540,20 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
     subject: "You missed logging time on {{missedDate}}",
     html: compiledTemplates.escalation({
       targetName: V("name"), employeeName: V("name"), managerName: V("managerName"), date: V("missedDate"), project: "-"
+    })
+  },
+  "leave.requested": {
+    subject: "{{employeeName}} requested {{days}} day(s) of {{leaveType}}",
+    html: compiledTemplates.leaveRequested({
+      approverName: V("approverName"), employeeName: V("employeeName"), leaveType: V("leaveType"),
+      dates: V("dates"), days: V("days"), reason: V("reason")
+    })
+  },
+  "leave.decided": {
+    subject: "Your {{leaveType}} request was {{decision}}",
+    html: compiledTemplates.leaveDecided({
+      name: V("name"), leaveType: V("leaveType"), decision: V("decision"), decidedBy: V("decidedBy"),
+      dates: V("dates"), days: V("days"), note: V("note")
     })
   },
   "reminder.punch_in": {

@@ -364,7 +364,7 @@ model User {
   /// The id an external attendance source (biometric terminal, HRMS) knows this person by.
   /// Unique when set so an inbound punch matched on it resolves to exactly one person; nullable
   /// because most workspaces never connect such a source.
-  employeeCode                String?            @unique @db.VarChar(64)
+  employeeCode                String?              @unique @db.VarChar(64)
   /// Which holiday calendar decides this person's days off. NULL = the workspace default calendar
   /// (HolidayCalendar.isDefault), so a fresh workspace needs no per-person assignment at all.
   /// SetNull on delete: removing a calendar drops people back to the default, never orphans them.
@@ -372,9 +372,12 @@ model User {
   /// When this person first accepted the workspace's location-consent wording for punch-in (V17 A2).
   /// NULL = never asked yet; the punch-in dialog shows the consent text before the first location read.
   attendanceLocationConsentAt DateTime?
-  holidayCalendar             HolidayCalendar?   @relation(fields: [holidayCalendarId], references: [id], onDelete: SetNull)
+  holidayCalendar             HolidayCalendar?     @relation(fields: [holidayCalendarId], references: [id], onDelete: SetNull)
   attendanceRecords           AttendanceRecord[]
   missedDayReasons            MissedDayReason[]
+  /// V17 Phase B leave. Cascade with the person (personal data), like attendance.
+  leaveRequests               LeaveRequest[]
+  leaveLedger                 LeaveBalanceLedger[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -2318,6 +2321,10 @@ model GlobalNotificationSettings {
   /// V17 A4: the 11:00 "you haven't punched in" reminder (workers/daily-reminder.worker.ts). Only
   /// ever fires when attendance is on and its own punchInReminderEnabled is set, so ON here is safe.
   emailPunchInReminder      Boolean @default(true)
+  /// V17 Phase B: a leave request waiting on this approver, and the requester's decision mail.
+  /// Both are direct consequences of somebody's action, so they ship ON (the codebase's rule).
+  emailLeaveRequested       Boolean @default(true)
+  emailLeaveDecided         Boolean @default(true)
   emailTicketAssigned       Boolean @default(true)
   emailTicketStatusChanged  Boolean @default(true)
   emailTicketCommented      Boolean @default(true)
@@ -6176,26 +6183,39 @@ model GlobalAttendanceSettings {
 
   /// AI suggestions per audience. Separate because "show me my own pattern" and "show a manager
   /// their team's pattern" are different privacy decisions. Aggregates only, never raw GPS/face.
-  aiInsightsSelf    Boolean @default(false)
-  aiInsightsManager Boolean @default(false)
-  aiInsightsOrg     Boolean @default(false)
+  aiInsightsSelf      Boolean                    @default(false)
+  aiInsightsManager   Boolean                    @default(false)
+  aiInsightsOrg       Boolean                    @default(false)
   /// Never show an aggregate over fewer people than this — below it an "average" is one person.
-  minGroupSize      Int     @default(5)
+  minGroupSize        Int                        @default(5)
   /// How long an AI suggestion set is reused before the model is asked again (V17 A6). Rule-based
   /// suggestions are recomputed on every request; only the paid call is cached.
   aiInsightsFrequency AttendanceInsightFrequency @default(WEEKLY)
   /// Lateness is OFF by default: many workspaces run flexible hours, and "late" against a start
   /// time nobody agreed to is an accusation, not a metric. Off, analytics report each person's
   /// punch-in trend against their OWN median instead of an on-time percentage.
-  latenessEnabled     Boolean @default(false)
+  latenessEnabled     Boolean                    @default(false)
   /// Expected local start, minutes after midnight (600 = 10:00). Only read when latenessEnabled.
-  expectedStartMinute Int     @default(600)
+  expectedStartMinute Int                        @default(600)
 
   /// Shown the first time someone is asked for their location. NULL = the built-in wording.
   locationConsentText   String? @db.Text
   /// How long raw punch coordinates / IP / user agent are kept before the retention worker nulls
   /// them. The punch itself (time + source) is kept; it is the record.
   locationRetentionDays Int     @default(90)
+
+  /// --- Leave (V17 Phase B) -------------------------------------------------------------------
+  /// The admin half of the leave gate. The other half is PlanTierLimit.leaveManagementEnabled.
+  /// Independent of attendanceEnabled: a workspace can run leave without punch-in.
+  leaveEnabled           Boolean               @default(false)
+  /// First month of the leave year, 1 = January, 4 = April (the Indian financial year). Balances,
+  /// accrual and carry-forward are all per leave year.
+  leaveYearStartMonth    Int                   @default(1)
+  /// An HRMS that says "approved" is believed (approved as-is, ledger debited) when true; when
+  /// false every external request lands PENDING and goes through the normal approver.
+  trustExternalApprovals Boolean               @default(false)
+  /// Who decides for someone with no (active) manager.
+  leaveApprovalFallback  LeaveApprovalFallback @default(ADMINS)
 
   updatedById String?
   updatedAt   DateTime @updatedAt
@@ -6400,4 +6420,167 @@ model AttendanceInsightCache {
   createdAt DateTime @default(now())
 
   @@index([expiresAt])
+}
+
+/**
+ * ------------------------------------------------------------------ *
+ * LEAVE (V17 Phase B)
+ * The balance is the SUM of LeaveBalanceLedger rows for (person, type, leave year) — never a
+ * mutable column. A column can be overwritten by two concurrent approvals; an append-only ledger
+ * with a unique idempotency key cannot be double-written, and it explains itself.
+ * ------------------------------------------------------------------ *
+ */
+
+enum LeaveAccrual {
+  /// The whole annual quota lands on the first day of the leave year.
+  YEARLY_UPFRONT
+  /// quota / 12 lands on the first of every month of the leave year.
+  MONTHLY_PRORATA
+}
+
+enum LeaveLedgerKind {
+  ACCRUAL
+  CARRY_FORWARD
+  DEBIT
+  CREDIT_REVERSAL
+  ADJUSTMENT
+  EXPIRY
+}
+
+enum LeaveHalf {
+  FULL
+  FIRST_HALF
+  SECOND_HALF
+}
+
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum LeaveApprovalFallback {
+  /// Any ADMIN or SUPER_ADMIN.
+  ADMINS
+  /// SUPER_ADMIN only.
+  SUPER_ADMINS
+}
+
+/// A kind of leave (Privilege, Casual, Sick ...). Seeded PL/CL/SL by migration, all DISABLED, so
+/// fresh and upgraded installs agree and nothing is offered until an admin opts in.
+model LeaveType {
+  id                        String       @id @default(uuid())
+  /// Stable short code an HRMS sends ("PL"). Upper-case, unique.
+  code                      String       @unique @db.VarChar(20)
+  name                      String       @db.VarChar(80)
+  /// A design-token name (primary, success, warning, info, danger ...), never a raw hex: the UI
+  /// themes it for light and dark.
+  colour                    String       @default("primary") @db.VarChar(32)
+  annualQuota               Decimal      @default(0) @db.Decimal(6, 2)
+  accrual                   LeaveAccrual @default(YEARLY_UPFRONT)
+  /// Most unused days that roll into the next leave year; the rest expire. 0 = nothing carries.
+  carryForwardMax           Decimal      @default(0) @db.Decimal(6, 2)
+  allowHalfDay              Boolean      @default(true)
+  isPaid                    Boolean      @default(true)
+  /// false = requests are approved the moment they are made (the ledger is still debited).
+  requiresApproval          Boolean      @default(true)
+  /// A request LONGER than this many days needs a document (a sick note). NULL = never.
+  requiresDocumentAfterDays Int?
+  /// Lets the balance go below zero (unpaid leave, or "borrow from next month").
+  allowNegative             Boolean      @default(false)
+  enabled                   Boolean      @default(false)
+  sortOrder                 Int          @default(0)
+
+  ledger   LeaveBalanceLedger[]
+  requests LeaveRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([enabled, sortOrder])
+}
+
+/// Append-only. Every change to a balance is one row with a sign; the balance is the sum.
+model LeaveBalanceLedger {
+  id             String          @id @default(uuid())
+  userId         String
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Restrict: a type with history is disabled, never deleted.
+  leaveTypeId    String
+  leaveType      LeaveType       @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+  /// The calendar year the leave year STARTS in (an April-March year 2027-28 is 2027).
+  leaveYear      Int
+  delta          Decimal         @db.Decimal(6, 2)
+  kind           LeaveLedgerKind
+  reason         String?         @db.VarChar(255)
+  /// The LeaveRequest behind a DEBIT / CREDIT_REVERSAL. A plain id so cancelling or erasing a
+  /// request can never rewrite the ledger.
+  refRequestId   String?         @db.VarChar(64)
+  /// Who caused it. NULL = the system (accrual worker, auto-approval, trusted HRMS).
+  actorId        String?         @db.VarChar(64)
+  /// `DEBIT:<requestId>`, `REVERSAL:<requestId>`, `ACCRUAL:<user>:<type>:<year>-<mm>`,
+  /// `CARRY:<user>:<type>:<year>`, `EXPIRY:<user>:<type>:<year>`. UNIQUE: this is what makes a
+  /// double-clicked approval or a re-run worker unable to write the same entry twice, whatever
+  /// races above it. NULL for manual adjustments, which are allowed to repeat.
+  idempotencyKey String?         @unique @db.VarChar(191)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, leaveTypeId, leaveYear])
+  @@index([refRequestId])
+}
+
+model LeaveRequest {
+  id          String             @id @default(uuid())
+  userId      String
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leaveTypeId String
+  leaveType   LeaveType          @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+  /// Calendar DAYS, not instants — same reasoning as Holiday.date.
+  startDate   DateTime           @db.Date
+  endDate     DateTime           @db.Date
+  /// Single day: FULL / FIRST_HALF / SECOND_HALF. Several days: the start may be SECOND_HALF (leave
+  /// from the afternoon) and the end FIRST_HALF (back after lunch).
+  startHalf   LeaveHalf          @default(FULL)
+  endHalf     LeaveHalf          @default(FULL)
+  /// Working days the request costs, computed SERVER-side (weekends, the person's holidays and
+  /// halves excluded). Never taken from the client.
+  days        Decimal            @db.Decimal(6, 2)
+  /// The leave year the days are debited from. A request may not straddle two leave years.
+  leaveYear   Int
+  reason      String?            @db.Text
+  status      LeaveRequestStatus @default(PENDING)
+
+  /// Supporting document, stored through services/attachment-storage.service.ts like every upload.
+  attachmentUrl      String? @db.VarChar(512)
+  attachmentName     String? @db.VarChar(255)
+  attachmentMimeType String? @db.VarChar(120)
+  attachmentSize     Int?
+
+  /// The person's manager when the request was made. NULL = the admin pool decides
+  /// (GlobalAttendanceSettings.leaveApprovalFallback). Plain ids, not relations, like
+  /// AttendanceRecord.faceAttemptId: deleting a manager must not rewrite history.
+  approverId             String?   @db.VarChar(64)
+  decidedById            String?   @db.VarChar(64)
+  decidedAt              DateTime?
+  decisionNote           String?   @db.Text
+  /// A SUPER_ADMIN decided a request that was not theirs to decide. Audited as well.
+  overriddenBySuperAdmin Boolean   @default(false)
+  cancelledAt            DateTime?
+
+  source      AttendanceSourceKind @default(WEB)
+  /// Set for HRMS / API requests.
+  externalRef String?              @db.VarChar(191)
+  /// `${source}:${sourceId|apiKeyId}:${externalRef}`, unique, so an HRMS re-sending the same leave
+  /// is a DUPLICATE, never a second request.
+  dedupeKey   String?              @unique @db.VarChar(255)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status, startDate])
+  @@index([status, startDate, endDate])
+  @@index([approverId, status])
+  @@index([leaveTypeId])
 }

@@ -31,6 +31,7 @@ import { COUNTED_PEOPLE } from "./people-visibility.service.js";
 import { getPlanningSettings } from "./planning.service.js";
 import { resolveDayStatus, type AttendanceDayStatus } from "./attendance-day-status.js";
 import { findLeaveInRange } from "./attendance-punch.service.js";
+import { halfLabel } from "./leave-calc.js";
 
 const UNRESTRICTED_ROLES = new Set(["SUPER_ADMIN", "ADMIN"]);
 const MANAGING_ROLES = new Set(["MANAGER", "TEAM_LEAD"]);
@@ -139,6 +140,8 @@ export interface TeamTodayRow {
   user: { id: string; name: string; email: string; avatarUrl: string | null; title: string };
   status: AttendanceDayStatus;
   holidayName: string | null;
+  /** Approved leave on the day (Phase B): the type code and FULL or the half taken. */
+  leave: { type: string; half: "FULL" | "FIRST_HALF" | "SECOND_HALF" } | null;
   punch: {
     punchInAt: string;
     source: AttendanceSourceKind;
@@ -219,10 +222,12 @@ export async function getTeamDay(actor: { id: string; role: string }, query: Tea
     });
     const sheet = sheetsBy.get(p.id);
     const reason = reasonBy.get(p.id);
+    const leave = leaveOf ? leaveOf(p.id, query.date) : null;
     return {
       user: { id: p.id, name: p.name, email: p.email, avatarUrl: p.avatarUrl, title: p.role.name },
       status: day.status,
       holidayName: day.holidayName,
+      leave: leave ? { type: leave.type, half: leave.half ?? "FULL" } : null,
       punch: record
         ? {
             punchInAt: record.punchInAt.toISOString(),
@@ -303,7 +308,7 @@ export async function getPersonTimeline(actor: { id: string; role: string }, use
   const fromAt = new Date(dayStart(from).getTime() - ZONE_SLACK_MS);
   const toAt = new Date(dayStart(to).getTime() + DAY_MS + ZONE_SLACK_MS);
 
-  const [logins, records, sheetAudits, reasons, emails] = await Promise.all([
+  const [logins, records, sheetAudits, reasons, emails, leaveOf] = await Promise.all([
     prisma.auditLog.findMany({
       where: { actorId: userId, action: { in: [...LOGIN_ACTIONS] }, createdAt: { gte: fromAt, lt: toAt } },
       select: { action: true, createdAt: true },
@@ -328,8 +333,17 @@ export async function getPersonTimeline(actor: { id: string; role: string }, use
       where: { to: person.email, template: { startsWith: "reminder." }, createdAt: { gte: fromAt, lt: toAt } },
       select: { template: true, subject: true, status: true, createdAt: true },
       take: 200
-    })
+    }),
+    findLeaveInRange([userId], from, to)
   ]);
+  const leaveEvents: TimelineEvent[] = [];
+  for (let key = from; key <= to; key = addDays(key, 1)) {
+    const leave = leaveOf(userId, key);
+    if (!leave) continue;
+    const half = leave.half && leave.half !== "FULL" ? `, ${halfLabel(leave.half)}` : "";
+    // Pinned to the start of the day: leave is a property of the day, not of a moment in it.
+    leaveEvents.push({ kind: "LEAVE", at: `${key}T00:00:00.000Z`, label: "On leave", detail: `${leave.type}${half}` });
+  }
 
   const events: TimelineEvent[] = [
     ...logins.map((l) => ({
@@ -359,8 +373,8 @@ export async function getPersonTimeline(actor: { id: string; role: string }, use
       at: e.createdAt.toISOString(),
       label: "Reminder email",
       detail: `${e.subject} (${e.status.toLowerCase()})`
-    }))
-    // LEAVE: Phase B adds approved leave here; there is no leave data yet.
+    })),
+    ...leaveEvents
   ];
 
   return {

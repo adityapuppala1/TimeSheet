@@ -13,6 +13,7 @@
  * is a different claim from a median over all two hundred and nothing on a chart says which.
  */
 import type { Prisma } from "@prisma/client";
+import { absenceByPerson, mergedTimeOffHours } from "./leave-capacity.service.js";
 import { prisma } from "../config/prisma.js";
 import { platformToday } from "../utils/date-window.js";
 import { COUNTED_PEOPLE, resolveVisiblePeopleNames } from "./people-visibility.service.js";
@@ -172,7 +173,7 @@ const LATENCY_SELECT = {
 
 type LatencyRow = Prisma.TimesheetGetPayload<{ select: typeof LATENCY_SELECT }>;
 
-const PERSON_SELECT = { id: true, name: true, weeklyCapacityHours: true, plannedUtilizationPct: true, createdAt: true } as const;
+const PERSON_SELECT = { id: true, name: true, weeklyCapacityHours: true, plannedUtilizationPct: true, createdAt: true, holidayCalendarId: true } as const;
 
 /**
  * The people a utilisation table covers: everyone in scope who is still counted (not deactivated,
@@ -200,17 +201,44 @@ async function peopleInScope(filters: TimesheetReportFilters, loggedIds: string[
   return [...new Map([...inScope, ...loggers].map((p) => [p.id, p])).values()];
 }
 
-/** Hours of leave booked per person inside [from, through] — the workload board's own arithmetic. */
-async function timeOffByPerson(ids: string[], from: Date, through: Date, workingDays: number[]): Promise<Map<string, number>> {
+/**
+ * Hours of leave per person inside [from, through] — the workload board's own arithmetic. V17
+ * Phase B: approved leave and holidays count too, merged per day with isTimeOff bookings (the
+ * larger wins, never the sum — leave-capacity.service.ts).
+ */
+async function timeOffByPerson(
+  people: ReadonlyArray<{ id: string; holidayCalendarId: string | null; weeklyCapacityHours: unknown }>,
+  from: Date,
+  through: Date,
+  workingDays: number[],
+  defaultWeeklyCapacityHours: number
+): Promise<Map<string, number>> {
   const out = new Map<string, number>();
-  if (ids.length === 0 || through < from) return out;
-  const bookings = await prisma.resourceBooking.findMany({
-    where: { userId: { in: ids }, isTimeOff: true, startDate: { lte: through }, endDate: { gte: from } },
-    select: { userId: true, startDate: true, endDate: true, hoursPerDay: true }
-  });
+  if (people.length === 0 || through < from) return out;
+  const ids = people.map((p) => p.id);
+  const fromKey = from.toISOString().slice(0, 10);
+  const toKey = through.toISOString().slice(0, 10);
+  const [bookings, absence] = await Promise.all([
+    prisma.resourceBooking.findMany({
+      where: { userId: { in: ids }, isTimeOff: true, startDate: { lte: through }, endDate: { gte: from } },
+      select: { userId: true, startDate: true, endDate: true, hoursPerDay: true }
+    }),
+    absenceByPerson(
+      people.map((p) => ({ id: p.id, holidayCalendarId: p.holidayCalendarId, weeklyCapacityHours: p.weeklyCapacityHours == null ? null : Number(p.weeklyCapacityHours) })),
+      fromKey,
+      toKey,
+      workingDays,
+      defaultWeeklyCapacityHours
+    )
+  ]);
   for (const b of bookings) {
+    if (absence.has(b.userId)) continue;
     const hours = bookedHoursInRange({ ...b, hoursPerDay: Number(b.hoursPerDay) }, from, through, workingDays);
     out.set(b.userId, (out.get(b.userId) ?? 0) + hours);
+  }
+  for (const [userId, days] of absence) {
+    const theirs = bookings.filter((b) => b.userId === userId).map((b) => ({ ...b, hoursPerDay: Number(b.hoursPerDay) }));
+    out.set(userId, mergedTimeOffHours(theirs, days, fromKey, toKey, workingDays));
   }
   return out;
 }
@@ -347,7 +375,7 @@ export async function buildTimesheetAnalytics(
   const loggedIds = [...hoursByPerson.keys()];
   const people = await peopleInScope(filters, loggedIds);
   const shownIds = new Set(people.map((p) => p.id));
-  const leave = await timeOffByPerson([...shownIds], from, through, workingDayNumbers);
+  const leave = await timeOffByPerson(people, from, through, workingDayNumbers, Number(settings.defaultWeeklyCapacityHours ?? 40));
   const defaults = {
     weeklyCapacityHours: Number(settings.defaultWeeklyCapacityHours ?? 40),
     workingDaysPerWeek: workingDayNumbers.length || 5

@@ -284,7 +284,8 @@ export async function runEscalationReminders(now: Date = new Date()): Promise<{ 
  * EMAIL is the Email channels role matrix (emailRoleMutes.emailPunchInReminder), applied by
  * dispatchNotification like every other category — on for every role unless an admin unticks it.
  * Per person: only when resolveDayStatus says PENDING — so a weekend (per the workspace's working
- * days), a holiday in their calendar, leave (Phase B) or a punch from ANY source (web, API,
+ * days), a holiday in their calendar, a FULL day of approved leave (Phase B — a half day still
+ * owes a punch, so resolveDayStatus keeps it PENDING) or a punch from ANY source (web, API,
  * webhook, MCP, CSV) all stay silent. Idempotent per recipient-day through the Notification table.
  *
  * NO N+1: the people whose local hour matches are found first, then ONE query per fact (holidays,

@@ -115,13 +115,15 @@ export async function missedDayReasonState(
     client.timesheet.count({ where: { userId, workDate, deletedAt: null } }),
     client.missedDayReason.findUnique({ where: { userId_workDate: { userId, workDate } }, select: { id: true } })
   ]);
-  // Phase B: approved leave makes the day not a working day. Today it is always null.
+  // Phase B: a FULL day of approved leave makes the day not a working day. A half day does not —
+  // the other half was owed, so an empty day still needs its reason.
   const leave = await findLeaveForDay(userId, workDateKey);
+  const fullDayLeave = Boolean(leave) && (!leave?.half || leave.half === "FULL");
   const required = isMissedDayReasonRequired({
     workDateKey,
     todayKey,
     workingDays: planning.workingDays,
-    isHoliday: Boolean(holiday) || Boolean(leave),
+    isHoliday: Boolean(holiday) || fullDayLeave,
     existingEntries,
     hasReason: Boolean(reason),
     enabled: true

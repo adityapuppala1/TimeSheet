@@ -21,7 +21,13 @@ export const WEBHOOK_EVENTS = [
   "ticket.status_changed",
   "ticket.closed",
   "timesheet.submitted",
-  "timesheet.approved"
+  "timesheet.approved",
+  // V17 Phase B: the leave lifecycle, so payroll / an HRMS can mirror decisions made here. Payload is
+  // the request (person, type code, dates, halves, days, status) — never the reason text.
+  "leave.requested",
+  "leave.approved",
+  "leave.rejected",
+  "leave.cancelled"
 ] as const;
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];

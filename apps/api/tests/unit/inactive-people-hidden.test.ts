@@ -160,6 +160,11 @@ function groupTimesheets(rows: Array<Record<string, any>>, args: any) {
   return [...groups.values()];
 }
 
+// V17 Phase B: approved leave / holidays on capacity are covered by leave-calc.test.ts; none here.
+vi.mock("../../src/services/leave-capacity.service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/services/leave-capacity.service.js")>()),
+  absenceByPerson: async () => new Map()
+}));
 vi.mock("../../src/config/prisma.js", () => {
   const noRows = () => vi.fn().mockResolvedValue([]);
   return {

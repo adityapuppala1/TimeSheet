@@ -28,6 +28,7 @@ import { getPlanningSettings } from "./planning.service.js";
 import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
 import { audit } from "./audit.service.js";
 import { ingestPunch } from "./attendance-ingest.service.js";
+import { loadApprovedLeave, type LeaveLookup, type LeaveOnDay } from "./leave-query.service.js";
 
 /** Shown when the admin left locationConsentText empty. Plain about what is kept and for how long. */
 export const DEFAULT_LOCATION_CONSENT =
@@ -58,24 +59,19 @@ export async function assertAttendanceOn(): Promise<void> {
 }
 
 /**
- * Phase B hook: approved leave covering the day. Deliberately returns nothing today so the
- * resolver's order is already final and Phase B only fills this in.
+ * Approved leave covering the day, with the half taken (V17 Phase B). A thin wrapper over
+ * leave-query.service.ts so every Phase A caller kept its import.
  */
-export async function findLeaveForDay(_userId: string, _dateKey: string): Promise<{ type: string } | null> {
-  return null;
+export async function findLeaveForDay(userId: string, dateKey: string): Promise<LeaveOnDay | null> {
+  return (await loadApprovedLeave([userId], dateKey, dateKey))(userId, dateKey);
 }
 
 /**
- * Phase B hook, batched (V17 A5): approved leave for many people over a date range, as a lookup.
- * Team Activity judges a whole team's day at once and must not ask per person; Phase B fills this
- * with ONE query. Returns "no leave" for everyone until then.
+ * Approved leave for many people over a date range, as a lookup (V17 A5 shape, Phase B data). ONE
+ * query however many people — Team Activity judges a whole team's day at once.
  */
-export async function findLeaveInRange(
-  _userIds: readonly string[],
-  _from: string,
-  _to: string
-): Promise<(userId: string, dateKey: string) => { type: string } | null> {
-  return () => null;
+export async function findLeaveInRange(userIds: readonly string[], from: string, to: string): Promise<LeaveLookup> {
+  return loadApprovedLeave(userIds, from, to);
 }
 
 /** The person's holiday on `dateKey`: their own calendar, else the workspace default. */

@@ -33,6 +33,7 @@ import { requireTenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";
 import { resolveDayStatus, todayKeyFor, weekdayOfDateKey, type AttendanceDayStatus } from "./attendance-day-status.js";
 import { findLeaveInRange } from "./attendance-punch.service.js";
+import { leaveForAi, leaveRules, loadLeaveAnalytics } from "./leave-analytics.js";
 import { getAttendanceSettings } from "./attendance-settings.service.js";
 import { assertTeamScope, faceResult, loadHolidays, LOGIN_ACTIONS, peopleWhere, type FaceResult } from "./attendance-team.service.js";
 import { getPlanningSettings } from "./planning.service.js";
@@ -70,6 +71,8 @@ export interface DayFact {
   hoursLogged: number;
   hasTimesheet: boolean;
   reasonCode: string | null;
+  /** Phase B: a HALF day of approved leave on a working day — only half the day's hours are owed. */
+  halfLeave?: boolean;
 }
 
 export interface PersonFacts {
@@ -190,7 +193,10 @@ export function summariseSelf(person: Pick<PersonFacts, "days" | "weeklyCapacity
   }
   const logged = days.reduce((n, d) => n + d.hoursLogged, 0);
   // Expected hours accrue on every working day the range has reached, today included.
-  const expectedDays = days.filter((d) => d.isWorkingDay && (d.closed || d.status === "PRESENT")).length;
+  // A half day of approved leave owes half the hours (Phase B).
+  const expectedDays = days
+    .filter((d) => d.isWorkingDay && (d.closed || d.status === "PRESENT"))
+    .reduce((n, d) => n + (d.halfLeave ? 0.5 : 1), 0);
   const punchTrend = days.flatMap((d) => (d.punchMinute != null && d.isWorkingDay ? [{ date: d.date, minute: d.punchMinute }] : []));
   const onTime = punchTrend.filter((p) => p.minute <= opts.expectedStartMinute).length;
   const closedPresent = days.filter((d) => d.status === "PRESENT" && d.closed);
@@ -371,7 +377,8 @@ export async function loadPersonFacts(people: LoadedPerson[], from: string, to: 
         face: record ? faceResult(record) : null,
         hoursLogged: hours ?? 0,
         hasTimesheet: hours !== undefined,
-        reasonCode: reasonBy.get(`${p.id}|${date}`) ?? null
+        reasonCode: reasonBy.get(`${p.id}|${date}`) ?? null,
+        ...(day.leaveHalf ? { halfLeave: true } : {})
       });
     }
     return {
@@ -446,7 +453,8 @@ export async function getMyAnalytics(userId: string, range: AnalyticsRange, now:
     range: rangeOut(range, workingDayCount(people)),
     lateness: { enabled: opts.latenessEnabled, expectedStartMinute: opts.expectedStartMinute },
     summary: summariseSelf(people[0], opts),
-    upcomingHolidays: await upcomingHolidays([user.holidayCalendarId], today)
+    upcomingHolidays: await upcomingHolidays([user.holidayCalendarId], today),
+    leave: await loadLeaveAnalytics({ audience: "me", people: [user], minGroupSize: opts.minGroupSize, range, today, workingDays: planning.workingDays, now })
   };
 }
 
@@ -469,7 +477,8 @@ export async function getTeamAnalytics(actor: { id: string; role: string }, rang
     lateness: { enabled: opts.latenessEnabled, expectedStartMinute: opts.expectedStartMinute },
     group: summariseGroup(people, opts),
     people: personRows(people, opts),
-    upcomingHolidays: await upcomingHolidays(loaded.map((p) => p.holidayCalendarId), today)
+    upcomingHolidays: await upcomingHolidays(loaded.map((p) => p.holidayCalendarId), today),
+    leave: await loadLeaveAnalytics({ audience: "team", people: loaded, minGroupSize: opts.minGroupSize, range, today, workingDays: planning.workingDays, now })
   };
 }
 
@@ -617,7 +626,8 @@ export async function getOrgAnalytics(actor: { id: string; role: string }, range
     loginHistogram: logins24 ? { suppressed: false, hours: logins24 } : { suppressed: true, hours: null },
     integrations,
     holidays: { dates: holidayDates.size, personDays: holidayPersonDays },
-    upcomingHolidays: await upcomingHolidays(loaded.map((p) => p.holidayCalendarId), today)
+    upcomingHolidays: await upcomingHolidays(loaded.map((p) => p.holidayCalendarId), today),
+    leave: await loadLeaveAnalytics({ audience: "org", people: loaded, minGroupSize: opts.minGroupSize, range, today, workingDays: planning.workingDays, now })
   };
 }
 
@@ -762,6 +772,7 @@ export function ruleInsights(data: AnyAnalytics): Insight[] {
   else if (data.audience === "team") out = [...groupRules(data.group, data.minGroupSize), teamDriftRule(data)];
   else out = [...groupRules(data.overall, data.minGroupSize), ...silentSourceRules(data)];
   out.push(holidayRule(data.upcomingHolidays));
+  out.push(...leaveRules(data.leave));
   return out.filter((i): i is Insight => i !== null);
 }
 
@@ -819,7 +830,8 @@ export function buildAiPayload(data: AnyAnalytics): Record<string, unknown> {
       sources: { ...s.sources },
       absencesByWeekday: [...s.absencesByWeekday],
       presentNoTimesheetDays: s.presentNoTimesheetDays,
-      upcomingHolidayDates
+      upcomingHolidayDates,
+      ...(data.leave ? { leave: leaveForAi(data.leave) } : {})
     };
   }
   if (data.audience === "team") {
@@ -830,6 +842,9 @@ export function buildAiPayload(data: AnyAnalytics): Record<string, unknown> {
       range,
       group: groupForAi(data.group),
       ...(data.people.length >= data.minGroupSize ? { distribution: teamDistribution(data.people) } : {}),
+      // Leave counts only at or above minGroupSize, like the distribution: below it a count of
+      // "people off" on a team of two is a person.
+      ...(data.leave && data.people.length >= data.minGroupSize ? { leave: leaveForAi(data.leave) } : {}),
       upcomingHolidayDates
     };
   }
@@ -849,6 +864,7 @@ export function buildAiPayload(data: AnyAnalytics): Record<string, unknown> {
       silentWorkingDays: s.silentWorkingDays
     })),
     holidays: { dates: data.holidays.dates, personDays: data.holidays.personDays },
+    ...(data.leave && !data.overall.suppressed ? { leave: leaveForAi(data.leave) } : {}),
     upcomingHolidayDates
   };
 }

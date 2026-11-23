@@ -45,6 +45,7 @@ import {
 } from "../services/ticket.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
 import { publicAttendanceRouter } from "./public-attendance.controller.js";
+import { publicLeaveRouter } from "./public-leave.controller.js";
 
 export const publicApiRouter = Router();
 publicApiRouter.use(publicApiAuth);
@@ -232,3 +233,4 @@ publicApiRouter.get("/timesheets", async (req, res) => {
 
 // Attendance + holidays (V17 A3) — gated by granular grants, see public-attendance.controller.ts.
 publicApiRouter.use(publicAttendanceRouter);
+publicApiRouter.use(publicLeaveRouter);

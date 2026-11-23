@@ -21,6 +21,8 @@ let aiImpl: () => Promise<Array<{ title: string; detail: string }>> = async () =
 type Person = { id: string; name: string; email: string; managerId: string | null; timezone: string; holidayCalendarId: null; weeklyCapacityHours: number | null };
 let people: Person[] = [];
 let records: Array<Record<string, unknown>> = [];
+/** V17 Phase B: approved / pending leave rows, read only when settingsRow.leaveEnabled is on. */
+let leaveRows: Array<Record<string, unknown>> = [];
 
 vi.mock("../../src/middleware/auth.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/middleware/auth.js")>("../../src/middleware/auth.js");
@@ -50,6 +52,12 @@ vi.mock("../../src/config/prisma.js", () => ({
     missedDayReason: { findMany: async () => [] },
     auditLog: { findMany: async () => [] },
     attendanceSource: { findMany: async () => [] },
+    leaveRequest: {
+      findMany: async ({ where }: { where: { userId: { in: string[] } } }) => leaveRows.filter((l) => where.userId.in.includes(l.userId as string)),
+      groupBy: async () => []
+    },
+    leaveType: { findMany: async () => [{ id: "t-pl", code: "PL", name: "Privilege", colour: "primary", annualQuota: 12, accrual: "YEARLY_UPFRONT", carryForwardMax: 0, allowHalfDay: true, isPaid: true, requiresApproval: true, requiresDocumentAfterDays: null, allowNegative: false, enabled: true, sortOrder: 0 }] },
+    leaveBalanceLedger: { groupBy: async () => [] },
     attendanceEvent: { groupBy: async () => [] },
     attendanceInsightCache: {
       findUnique: async ({ where }: { where: { cacheKey: string } }) => cacheRow ?? cacheStore.get(where.cacheKey) ?? null,
@@ -130,6 +138,7 @@ beforeEach(() => {
     { id: "r1", name: "Ana", email: "ana@x.io", managerId: "mgr", timezone: "UTC", holidayCalendarId: null, weeklyCapacityHours: 40 },
     { id: "r2", name: "Ben", email: "ben@x.io", managerId: "mgr", timezone: "UTC", holidayCalendarId: null, weeklyCapacityHours: 40 }
   ];
+  leaveRows = [];
   records = [
     { userId: "r1", workDate: new Date("2026-11-20T00:00:00Z"), punchInAt: new Date("2026-11-20T09:10:00Z"), source: "WEB", faceAttemptId: "fa-1", flagged: false, lat: 12.97, lng: 77.59, ip: "10.0.0.1" }
   ];
@@ -469,3 +478,77 @@ describe("AI insights cache is per period, not per range", () => {
     expect(statuses[20]).toBe(429);
   });
 });
+
+/* ----------------------------- V17 Phase B: leave in analytics ----------------------------- */
+
+describe("leave in analytics", () => {
+  const leave = (userId: string, startDate: string, endDate: string, status = "APPROVED", startHalf = "FULL") => ({
+    userId,
+    status,
+    startDate: new Date(`${startDate}T00:00:00Z`),
+    endDate: new Date(`${endDate}T00:00:00Z`),
+    startHalf,
+    endHalf: startHalf,
+    leaveType: { code: "PL", name: "Privilege" },
+    // Present on the row to prove it never travels further.
+    reason: "Surgery at City Hospital"
+  });
+  const NOW = new Date("2026-11-23T12:00:00Z");
+
+  it("is absent (null) while leave is switched off", async () => {
+    const data = await svc.getTeamAnalytics(actor, { from: "2026-11-16", to: "2026-11-20" }, NOW);
+    expect(data.leave).toBeNull();
+  });
+
+  it("team: flags two people off in one week as a coverage risk, with no reason text anywhere", async () => {
+    settingsRow = { ...settingsRow, leaveEnabled: true };
+    leaveRows = [leave("r1", "2026-11-30", "2026-12-01"), leave("r2", "2026-12-02", "2026-12-02", "PENDING")];
+    const data = await svc.getTeamAnalytics(actor, { from: "2026-11-16", to: "2026-11-20" }, NOW);
+    expect(data.leave?.coverage?.find((w) => w.weekStart === "2026-11-30")).toMatchObject({ peopleOff: 2, atRisk: true });
+    expect(svc.ruleInsights(data).map((i) => i.id)).toContain("leave-coverage");
+    expect(JSON.stringify(data)).not.toContain("Surgery");
+  });
+
+  it("team below minGroupSize: utilisation is suppressed and the AI gets no leave block", async () => {
+    settingsRow = { ...settingsRow, leaveEnabled: true };
+    leaveRows = [leave("r1", "2026-11-16", "2026-11-17")];
+    const data = await svc.getTeamAnalytics(actor, { from: "2026-11-16", to: "2026-11-20" }, NOW);
+    expect(data.leave?.utilisation).toBeNull();
+    expect(svc.buildAiPayload(data)).not.toHaveProperty("leave");
+  });
+
+  it("team at minGroupSize: the AI gets counts per type and week, never names, ids, dates of a person or reasons", async () => {
+    settingsRow = { ...settingsRow, leaveEnabled: true };
+    people.push({ id: "r3", name: "Cy", email: "cy@x.io", managerId: "mgr", timezone: "UTC", holidayCalendarId: null, weeklyCapacityHours: 40 });
+    leaveRows = [leave("r1", "2026-11-16", "2026-11-17"), leave("r2", "2026-11-30", "2026-11-30"), leave("r3", "2026-12-01", "2026-12-01")];
+    const data = await svc.getTeamAnalytics(actor, { from: "2026-11-16", to: "2026-11-20" }, NOW);
+    expect(data.leave?.utilisation).toEqual([{ code: "PL", name: "Privilege", days: 2, people: 1 }]);
+    const payload = svc.buildAiPayload(data);
+    expect(payload.leave).toEqual({ approvedDaysByType: { PL: 2 }, upcomingRequests: 2, upcomingPeople: 2, weeksAtRisk: 1, expiringDaysByType: undefined });
+    expect(leaks(payload)).toEqual([]);
+    expect(JSON.stringify(payload)).not.toMatch(/Ana|Ben|Cy|Surgery|2026-11-30/);
+  });
+
+  it("org: counts only, no upcoming entries at all", async () => {
+    settingsRow = { ...settingsRow, leaveEnabled: true };
+    leaveRows = [leave("r1", "2026-11-30", "2026-11-30")];
+    const data = await svc.getOrgAnalytics({ id: "boss", role: "SUPER_ADMIN" }, { from: "2026-11-16", to: "2026-11-20" }, NOW);
+    expect(data.leave?.upcoming.entries).toBeNull();
+    expect(leaks(svc.buildAiPayload(data))).toEqual([]);
+  });
+
+  it("me: a half day of leave owes half the expected hours", () => {
+    const s = svc.summariseSelf(personFacts("r1", [day("2026-11-02"), day("2026-11-03", { halfLeave: true })]), OPTS);
+    expect(s.hours.expected).toBe(12);
+  });
+
+  it("me: the payload carries my own leave counts and nothing identifying", async () => {
+    settingsRow = { ...settingsRow, leaveEnabled: true };
+    actor = { ...actor, id: "r1", role: "EMPLOYEE" };
+    leaveRows = [leave("r1", "2026-11-30", "2026-11-30")];
+    const data = await svc.getMyAnalytics("r1", { from: "2026-11-16", to: "2026-11-20" }, NOW);
+    expect(data.leave?.upcoming.requests).toBe(1);
+    expect(leaks(svc.buildAiPayload(data))).toEqual([]);
+  });
+});
+

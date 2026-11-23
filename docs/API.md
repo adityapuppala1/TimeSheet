@@ -3107,6 +3107,8 @@ On top of `READ`/`WRITE`, a key can carry **granular scopes**, ticked when it is
 |---|---|
 | `attendance:read` | `GET /attendance`, `GET /holidays` |
 | `attendance:write` | `POST /attendance/punches` |
+| `leave:read` | `GET /leave-requests` (V17 Phase B) |
+| `leave:write` | `POST /leave-requests` |
 
 `READ`/`WRITE` never imply them: every key issued before they existed has **no attendance access**,
 and a `WRITE` key calling an attendance route gets `403` naming the missing scope. The attendance
@@ -3236,6 +3238,109 @@ reason is marked *requires note*, e.g. `OTHER`). Without them the create is refu
 Signed-in clients can ask ahead: `GET /api/attendance/missed-reasons/options` and
 `GET /api/attendance/missed-reasons/check?date=YYYY-MM-DD` → `{ date, required, options }`.
 
+### Leave (V17 Phase B)
+
+Leave runs when **Attendance & Leave → Leave** is switched on (`GlobalAttendanceSettings.leaveEnabled`)
+AND the plan includes **leave management** (Enterprise). Otherwise every route below answers `403`
+naming which half is off — except `GET /api/leave/status`, which always answers `200
+{ enabled, leaveYearStartMonth }`. Leave is independent of the attendance toggle.
+
+**The model.** A *leave type* (`PL`, `CL`, `SL` are seeded, all disabled) has an annual quota, an
+accrual rule (`YEARLY_UPFRONT` or `MONTHLY_PRORATA`), a carry-forward cap, `allowHalfDay`,
+`isPaid`, `requiresApproval`, `requiresDocumentAfterDays` and `allowNegative`. The **balance is
+never stored**: it is the sum of ledger rows (`ACCRUAL`, `CARRY_FORWARD`, `DEBIT`,
+`CREDIT_REVERSAL`, `ADJUSTMENT`, `EXPIRY`) for a person, type and *leave year* (named by the year
+it starts in; `leaveYearStartMonth` 1 = January, 4 = April). A request's `days` are computed by the
+server — working days in the span, minus the person's holidays, a half counting 0.5 — and a `days`
+field in a body is refused. One request may not span more than 93 days or cross a leave year.
+
+**Who decides.** The person's manager (`User.managerId`, captured as `approverId`) while that manager
+is an active account; otherwise the admin pool — any ADMIN or SUPER_ADMIN, or SUPER_ADMIN only when
+`leaveApprovalFallback` is `SUPER_ADMINS`. A SUPER_ADMIN may decide any request; when it was not
+theirs it is marked `overriddenBySuperAdmin` and audited. Nobody decides their own request except a
+SUPER_ADMIN (an override). An unknown id and somebody else's request get the **same** `403`.
+
+**Concurrency.** A decision is a conditional update (`PENDING` → decided) in the same transaction
+as the `DEBIT`, whose idempotency key `DEBIT:<requestId>` is unique in the database: a double click
+or two approvers at once produce exactly one debit and one `409 LEAVE_ALREADY_DECIDED`.
+
+#### Signed-in routes (`/api/leave`)
+
+| Route | Who | Body / query → response |
+|---|---|---|
+| `GET /status` | anyone | `{ enabled, leaveYearStartMonth }` |
+| `GET /types` | anyone | `{ items: LeaveType[] }` (enabled only) |
+| `GET /me/balances?year=` | self | `{ leaveYear, from, to, yearStartMonth, balances: [{ leaveType, balance, accrued, carriedForward, used, adjusted, expired, pending, available, projectedYearEnd, expiringAtYearEnd }] }` |
+| `GET /me/ledger?year=` | self | `{ leaveYear, items: [{ id, leaveType: { code, name }, delta, kind, reason, refRequestId, createdAt }] }` |
+| `GET /me/requests?status=&year=` | self | `{ items: LeaveRequest[] }` |
+| `GET /me/requests/:id` | self | `LeaveRequest` (404 for anyone else's) |
+| `POST /me/requests` | self | JSON or multipart (`document` = supporting file): `{ leaveTypeId \| leaveTypeCode, startDate, endDate, startHalf?, endHalf?, reason? }` → `201 { request: LeaveRequest, autoApproved }` |
+| `POST /me/requests/:id/cancel` | self; SUPER_ADMIN any | → `LeaveRequest`. Pending: cancelled. Approved and not started: cancelled with a `CREDIT_REVERSAL`. Started: SUPER_ADMIN only. |
+| `GET /me/expected-hours?from=&to=` | self | `{ from, to, workingDays, holidays, leaveDays, expectedDays, dailyHours, expectedHours }` |
+| `GET /inbox?scope=mine\|all&status=PENDING\|APPROVED\|REJECTED\|CANCELLED\|ALL&page=&pageSize=` | approvers (`all`: SUPER_ADMIN) | `{ total, page, pageSize, items: LeaveRequest[] }` |
+| `POST /inbox/:id/decision` | approver | `{ decision: "APPROVE" \| "REJECT", note? }` (note required to reject) → `LeaveRequest` |
+| `POST /inbox/bulk-decision` | approver | `{ ids: string[≤100], decision, note? }` → `207 { results: [{ id, ok, status?, error?, httpStatus? }] }` |
+| `GET /team?from=&to=&managerId=` | managers, team leads, admins | `{ from, to, items }` — approved + pending leave of the people Team Activity shows them, without reason, note or document |
+
+`LeaveRequest` = `{ id, user?, leaveType: { id, code, name, colour, isPaid }, startDate, endDate,
+startHalf, endHalf, days, leaveYear, reason, status, attachment: { name, mimeType, size, url } | null,
+approverId, decidedById, decidedAt, decisionNote, overriddenBySuperAdmin, cancelledAt, source,
+externalRef, createdAt }`. Halves: a one-day request is `FULL`, `FIRST_HALF` or `SECOND_HALF`; a
+longer one may start `SECOND_HALF` and end `FIRST_HALF`.
+
+Errors carry a `code`: `LEAVE_TYPE_UNAVAILABLE`, `LEAVE_INVALID_SPAN`, `LEAVE_OUT_OF_RANGE`
+(more than 60 days back, 366 ahead, or 93 long), `LEAVE_CROSSES_YEAR`, `LEAVE_NO_WORKING_DAYS`,
+`LEAVE_DOCUMENT_REQUIRED` (`details.afterDays`), `LEAVE_OVERLAP` (`details.requestId`; the two
+halves of one day do not overlap), `LEAVE_INSUFFICIENT_BALANCE` (`details.available`,
+`details.requested`), `LEAVE_ALREADY_DECIDED`, `LEAVE_NOT_CANCELLABLE`.
+
+Super-admin configuration under `/api/leave/admin` (reads need no entitlement; writes need the
+plan): `GET|PUT /settings` (`{ leaveEnabled, leaveYearStartMonth, trustExternalApprovals,
+leaveApprovalFallback }` — switching on needs at least one enabled type), `GET|POST /types`,
+`PUT /types/:id` (no delete: disable instead), `POST /adjustments` (`{ userId, leaveTypeId,
+leaveYear?, delta, reason }`), `GET /balances/:userId?year=` (balances plus the ledger), and
+`POST /accrual/run` (posts what is due now; idempotent).
+
+**Accrual** runs nightly (02:20): every slot due this leave year and not yet posted, keyed
+`ACCRUAL:<user>:<type>:<YYYY-MM>` so re-runs write nothing; a joiner accrues from their joining
+month. On the first run of a new leave year the closing balance is settled: up to
+`carryForwardMax` carries (`CARRY_FORWARD`), the rest lapses (`EXPIRY`); a negative balance carries
+in full. Balances shown to people include accrual that is due but not yet posted.
+
+**Expected hours** = (working days − holidays − leave days) × weekly capacity ÷ working days per
+week, a half day of leave counting 0.5. The capacity board, the dashboard capacity widget and the
+utilisation report now subtract approved leave and holidays from what is available — per day, the
+larger of an `isTimeOff` booking and the leave, never both.
+
+**Notifications.** `leave.requested` (to the approver, or every pool member) and `leave.decided`
+(to the requester) go through the normal pipeline: their own Email channels rows, role mutes and
+EmailLog, templates `leave.requested` / `leave.decided`.
+
+#### Public API (`leave:read`, `leave:write`)
+
+Granular scopes like the attendance ones — `READ`/`WRITE` never imply them — and the routes also
+need the plan's attendance integrations.
+
+- `POST /leave-requests` *(leave:write)* — one object or an array of up to 500 (`207`):
+  `{ email | employeeCode | externalId | identifier, leaveType: "PL", startDate, endDate,
+  startHalf?, endHalf?, status?: "PENDING" | "APPROVED" | "CANCELLED", externalRef, reason? }`.
+  Each item answers `{ status: "RECEIVED" | "DUPLICATE" | "REJECTED", requestId, leaveStatus?,
+  error? }`. `externalRef` is the idempotency key (per API key). `APPROVED` is recorded as approved
+  (and debited) only when **Trust approvals from external systems** is on; otherwise the request
+  lands `PENDING` with the normal approver. `CANCELLED` with a known `externalRef` cancels it
+  (reversing the debit). External items skip the balance and document checks — the HRMS owns those.
+- `GET /leave-requests?from=&to=&employee=&status=&limit=500` *(leave:read)* — requests overlapping
+  the range (at most 366 days): person, type, dates, halves, days, status, source. Never the reason.
+
+The signed attendance webhook (above) accepts leave items too: add `"kind": "leave"` to an item with
+the same fields, and the source's match field applies when only `identifier` is sent.
+
+#### MCP tools
+
+`apply_leave` (`leaveType`, `startDate`, `endDate`, `startHalf?`, `endHalf?`, `reason?`),
+`get_leave_balance` and `list_my_leave` (`status?`) — always as the signed-in person, no "who"
+parameter. `apply_leave` is refused for a type that needs a document; apply in the web app then.
+
 ### Outbound webhooks
 
 Configured alongside API keys in **Workspace Settings → Public API**. Each webhook subscribes to
@@ -3248,6 +3353,13 @@ one or more events and receives a signed `POST` when they happen:
 | `ticket.closed` | A ticket moves to `CLOSED` specifically (in addition to the status-changed event above) |
 | `timesheet.submitted` | A timesheet entry is submitted for approval |
 | `timesheet.approved` | A timesheet entry is approved |
+| `leave.requested` | A leave request is made (any source; an auto-approved one fires `leave.approved` too) |
+| `leave.approved` | A leave request is approved (by an approver, automatically, or a trusted HRMS) |
+| `leave.rejected` | A leave request is rejected |
+| `leave.cancelled` | A leave request is cancelled (an approved one has its days reversed) |
+
+A leave event's `data` is `{ id, employee: { email, employeeCode }, leaveType, startDate, endDate,
+startHalf, endHalf, days, status, source, externalRef }` — never the reason or decision note.
 
 Payload shape:
 

@@ -490,6 +490,26 @@ export const templates = {
         paragraph(button("Log time now", appUrl("/app/timesheet"), ACCENT))
     ),
 
+  /** V17 Phase B: a leave request waiting on its approver. */
+  leaveRequested: (params: { approverName: string; employeeName: string; leaveType: string; dates: string; days: string; reason: string }) =>
+    shell(
+      { title: "Leave request", preheader: `${params.employeeName} requested ${params.leaveType}.`, accentColor: ACCENT },
+      heading(`Hi ${escape(params.approverName.split(" ")[0])}, a leave request needs your decision`) +
+        paragraph(`<strong>${escape(params.employeeName)}</strong> asked for ${escape(params.leaveType)}: ${escape(params.dates)} (${escape(params.days)} day(s)).`) +
+        paragraph(`Reason: ${escape(params.reason)}`) +
+        paragraph(button("Review the request", appUrl("/app/attendance"), ACCENT))
+    ),
+
+  /** V17 Phase B: the requester hears the decision. */
+  leaveDecided: (params: { name: string; leaveType: string; decision: string; decidedBy: string; dates: string; days: string; note: string }) =>
+    shell(
+      { title: "Leave decided", preheader: `Your leave request was ${params.decision}.`, accentColor: ACCENT },
+      heading(`Hi ${escape(params.name.split(" ")[0])}, your leave request was ${escape(params.decision)}`) +
+        paragraph(`${escape(params.leaveType)}, ${escape(params.dates)} (${escape(params.days)} day(s)) was <strong>${escape(params.decision)}</strong> by ${escape(params.decidedBy)}.`) +
+        paragraph(`Note: ${escape(params.note)}`) +
+        paragraph(button("Open TimeSphere", appUrl("/app/attendance"), ACCENT))
+    ),
+
   /** V17 A4: the punch-in reminder — sent only on a working day with no punch from ANY source yet. */
   punchInReminder: (params: { name: string; date: string }) =>
     shell(

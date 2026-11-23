@@ -39,6 +39,10 @@ export type NotificationCategory =
   | "reminder.escalation"
   /** V17 A4: "you haven't punched in yet" at GlobalAttendanceSettings.punchInReminderHour. */
   | "reminder.punch_in"
+  /** V17 Phase B: a leave request is waiting on this approver (manager, or the admin pool). */
+  | "leave.requested"
+  /** V17 Phase B: the requester's leave request was approved or rejected. */
+  | "leave.decided"
   | "ticket.assigned"
   | "ticket.status_changed"
   | "ticket.commented"
@@ -172,6 +176,8 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "reminder.daily": "emailDailyReminder",
   "reminder.escalation": "emailDailyEscalation",
   "reminder.punch_in": "emailPunchInReminder",
+  "leave.requested": "emailLeaveRequested",
+  "leave.decided": "emailLeaveDecided",
   "ticket.assigned": "emailTicketAssigned",
   "ticket.status_changed": "emailTicketStatusChanged",
   "ticket.commented": "emailTicketCommented",

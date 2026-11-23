@@ -32,6 +32,8 @@ import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { constantTimeEqual } from "../utils/security.js";
 import { isReplayedDelivery } from "./webhook-replay.js";
+import { assertLeaveIntegrationAllowed } from "./leave.service.js";
+import { ingestExternalLeave, isLeaveItem } from "./leave-external.service.js";
 import { assertIngestAllowed, ingestPunch, publicStatus, type PublicIngestStatus } from "./attendance-ingest.service.js";
 
 export const REPLAY_WINDOW_SECONDS = 300;
@@ -100,7 +102,14 @@ export function identifierOf(item: ExternalPunchItem, fallback: AttendanceMatchF
 /** Each item through the ingest; a malformed one is REJECTED in place, never fails the batch. */
 async function ingestItems(items: unknown[], source: { id: string; matchField: AttendanceMatchField }, eventId: string): Promise<ItemResult[]> {
   const results: ItemResult[] = [];
+  let leaveGate: string | null | undefined;
   for (const [index, rawItem] of items.entries()) {
+    // V17 Phase B: an HRMS may send leave on the same signed channel ({ "kind": "leave", ... }).
+    if (isLeaveItem(rawItem)) {
+      leaveGate ??= await leaveGateMessage();
+      results.push(await ingestLeaveItem(index, rawItem, source, leaveGate));
+      continue;
+    }
     const check = externalPunchItem.safeParse(rawItem);
     if (!check.success) {
       results.push({ index, status: "REJECTED", eventId: null, error: check.error.issues[0]?.message ?? "Invalid punch" });
@@ -131,7 +140,35 @@ export interface ItemResult {
   index: number;
   status: PublicIngestStatus;
   eventId: string | null;
+  /** Leave items only (Phase B). */
+  leaveRequestId?: string | null;
+  leaveStatus?: string;
   error?: string;
+}
+
+/** One leave item on the webhook, through the same function the public API uses. */
+async function ingestLeaveItem(index: number, rawItem: unknown, source: { id: string; matchField: AttendanceMatchField }, gate: string | null): Promise<ItemResult> {
+  if (gate) return { index, status: "REJECTED", eventId: null, error: gate };
+  const leave = await ingestExternalLeave({ kind: "WEBHOOK", sender: source.id, rawItem, matchFallback: source.matchField });
+  return {
+    index,
+    status: leave.status,
+    eventId: null,
+    leaveRequestId: leave.requestId,
+    ...(leave.leaveStatus ? { leaveStatus: leave.leaveStatus } : {}),
+    ...(leave.error ? { error: leave.error } : {})
+  };
+}
+
+/** Null when leave items may be ingested; otherwise the reason each one is rejected. */
+async function leaveGateMessage(): Promise<string | null> {
+  try {
+    await assertLeaveIntegrationAllowed();
+    return null;
+  } catch (error) {
+    if (error instanceof AppError) return error.message;
+    throw error;
+  }
 }
 
 const NOT_FOUND = "Not found";

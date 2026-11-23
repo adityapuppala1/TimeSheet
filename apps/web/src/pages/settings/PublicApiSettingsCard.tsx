@@ -30,7 +30,11 @@ const EVENT_LABEL: Record<OutboundWebhookEvent, string> = {
   "ticket.status_changed": "Ticket status changed",
   "ticket.closed": "Ticket closed",
   "timesheet.submitted": "Timesheet submitted",
-  "timesheet.approved": "Timesheet approved"
+  "timesheet.approved": "Timesheet approved",
+  "leave.requested": "Leave requested",
+  "leave.approved": "Leave approved",
+  "leave.rejected": "Leave rejected",
+  "leave.cancelled": "Leave cancelled"
 };
 
 function CopyableSecret({ value }: { value: string }) {
