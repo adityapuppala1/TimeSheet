@@ -38,8 +38,16 @@ vi.mock("../../src/middleware/auth.js", async () => {
 
 const tx = {
   user: { update: (...a: unknown[]) => userUpdate(...a) },
-  attendanceRecord: { create: (...a: unknown[]) => recordCreate(...a) }
+  // A3: the punch now persists through attendance-ingest.service.ts, which re-reads the day inside
+  // its transaction and logs an AttendanceEvent per punch.
+  attendanceRecord: {
+    create: (...a: unknown[]) => recordCreate(...a),
+    findUnique: (...a: unknown[]) => recordFindUnique(...a),
+    update: async () => ({})
+  },
+  attendanceEvent: { create: async () => ({ id: "ev-1" }), updateMany: async () => ({ count: 0 }) }
 };
+let lastCreated: unknown = null;
 
 vi.mock("../../src/config/prisma.js", () => ({
   prisma: {
@@ -133,8 +141,9 @@ beforeEach(() => {
   user = { timezone: "UTC", holidayCalendarId: null, attendanceLocationConsentAt: null };
   faceEnabled = true;
   faceRule = "pass";
-  recordFindUnique.mockReset().mockResolvedValue(null);
-  recordCreate.mockReset().mockImplementation(async ({ data }: { data: Record<string, unknown> }) => fakeRecord(data));
+  lastCreated = null;
+  recordFindUnique.mockReset().mockImplementation(async () => lastCreated);
+  recordCreate.mockReset().mockImplementation(async ({ data }: { data: Record<string, unknown> }) => (lastCreated = fakeRecord(data)));
   userUpdate.mockClear();
   consume.mockClear();
   auditFn.mockClear();
@@ -240,7 +249,9 @@ describe("POST /punch-in", () => {
 
   it("returns the winner when a concurrent punch hits the unique constraint", async () => {
     recordCreate.mockRejectedValueOnce(Object.assign(new Error("dup"), { code: "P2002" }));
-    recordFindUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(existing({ id: "win" }));
+    // The pre-check and the first in-transaction read both see no record; the create then loses
+    // the race and the retry reads the winner.
+    recordFindUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(null).mockResolvedValue(existing({ id: "win" }));
     const res = await request(app()).post("/att/punch-in").send({});
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ created: false, record: { id: "win" } });

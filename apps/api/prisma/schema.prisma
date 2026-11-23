@@ -364,17 +364,17 @@ model User {
   /// The id an external attendance source (biometric terminal, HRMS) knows this person by.
   /// Unique when set so an inbound punch matched on it resolves to exactly one person; nullable
   /// because most workspaces never connect such a source.
-  employeeCode      String?            @unique @db.VarChar(64)
+  employeeCode                String?            @unique @db.VarChar(64)
   /// Which holiday calendar decides this person's days off. NULL = the workspace default calendar
   /// (HolidayCalendar.isDefault), so a fresh workspace needs no per-person assignment at all.
   /// SetNull on delete: removing a calendar drops people back to the default, never orphans them.
-  holidayCalendarId String?
+  holidayCalendarId           String?
   /// When this person first accepted the workspace's location-consent wording for punch-in (V17 A2).
   /// NULL = never asked yet; the punch-in dialog shows the consent text before the first location read.
   attendanceLocationConsentAt DateTime?
-  holidayCalendar   HolidayCalendar?   @relation(fields: [holidayCalendarId], references: [id], onDelete: SetNull)
-  attendanceRecords AttendanceRecord[]
-  missedDayReasons  MissedDayReason[]
+  holidayCalendar             HolidayCalendar?   @relation(fields: [holidayCalendarId], references: [id], onDelete: SetNull)
+  attendanceRecords           AttendanceRecord[]
+  missedDayReasons            MissedDayReason[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -3397,6 +3397,11 @@ model ApiKey {
   /// scoping yet — see docs/ROADMAP.md for why a fuller scopes list is future work, not this
   /// phase.
   scope       String    @default("READ") @db.VarChar(10)
+  /// Granular grants ON TOP of `scope`, comma-separated (`attendance:read,attendance:write`).
+  /// NULL on every key issued before V17 A3, which is exactly "no attendance access": a broad
+  /// WRITE key minted for Zapier must not start punching people in because a module shipped.
+  /// See middleware/public-api-auth.ts#requireApiGrant.
+  grants      String?   @db.VarChar(255)
   lastUsedAt  DateTime?
   createdById String?
   createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
@@ -6140,19 +6145,26 @@ model GlobalAttendanceSettings {
   id String @id
 
   /// The admin half of the gate. The other half is PlanTierLimit.attendanceEnabled.
-  attendanceEnabled      Boolean                   @default(false)
-  punchInMode            PunchInMode               @default(OFF)
-  locationMode           AttendanceLocationMode    @default(OFF)
+  attendanceEnabled   Boolean                   @default(false)
+  punchInMode         PunchInMode               @default(OFF)
+  locationMode        AttendanceLocationMode    @default(OFF)
   /// Reuses face.service (liveness + match) with context PUNCH_IN. Ignored without the face
   /// entitlement, for the same fail-open reason face enforcement on timesheets is.
-  punchInFaceRequired    Boolean                   @default(false)
-  faceFailureRule        AttendanceFaceFailureRule @default(BLOCK)
+  punchInFaceRequired Boolean                   @default(false)
+  faceFailureRule     AttendanceFaceFailureRule @default(BLOCK)
+  /// Conflict priorities for punches with no configured source row (A3). Higher wins; a WEBHOOK
+  /// source ranks 1000 + its own priority, so biometrics beat these unless an admin raises one.
+  apiPriority         Int                       @default(30)
+  webPriority         Int                       @default(20)
+  mcpPriority         Int                       @default(20)
+  csvPriority         Int                       @default(10)
+
   /// Local hour (0-23, recipient's timezone) of the "you haven't punched in" reminder. 11 is late
   /// enough that someone on a normal morning has already punched in, early enough to matter.
-  punchInReminderHour    Int                       @default(11)
-  punchInReminderEnabled Boolean                   @default(false)
+  punchInReminderHour    Int     @default(11)
+  punchInReminderEnabled Boolean @default(false)
   /// Require a reason when someone logs time for a past working day that has no entries at all.
-  missedDayReasonEnabled Boolean                   @default(false)
+  missedDayReasonEnabled Boolean @default(false)
 
   /// AI suggestions per audience. Separate because "show me my own pattern" and "show a manager
   /// their team's pattern" are different privacy decisions. Aggregates only, never raw GPS/face.
@@ -6213,21 +6225,76 @@ model Holiday {
 /// is stored only as a hash: it signs webhooks, and a leaked database must not let anyone forge a
 /// punch.
 model AttendanceSource {
-  id          String               @id @default(uuid())
-  name        String               @unique @db.VarChar(120)
-  kind        AttendanceSourceKind
-  secretHash  String?              @db.VarChar(255)
-  matchField  AttendanceMatchField @default(EMAIL)
+  id              String               @id @default(uuid())
+  name            String               @unique @db.VarChar(120)
+  kind            AttendanceSourceKind
+  /// Unused since A3 (an HMAC verifier needs the secret itself, not a hash of it). Kept so the
+  /// A1 migration is not rewritten; see secretEncrypted.
+  secretHash      String?              @db.VarChar(255)
+  /// The webhook signing secret, AES-GCM encrypted with utils/encryption.ts — the same at-rest
+  /// treatment as the git webhook secret. Revealed once on create/rotate, never returned again.
+  secretEncrypted String?              @db.Text
+  matchField      AttendanceMatchField @default(EMAIL)
   /// Higher wins when two sources disagree about the same person-day; the losers are kept on
   /// AttendanceRecord.rawPayload history for audit (A3), never silently dropped.
-  priority    Int                  @default(0)
-  enabled     Boolean              @default(false)
-  lastEventAt DateTime?
+  priority        Int                  @default(0)
+  enabled         Boolean              @default(false)
+  lastEventAt     DateTime?
 
   records AttendanceRecord[]
+  events  AttendanceEvent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+enum AttendanceEventStatus {
+  /// Became (or updated) the day's AttendanceRecord.
+  ACCEPTED
+  /// Same (source, externalRef) seen before — nothing changed.
+  DUPLICATE
+  /// Matched a person but lost to a higher-priority source, or was overtaken by one later.
+  SUPERSEDED
+  /// No active person carries that identifier. Replayable once the mapping is fixed.
+  UNMATCHED
+  /// Malformed (bad timestamp, missing identifier) or refused (module/plan off).
+  REJECTED
+}
+
+/// Every inbound punch from any source, kept whether or not it won (V17 A3). The record is the
+/// answer; this is the evidence. Admin-only (delivery log), never shown to the person.
+model AttendanceEvent {
+  id          String                @id @default(uuid())
+  source      AttendanceSourceKind
+  /// SetNull: deleting a source keeps its history readable.
+  sourceId    String?
+  sourceRef   AttendanceSource?     @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  status      AttendanceEventStatus
+  reason      String?               @db.VarChar(255)
+  /// `${kind}:${sourceId}:${externalRef}` — unique so dedupe survives two concurrent deliveries.
+  /// NULL for events with no externalRef and for DUPLICATE rows (they repeat a key by definition).
+  dedupeKey   String?               @unique @db.VarChar(255)
+  externalRef String?               @db.VarChar(191)
+  /// What the event claimed identifies the person. Kept for UNMATCHED replay; not a user id.
+  identifier  String?               @db.VarChar(191)
+  userId      String?
+  recordId    String?
+  workDate    DateTime?             @db.Date
+  punchInAt   DateTime?
+  punchOutAt  DateTime?
+  /// True for "send test event" deliveries: verified end to end, never touches a record.
+  isTest      Boolean               @default(false)
+  /// The normalized input, so a replay re-runs exactly what arrived.
+  input       Json?
+  /// Raw payload, size-capped by the ingest service (see RAW_PAYLOAD_CAP).
+  rawPayload  Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([status, createdAt])
+  @@index([sourceId, createdAt])
+  @@index([recordId])
+  @@index([createdAt])
 }
 
 /// One punch per person per working day — the unique key is what makes ingest from several

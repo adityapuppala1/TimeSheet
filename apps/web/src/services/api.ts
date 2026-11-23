@@ -5,6 +5,7 @@ import type { SignupVerifyResult } from "../utils/signup-flow";
 import type { BulkUploadResult } from "../components/CsvBulkUploadDialog";
 import type {
   AiProposalTargetType,
+  ApiKeyGrant,
   ApiKeyScope,
   AuthUser,
   ChatIntegrationRow,
@@ -2579,7 +2580,7 @@ export const settingsApi = {
   // Public API keys & outbound webhooks — see docs/ROADMAP.md's "Public REST API + outbound
   // webhooks" theme. Both "create" endpoints return the plaintext secret exactly once.
   listApiKeys: async () => (await api.get<ApiKeyRow[]>("/settings/api-keys")).data,
-  createApiKey: async (payload: { name: string; scope: ApiKeyScope; expiresAt?: string }) =>
+  createApiKey: async (payload: { name: string; scope: ApiKeyScope; grants?: ApiKeyGrant[]; expiresAt?: string }) =>
     (await api.post<ApiKeyCreated>("/settings/api-keys", payload)).data,
   revokeApiKey: async (id: string) => api.delete(`/settings/api-keys/${id}`),
 
@@ -2649,6 +2650,8 @@ export interface ApiKeyRow {
   name: string;
   keyPrefix: string;
   scope: ApiKeyScope;
+  /** Granular grants (V17 A3). Empty on every key issued before they existed. */
+  grants: ApiKeyGrant[];
   lastUsedAt: string | null;
   createdAt: string;
   revokedAt: string | null;
@@ -2660,6 +2663,7 @@ export interface ApiKeyCreated {
   id: string;
   name: string;
   scope: ApiKeyScope;
+  grants: ApiKeyGrant[];
   expiresAt: string | null;
   /** Shown exactly once — the server never returns it again after this response. */
   key: string;

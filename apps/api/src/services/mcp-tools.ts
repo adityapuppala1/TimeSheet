@@ -44,6 +44,9 @@ import {
 } from "./ticket.service.js";
 import { buildTimesheetReport, GROUP_BY_KEYS, type GroupByKey } from "./timesheet-report.service.js";
 import { htmlToText } from "../utils/sanitize.js";
+import { assertIngestAllowed, ingestPunch } from "./attendance-ingest.service.js";
+import { isPunchInFaceRequired, publicRecord } from "./attendance-punch.service.js";
+import { getAttendanceSettings } from "./attendance-settings.service.js";
 
 /** The subset of GlobalMcpSettings the enablement rules read. Structural rather than the Prisma
  *  row type so tests can build one without a database. */
@@ -145,6 +148,16 @@ const TICKET_SELECT = {
 
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use yyyy-mm-dd");
 const CLOCK_TIME = z.string().regex(/^\d{2}:\d{2}$/, "Use 24-hour HH:MM");
+
+/** A bounded yyyy-mm-dd range for the attendance tools. */
+function mcpRange(fromKey: string, toKey: string, maxDays = 93): { from: Date; to: Date } {
+  const from = new Date(`${fromKey}T00:00:00Z`);
+  const to = new Date(`${toKey}T00:00:00Z`);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) throw new AppError(422, "Use real dates, yyyy-mm-dd.");
+  if (to < from) throw new AppError(422, "to is before from.");
+  if ((to.getTime() - from.getTime()) / 86_400_000 > maxDays) throw new AppError(422, `The range is limited to ${maxDays} days.`);
+  return { from, to };
+}
 
 /** Restricts a ticket query to the projects this user may see. Returns null when the caller is
  *  unrestricted (privileged roles), meaning "add no filter". */
@@ -658,6 +671,101 @@ const TOOLS: readonly McpToolRegistration[] = [
         caller: ctx.caller
       });
       return { updated: true, key: existing.key, from, to };
+    }
+  },
+  /* ---- Attendance (V17 A3). Always the caller's own day: there is no "who" parameter. ---- */
+  {
+    name: "punch_in",
+    title: "Punch in",
+    description:
+      "Call this when the acting user asks to punch in / mark themselves present for today. It " +
+      "records the punch for THEM only (there is no parameter for anyone else) on their own local " +
+      "calendar day, and is idempotent — punching in twice returns the first punch. Refused when " +
+      "the workspace requires a face check or location for punch-in, because an assistant cannot " +
+      "provide either; tell the user to punch in from the web app instead.",
+    inputSchema: {},
+    permission: null,
+    mutating: true,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx) => {
+      await assertIngestAllowed("MCP");
+      const settings = await getAttendanceSettings();
+      if (settings.punchInMode === "OFF") {
+        throw new AppError(403, "Self punch-in is not enabled for this workspace.");
+      }
+      if (settings.locationMode === "REQUIRED" || (await isPunchInFaceRequired(settings.punchInFaceRequired))) {
+        throw new AppError(403, "This workspace requires a face check or location to punch in. Punch in from the TimeSphere web app.");
+      }
+      const me = await prisma.user.findUnique({ where: { id: ctx.user.id }, select: { id: true, timezone: true } });
+      if (!me) throw new AppError(404, "User not found");
+      const result = await ingestPunch({ kind: "MCP", person: me, userId: me.id, punchInAt: new Date(), gateChecked: true });
+      const record = result.recordId
+        ? await prisma.attendanceRecord.findUnique({ where: { id: result.recordId }, include: { sourceRef: { select: { name: true } } } })
+        : null;
+      return { created: result.created, outcome: result.status, record: publicRecord(record) };
+    }
+  },
+
+  {
+    name: "get_my_attendance",
+    title: "My attendance",
+    description:
+      "Call this when the acting user asks about their OWN attendance — 'when did I punch in this " +
+      "week', 'did my badge swipe register on Monday'. Always scoped to them. Returns one row per " +
+      "day they have a punch, with the source (web, device, import). Range is at most 93 days.",
+    inputSchema: {
+      from: ISO_DATE.describe("Inclusive start date, yyyy-mm-dd"),
+      to: ISO_DATE.describe("Inclusive end date, yyyy-mm-dd")
+    },
+    permission: null,
+    mutating: false,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx, args) => {
+      await assertIngestAllowed("MCP");
+      const { from, to } = mcpRange(args.from, args.to);
+      const records = await prisma.attendanceRecord.findMany({
+        where: { userId: ctx.user.id, workDate: { gte: from, lte: to } },
+        orderBy: { workDate: "asc" },
+        include: { sourceRef: { select: { name: true } } }
+      });
+      return {
+        count: records.length,
+        days: records.map((r) => ({ ...publicRecord(r), punchOutAt: r.punchOutAt?.toISOString() ?? null }))
+      };
+    }
+  },
+
+  {
+    name: "list_holidays",
+    title: "My holidays",
+    description:
+      "Call this when the acting user asks which days are holidays for them — 'is Friday a " +
+      "holiday', 'list the holidays this quarter'. Reads THEIR holiday calendar (or the workspace " +
+      "default when they have none). Range is at most 366 days.",
+    inputSchema: {
+      from: ISO_DATE.describe("Inclusive start date, yyyy-mm-dd"),
+      to: ISO_DATE.describe("Inclusive end date, yyyy-mm-dd")
+    },
+    permission: null,
+    mutating: false,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx, args) => {
+      await assertIngestAllowed("MCP");
+      const { from, to } = mcpRange(args.from, args.to, 366);
+      const me = await prisma.user.findUnique({ where: { id: ctx.user.id }, select: { holidayCalendarId: true } });
+      const calendarId =
+        me?.holidayCalendarId ?? (await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true } }))?.id ?? null;
+      if (!calendarId) return { calendar: null, holidays: [] };
+      const calendar = await prisma.holidayCalendar.findUnique({ where: { id: calendarId }, select: { name: true } });
+      const holidays = await prisma.holiday.findMany({
+        where: { calendarId, date: { gte: from, lte: to } },
+        orderBy: { date: "asc" },
+        select: { date: true, name: true, isOptional: true }
+      });
+      return { calendar: calendar?.name ?? null, holidays: holidays.map((h) => ({ ...h, date: h.date.toISOString().slice(0, 10) })) };
     }
   }
 ];

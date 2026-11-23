@@ -191,3 +191,18 @@ export function startOfZonedDayUtc(instant: Date, timeZone?: string | null, fall
   const offset = formatterFor(parts.timeZone) ? zoneOffsetMs(instant, parts.timeZone) : 0;
   return new Date(Date.UTC(y, m - 1, d) - offset);
 }
+
+/**
+ * A wall-clock time on a calendar day in `timeZone` → the UTC instant (V17 A3, CSV import: a
+ * spreadsheet says "09:05 on 2026-11-23", meaning the person's 09:05). Two passes so the offset is
+ * read at the RESULT instant, which is what keeps a time just after a DST change right.
+ */
+export function zonedWallTimeToUtc(dateKey: string, hh: number, mm: number, timeZone?: string | null, fallbackZone?: string | null): Date {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const asUtc = Date.UTC(y, m - 1, d, hh, mm, 0);
+  const zone = zonedParts(new Date(asUtc), timeZone, fallbackZone).timeZone;
+  if (!formatterFor(zone)) return new Date(asUtc);
+  let guess = asUtc - zoneOffsetMs(new Date(asUtc), zone);
+  guess = asUtc - zoneOffsetMs(new Date(guess), zone);
+  return new Date(guess);
+}

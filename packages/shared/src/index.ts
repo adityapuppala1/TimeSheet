@@ -572,6 +572,10 @@ export const outboundWebhookEvents = [
 export type OutboundWebhookEvent = (typeof outboundWebhookEvents)[number];
 export const apiKeyScopes = ["READ", "WRITE"] as const;
 export type ApiKeyScope = (typeof apiKeyScopes)[number];
+/** Granular grants layered on top of READ/WRITE (V17 A3). A key holds none unless an admin ticks
+ *  them, so every key issued before they existed keeps exactly its old reach. */
+export const apiKeyGrants = ["attendance:read", "attendance:write"] as const;
+export type ApiKeyGrant = (typeof apiKeyGrants)[number];
 
 export interface TicketInput {
   projectId: string;

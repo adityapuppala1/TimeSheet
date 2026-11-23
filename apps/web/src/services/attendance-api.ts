@@ -24,6 +24,11 @@ export interface AttendanceSettings {
   minGroupSize: number;
   locationConsentText: string | null;
   locationRetentionDays: number;
+  /** A3 conflict priorities for punches without a source row. Higher wins; webhooks rank 1000+. */
+  apiPriority: number;
+  webPriority: number;
+  mcpPriority: number;
+  csvPriority: number;
 }
 
 export interface AttendanceEntitlements {
@@ -155,4 +160,82 @@ export const attendanceApi = {
   myToday: async () => (await api.get<MyToday>("/attendance/me/today")).data,
   punchIn: async (payload: PunchInPayload) =>
     (await api.post<{ created: boolean; record: AttendancePunchRecord }>("/attendance/punch-in", payload)).data
+};
+
+/* ------------------------------------------------------------------ *
+ * Sources & integrations (V17 A3) — /api/attendance/admin/integrations
+ * ------------------------------------------------------------------ */
+
+export type AttendanceSourceKind = "WEBHOOK" | "API" | "CSV";
+export type AttendanceMatchField = "EMAIL" | "EMPLOYEE_CODE" | "EXTERNAL_ID";
+export type AttendanceEventStatus = "ACCEPTED" | "DUPLICATE" | "SUPERSEDED" | "UNMATCHED" | "REJECTED";
+
+export interface AttendanceSourceRow {
+  id: string;
+  name: string;
+  kind: AttendanceSourceKind;
+  matchField: AttendanceMatchField;
+  priority: number;
+  enabled: boolean;
+  lastEventAt: string | null;
+  createdAt: string;
+  hasSecret: boolean;
+  /** Relative; prefix with the API origin. Null for non-webhook sources. */
+  webhookPath: string | null;
+}
+
+export interface AttendanceEventRow {
+  id: string;
+  source: string;
+  status: AttendanceEventStatus;
+  reason: string | null;
+  externalRef: string | null;
+  identifier: string | null;
+  workDate: string | null;
+  punchInAt: string | null;
+  punchOutAt: string | null;
+  isTest: boolean;
+  createdAt: string;
+  rawPayload: unknown;
+  sourceRef: { id: string; name: string } | null;
+  person: { id: string; name: string; email: string } | null;
+}
+
+export interface CsvPreviewRow {
+  line: number;
+  identifier: string;
+  date: string;
+  punchIn: string;
+  punchOut: string | null;
+  errors: string[];
+  person: { id: string; name: string } | null;
+}
+
+export interface CsvPreview {
+  headerErrors: string[];
+  total: number;
+  valid: number;
+  rows: CsvPreviewRow[];
+}
+
+export type CsvCommitSummary = { total: number; skipped: number } & Record<AttendanceEventStatus, number>;
+
+const INT = "/attendance/admin/integrations";
+
+export const attendanceIntegrationsApi = {
+  listSources: async () => (await api.get<AttendanceSourceRow[]>(`${INT}/sources`)).data,
+  createSource: async (payload: { name: string; kind: AttendanceSourceKind; matchField: AttendanceMatchField; priority?: number; enabled?: boolean }) =>
+    (await api.post<AttendanceSourceRow & { secret: string | null }>(`${INT}/sources`, payload)).data,
+  updateSource: async (id: string, payload: Partial<Pick<AttendanceSourceRow, "name" | "matchField" | "priority" | "enabled">>) =>
+    (await api.patch<AttendanceSourceRow>(`${INT}/sources/${id}`, payload)).data,
+  deleteSource: async (id: string) => api.delete(`${INT}/sources/${id}`),
+  rotateSecret: async (id: string) => (await api.post<{ secret: string }>(`${INT}/sources/${id}/rotate-secret`)).data,
+  sendTestEvent: async (id: string) => (await api.post<{ results: Array<{ status: string; eventId: string | null }> }>(`${INT}/sources/${id}/test`)).data,
+  listEvents: async (params: { status?: AttendanceEventStatus; sourceId?: string; cursor?: string }) =>
+    (await api.get<{ events: AttendanceEventRow[]; nextCursor: string | null }>(`${INT}/events`, { params })).data,
+  replayEvent: async (id: string) => (await api.post<{ status: AttendanceEventStatus; reason: string | null }>(`${INT}/events/${id}/replay`)).data,
+  previewCsv: async (payload: { csv: string; matchField: AttendanceMatchField; sourceId?: string | null }) =>
+    (await api.post<CsvPreview>(`${INT}/import/preview`, payload)).data,
+  commitCsv: async (payload: { csv: string; matchField: AttendanceMatchField; sourceId?: string | null }) =>
+    (await api.post<CsvCommitSummary>(`${INT}/import/commit`, payload)).data
 };

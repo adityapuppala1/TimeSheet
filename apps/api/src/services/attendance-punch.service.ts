@@ -27,6 +27,7 @@ import { consumeVerification, getFaceSettings, isFaceFeatureAllowedForOrg } from
 import { getPlanningSettings } from "./planning.service.js";
 import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
 import { audit } from "./audit.service.js";
+import { ingestPunch } from "./attendance-ingest.service.js";
 
 /** Shown when the admin left locationConsentText empty. Plain about what is kept and for how long. */
 export const DEFAULT_LOCATION_CONSENT =
@@ -186,10 +187,6 @@ export interface PunchInInput {
   now?: Date;
 }
 
-function isUniqueViolation(error: unknown): boolean {
-  return (error as { code?: string } | null)?.code === "P2002";
-}
-
 type PunchLocation = { lat: number; lng: number; accuracyM: number | null };
 
 /** Location by mode. OFF stores nothing even if the client sent it — the admin said not to collect it. */
@@ -252,35 +249,36 @@ export async function punchIn(input: PunchInInput): Promise<{ created: boolean; 
   const location = resolveLocation(settings.locationMode, input, Boolean(user.attendanceLocationConsentAt));
   const { faceAttemptId, flagged } = await resolveFace(settings, input);
 
-  let record;
-  try {
-    record = await prisma.$transaction(async (tx) => {
+  // Persisted through the single ingest path (attendance-ingest.service.ts) as a WEB event, so the
+  // web punch is ranked, logged and conflict-resolved exactly like every other source. The gate was
+  // checked above with the web's own messages.
+  const result = await ingestPunch({
+    kind: "WEB",
+    userId: input.userId,
+    person: { id: input.userId, timezone: user.timezone },
+    punchInAt: now,
+    now,
+    gateChecked: true,
+    evidence: {
+      lat: location?.lat ?? null,
+      lng: location?.lng ?? null,
+      accuracyM: location?.accuracyM ?? null,
+      ip: input.ip,
+      userAgent: input.userAgent,
+      faceAttemptId,
+      flagged
+    },
+    beforeCreate: async (tx) => {
       if (location && !user.attendanceLocationConsentAt) {
         await tx.user.update({ where: { id: input.userId }, data: { attendanceLocationConsentAt: now } });
       }
-      return tx.attendanceRecord.create({
-        data: {
-          userId: input.userId,
-          workDate,
-          punchInAt: now,
-          lat: location?.lat ?? null,
-          lng: location?.lng ?? null,
-          accuracyM: location?.accuracyM ?? null,
-          ip: input.ip?.slice(0, 64) ?? null,
-          userAgent: input.userAgent ?? null,
-          faceAttemptId,
-          flagged,
-          source: "WEB"
-        },
-        include
-      });
-    });
-  } catch (error) {
-    if (!isUniqueViolation(error)) throw error;
-    const winner = await prisma.attendanceRecord.findUnique({ where: { userId_workDate: { userId: input.userId, workDate } }, include });
-    if (!winner) throw error;
-    return { created: false, record: publicRecord(winner)! };
-  }
+    }
+  });
+  const record = await prisma.attendanceRecord.findUnique({ where: { userId_workDate: { userId: input.userId, workDate } }, include });
+  if (!record) throw new AppError(409, "Your punch could not be recorded. Please try again.");
+  // Lost a race (or to a higher-priority source that arrived between the check above and now):
+  // the day already has its punch, which is the A2 contract for a second punch.
+  if (!result.created) return { created: false, record: publicRecord(record)! };
 
   // Never the coordinates in the audit log: it is read far more widely than attendance is.
   await audit(input.userId, "attendance.punched_in", "AttendanceRecord", record.id, {

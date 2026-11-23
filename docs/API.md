@@ -3099,6 +3099,82 @@ logic the authenticated endpoint owns — see [docs/ROADMAP.md](ROADMAP.md)).
 
 Rate limit: 120 requests/minute per IP (separate from the UI's own rate limits).
 
+### Granular scopes (attendance)
+
+On top of `READ`/`WRITE`, a key can carry **granular scopes**, ticked when it is generated:
+
+| Scope | Can do |
+|---|---|
+| `attendance:read` | `GET /attendance`, `GET /holidays` |
+| `attendance:write` | `POST /attendance/punches` |
+
+`READ`/`WRITE` never imply them: every key issued before they existed has **no attendance access**,
+and a `WRITE` key calling an attendance route gets `403` naming the missing scope. The attendance
+routes also need the Attendance module switched on and the plan's **attendance integrations**
+entitlement (Enterprise); otherwise `403`.
+
+### Attendance endpoints
+
+All punches, from any source, go through one ingest pipeline: dedupe on `(source, externalRef)`,
+the person matched among **active** users, the work date taken in **the person's own timezone**,
+and conflicts settled by source priority (Workspace Settings → Attendance & Leave → Sources &
+integrations). The loser is kept in the admin delivery log, never dropped.
+
+- `POST /attendance/punches` *(attendance:write)* — one punch object, or an array of up to 500.
+  ```json
+  { "email": "ana@acme.com", "punchInAt": "2026-11-23T09:02:00+05:30", "punchOutAt": null,
+    "externalRef": "door-7-evt-88123", "location": { "lat": 12.97, "lng": 77.59, "accuracyM": 20 } }
+  ```
+  Identify the person with exactly one of `email`, `employeeCode`, `externalId` (the SCIM id).
+  `punchInAt`/`punchOutAt` must be ISO-8601 **with a zone** (`Z` or `±hh:mm`) — a bare local time
+  is refused. `externalRef` is **required** (it is the idempotency key). Optional `?sourceId=` ties
+  the punches to an enabled source of kind API, so its priority applies.
+
+  A single object answers `202` with one result; an array answers `207` with
+  `{ "results": [ { "index": 0, "status": "RECEIVED", "eventId": "..." }, ... ] }`. `status` is
+  `RECEIVED`, `DUPLICATE` (that `externalRef` was already received) or `REJECTED` (with `error`).
+  **An unknown person is also `RECEIVED`** — the API never confirms who works here; unmatched punches
+  wait in the admin delivery log, where they can be replayed once the person's identifier is fixed.
+- `GET /attendance?from=YYYY-MM-DD&to=YYYY-MM-DD&employee=&limit=500` *(attendance:read)* — one
+  row per person per day (`workDate`, `punchInAt`, `punchOutAt`, `source`, source name, person's
+  name/email/employeeCode). Range up to 93 days; `employee` is an email or employee code. Raw
+  evidence (coordinates, IP, user agent) is never returned.
+- `GET /holidays?from=YYYY-MM-DD&to=YYYY-MM-DD` *(attendance:read)* — holidays in every calendar,
+  with the calendar's name and whether it is the workspace default. Range up to 93 days.
+
+### Signed attendance webhook (devices, HRMS)
+
+For a biometric terminal or an HRMS that pushes punches. Create a **webhook source** in Workspace
+Settings → Attendance & Leave → Sources & integrations; it shows the URL and a signing secret
+(`whsec_...`) **once** — rotate it to get a new one. The secret is stored encrypted, never in plain
+text, and never shown again.
+
+```
+POST <your-workspace-url>/api/integrations/attendance/<sourceId>
+Content-Type: application/json
+X-TimeSphere-Timestamp: 1795430400            (unix seconds)
+X-TimeSphere-Event-Id: <unique id per delivery>
+X-TimeSphere-Signature: sha256=<hex HMAC-SHA256(secret, "<timestamp>.<raw body>")>
+```
+
+Body: one punch or an array of up to 500, same fields as the API, except the person may also be
+sent as `identifier`, read by the source's **match field** (email, employee code or external id).
+Without an `externalRef`, the event id (plus `#index` in an array) is the idempotency key.
+
+| Response | Meaning |
+|---|---|
+| `202` | Verified; per-item `results` as above (`RECEIVED` / `DUPLICATE` / `REJECTED`). |
+| `200 { "duplicate": true }` | That `X-TimeSphere-Event-Id` was already delivered. |
+| `400` | No event id, or the body is not JSON. |
+| `401` | Missing/invalid signature, or a timestamp more than **5 minutes** from server time. |
+| `404` | Unknown source, disabled source, or the module/plan is off — all identical. |
+| `413` | Body over 512 KB or more than 500 punches. |
+
+Signature compare is constant-time; the timestamp is inside the signed bytes, so a captured
+delivery cannot be refreshed. Rate limit: 120 requests/minute per IP. **Send test event** in
+settings signs a test delivery server-side and runs it through the same handler: it is verified
+and logged (marked *test*) and never creates attendance.
+
 ### Outbound webhooks
 
 Configured alongside API keys in **Workspace Settings → Public API**. Each webhook subscribes to
@@ -3205,6 +3281,9 @@ hidden from the list is not callable by a client that guessed its name.
 | `create_ticket` | `tickets:write` | yes | **off** |
 | `add_ticket_comment` | `tickets:write` | yes | **off** |
 | `transition_ticket` | `tickets:write` | yes (**destructive**) | **off** |
+| `punch_in` | — | yes | **off** |
+| `get_my_attendance` | — | no | on |
+| `list_holidays` | — | no | on |
 
 - A dash under *Permission* means the tool's scope is the caller themselves (their own timesheets,
   their own direct reports), so there is nothing a permission would have protected.
@@ -3215,6 +3294,10 @@ hidden from the list is not callable by a client that guessed its name.
   per-tool setting says.
 - `log_timesheet_entry` creates a **DRAFT** and never submits: submitting starts an approval SLA
   clock and, where configured, requires an identity check.
+- The three attendance tools act only as the credential's own person (no "who" argument) and need
+  the Attendance module on plus the attendance-integrations entitlement. `punch_in` is refused when
+  the workspace requires a face check or location for punch-in, since an assistant can provide
+  neither; it is idempotent per day and ranks by the *AI assistant* priority.
 - `transition_ticket` is flagged `destructiveHint`, because a status change is visible to everyone
   who can see the ticket, fires this workspace's outbound webhooks (`ticket.status_changed`, plus
   `ticket.closed` on close) and stops or restarts the SLA clock. It enforces the same three rules

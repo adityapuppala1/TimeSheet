@@ -37,7 +37,9 @@ vi.mock("../../src/middleware/public-api-auth.js", () => ({
     req.apiKey = { id: "key-1", scope: "WRITE" };
     next();
   },
-  requireWriteScope: (_req: express.Request, _res: express.Response, next: express.NextFunction) => next()
+  requireWriteScope: (_req: express.Request, _res: express.Response, next: express.NextFunction) => next(),
+  // V17 A3: the public router now mounts the attendance routes; unused by these tests.
+  requireApiGrant: () => (_req: express.Request, _res: express.Response, next: express.NextFunction) => next()
 }));
 const auditSpy = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../src/services/audit.service.js", () => ({ audit: (...a: unknown[]) => auditSpy(...a) }));

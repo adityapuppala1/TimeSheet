@@ -10,7 +10,8 @@
  * here is refused server-side without the entitlement, including the holiday and reason editors.
  * A form whose every save 403s is worse than one sentence explaining the plan.
  *
- * Leave types, approvals and integrations are placeholders: phase B and step A3 build them.
+ * Leave types and approvals are placeholders until phase B. Sources & integrations (A3) live in
+ * AttendanceSourcesSection.
  */
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -49,6 +50,7 @@ import {
   type HolidayRow,
   type MissedReasonOptionRow
 } from "../../services/attendance-api";
+import { AttendanceSourcesSection } from "./AttendanceSourcesSection";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -115,7 +117,7 @@ export function AttendanceSettingsCard({ readOnly }: { readOnly: boolean }) {
   const disabled = readOnly || update.isPending;
   const save = (payload: Partial<AttendanceSettings>) => update.mutate(payload);
   const on = config.data.effective;
-  const board = buildBoard({ settings, on, calendars: calendars.data, calendarsFailed: calendars.isError, reasons: reasons.data, reasonsFailed: reasons.isError });
+  const board = buildBoard({ settings, on, calendars: calendars.data, calendarsFailed: calendars.isError, reasons: reasons.data, reasonsFailed: reasons.isError, integrationsLocked: !entitlements.attendanceIntegrationsEnabled });
   const shell = (id: string) => {
     const e = board.find((b) => b.id === id)!;
     return { id, prefix: PREFIX, name: e.name, blurb: e.blurb, state: e.state, stateLabel: e.stateLabel, Icon: e.Icon, open: sections.isOpen(id), onToggle: () => sections.toggle(id) };
@@ -232,7 +234,7 @@ export function AttendanceSettingsCard({ readOnly }: { readOnly: boolean }) {
       </SettingsSection>
 
       <SettingsSection {...shell("sources")}>
-        <ComingSoon text="Punches from biometric devices, HRMS webhooks, the public API, MCP and CSV import arrive in the next step." locked={!entitlements.attendanceIntegrationsEnabled} />
+        <AttendanceSourcesSection readOnly={readOnly} locked={!entitlements.attendanceIntegrationsEnabled} settings={settings} onSaveSettings={save} />
       </SettingsSection>
 
       <SettingsSection {...shell("analytics")}>
@@ -322,6 +324,7 @@ function buildBoard(input: {
   calendarsFailed: boolean;
   reasons?: MissedReasonOptionRow[];
   reasonsFailed: boolean;
+  integrationsLocked: boolean;
 }): BoardEntry[] {
   const { settings, on, calendars, reasons } = input;
   const holidayCount = (calendars ?? []).reduce((n, c) => n + c.holidays.length, 0);
@@ -337,7 +340,7 @@ function buildBoard(input: {
     { id: "reasons", name: "Missed-day reasons", blurb: "What people may choose when a past working day has no time.", Icon: MessageSquareWarning, value: reasons ? `${enabledReasons} enabled` : undefined, state: listState(input.reasonsFailed, settings.missedDayReasonEnabled, on) },
     { id: "leave", name: "Leave types", blurb: "Coming in phase B.", Icon: Plane, ...soon },
     { id: "approvals", name: "Approvals", blurb: "Coming in phase B.", Icon: UserCheck, ...soon },
-    { id: "sources", name: "Sources & integrations", blurb: "Biometric devices, HRMS, API and CSV.", Icon: Plug, ...soon },
+    { id: "sources", name: "Sources & integrations", blurb: "Biometric devices, HRMS, API, MCP and CSV.", Icon: Plug, state: input.integrationsLocked ? "off" : "ready", stateLabel: input.integrationsLocked ? "Locked" : undefined },
     { id: "analytics", name: "Analytics & AI", blurb: "AI suggestions over attendance aggregates.", Icon: Sparkles, state: partState(aiOn, on) },
     { id: "privacy", name: "Privacy & retention", blurb: "Location consent wording and how long raw evidence is kept.", Icon: ShieldCheck, value: `${settings.locationRetentionDays} days`, state: "ready" }
   ];

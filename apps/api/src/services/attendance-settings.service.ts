@@ -66,7 +66,12 @@ export const attendanceSettingsBody = z
     // Below 3 an "average" identifies a person; 3 is the floor, not a recommendation.
     minGroupSize: z.number().int().min(3).max(100),
     locationConsentText: z.string().trim().max(2000).nullable(),
-    locationRetentionDays: z.number().int().min(1).max(3650)
+    locationRetentionDays: z.number().int().min(1).max(3650),
+    // A3 conflict priorities for sourceless punches (attendance-ingest.service.ts#rankOf).
+    apiPriority: z.number().int().min(-1000).max(5000),
+    webPriority: z.number().int().min(-1000).max(5000),
+    mcpPriority: z.number().int().min(-1000).max(5000),
+    csvPriority: z.number().int().min(-1000).max(5000)
   })
   .partial()
   .strict();

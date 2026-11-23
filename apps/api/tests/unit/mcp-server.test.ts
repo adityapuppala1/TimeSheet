@@ -254,7 +254,7 @@ describe("permissions", () => {
     // The only tools allowed to be permission-free are the ones whose entire scope is the caller
     // themselves — if a new tool joins this list, that was a decision, not an oversight.
     const unpermissioned = MCP_TOOLS.filter((t) => t.permission === null).map((t) => t.name);
-    expect(unpermissioned.sort()).toEqual(["get_team_summary", "list_my_timesheets", "list_projects", "whoami"]);
+    expect(unpermissioned.sort()).toEqual(["get_my_attendance", "get_team_summary", "list_holidays", "list_my_timesheets", "list_projects", "punch_in", "whoami"]);
   });
 
   it("the dispatcher, not the handler, is what enforces the permission", async () => {
