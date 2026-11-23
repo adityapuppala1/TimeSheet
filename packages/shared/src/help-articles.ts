@@ -320,9 +320,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Check your plan: attendance is on Team and above; integrations and AI insights are Enterprise (a platform administrator can also grant them per workspace). Without it the tab shows an upgrade note and the server refuses the calls.",
       "Open Workspace Settings → Attendance & Leave and switch Overview on (a super admin makes the changes; admins can read).",
       "Punch-in: choose Off, Optional or Mandatory, and whether location and face verification are off, optional or required.",
-      "Reminders: set the hour for the punch-in nudge. It only goes to people on a working day with no punch from any source.",
+      "Reminders: set the hour for the punch-in nudge. It goes to every active person, whatever their role, on a working day with no punch from any source. Choose which roles get the email in Workspace Settings → Email channels, on the Punch-in reminder row (every role is ticked by default).",
       "Working days & holidays: add a calendar (the first is the default), then its holidays; assign another calendar to people who follow a different one.",
-      "Missed-day reasons: keep, edit or add reasons and mark which need a note. Deleting asks you to confirm.",
+      "Missed-day reasons: keep, edit or add reasons and mark which need a note. Deleting asks you to confirm. While the reason rule is on, at least one reason must stay enabled, and the rule cannot be switched on with none.",
       "Privacy & retention: set the location consent wording and how many days raw location evidence is kept."
     ],
     notes:

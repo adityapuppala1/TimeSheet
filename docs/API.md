@@ -3154,7 +3154,14 @@ POST <your-workspace-url>/api/integrations/attendance/<sourceId>
 Content-Type: application/json
 X-TimeSphere-Timestamp: 1795430400            (unix seconds)
 X-TimeSphere-Event-Id: <unique id per delivery>
-X-TimeSphere-Signature: sha256=<hex HMAC-SHA256(secret, "<timestamp>.<raw body>")>
+X-TimeSphere-Signature: sha256=<hex HMAC-SHA256(secret, "<timestamp>.<event id>.<raw body>")>
+```
+
+The event id is part of the signed bytes, so a captured delivery cannot be replayed under a fresh
+id. Node example:
+
+```js
+const signature = "sha256=" + crypto.createHmac("sha256", secret).update(`${timestamp}.${eventId}.${rawBody}`).digest("hex");
 ```
 
 Body: one punch or an array of up to 500, same fields as the API, except the person may also be

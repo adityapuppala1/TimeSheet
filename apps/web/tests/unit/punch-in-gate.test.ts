@@ -5,7 +5,7 @@
  * one pure function precisely so this file can pin them without rendering the shell.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { decidePunchIn, dismissalKey, punchNotice, readDismissal, writeDismissal, type PunchInDecisionInput } from "../../src/lib/punch-in-gate";
+import { decidePunchIn, dismissalKey, gateEscapeHatches, punchNotice, readDismissal, writeDismissal, type PunchInDecisionInput } from "../../src/lib/punch-in-gate";
 import type { MyToday } from "../../src/services/attendance-api";
 
 const today = (over: Partial<MyToday> = {}): MyToday => ({
@@ -111,5 +111,21 @@ describe("dismissal memory", () => {
 describe("punchNotice", () => {
   it("names the time and the source", () => {
     expect(punchNotice({ punchInAt: "2026-11-23T08:50:00Z", sourceLabel: "Biometric" })).toMatch(/^Punched in .+ via Biometric$/);
+  });
+});
+
+describe("mandatory mode never locks out an administrator", () => {
+  const mandatory = today({ punchInMode: "MANDATORY" });
+  it.each(["SUPER_ADMIN", "ADMIN"])("%s gets the dialog, then the banner — never the blocking gate", (role) => {
+    expect(decidePunchIn(input({ today: mandatory, role })).surface).toBe("dialog");
+    expect(decidePunchIn(input({ today: mandatory, role, dismissal: "dialog" })).surface).toBe("banner");
+  });
+  it("an employee still gets the gate", () => {
+    expect(decidePunchIn(input({ today: mandatory, role: "EMPLOYEE" })).surface).toBe("gate");
+  });
+  it("the workspace settings page is an escape hatch for admins only", () => {
+    expect(gateEscapeHatches("SUPER_ADMIN")).toContain("/app/settings");
+    expect(gateEscapeHatches("EMPLOYEE")).not.toContain("/app/settings");
+    expect(decidePunchIn(input({ today: mandatory, role: "EMPLOYEE", pathname: "/app/settings" })).surface).toBe("gate");
   });
 });

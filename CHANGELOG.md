@@ -28,6 +28,15 @@ number, on purpose — an installation must never render history for a version t
   past working day that has none, on web, API and MCP.
 - **Attendance page.** My attendance, Team (today status, source, location, face result, reminders, and a person
   timeline sheet) and Organisation, with rule-based insights and plan-gated AI suggestions built only from aggregates.
+- **Punch-in reminder reaches every role.** The 11:00 reminder now goes to every active person (employees, team
+  leads, managers, admins and super admins), not only the 17:00 timesheet reminder's employees and team leads. Which
+  roles get the email is the *Punch-in reminder* row in Workspace Settings → Email channels, every role on by
+  default. The 17:00 reminder and next-morning escalation are unchanged.
+- **Hardening.** Admins and super admins are never locked behind the Mandatory punch-in overlay (they get the
+  dialog and banner), so they can always reach Settings. The missed-day reason rule cannot be left with no enabled
+  reason. The webhook signature now covers the event id: `HMAC(secret, "<timestamp>.<event id>.<raw body>")`.
+  AI insights are cached per day/week and computed over the last 30 days, with a per-user rate limit. The delivery
+  log no longer shows a sender's coordinates, and team AI suggestions never send per-person figures.
 - **Settings polish.** Row deletes use the app's confirm dialog; empty lists use the standard empty state.
 - Leave management and approvals are Phase B and not in this release.
 

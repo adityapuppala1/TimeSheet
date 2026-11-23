@@ -31,6 +31,8 @@ export interface PunchInDecisionInput {
   onboardingLoading: boolean;
   pathname: string;
   dismissal: PunchInDismissal;
+  /** The viewer's role. Admins are never shown the blocking gate (see decidePunchIn). */
+  role?: string;
 }
 
 export interface PunchInDecision {
@@ -41,6 +43,20 @@ export interface PunchInDecision {
 
 /** Mandatory mode leaves exactly these reachable — the profile (where face enrolment lives). */
 export const PUNCH_IN_ESCAPE_HATCH = "/app/profile";
+/** Where an administrator turns attendance off. */
+export const WORKSPACE_SETTINGS_PATH = "/app/settings";
+
+const ADMIN_ROLES = new Set(["SUPER_ADMIN", "ADMIN"]);
+
+export function isGateExempt(role: string | undefined): boolean {
+  return role !== undefined && ADMIN_ROLES.has(role);
+}
+
+/** The routes the mandatory overlay steps aside for. Admins also keep workspace settings — defence
+ *  in depth: they never get the gate, but if they ever did they must still reach the off switch. */
+export function gateEscapeHatches(role: string | undefined): string[] {
+  return isGateExempt(role) ? [PUNCH_IN_ESCAPE_HATCH, WORKSPACE_SETTINGS_PATH] : [PUNCH_IN_ESCAPE_HATCH];
+}
 
 const NONE: PunchInDecision = { surface: "none", holdsOthers: false };
 
@@ -55,12 +71,15 @@ export function decidePunchIn(input: PunchInDecisionInput): PunchInDecision {
   if (today.record) return { surface: "notice", holdsOthers: false };
   if (!today.isWorkingDay) return NONE;
 
-  if (today.punchInMode === "MANDATORY") {
+  // An administrator is never blocked: if location REQUIRED is denied or a face BLOCK fails on their
+  // device, the gate would lock out the one person who can turn it off. They get OPTIONAL's
+  // dialog → banner instead; the rule itself is unchanged for everyone else.
+  if (today.punchInMode === "MANDATORY" && !isGateExempt(input.role)) {
     // On the profile the overlay steps aside (they may need to enrol a face), but still holds others.
-    if (input.pathname.startsWith(PUNCH_IN_ESCAPE_HATCH)) return { surface: "none", holdsOthers: true };
+    if (gateEscapeHatches(input.role).some((p) => input.pathname.startsWith(p))) return { surface: "none", holdsOthers: true };
     return { surface: "gate", holdsOthers: true };
   }
-  // OPTIONAL
+  // OPTIONAL (and MANDATORY for an administrator)
   if (input.dismissal === "none") return { surface: "dialog", holdsOthers: true };
   if (input.dismissal === "dialog") return { surface: "banner", holdsOthers: false };
   return NONE;

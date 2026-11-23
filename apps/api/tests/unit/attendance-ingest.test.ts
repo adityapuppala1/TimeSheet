@@ -276,21 +276,27 @@ describe("ingestPunch", () => {
 describe("webhook signature", () => {
   const body = '{"identifier":"E100","punchInAt":"2026-11-23T03:25:00Z"}';
   const ts = String(Math.floor(NOW.getTime() / 1000));
-  const sig = webhook.signAttendancePayload(SECRET, ts, body);
+  const EVT = "evt-1";
+  const sig = webhook.signAttendancePayload(SECRET, ts, EVT, body);
 
   it("accepts a valid signature inside the window", () => {
-    expect(webhook.verifyAttendanceSignature({ secret: SECRET, timestamp: ts, signature: sig, rawBody: body, nowMs: NOW.getTime() })).toBe("OK");
+    expect(webhook.verifyAttendanceSignature({ secret: SECRET, timestamp: ts, eventId: EVT, signature: sig, rawBody: body, nowMs: NOW.getTime() })).toBe("OK");
+  });
+  it("signs the event id: a captured body replayed under a fresh event id fails", () => {
+    expect(sig).toBe("sha256=" + crypto.createHmac("sha256", SECRET).update(`${ts}.${EVT}.${body}`).digest("hex"));
+    expect(webhook.verifyAttendanceSignature({ secret: SECRET, timestamp: ts, eventId: "evt-2", signature: sig, rawBody: body, nowMs: NOW.getTime() })).toBe("BAD_SIGNATURE");
   });
   it("refuses a bad signature, a tampered body, and a wrong secret", () => {
-    const base = { timestamp: ts, rawBody: body, nowMs: NOW.getTime() };
+    const base = { timestamp: ts, eventId: EVT, rawBody: body, nowMs: NOW.getTime() };
     expect(webhook.verifyAttendanceSignature({ ...base, secret: SECRET, signature: sig.replace(/.$/, (c) => (c === "0" ? "1" : "0")) })).toBe("BAD_SIGNATURE");
     expect(webhook.verifyAttendanceSignature({ ...base, secret: SECRET, signature: sig, rawBody: body.replace("E100", "E101") })).toBe("BAD_SIGNATURE");
     expect(webhook.verifyAttendanceSignature({ ...base, secret: "other", signature: sig })).toBe("BAD_SIGNATURE");
   });
   it("refuses a stale or future timestamp and missing headers", () => {
-    expect(webhook.verifyAttendanceSignature({ secret: SECRET, timestamp: ts, signature: sig, rawBody: body, nowMs: NOW.getTime() + 301_000 })).toBe("STALE");
-    expect(webhook.verifyAttendanceSignature({ secret: SECRET, timestamp: ts, signature: sig, rawBody: body, nowMs: NOW.getTime() - 301_000 })).toBe("STALE");
-    expect(webhook.verifyAttendanceSignature({ secret: SECRET, timestamp: undefined, signature: sig, rawBody: body })).toBe("MISSING");
+    expect(webhook.verifyAttendanceSignature({ secret: SECRET, timestamp: ts, eventId: EVT, signature: sig, rawBody: body, nowMs: NOW.getTime() + 301_000 })).toBe("STALE");
+    expect(webhook.verifyAttendanceSignature({ secret: SECRET, timestamp: ts, eventId: EVT, signature: sig, rawBody: body, nowMs: NOW.getTime() - 301_000 })).toBe("STALE");
+    expect(webhook.verifyAttendanceSignature({ secret: SECRET, timestamp: undefined, eventId: EVT, signature: sig, rawBody: body })).toBe("MISSING");
+    expect(webhook.verifyAttendanceSignature({ secret: SECRET, timestamp: ts, eventId: undefined, signature: sig, rawBody: body })).toBe("MISSING");
   });
 });
 
@@ -301,15 +307,16 @@ describe("POST /integrations/attendance/:sourceId", () => {
     a.use(errorHandler);
     return a;
   }
-  function send(sourceId: string, payload: unknown, opts: { secret?: string; ts?: number; eventId?: string } = {}) {
+  function send(sourceId: string, payload: unknown, opts: { secret?: string; ts?: number; eventId?: string; sentEventId?: string } = {}) {
     const raw = JSON.stringify(payload);
     const ts = String(opts.ts ?? Math.floor(Date.now() / 1000));
+    const eventId = opts.eventId ?? crypto.randomUUID();
     return request(app())
       .post(`/hook/${sourceId}`)
       .set("content-type", "application/json")
       .set(webhook.TIMESTAMP_HEADER, ts)
-      .set(webhook.SIGNATURE_HEADER, webhook.signAttendancePayload(opts.secret ?? SECRET, ts, raw))
-      .set(webhook.EVENT_ID_HEADER, opts.eventId ?? crypto.randomUUID())
+      .set(webhook.SIGNATURE_HEADER, webhook.signAttendancePayload(opts.secret ?? SECRET, ts, eventId, raw))
+      .set(webhook.EVENT_ID_HEADER, opts.sentEventId ?? eventId)
       .send(raw);
   }
 
@@ -323,6 +330,19 @@ describe("POST /integrations/attendance/:sourceId", () => {
   it("401s a bad signature and a stale timestamp", async () => {
     expect((await send(DOOR, { identifier: "E100", punchInAt: new Date().toISOString() }, { secret: "wrong" })).status).toBe(401);
     expect((await send(DOOR, { identifier: "E100", punchInAt: new Date().toISOString() }, { ts: Math.floor(Date.now() / 1000) - 600 })).status).toBe(401);
+    expect(db.records).toHaveLength(0);
+  });
+
+  it("keeps a sender's coordinates out of the stored raw payload", async () => {
+    const res = await send(DOOR, { identifier: "E100", punchInAt: new Date(Date.now() - 60_000).toISOString(), location: { lat: 12.97, lng: 77.59 } });
+    expect(res.status).toBe(202);
+    expect(JSON.stringify(db.events.at(-1)?.rawPayload)).not.toMatch(/12\.97|77\.59|location/);
+  });
+
+  it("401s a captured delivery replayed with a fresh event id", async () => {
+    const payload = { identifier: "E100", punchInAt: new Date(Date.now() - 60_000).toISOString() };
+    const res = await send(DOOR, payload, { eventId: "captured-1", sentEventId: "fresh-2" });
+    expect(res.status).toBe(401);
     expect(db.records).toHaveLength(0);
   });
 

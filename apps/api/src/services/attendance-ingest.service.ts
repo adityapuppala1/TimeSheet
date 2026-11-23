@@ -25,6 +25,7 @@
 import crypto from "node:crypto";
 import { Prisma, type AttendanceEventStatus, type AttendanceMatchField, type AttendanceSourceKind } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
+import { redactCoordinates } from "../utils/redact-coordinates.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { serverTimezone } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
@@ -372,7 +373,9 @@ export async function ingestPunch(input: IngestInput): Promise<IngestResult> {
   if (!input.gateChecked) await assertIngestAllowed(input.kind);
   const now = input.now ?? new Date();
   const externalRef = input.externalRef?.trim().slice(0, 191) || null;
-  const raw = capRawPayload(input.rawPayload);
+  // The record keeps coordinates in its own columns (lat/lng, under the privacy settings) and
+  // `input` keeps them for an admin replay; a second copy in the raw payload serves nobody.
+  const raw = capRawPayload(input.kind === "WEB" ? input.rawPayload : redactCoordinates(input.rawPayload));
   const normalized = normalizeInput(input, externalRef);
   const base = {
     sourceId: input.sourceId ?? null,

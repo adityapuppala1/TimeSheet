@@ -5,11 +5,13 @@
  * THE SCHEME (documented in docs/API.md, deliberately the Stripe/Slack shape every integrator knows):
  *   X-TimeSphere-Timestamp: <unix seconds>
  *   X-TimeSphere-Event-Id:  <the sender's unique id for this delivery>
- *   X-TimeSphere-Signature: sha256=<hex HMAC-SHA256(secret, `${timestamp}.${rawBody}`)>
+ *   X-TimeSphere-Signature: sha256=<hex HMAC-SHA256(secret, `${timestamp}.${eventId}.${rawBody}`)>
  *
  * WHY EACH PART:
  * - The timestamp is INSIDE the signed bytes, so it cannot be refreshed by someone replaying a
  *   captured delivery, and anything older than REPLAY_WINDOW_SECONDS is refused outright.
+ * - The event id is signed too: otherwise a captured delivery could be replayed inside the window
+ *   under a fresh id, which skips the replay memory below.
  * - Inside the window, the event id is remembered (services/webhook-replay.ts) — here the secret
  *   never travels with the request, which is exactly the case that module calls a real boundary.
  *   The ingest's (source, externalRef) dedupe is the durable second layer that survives restarts.
@@ -40,8 +42,8 @@ export const SIGNATURE_HEADER = "x-timesphere-signature";
 export const TIMESTAMP_HEADER = "x-timesphere-timestamp";
 export const EVENT_ID_HEADER = "x-timesphere-event-id";
 
-export function signAttendancePayload(secret: string, timestamp: string, rawBody: string): string {
-  const digest = crypto.createHmac("sha256", secret).update(timestamp + "." + rawBody).digest("hex");
+export function signAttendancePayload(secret: string, timestamp: string, eventId: string, rawBody: string): string {
+  const digest = crypto.createHmac("sha256", secret).update(`${timestamp}.${eventId}.${rawBody}`).digest("hex");
   return "sha256=" + digest;
 }
 
@@ -51,16 +53,17 @@ export type SignatureVerdict = "OK" | "MISSING" | "STALE" | "BAD_SIGNATURE";
 export function verifyAttendanceSignature(params: {
   secret: string;
   timestamp: string | undefined;
+  eventId: string | undefined;
   signature: string | undefined;
   rawBody: string;
   nowMs?: number;
 }): SignatureVerdict {
-  const { secret, timestamp, signature, rawBody } = params;
-  if (!timestamp || !signature) return "MISSING";
+  const { secret, timestamp, eventId, signature, rawBody } = params;
+  if (!timestamp || !signature || !eventId) return "MISSING";
   if (!/^\d{9,11}$/.test(timestamp)) return "STALE";
   const skew = Math.abs((params.nowMs ?? Date.now()) / 1000 - Number(timestamp));
   if (skew > REPLAY_WINDOW_SECONDS) return "STALE";
-  const expected = signAttendancePayload(secret, timestamp, rawBody);
+  const expected = signAttendancePayload(secret, timestamp, eventId, rawBody);
   return constantTimeEqual(expected, signature.trim()) ? "OK" : "BAD_SIGNATURE";
 }
 
@@ -166,9 +169,13 @@ export async function handleAttendanceWebhook(params: {
     // broken source looks like no source.
     throw new AppError(404, NOT_FOUND);
   }
+  // The event id is part of the signed bytes, so it must be present before verifying.
+  const eventId = header(EVENT_ID_HEADER)?.trim();
+  if (!eventId || eventId.length > 120) throw new AppError(400, "Send a unique X-TimeSphere-Event-Id (max 120 characters) with every delivery.");
   const verdict = verifyAttendanceSignature({
     secret,
     timestamp: header(TIMESTAMP_HEADER),
+    eventId,
     signature: header(SIGNATURE_HEADER),
     rawBody: params.rawBody,
     nowMs: params.nowMs
@@ -177,8 +184,6 @@ export async function handleAttendanceWebhook(params: {
   if (verdict === "STALE") throw new AppError(401, "Timestamp outside the 5-minute window. Check the sender's clock.");
   if (verdict === "BAD_SIGNATURE") throw new AppError(401, "Signature mismatch.");
 
-  const eventId = header(EVENT_ID_HEADER)?.trim();
-  if (!eventId || eventId.length > 120) throw new AppError(400, "Send a unique X-TimeSphere-Event-Id (max 120 characters) with every delivery.");
   // Checked only AFTER the signature: an unauthenticated caller must not be able to burn ids.
   if (isReplayedDelivery(`${requireTenantContext().orgId}:attendance:${source.id}`, eventId)) {
     return { status: 200, body: { duplicate: true, results: [] } };

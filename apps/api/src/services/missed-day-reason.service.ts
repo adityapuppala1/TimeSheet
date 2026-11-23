@@ -126,7 +126,15 @@ export async function missedDayReasonState(
     hasReason: Boolean(reason),
     enabled: true
   });
-  return { required, options: required ? await listEnabledMissedReasonOptions() : [] };
+  if (!required) return { required: false, options: [] };
+  const options = await listEnabledMissedReasonOptions();
+  // Fail open: with every option disabled nobody could answer the prompt, so the rule would block
+  // all backfill. The settings API refuses to get here; this covers data that slipped past it.
+  if (options.length === 0) {
+    console.warn("[missed-day-reason] missedDayReasonEnabled is on but no reason option is enabled; not requiring a reason");
+    return { required: false, options: [] };
+  }
+  return { required: true, options };
 }
 
 /**

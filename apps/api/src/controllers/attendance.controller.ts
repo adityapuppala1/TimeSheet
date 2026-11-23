@@ -11,6 +11,7 @@
  */
 import { Router } from "express";
 import { z } from "zod";
+import { aiRateLimit } from "../middleware/ai-rate-limit.js";
 import { requireAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { assertAttendanceOn, getMyToday, punchIn } from "../services/attendance-punch.service.js";
@@ -158,7 +159,8 @@ attendanceRouter.get("/analytics/org", requireAuth, async (req, res) => {
   res.json(await getOrgAnalytics({ id: req.user!.id, role: req.user!.role }, await analyticsRange(req.query, req.user!.id)));
 });
 
-attendanceRouter.get("/analytics/:audience/insights", requireAuth, async (req, res) => {
+// aiRateLimit (per user, shared with the other AI routes) — a cache miss here is a model call.
+attendanceRouter.get("/analytics/:audience/insights", requireAuth, aiRateLimit, async (req, res) => {
   await assertAttendanceOn();
   const audience = z.enum(["me", "team", "org"]).parse(req.params.audience) as AnalyticsAudience;
   res.json(await getInsights({ id: req.user!.id, role: req.user!.role }, audience, await analyticsRange(req.query, req.user!.id)));

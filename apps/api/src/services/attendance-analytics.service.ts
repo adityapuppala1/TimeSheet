@@ -784,6 +784,17 @@ function groupForAi(g: GroupSummary) {
   };
 }
 
+/** Counts across a team's people — how many, never who. Only called at or above minGroupSize. */
+function teamDistribution(people: TeamAnalytics["people"]) {
+  const band = (lo: number, hi: number) => people.filter((p) => p.presenceRate !== null && p.presenceRate >= lo && p.presenceRate < hi).length;
+  return {
+    people: people.length,
+    driftingPeople: people.filter((p) => p.drifting).length,
+    presenceRateBands: { below50: band(0, 0.5), from50to80: band(0.5, 0.8), from80: band(0.8, Infinity) },
+    peopleWithAbsences: people.filter((p) => p.absentDays > 0).length
+  };
+}
+
 /**
  * The ONLY thing that reaches the model. Copies named numeric/enum fields; never spreads an input
  * object, so a field added to the analytics later cannot leak by default. People and teams become
@@ -812,16 +823,13 @@ export function buildAiPayload(data: AnyAnalytics): Record<string, unknown> {
     };
   }
   if (data.audience === "team") {
+    // Never a row per person: a positional label on a team of four is still a person. Only the
+    // pooled group goes out, plus counts across people when there are enough of them to pool.
     return {
       audience: "team",
       range,
       group: groupForAi(data.group),
-      people: data.people.map((p, i) => ({
-        label: `Person ${i + 1}`,
-        presenceRate: p.presenceRate,
-        driftMinutesPerWeek: p.driftMinutesPerWeek,
-        absentDays: p.absentDays
-      })),
+      ...(data.people.length >= data.minGroupSize ? { distribution: teamDistribution(data.people) } : {}),
       upcomingHolidayDates
     };
   }
@@ -855,14 +863,39 @@ const FREQUENCY_MS = { DAILY: DAY_MS, WEEKLY: 7 * DAY_MS } as const;
 
 export type AiStatus = "off" | "fresh" | "cached" | "unavailable";
 
-export function insightCacheKey(audience: AnalyticsAudience, scope: string, range: AnalyticsRange): string {
-  return `${audience}:${scope}:${range.from}:${range.to}`;
+/**
+ * The frequency period an AI answer belongs to: the UTC day for DAILY, the ISO week for WEEKLY.
+ * The cache is keyed on this, NOT on the requested range — keying on an arbitrary from/to let
+ * every new range buy another model call, so "once a week" was really "once per URL".
+ */
+export function aiInsightPeriod(frequency: "DAILY" | "WEEKLY", now: Date): string {
+  const day = now.toISOString().slice(0, 10);
+  if (frequency === "DAILY") return day;
+  // ISO 8601: the week belongs to the year of its Thursday.
+  const d = new Date(`${day}T00:00:00Z`);
+  const weekday = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - weekday);
+  const yearStart = Date.UTC(d.getUTCFullYear(), 0, 1);
+  const week = Math.ceil(((d.getTime() - yearStart) / DAY_MS + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+export function insightCacheKey(audience: AnalyticsAudience, scope: string, period: string): string {
+  return `${audience}:${scope}:${period}`;
+}
+
+/**
+ * AI facts are always computed over this fixed window (the last DEFAULT_RANGE_DAYS days), whatever
+ * range the viewer asked for, so one cached answer per period is honest for every range.
+ */
+export function aiCanonicalRange(now: Date): AnalyticsRange {
+  return defaultRange(now.toISOString().slice(0, 10));
 }
 
 async function aiInsightsFor(
   audience: AnalyticsAudience,
   scope: string,
-  data: AnyAnalytics,
+  loadCanonical: () => Promise<AnyAnalytics>,
   actorId: string,
   now: Date
 ): Promise<{ status: AiStatus; insights: Insight[] }> {
@@ -872,15 +905,18 @@ async function aiInsightsFor(
 
   const toInsights = (rows: Array<{ title: string; detail: string }>): Insight[] =>
     rows.map((r, i) => ({ id: `ai:${i}`, title: r.title, detail: r.detail, severity: "info", source: "ai" }));
-  const cacheKey = insightCacheKey(audience, scope, data.range);
+  const frequency = settings.aiInsightsFrequency ?? "WEEKLY";
+  const cacheKey = insightCacheKey(audience, scope, aiInsightPeriod(frequency, now));
   try {
     const cached = await prisma.attendanceInsightCache.findUnique({ where: { cacheKey } });
     if (cached && cached.expiresAt > now && Array.isArray(cached.insights)) {
       return { status: "cached", insights: toInsights(cached.insights as Array<{ title: string; detail: string }>) };
     }
     const { generateAttendanceInsights } = await import("./ai.service.js");
+    // Only on a miss: the canonical-window analytics cost a second read of the same tables.
+    const data = await loadCanonical();
     const rows = await generateAttendanceInsights({ audience: AI_AUDIENCE[audience], facts: JSON.stringify(buildAiPayload(data)), userId: actorId });
-    const expiresAt = new Date(now.getTime() + FREQUENCY_MS[settings.aiInsightsFrequency ?? "WEEKLY"]);
+    const expiresAt = new Date(now.getTime() + FREQUENCY_MS[frequency]);
     const json = rows.map((r) => ({ title: r.title, detail: r.detail }));
     await prisma.attendanceInsightCache.upsert({
       where: { cacheKey },
@@ -897,21 +933,19 @@ async function aiInsightsFor(
 }
 
 export async function getInsights(actor: { id: string; role: string }, audience: AnalyticsAudience, range: AnalyticsRange, now: Date = new Date()) {
-  let data: AnyAnalytics;
-  let scope: string;
-  if (audience === "me") {
-    data = await getMyAnalytics(actor.id, range, now);
-    scope = actor.id;
-  } else if (audience === "team") {
-    data = await getTeamAnalytics(actor, range, now);
-    // Admins all see the same team (everyone), so they share one cache entry.
-    scope = ADMIN_ROLES.has(actor.role) ? "all" : actor.id;
-  } else {
-    data = await getOrgAnalytics(actor, range, now);
-    scope = "org";
-  }
+  const load = (r: AnalyticsRange): Promise<AnyAnalytics> => {
+    if (audience === "me") return getMyAnalytics(actor.id, r, now);
+    if (audience === "team") return getTeamAnalytics(actor, r, now);
+    return getOrgAnalytics(actor, r, now);
+  };
+  // Admins all see the same team (everyone), so they share one cache entry.
+  let scope = "org";
+  if (audience === "me") scope = actor.id;
+  else if (audience === "team") scope = ADMIN_ROLES.has(actor.role) ? "all" : actor.id;
+  // Rule-based insights follow the requested range; the AI part uses the canonical window.
+  const data = await load(range);
   const rules = ruleInsights(data);
-  const ai = await aiInsightsFor(audience, scope, data, actor.id, now);
+  const ai = await aiInsightsFor(audience, scope, () => load(aiCanonicalRange(now)), actor.id, now);
   return { audience, range: data.range, aiStatus: ai.status, insights: [...ai.insights, ...rules] };
 }
 

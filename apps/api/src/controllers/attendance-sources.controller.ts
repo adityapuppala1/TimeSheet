@@ -31,6 +31,7 @@ import {
   TIMESTAMP_HEADER
 } from "../services/attendance-webhook.service.js";
 import { encryptSecret, decryptSecret } from "../utils/encryption.js";
+import { redactCoordinates } from "../utils/redact-coordinates.js";
 
 export const attendanceSourcesRouter = Router();
 attendanceSourcesRouter.use(requireAuth, requireSuperAdmin);
@@ -157,14 +158,15 @@ attendanceSourcesRouter.post("/sources/:id/test", validate(z.object({ params: id
   if (!source.enabled) throw new AppError(422, "Enable the source first — a disabled source answers 404 to everyone, tests included.");
   await assertIngestAllowed("WEBHOOK");
   const timestamp = String(Math.floor(Date.now() / 1000));
+  const eventId = `test-${crypto.randomUUID()}`;
   const rawBody = JSON.stringify({ test: true, identifier: "test", punchInAt: new Date().toISOString(), externalRef: `test-${crypto.randomUUID()}` });
   const result = await handleAttendanceWebhook({
     sourceId: source.id,
     rawBody,
     headers: {
       [TIMESTAMP_HEADER]: timestamp,
-      [SIGNATURE_HEADER]: signAttendancePayload(decryptSecret(source.secretEncrypted), timestamp, rawBody),
-      [EVENT_ID_HEADER]: `test-${crypto.randomUUID()}`
+      [SIGNATURE_HEADER]: signAttendancePayload(decryptSecret(source.secretEncrypted), timestamp, eventId, rawBody),
+      [EVENT_ID_HEADER]: eventId
     }
   });
   res.json(result.body);
@@ -210,6 +212,8 @@ attendanceSourcesRouter.get("/events", async (req, res) => {
   res.json({
     events: page.map((r) => ({
       ...r,
+      // Coordinates stay on the AttendanceRecord (under the privacy settings), never in the log view.
+      rawPayload: redactCoordinates(r.rawPayload),
       workDate: r.workDate ? r.workDate.toISOString().slice(0, 10) : null,
       person: r.userId ? (byId.get(r.userId) ?? null) : null
     })),

@@ -25,6 +25,10 @@ const upsert = vi.fn().mockResolvedValue(settingsRow);
 const holidayCreate = vi.fn();
 const calendarFindUnique = vi.fn();
 const auditFn = vi.fn().mockResolvedValue(undefined);
+let reasonSettingOn = false;
+let reasonOptions: { id: string; enabled: boolean }[] = [];
+const optionUpdate = vi.fn(async ({ where, data }: { where: { id: string }; data: object }) => ({ id: where.id, ...data }));
+const optionDeleteMany = vi.fn(async () => ({ count: 1 }));
 
 vi.mock("../../src/middleware/auth.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/middleware/auth.js")>("../../src/middleware/auth.js");
@@ -39,10 +43,18 @@ vi.mock("../../src/middleware/auth.js", async () => {
 
 vi.mock("../../src/config/prisma.js", () => ({
   prisma: {
-    globalAttendanceSettings: { upsert: (...a: unknown[]) => upsert(...a), findUnique: vi.fn() },
+    globalAttendanceSettings: { upsert: (...a: unknown[]) => upsert(...a), findUnique: async () => ({ id: "global", missedDayReasonEnabled: reasonSettingOn }) },
     holidayCalendar: { findUnique: (...a: unknown[]) => calendarFindUnique(...a), findMany: vi.fn().mockResolvedValue([]) },
     holiday: { create: (...a: unknown[]) => holidayCreate(...a) },
-    missedReasonOption: { findMany: vi.fn().mockResolvedValue([]), create: vi.fn() }
+    missedReasonOption: {
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+      findUnique: async ({ where }: { where: { id: string } }) => reasonOptions.find((o) => o.id === where.id) ?? null,
+      count: async ({ where }: { where: { enabled?: boolean; id?: { not: string } } }) =>
+        reasonOptions.filter((o) => (where.enabled === undefined || o.enabled === where.enabled) && o.id !== where.id?.not).length,
+      update: (...a: unknown[]) => optionUpdate(...a),
+      deleteMany: (...a: unknown[]) => optionDeleteMany(...a)
+    }
   }
 }));
 
@@ -75,6 +87,10 @@ beforeEach(() => {
   holidayCreate.mockReset();
   calendarFindUnique.mockReset();
   auditFn.mockClear();
+  reasonSettingOn = false;
+  reasonOptions = [];
+  optionUpdate.mockClear();
+  optionDeleteMany.mockClear();
 });
 
 describe("attendance settings validation", () => {
@@ -160,5 +176,35 @@ describe("holidays", () => {
   it("404s a holiday on a calendar that does not exist", async () => {
     calendarFindUnique.mockResolvedValue(null);
     await request(app()).post("/a/calendars/nope/holidays").send({ date: "2027-01-26", name: "x" }).expect(404);
+  });
+});
+
+describe("missed-day reason options can never all be off while the rule is on", () => {
+  it("409s disabling or deleting the last enabled option while the rule is on", async () => {
+    reasonSettingOn = true;
+    reasonOptions = [{ id: "r1", enabled: true }, { id: "r2", enabled: false }];
+    const put = await request(app()).put("/a/missed-reasons/r1").send({ enabled: false }).expect(409);
+    expect(put.body.message).toMatch(/last enabled reason/i);
+    await request(app()).delete("/a/missed-reasons/r1").expect(409);
+    expect(optionUpdate).not.toHaveBeenCalled();
+    expect(optionDeleteMany).not.toHaveBeenCalled();
+  });
+
+  it("allows it when another option stays enabled, or when the rule is off", async () => {
+    reasonSettingOn = true;
+    reasonOptions = [{ id: "r1", enabled: true }, { id: "r2", enabled: true }];
+    await request(app()).put("/a/missed-reasons/r1").send({ enabled: false }).expect(200);
+    reasonOptions = [{ id: "r1", enabled: true }];
+    reasonSettingOn = false;
+    await request(app()).delete("/a/missed-reasons/r1").expect(204);
+  });
+
+  it("409s turning the rule on with zero enabled options", async () => {
+    reasonOptions = [{ id: "r1", enabled: false }];
+    const res = await request(app()).put("/a/settings").send({ missedDayReasonEnabled: true }).expect(409);
+    expect(res.body.message).toMatch(/enable at least one/i);
+    expect(upsert).not.toHaveBeenCalled();
+    reasonOptions = [{ id: "r1", enabled: true }];
+    await request(app()).put("/a/settings").send({ missedDayReasonEnabled: true }).expect(200);
   });
 });

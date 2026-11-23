@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { runInTenant } from "../helpers/tenant-context.js";
 
-type Person = { id: string; name: string; email: string; timezone: string | null; holidayCalendarId: string | null; manager: { id: string; name: string; isAgent: boolean } | null };
+type Person = { id: string; name: string; email: string; timezone: string | null; holidayCalendarId: string | null; manager: { id: string; name: string; isAgent: boolean } | null; role?: string };
 
 const MEERA = { id: "meera", name: "Meera", isAgent: false };
 const PEOPLE: Person[] = [
@@ -25,26 +25,55 @@ const h = vi.hoisted(() => ({
   holidays: [] as string[],
   loggedTimesheet: false,
   attendance: {} as Record<string, unknown>,
-  planAllows: true
+  planAllows: true,
+  queries: 0,
+  userWheres: [] as any[],
+  extraPeople: [] as Person[]
 }));
 
-vi.mock("../../src/config/prisma.js", () => ({
-  prisma: {
-    user: { findMany: vi.fn(async () => PEOPLE) },
-    timesheet: { count: vi.fn(async () => (h.loggedTimesheet ? 1 : 0)) },
-    notification: {
-      count: vi.fn(async ({ where }: any) => h.sent.filter((n) => n.userId === where.userId && n.category === where.category).length)
-    },
-    attendanceRecord: {
-      findUnique: vi.fn(async ({ where }: any) => {
-        const key = `${where.userId_workDate.userId}|${where.userId_workDate.workDate.toISOString().slice(0, 10)}`;
-        return h.punched.has(key) ? { id: "rec", source: h.punched.get(key) } : null;
-      })
-    },
-    holidayCalendar: { findFirst: vi.fn(async () => ({ id: "cal" })) },
-    holiday: { findFirst: vi.fn(async ({ where }: any) => (h.holidays.includes(where.date.toISOString().slice(0, 10)) ? { name: "Holiday" } : null)) }
-  }
-}));
+vi.mock("../../src/config/prisma.js", () => {
+  const counted = <T extends (...a: any[]) => any>(fn: T) =>
+    vi.fn(async (...a: Parameters<T>) => {
+      h.queries += 1;
+      return fn(...a);
+    });
+  return {
+    prisma: {
+      user: {
+        findMany: counted(({ where }: any = {}) => {
+          h.userWheres.push(where);
+          const roles: string[] | undefined = where?.role?.name?.in;
+          return [...PEOPLE, ...h.extraPeople].filter((p) => !roles || roles.includes(p.role ?? "EMPLOYEE"));
+        })
+      },
+      timesheet: { count: vi.fn(async () => (h.loggedTimesheet ? 1 : 0)) },
+      notification: {
+        count: vi.fn(async ({ where }: any) => h.sent.filter((n) => n.userId === where.userId && n.category === where.category).length),
+        // Rows from this run's earlier ticks; "createdAt" is the start of the window asked about.
+        findMany: counted(({ where }: any) =>
+          h.sent.filter((n) => where.userId.in.includes(n.userId) && n.category === where.category).map((n) => ({ userId: n.userId, createdAt: n.createdAt ?? new Date(8.64e15) }))
+        )
+      },
+      attendanceRecord: {
+        findMany: counted(({ where }: any) => {
+          const days = where.workDate.in.map((d: Date) => d.toISOString().slice(0, 10));
+          return [...h.punched.keys()]
+            .map((k) => k.split("|"))
+            .filter(([u, d]) => where.userId.in.includes(u) && days.includes(d))
+            .map(([u, d]) => ({ userId: u, workDate: new Date(`${d}T00:00:00Z`) }));
+        })
+      },
+      holidayCalendar: { findFirst: counted(() => ({ id: "cal" })) },
+      holiday: {
+        findMany: counted(({ where }: any) =>
+          h.holidays
+            .filter((d) => d >= where.date.gte.toISOString().slice(0, 10) && d <= where.date.lte.toISOString().slice(0, 10))
+            .map((d) => ({ calendarId: "cal", date: new Date(`${d}T00:00:00Z`), name: "Holiday" }))
+        )
+      }
+    }
+  };
+});
 vi.mock("../../src/services/notify.service.js", () => ({
   getGlobalNotificationSettings: vi.fn(async () => ({ dailyReminderHour: 17, escalationReminderHour: 9, remindOnWeekdaysOnly: true })),
   dispatchNotification: vi.fn(async (n: any) => {
@@ -71,6 +100,9 @@ beforeEach(() => {
   h.holidays = [];
   h.loggedTimesheet = false;
   h.planAllows = true;
+  h.queries = 0;
+  h.userWheres = [];
+  h.extraPeople = [];
   h.attendance = { attendanceEnabled: true, punchInReminderEnabled: true, punchInMode: "OPTIONAL", punchInReminderHour: 11 };
 });
 
@@ -217,5 +249,43 @@ describe("the existing timesheet reminders are byte-for-byte what they were", ()
     h.loggedTimesheet = true;
     await inTenant(() => runPunchInReminders(IST_11));
     expect(punchRecipients()).toEqual(["asha"]);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Who: every role, and a constant number of queries
+ * ------------------------------------------------------------------ */
+
+const ROLES = ["EMPLOYEE", "TEAM_LEAD", "MANAGER", "ADMIN", "SUPER_ADMIN"];
+const personIn = (id: string, role: string, timezone = "Asia/Kolkata"): Person => ({ id, name: id, email: `${id}@acme.test`, timezone, holidayCalendarId: null, manager: null, role });
+
+describe("the punch-in reminder reaches every role", () => {
+  it("each active role gets it — the recipient query does not filter by role", async () => {
+    h.extraPeople = ROLES.map((r) => personIn(`p-${r}`, r));
+    await inTenant(() => runPunchInReminders(IST_11));
+    expect(punchRecipients()).toEqual(["asha", ...ROLES.map((r) => `p-${r}`)]);
+    expect(h.userWheres[0]).toMatchObject({ isAgent: false, deletedAt: null, status: "ACTIVE" });
+    expect(h.userWheres[0].role).toBeUndefined();
+  });
+
+  it("the 17:00 timesheet population is still EMPLOYEE and TEAM_LEAD only", async () => {
+    h.extraPeople = ROLES.map((r) => personIn(`p-${r}`, r));
+    await inTenant(() => runDailyReminders(new Date("2026-11-18T11:30:00.000Z")));
+    expect(h.userWheres[0].role).toEqual({ name: { in: ["EMPLOYEE", "TEAM_LEAD"] } });
+    expect(h.sent.map((n) => n.userId)).toEqual(["asha", "p-EMPLOYEE", "p-TEAM_LEAD"]);
+  });
+});
+
+describe("the punch-in reminder has no N+1", () => {
+  it("makes the same number of queries for 3 people as for 60", async () => {
+    h.extraPeople = [personIn("x0", "EMPLOYEE")];
+    await inTenant(() => runPunchInReminders(IST_11));
+    const few = h.queries;
+    h.sent.length = 0;
+    h.queries = 0;
+    h.extraPeople = Array.from({ length: 58 }, (_, i) => personIn(`x${i}`, ROLES[i % ROLES.length], i % 2 ? "Asia/Kolkata" : "Asia/Calcutta"));
+    await inTenant(() => runPunchInReminders(IST_11));
+    expect(punchRecipients()).toHaveLength(59);
+    expect(h.queries).toBe(few);
   });
 });

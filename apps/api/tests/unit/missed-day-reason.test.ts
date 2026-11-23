@@ -143,6 +143,7 @@ type State = {
 let state: State;
 let client: PrismaClient;
 let savedReasons: any[];
+let enabledOptions: typeof OPTIONS;
 
 function fakeClient(): PrismaClient {
   const c: any = {
@@ -154,7 +155,7 @@ function fakeClient(): PrismaClient {
     holiday: {
       findFirst: vi.fn(async ({ where }: any) => (state.holidays.includes(where.date.toISOString().slice(0, 10)) ? { name: "Founders day" } : null))
     },
-    missedReasonOption: { findMany: vi.fn(async () => OPTIONS) },
+    missedReasonOption: { findMany: vi.fn(async () => enabledOptions) },
     missedDayReason: {
       findUnique: vi.fn(async () => (state.reasonExists ? { id: "r-1" } : null)),
       upsert: vi.fn(async (args: any) => {
@@ -232,6 +233,7 @@ beforeEach(() => {
   planAllows = true;
   state = { settings: { attendanceEnabled: true, missedDayReasonEnabled: true }, entriesOnDay: 0, reasonExists: false, holidays: [] };
   savedReasons = [];
+  enabledOptions = OPTIONS;
   client = fakeClient();
 });
 
@@ -348,5 +350,17 @@ describe("GET /api/attendance/missed-reasons", () => {
   it("refuses a malformed date", async () => {
     const res = await request(buildApp()).get("/api/attendance/missed-reasons/check?date=17-11-2026");
     expect(res.status).toBe(422);
+  });
+});
+
+describe("with no enabled reason options, the rule fails open", () => {
+  it("saves a backfill entry instead of demanding a reason nobody can give", async () => {
+    enabledOptions = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await request(buildApp()).post("/api/timesheets/draft").send(entry("2026-11-17"));
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(savedReasons).toEqual([]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

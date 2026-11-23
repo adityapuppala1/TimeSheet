@@ -25,6 +25,7 @@ import {
   PUNCH_IN_ESCAPE_HATCH,
   punchNotice,
   readDismissal,
+  isGateExempt,
   usePunchInGate,
   writeDismissal
 } from "../lib/punch-in-gate";
@@ -326,11 +327,12 @@ export function PunchInController() {
     onboardingBlocked,
     onboardingLoading,
     pathname: location.pathname,
-    dismissal: reopenRequested ? "none" : dismissal
+    dismissal: reopenRequested ? "none" : dismissal,
+    role: user?.role
   });
   // Keep the dialog up through its own Done step, even though the refreshed status now says "notice".
   const keepOpen = activePhase === "done" || activePhase === "submitting" || activePhase === "face";
-  const ownSurface = data?.punchInMode === "MANDATORY" ? "gate" : "dialog";
+  const ownSurface = data?.punchInMode === "MANDATORY" && !isGateExempt(user?.role) ? "gate" : "dialog";
   const surface = keepOpen && decision.surface === "notice" ? ownSurface : decision.surface;
 
   useEffect(() => {
@@ -430,6 +432,10 @@ function PunchInGateOverlay({ title, body }: Readonly<{ title: string; body: Rea
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">Your workspace asks everyone to punch in before starting work.</p>
         <div className="mt-4">{body}</div>
+        <p className="mt-3 text-xs text-muted-foreground">
+          Can&apos;t punch in because location or the camera isn&apos;t working on this device? Follow the steps above,
+          try another device, or ask your administrator — you can sign out below meanwhile.
+        </p>
         <div className="mt-4 flex items-center justify-between gap-2 border-t border-border pt-3 text-xs">
           <Link to={PUNCH_IN_ESCAPE_HATCH} className="text-primary underline-offset-2 hover:underline">
             Go to my profile
@@ -452,7 +458,8 @@ export function PunchInBanner() {
   const today = useMyToday();
   const { dismissal, setDismissal, requestReopen, reopenRequested } = usePunchInGate();
   const data = today.data;
-  if (!user || !data?.enabled || data.punchInMode !== "OPTIONAL" || data.record || !data.isWorkingDay) return null;
+  const optionalForViewer = data?.punchInMode === "OPTIONAL" || (data?.punchInMode === "MANDATORY" && isGateExempt(user?.role));
+  if (!user || !data?.enabled || !optionalForViewer || data.record || !data.isWorkingDay) return null;
   if (dismissal !== "dialog" || reopenRequested) return null;
 
   return (

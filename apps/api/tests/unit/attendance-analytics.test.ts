@@ -14,6 +14,7 @@ let actor = { id: "mgr", name: "Max", email: "max@x.io", role: "MANAGER", permis
 let settingsRow: Record<string, unknown> = {};
 let cacheRow: { cacheKey: string; insights: unknown; expiresAt: Date } | null = null;
 const cacheWrites: unknown[] = [];
+const cacheStore = new Map<string, { cacheKey: string; insights: unknown; expiresAt: Date }>();
 const aiCalls: Array<{ audience: string; facts: string }> = [];
 let aiImpl: () => Promise<Array<{ title: string; detail: string }>> = async () => [{ title: "AI says", detail: "something" }];
 
@@ -51,9 +52,10 @@ vi.mock("../../src/config/prisma.js", () => ({
     attendanceSource: { findMany: async () => [] },
     attendanceEvent: { groupBy: async () => [] },
     attendanceInsightCache: {
-      findUnique: async () => cacheRow,
-      upsert: async (args: unknown) => {
+      findUnique: async ({ where }: { where: { cacheKey: string } }) => cacheRow ?? cacheStore.get(where.cacheKey) ?? null,
+      upsert: async (args: { create: { cacheKey: string; insights: unknown; expiresAt: Date } }) => {
         cacheWrites.push(args);
+        cacheStore.set(args.create.cacheKey, args.create);
         return {};
       }
     }
@@ -120,6 +122,7 @@ beforeEach(() => {
   settingsRow = { attendanceEnabled: true, minGroupSize: 3, latenessEnabled: false, expectedStartMinute: 600, aiInsightsSelf: true, aiInsightsManager: true, aiInsightsOrg: true, aiInsightsFrequency: "WEEKLY" };
   cacheRow = null;
   cacheWrites.length = 0;
+  cacheStore.clear();
   aiCalls.length = 0;
   aiImpl = async () => [{ title: "AI says", detail: "something" }];
   people = [
@@ -302,6 +305,16 @@ function leaks(value: unknown, path = "$"): string[] {
   return [];
 }
 
+/** Paths of arrays whose items look like one person's figures. */
+function perPersonArrays(value: unknown, path = "$"): string[] {
+  if (Array.isArray(value)) {
+    const personal = value.some((v) => v && typeof v === "object" && ("presenceRate" in v || "driftMinutesPerWeek" in v || "absentDays" in v || /^Person /.test(String((v as { label?: unknown }).label ?? ""))));
+    return [...(personal ? [path] : []), ...value.flatMap((v, i) => perPersonArrays(v, `${path}[${i}]`))];
+  }
+  if (value && typeof value === "object") return Object.entries(value).flatMap(([k, v]) => perPersonArrays(v, `${path}.${k}`));
+  return [];
+}
+
 describe("buildAiPayload is an allowlist", () => {
   it("self: no coordinates, IPs, notes, emails, names or ids", async () => {
     actor = { ...actor, id: "r1", role: "EMPLOYEE" };
@@ -314,7 +327,25 @@ describe("buildAiPayload is an allowlist", () => {
     const payload = svc.buildAiPayload(data);
     expect(leaks(payload)).toEqual([]);
     expect(JSON.stringify(payload)).not.toContain("Ana");
-    expect((payload.people as Array<{ label: string }>).map((p) => p.label)).toEqual(["Person 1", "Person 2"]);
+    expect(perPersonArrays(payload)).toEqual([]);
+  });
+
+  it("team: a suppressed group (2 < 3) yields no individual figures and no distribution", async () => {
+    const data = await svc.getTeamAnalytics(actor, { from: "2026-11-16", to: "2026-11-20" }, new Date("2026-11-23T12:00:00Z"));
+    expect(data.group.suppressed).toBe(true);
+    const payload = svc.buildAiPayload(data);
+    expect(payload.group).toEqual({ people: 2, suppressed: true });
+    expect(payload).not.toHaveProperty("people");
+    expect(payload).not.toHaveProperty("distribution");
+    expect(JSON.stringify(payload)).not.toMatch(/presenceRate|driftMinutesPerWeek|absentDays|Person \d/);
+  });
+
+  it("team: at or above minGroupSize only counts go out, never a row per person", async () => {
+    people.push({ id: "r3", name: "Cy", email: "cy@x.io", managerId: "mgr", timezone: "UTC", holidayCalendarId: null, weeklyCapacityHours: 40 });
+    const data = await svc.getTeamAnalytics(actor, { from: "2026-11-16", to: "2026-11-20" }, new Date("2026-11-23T12:00:00Z"));
+    const payload = svc.buildAiPayload(data);
+    expect(perPersonArrays(payload)).toEqual([]);
+    expect(payload.distribution).toMatchObject({ people: 3, driftingPeople: expect.any(Number) });
   });
 
   it("org: no names, ids or source names", async () => {
@@ -326,6 +357,7 @@ describe("buildAiPayload is an allowlist", () => {
     const payload = svc.buildAiPayload(withSource);
     expect(leaks(payload)).toEqual([]);
     expect(JSON.stringify(payload)).not.toMatch(/Lobby|Max|Ana|Ben/);
+    expect(perPersonArrays(payload)).toEqual([]);
   });
 
   it("what reaches the model is exactly the payload", async () => {
@@ -394,7 +426,7 @@ describe("insights", () => {
   });
 
   it("reuses an unexpired cached answer without calling the model", async () => {
-    cacheRow = { cacheKey: "team:mgr:2026-11-16:2026-11-20", insights: [{ title: "Cached", detail: "from before" }], expiresAt: new Date(Date.now() + 3_600_000) };
+    cacheRow = { cacheKey: "team:mgr:2026-W48", insights: [{ title: "Cached", detail: "from before" }], expiresAt: new Date(Date.now() + 3_600_000) };
     const res = await request(app()).get("/att/analytics/team/insights?from=2026-11-16&to=2026-11-20");
     expect(res.body.aiStatus).toBe("cached");
     expect(res.body.insights[0]).toMatchObject({ source: "ai", title: "Cached" });
@@ -406,5 +438,34 @@ describe("insights", () => {
     const res = await request(app()).get("/att/analytics/team/insights?from=2026-11-16&to=2026-11-20");
     expect(res.body.aiStatus).toBe("off");
     expect(aiCalls).toHaveLength(0);
+  });
+});
+
+describe("AI insights cache is per period, not per range", () => {
+  it("two different ranges in the same period make one model call", async () => {
+    await request(app()).get("/att/analytics/team/insights?from=2026-11-16&to=2026-11-20").expect(200);
+    const second = await request(app()).get("/att/analytics/team/insights?from=2026-11-01&to=2026-11-20").expect(200);
+    expect(aiCalls).toHaveLength(1);
+    expect(second.body.aiStatus).toBe("cached");
+    // Rule insights still follow the requested range.
+    expect(second.body.range.from).toBe("2026-11-01");
+  });
+
+  it("keys on the ISO week for WEEKLY and the day for DAILY", () => {
+    const now = new Date("2026-11-25T10:00:00Z"); // Wednesday, ISO week 48
+    expect(svc.insightCacheKey("team", "mgr", svc.aiInsightPeriod("WEEKLY", now))).toBe("team:mgr:2026-W48");
+    expect(svc.insightCacheKey("team", "mgr", svc.aiInsightPeriod("DAILY", now))).toBe("team:mgr:2026-11-25");
+    expect(svc.aiInsightPeriod("WEEKLY", new Date("2027-01-01T00:00:00Z"))).toBe("2026-W53");
+  });
+
+  it("rate-limits the insights route per user", async () => {
+    actor = { ...actor, id: "rate-limited-mgr" };
+    people.forEach((p) => {
+      if (p.managerId === "mgr") p.managerId = "rate-limited-mgr";
+    });
+    const statuses: number[] = [];
+    for (let i = 0; i < 21; i++) statuses.push((await request(app()).get("/att/analytics/team/insights")).status);
+    expect(statuses.slice(0, 20).every((s) => s === 200)).toBe(true);
+    expect(statuses[20]).toBe(429);
   });
 });

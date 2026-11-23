@@ -32,14 +32,14 @@ const ARGS = {
   email: { templateKey: "reminder.punch_in", vars: { name: "Asha", date: "2026-11-18" }, fallback: { subject: "s", html: "h" } }
 };
 
-function setup(settings: Record<string, unknown>) {
+function setup(settings: Record<string, unknown>, role = "EMPLOYEE") {
   const client = createFakeTenantClient();
   vi.mocked(client.user.findUnique).mockResolvedValue({
     id: "asha",
     email: "asha@acme.test",
     status: "ACTIVE",
     deletedAt: null,
-    role: { name: "EMPLOYEE" },
+    role: { name: role },
     userRoles: []
   } as never);
   vi.mocked(client.globalNotificationSettings.upsert).mockResolvedValue({ id: "global", emailRoleMutes: null, ...settings } as never);
@@ -74,6 +74,27 @@ describe("the punch-in reminder's email gates", () => {
     await runInTenant(client, () => dispatchNotification(ARGS));
     await flush();
     expect(sendMail).not.toHaveBeenCalled();
+  });
+});
+
+const ROLES = ["EMPLOYEE", "TEAM_LEAD", "MANAGER", "ADMIN", "SUPER_ADMIN"] as const;
+
+describe("the punch-in reminder's per-role audience (Email channels matrix)", () => {
+  it.each(ROLES)("%s receives it by default", async (role) => {
+    const client = setup({ emailPunchInReminder: true }, role);
+    await runInTenant(client, () => dispatchNotification(ARGS));
+    await flush();
+    expect(sendMail).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(ROLES)("muting %s stops that role only", async (muted) => {
+    for (const role of ROLES) {
+      vi.mocked(sendMail).mockClear();
+      const client = setup({ emailPunchInReminder: true, emailRoleMutes: { emailPunchInReminder: [muted] } }, role);
+      await runInTenant(client, () => dispatchNotification(ARGS));
+      await flush();
+      expect(vi.mocked(sendMail).mock.calls.length, `${role} with ${muted} muted`).toBe(role === muted ? 0 : 1);
+    }
   });
 });
 

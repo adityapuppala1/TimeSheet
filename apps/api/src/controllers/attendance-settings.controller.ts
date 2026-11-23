@@ -67,6 +67,9 @@ attendanceSettingsRouter.put("/settings", validate(z.object({ body: attendanceSe
       throw new AppError(403, "Attendance AI insights are not included in this plan. Upgrade to Enterprise to use them.");
     }
   }
+  if (body.missedDayReasonEnabled === true && (await prisma.missedReasonOption.count({ where: { enabled: true } })) === 0) {
+    throw new AppError(409, "Enable at least one missed-day reason before turning on the missed-day reason rule.");
+  }
   const data = { ...body, locationConsentText: body.locationConsentText === "" ? null : body.locationConsentText };
 
   const updated = await prisma.globalAttendanceSettings.upsert({
@@ -249,6 +252,21 @@ attendanceSettingsRouter.post("/missed-reasons", validate(z.object({ body: reaso
   }
 });
 
+/**
+ * With the rule on, at least one option must stay enabled: otherwise nobody could answer the prompt
+ * (missedDayReasonState fails open in that case too, but the admin should be told, not surprised).
+ */
+async function assertNotLastEnabledReason(id: string): Promise<void> {
+  const settings = await prisma.globalAttendanceSettings.findUnique({ where: { id: "global" }, select: { missedDayReasonEnabled: true } });
+  if (!settings?.missedDayReasonEnabled) return;
+  const option = await prisma.missedReasonOption.findUnique({ where: { id }, select: { enabled: true } });
+  if (!option?.enabled) return;
+  const others = await prisma.missedReasonOption.count({ where: { enabled: true, id: { not: id } } });
+  if (others === 0) {
+    throw new AppError(409, "This is the last enabled reason and the missed-day reason rule is on. Enable another reason, or turn the rule off first.");
+  }
+}
+
 /** `code` is deliberately not editable: MissedDayReason rows store it, so renaming it would orphan
  *  history. Change the label instead, or disable the option and add a new one. */
 const reasonUpdateBody = reasonOptionBody.omit({ code: true }).partial().strict();
@@ -260,6 +278,7 @@ attendanceSettingsRouter.put(
     await assertAttendanceEntitled();
     const id = String(req.params.id);
     const body = reasonUpdateBody.parse(req.body);
+    if (body.enabled === false) await assertNotLastEnabledReason(id);
     try {
       const updated = await prisma.missedReasonOption.update({ where: { id }, data: body });
       await audit(req.user!.id, "attendance.reason_updated", "MissedReasonOption", id, body);
@@ -274,6 +293,7 @@ attendanceSettingsRouter.put(
 attendanceSettingsRouter.delete("/missed-reasons/:id", validate(z.object({ params: idParams })), async (req, res) => {
   await assertAttendanceEntitled();
   const id = String(req.params.id);
+  await assertNotLastEnabledReason(id);
   const result = await prisma.missedReasonOption.deleteMany({ where: { id } });
   if (result.count === 0) throw new AppError(404, "Reason not found");
   await audit(req.user!.id, "attendance.reason_deleted", "MissedReasonOption", id);
