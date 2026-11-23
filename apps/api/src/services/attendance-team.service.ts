@@ -389,15 +389,21 @@ export async function getPersonTimeline(actor: { id: string; role: string }, use
 export async function getMyHistory(userId: string, from: string, to: string, now: Date = new Date()) {
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { timezone: true, holidayCalendarId: true } });
   if (!user) throw new AppError(404, "User not found");
-  const [planning, holidayOf, leaveOf, records] = await Promise.all([
+  const [planning, holidayOf, leaveOf, records, sheets, reasons] = await Promise.all([
     getPlanningSettings(),
     loadHolidays([user.holidayCalendarId], from, to),
     findLeaveInRange([userId], from, to),
     prisma.attendanceRecord.findMany({
       where: { userId, workDate: { gte: dayStart(from), lte: dayStart(to) } },
-      select: { workDate: true, punchInAt: true, source: true, flagged: true, faceAttemptId: true, sourceRef: { select: { name: true } } }
-    })
+      select: { workDate: true, punchInAt: true, punchOutAt: true, source: true, flagged: true, faceAttemptId: true, sourceRef: { select: { name: true } } }
+    }),
+    prisma.timesheet.findMany({ where: { userId, workDate: { gte: dayStart(from), lte: dayStart(to) } }, select: { workDate: true, totalHours: true } }),
+    // The reason CODE only, and only the person's own: notes stay with the person and their approver.
+    prisma.missedDayReason.findMany({ where: { userId, workDate: { gte: dayStart(from), lte: dayStart(to) } }, select: { workDate: true, reasonCode: true } })
   ]);
+  const hoursBy = new Map<string, number>();
+  for (const t of sheets) hoursBy.set(t.workDate.toISOString().slice(0, 10), (hoursBy.get(t.workDate.toISOString().slice(0, 10)) ?? 0) + Number(t.totalHours));
+  const reasonBy = new Map(reasons.map((r) => [r.workDate.toISOString().slice(0, 10), r.reasonCode]));
   const recordBy = new Map(records.map((r) => [r.workDate.toISOString().slice(0, 10), r]));
   const days = [];
   for (let key = from; key <= to; key = addDays(key, 1)) {
@@ -417,8 +423,13 @@ export async function getMyHistory(userId: string, from: string, to: string, now
       status: day.status,
       holidayName: day.holidayName,
       punchInAt: record?.punchInAt.toISOString() ?? null,
+      punchOutAt: record?.punchOutAt?.toISOString() ?? null,
       sourceLabel: record ? (record.sourceRef?.name ?? SOURCE_LABELS[record.source]) : null,
-      face: record ? faceResult(record) : null
+      face: record ? faceResult(record) : null,
+      isWorkingDay: day.isWorkingDay,
+      leave: leaveOf(userId, key),
+      hours: hoursBy.get(key) ?? null,
+      reasonCode: reasonBy.get(key) ?? null
     });
   }
   return { from, to, days };

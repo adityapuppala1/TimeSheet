@@ -129,6 +129,9 @@ export interface MyTodayResponse {
   status?: AttendanceDayStatus;
   isWorkingDay?: boolean;
   holidayName?: string | null;
+  /** Only when the admin turned lateness on: the confirmation may say how late (informational). */
+  latenessEnabled?: boolean;
+  expectedStartMinute?: number;
   record?: ReturnType<typeof publicRecord>;
   steps?: PunchStep[];
 }
@@ -180,6 +183,7 @@ export async function getMyToday(userId: string, now: Date = new Date()): Promis
     status: day.status,
     isWorkingDay: day.isWorkingDay,
     holidayName: day.holidayName,
+    ...(settings.latenessEnabled ? { latenessEnabled: true, expectedStartMinute: settings.expectedStartMinute } : {}),
     record: publicRecord(record),
     steps
   };

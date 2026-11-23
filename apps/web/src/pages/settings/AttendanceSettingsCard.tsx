@@ -13,28 +13,15 @@
  * Leave types and approvals are placeholders until phase B. Sources & integrations (A3) live in
  * AttendanceSourcesSection.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  BellRing,
-  CalendarDays,
-  Fingerprint,
-  LayoutDashboard,
-  Lock,
-  MessageSquareWarning,
-  Pencil,
-  Plane,
-  Plug,
-  Plus,
-  ShieldCheck,
-  Sparkles,
-  UserCheck
-} from "lucide-react";
-import { SectionBoard, SectionGroup, SettingsSection, ToggleRow, useOpenSections, type BoardEntry, type SectionState } from "../../components/settings/settings-sections";
+import { CalendarDays, Lock, MessageSquareWarning, Pencil, Plus } from "lucide-react";
+import { CardError } from "../../components/attendance/attendance-ui";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { EmptyState } from "../../components/ui/empty-state";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -42,21 +29,39 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
+import {
+  changesPayload,
+  cleanDraft,
+  diffLeaveSettings,
+  diffSettings,
+  impactReasons,
+  matchPreset,
+  PRESETS,
+  settingsSections,
+  settingsSummary,
+  stagePreset,
+  type NavSection,
+  type PresetId,
+  type SettingsDraft
+} from "../../lib/attendance-settings-model";
 import { runInBackground } from "../../lib/run-in-background";
+import { cn } from "../../lib/utils";
 import {
   attendanceAdminApi,
+  MY_TODAY_QUERY_KEY,
   type AttendanceSettings,
   type HolidayCalendarRow,
   type HolidayRow,
   type MissedReasonOptionRow
 } from "../../services/attendance-api";
+import { LEAVE_STATUS_KEY, leaveAdminApi, type LeaveSettings } from "../../services/leave-api";
+import { StagedNumber, StagedSegment, StagedSelect, StagedToggle } from "./attendance-fields";
 import { AttendanceConfirmDelete } from "./AttendanceConfirmDelete";
 import { AttendanceSourcesSection } from "./AttendanceSourcesSection";
+import { BalanceAdjustments, LEAVE_SETTINGS_KEY, LEAVE_TYPES_KEY, LeaveSettingsFields, LeaveTypesSection } from "./LeaveSettingsSections";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
-const PREFIX = "attendance";
-const OPEN_KEY = "ts.settings.attendance.open";
 const SETTINGS_KEY = ["attendance-admin", "settings"] as const;
 const CALENDARS_KEY = ["attendance-admin", "calendars"] as const;
 const REASONS_KEY = ["attendance-admin", "reasons"] as const;
@@ -68,30 +73,65 @@ export function AttendanceSettingsCard({ readOnly }: { readOnly: boolean }) {
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: SETTINGS_KEY, queryFn: attendanceAdminApi.settings.get });
   const entitled = Boolean(config.data?.entitlements.attendanceEnabled);
+  const leaveEntitled = Boolean(config.data?.entitlements.leaveManagementEnabled);
   const calendars = useQuery({ queryKey: CALENDARS_KEY, queryFn: attendanceAdminApi.calendars.list, enabled: entitled });
   const reasons = useQuery({ queryKey: REASONS_KEY, queryFn: attendanceAdminApi.reasons.list, enabled: entitled });
-  const sections = useOpenSections(OPEN_KEY, ["overview"]);
+  const leaveCfg = useQuery({ queryKey: LEAVE_SETTINGS_KEY, queryFn: leaveAdminApi.settings, enabled: leaveEntitled });
+  const leaveTypes = useQuery({ queryKey: LEAVE_TYPES_KEY, queryFn: leaveAdminApi.types, enabled: leaveEntitled });
 
-  const update = useMutation({
+  const [section, setSection] = useState("overview");
+  const [draft, setDraft] = useState<SettingsDraft>({});
+  const [leaveDraft, setLeaveDraft] = useState<Partial<LeaveSettings>>({});
+  const [confirm, setConfirm] = useState<{ reasons: string[]; people: number | null } | null>(null);
+
+  const saved = config.data?.settings;
+  const savedLeave = leaveCfg.data?.settings;
+  const changes = useMemo(() => (saved ? diffSettings(saved, draft) : []), [saved, draft]);
+  const leaveChanges = useMemo(() => (savedLeave ? diffLeaveSettings(savedLeave, leaveDraft) : []), [savedLeave, leaveDraft]);
+  const dirty = changes.length + leaveChanges.length;
+  const sections = useMemo(() => settingsSections(leaveEntitled), [leaveEntitled]);
+
+  const afterSave = () => {
+    setDraft({});
+    setLeaveDraft({});
+    setConfirm(null);
+    toast.success("Settings saved");
+    runInBackground(queryClient.invalidateQueries({ queryKey: SETTINGS_KEY }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: LEAVE_SETTINGS_KEY }));
+    // The sidebar and the leave screens key off these, so they must notice the switch at once.
+    runInBackground(queryClient.invalidateQueries({ queryKey: LEAVE_STATUS_KEY }));
+    runInBackground(queryClient.invalidateQueries({ queryKey: MY_TODAY_QUERY_KEY }));
+  };
+
+  const saveAll = useMutation({
+    mutationFn: async () => {
+      if (!saved || !savedLeave) throw new Error("not loaded");
+      const payload = changesPayload(saved, draft);
+      if (Object.keys(payload).length > 0) await attendanceAdminApi.settings.update(payload);
+      if (leaveChanges.length > 0) await leaveAdminApi.updateSettings(leaveDraft);
+    },
+    onSuccess: afterSave,
+    onError: (err: unknown) => {
+      toast.error("Could not save", { description: serverMessage(err, "Nothing was lost; your changes are still staged.") });
+      setConfirm(null);
+    }
+  });
+
+  // An immediate save for the one control that is not staged (source priorities in the Sources section).
+  const saveNow = useMutation({
     mutationFn: (payload: Partial<AttendanceSettings>) => attendanceAdminApi.settings.update(payload),
     onSuccess: () => {
       toast.success("Saved");
       runInBackground(queryClient.invalidateQueries({ queryKey: SETTINGS_KEY }));
     },
-    onError: (err: any) => toast.error("Could not save", { description: serverMessage(err, "Try again.") })
+    onError: (err: unknown) => toast.error("Could not save", { description: serverMessage(err, "Try again.") })
   });
 
   if (config.isLoading) return <Skeleton className="h-64 w-full" />;
-  if (config.isError || !config.data) {
-    return (
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 p-3">
-        <p role="alert" className="text-sm text-destructive">Attendance settings could not be loaded.</p>
-        <Button size="sm" variant="outline" onClick={() => config.refetch()}>Retry</Button>
-      </div>
-    );
+  if (config.isError || !config.data || !saved) {
+    return <CardError message="Attendance settings could not be loaded." onRetry={() => runInBackground(config.refetch())} />;
   }
-
-  const { settings, entitlements } = config.data;
+  const { entitlements } = config.data;
 
   if (!entitlements.attendanceEnabled) {
     return (
@@ -115,263 +155,419 @@ export function AttendanceSettingsCard({ readOnly }: { readOnly: boolean }) {
     );
   }
 
-  const disabled = readOnly || update.isPending;
-  const save = (payload: Partial<AttendanceSettings>) => update.mutate(payload);
+  const values: AttendanceSettings = { ...saved, ...draft };
+  const leaveValues: LeaveSettings | null = savedLeave ? { ...savedLeave, ...leaveDraft } : null;
+  const disabled = readOnly || saveAll.isPending;
+  const stage = (patch: SettingsDraft) => setDraft((d) => cleanDraft(saved, { ...d, ...patch }));
+  const stageLeave = (patch: Partial<LeaveSettings>) =>
+    setLeaveDraft((d) => {
+      const next = { ...d, ...patch } as Partial<LeaveSettings>;
+      for (const k of Object.keys(next) as Array<keyof LeaveSettings>) if (savedLeave && next[k] === savedLeave[k]) delete next[k];
+      return next;
+    });
+  const changed = (key: keyof AttendanceSettings) => key in draft;
   const on = config.data.effective;
-  const board = buildBoard({ settings, on, calendars: calendars.data, calendarsFailed: calendars.isError, reasons: reasons.data, reasonsFailed: reasons.isError, integrationsLocked: !entitlements.attendanceIntegrationsEnabled });
-  const shell = (id: string) => {
-    const e = board.find((b) => b.id === id)!;
-    return { id, prefix: PREFIX, name: e.name, blurb: e.blurb, state: e.state, stateLabel: e.stateLabel, Icon: e.Icon, open: sections.isOpen(id), onToggle: () => sections.toggle(id) };
+  const enabledTypes = (leaveTypes.data ?? []).filter((t) => t.enabled).length;
+
+  const requestSave = async () => {
+    const reasonsList = impactReasons(saved, draft);
+    if (reasonsList.length === 0) {
+      saveAll.mutate();
+      return;
+    }
+    let people: number | null = null;
+    try {
+      people = (await attendanceAdminApi.settings.impact()).people;
+    } catch {
+      /* the count is context, not a gate: confirm without it */
+    }
+    setConfirm({ reasons: reasonsList, people });
   };
+
+  const summary = settingsSummary(values);
+  const preset = matchPreset(values);
 
   return (
     <div className="grid min-w-0 gap-4">
-      <SectionBoard
-        title="Attendance & Leave"
-        summary={on ? "On — pick a section to tune it." : "Off — nothing here affects anyone until the master switch is on."}
-        entries={board}
-        onPick={(id) => sections.reveal(id, PREFIX)}
-        columns={4}
-      />
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+        <SectionNav sections={sections} value={section} onChange={setSection} dirtySections={dirtySections(changes, leaveChanges)} />
+        <div className="grid min-w-0 content-start gap-4 pb-24">
+          <p className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground" aria-live="polite">
+            <span className="font-semibold text-foreground">Right now: </span>
+            {summary}
+          </p>
 
-      <SettingsSection {...shell("overview")}>
-        <SectionGroup>
-          <ToggleRow
-            emphasis
-            label="Enable attendance"
-            hint="Turns on the module for this workspace. Each part below has its own switch and stays off until you choose otherwise."
-            checked={settings.attendanceEnabled}
-            disabled={disabled}
-            onChange={(v) => save({ attendanceEnabled: v })}
-          />
-        </SectionGroup>
-      </SettingsSection>
-
-      <SettingsSection {...shell("punch-in")}>
-        <SectionGroup>
-          <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-            <ChoiceField
-              id="att-punch-mode"
-              label="Punch-in prompt"
-              hint="Optional can be dismissed for the day; mandatory blocks the app (except profile and sign-out) until done."
-              value={settings.punchInMode}
-              options={[["OFF", "Off"], ["OPTIONAL", "Optional"], ["MANDATORY", "Mandatory"]]}
-              disabled={disabled}
-              onChange={(v) => save({ punchInMode: v as AttendanceSettings["punchInMode"] })}
-            />
-            <ChoiceField
-              id="att-location"
-              label="Location"
-              hint="Asked from the browser with consent; IP is the fallback when it is refused."
-              value={settings.locationMode}
-              options={[["OFF", "Off"], ["OPTIONAL", "Optional"], ["REQUIRED", "Required"]]}
-              disabled={disabled}
-              onChange={(v) => save({ locationMode: v as AttendanceSettings["locationMode"] })}
-            />
-          </div>
-          <ToggleRow
-            label="Require a face check to punch in"
-            hint="Reuses face verification (liveness and match). Needs face verification enabled and in your plan."
-            checked={settings.punchInFaceRequired}
-            disabled={disabled}
-            onChange={(v) => save({ punchInFaceRequired: v })}
-          />
-          <ChoiceField
-            id="att-face-rule"
-            label="When the face check fails"
-            hint="Allow and flag records the punch and queues the attempt for review, so a bad camera never costs someone a day."
-            value={settings.faceFailureRule}
-            options={[["BLOCK", "Block the punch"], ["ALLOW_FLAGGED", "Allow and flag for review"]]}
-            disabled={disabled || !settings.punchInFaceRequired}
-            onChange={(v) => save({ faceFailureRule: v as AttendanceSettings["faceFailureRule"] })}
-          />
-        </SectionGroup>
-      </SettingsSection>
-
-      <SettingsSection {...shell("reminders")}>
-        <SectionGroup>
-          <ToggleRow
-            label="Remind people who have not punched in"
-            hint="Working days only — never on a weekend, a holiday or approved leave, and never if a punch arrived from any source."
-            checked={settings.punchInReminderEnabled}
-            disabled={disabled}
-            onChange={(v) => save({ punchInReminderEnabled: v })}
-          />
-          <ChoiceField
-            id="att-reminder-hour"
-            label="Reminder time (each person's own timezone)"
-            hint="The end-of-day timesheet reminder is separate and unchanged."
-            value={String(settings.punchInReminderHour)}
-            options={HOURS.map((h) => [String(h), hourLabel(h)] as [string, string])}
-            disabled={disabled || !settings.punchInReminderEnabled}
-            onChange={(v) => save({ punchInReminderHour: Number(v) })}
-          />
-        </SectionGroup>
-      </SettingsSection>
-
-      <SettingsSection {...shell("holidays")}>
-        <HolidayCalendarsEditor readOnly={readOnly} query={calendars} />
-      </SettingsSection>
-
-      <SettingsSection {...shell("reasons")}>
-        <SectionGroup>
-          <ToggleRow
-            label="Ask for a reason on empty past days"
-            hint="When someone logs time for a past working day that has no entries at all, they pick a reason. No approval — it is an explanation."
-            checked={settings.missedDayReasonEnabled}
-            disabled={disabled}
-            onChange={(v) => save({ missedDayReasonEnabled: v })}
-          />
-          <MissedReasonsEditor readOnly={readOnly} query={reasons} />
-        </SectionGroup>
-      </SettingsSection>
-
-      <SettingsSection {...shell("leave")}>
-        <ComingSoon text="Leave types — quotas, accrual, carry-forward, half days — arrive in phase B." locked={!entitlements.leaveManagementEnabled} />
-      </SettingsSection>
-
-      <SettingsSection {...shell("approvals")}>
-        <ComingSoon text="Leave approvals route to each person's manager, with a super-admin fallback. Coming in phase B." locked={!entitlements.leaveManagementEnabled} />
-      </SettingsSection>
-
-      <SettingsSection {...shell("sources")}>
-        <AttendanceSourcesSection readOnly={readOnly} locked={!entitlements.attendanceIntegrationsEnabled} settings={settings} onSaveSettings={save} />
-      </SettingsSection>
-
-      <SettingsSection {...shell("analytics")}>
-        <SectionGroup>
-          {!entitlements.attendanceAiInsightsEnabled && <PlanNote text="AI insights are part of the Enterprise plan." />}
-          <ToggleRow
-            label="Insights for each person about themselves"
-            hint="Their own patterns only."
-            checked={settings.aiInsightsSelf}
-            disabled={disabled || !entitlements.attendanceAiInsightsEnabled}
-            onChange={(v) => save({ aiInsightsSelf: v })}
-          />
-          <ToggleRow
-            label="Insights for managers about their team"
-            hint="Aggregates only — never raw location, face data or anyone's free-text notes."
-            checked={settings.aiInsightsManager}
-            disabled={disabled || !entitlements.attendanceAiInsightsEnabled}
-            onChange={(v) => save({ aiInsightsManager: v })}
-          />
-          <ToggleRow
-            label="Organisation-wide insights for super admins"
-            hint="Aggregates across the workspace."
-            checked={settings.aiInsightsOrg}
-            disabled={disabled || !entitlements.attendanceAiInsightsEnabled}
-            onChange={(v) => save({ aiInsightsOrg: v })}
-          />
-          <NumberField
-            id="att-min-group"
-            label="Smallest group an aggregate may describe"
-            hint="Below this, an average is really one person. Minimum 3."
-            value={settings.minGroupSize}
-            min={3}
-            max={100}
-            disabled={disabled}
-            onCommit={(v) => save({ minGroupSize: v })}
-          />
-          <ChoiceField
-            id="att-ai-frequency"
-            label="Refresh AI suggestions"
-            hint="AI suggestions are reused for this long; rule-based suggestions are always current."
-            value={settings.aiInsightsFrequency}
-            options={[["DAILY", "Daily"], ["WEEKLY", "Weekly"]]}
-            disabled={disabled || !entitlements.attendanceAiInsightsEnabled}
-            onChange={(v) => save({ aiInsightsFrequency: v as AttendanceSettings["aiInsightsFrequency"] })}
-          />
-          <ToggleRow
-            label="Measure punch-ins against an expected start time"
-            hint="Off by default. Without it, analytics compare each person with their own usual time, never with a rule."
-            checked={settings.latenessEnabled}
-            disabled={disabled}
-            onChange={(v) => save({ latenessEnabled: v })}
-          />
-          {settings.latenessEnabled && (
-            <ChoiceField
-              id="att-expected-start"
-              label="Expected start"
-              hint="In each person's own timezone."
-              value={String(settings.expectedStartMinute)}
-              options={EXPECTED_START_OPTIONS}
-              disabled={disabled}
-              onChange={(v) => save({ expectedStartMinute: Number(v) })}
-            />
+          {section === "overview" && (
+            <div className="grid gap-4">
+              <StagedToggle
+                id="att-enabled"
+                emphasis
+                label="Enable attendance"
+                hint="Turns on the module for this workspace. Each part has its own switch and stays off until you choose otherwise."
+                checked={values.attendanceEnabled}
+                disabled={disabled}
+                changed={changed("attendanceEnabled")}
+                onChange={(v) => stage({ attendanceEnabled: v })}
+              >
+                <PresetPicker active={preset} disabled={disabled} onPick={(id) => stage(stagePreset(values, id))} />
+              </StagedToggle>
+            </div>
           )}
-        </SectionGroup>
-      </SettingsSection>
 
-      <SettingsSection {...shell("privacy")}>
-        <SectionGroup>
-          <div className="grid min-w-0 gap-1.5">
-            <Label htmlFor="att-consent">Location consent text</Label>
-            <Textarea
-              id="att-consent"
-              rows={3}
-              maxLength={2000}
+          {section === "punch-in" && (
+            <div className="grid gap-4">
+              <PresetPicker active={preset} disabled={disabled} onPick={(id) => stage(stagePreset(values, id))} />
+              <StagedToggle
+                id="att-punch"
+                label="Ask people to punch in"
+                hint="A prompt when they open TimeSphere. Optional can be dismissed for the day; mandatory blocks the app (except profile and sign-out) until done."
+                checked={values.punchInMode !== "OFF"}
+                disabled={disabled}
+                changed={changed("punchInMode")}
+                onChange={(v) => stage({ punchInMode: v ? "OPTIONAL" : "OFF" })}
+              >
+                <StagedSegment
+                  label="How firmly"
+                  value={values.punchInMode === "MANDATORY" ? "MANDATORY" : "OPTIONAL"}
+                  disabled={disabled}
+                  onChange={(v) => stage({ punchInMode: v })}
+                  options={[
+                    { value: "OPTIONAL", label: "Optional" },
+                    { value: "MANDATORY", label: "Mandatory" }
+                  ]}
+                />
+              </StagedToggle>
+              <StagedToggle
+                id="att-location"
+                label="Confirm work location"
+                hint="Asked from the browser with consent; the network address is the fallback when it is refused."
+                checked={values.locationMode !== "OFF"}
+                disabled={disabled}
+                changed={changed("locationMode")}
+                onChange={(v) => stage({ locationMode: v ? "OPTIONAL" : "OFF" })}
+              >
+                <StagedSegment
+                  label="How firmly"
+                  value={values.locationMode === "REQUIRED" ? "REQUIRED" : "OPTIONAL"}
+                  disabled={disabled}
+                  onChange={(v) => stage({ locationMode: v })}
+                  options={[
+                    { value: "OPTIONAL", label: "Optional" },
+                    { value: "REQUIRED", label: "Required" }
+                  ]}
+                />
+              </StagedToggle>
+              <StagedToggle
+                id="att-face"
+                label="Face check to punch in"
+                hint="Reuses face verification (liveness and match). Needs face verification enabled and in your plan."
+                checked={values.punchInFaceRequired}
+                disabled={disabled}
+                changed={changed("punchInFaceRequired")}
+                onChange={(v) => stage({ punchInFaceRequired: v })}
+              >
+                <StagedSegment
+                  label="When the face check fails"
+                  hint="Allow and flag records the punch and queues it for review, so a bad camera never costs someone a day."
+                  value={values.faceFailureRule}
+                  disabled={disabled}
+                  onChange={(v) => stage({ faceFailureRule: v })}
+                  options={[
+                    { value: "BLOCK", label: "Block the punch" },
+                    { value: "ALLOW_FLAGGED", label: "Allow and flag" }
+                  ]}
+                />
+              </StagedToggle>
+            </div>
+          )}
+
+          {section === "reminders" && (
+            <StagedToggle
+              id="att-reminder"
+              label="Remind people who have not punched in"
+              hint="Working days only — never on a weekend, a holiday or approved leave, and never if a punch arrived from any source."
+              checked={values.punchInReminderEnabled}
               disabled={disabled}
-              defaultValue={settings.locationConsentText ?? ""}
-              placeholder="Shown the first time someone is asked for their location. Leave empty for the built-in wording."
-              onBlur={(e) => {
-                const next = e.target.value.trim();
-                if (next !== (settings.locationConsentText ?? "")) save({ locationConsentText: next === "" ? null : next });
-              }}
-            />
-          </div>
-          <NumberField
-            id="att-retention"
-            label="Keep raw location, IP and device for (days)"
-            hint="After this the evidence is cleared; the punch time and source are kept."
-            value={settings.locationRetentionDays}
-            min={1}
-            max={3650}
-            disabled={disabled}
-            onCommit={(v) => save({ locationRetentionDays: v })}
-          />
-        </SectionGroup>
-      </SettingsSection>
+              changed={changed("punchInReminderEnabled")}
+              onChange={(v) => stage({ punchInReminderEnabled: v })}
+            >
+              <StagedSelect
+                id="att-reminder-hour"
+                label="Reminder time (each person's own timezone)"
+                hint="The end-of-day timesheet reminder is separate and unchanged."
+                value={String(values.punchInReminderHour)}
+                options={HOURS.map((h) => [String(h), hourLabel(h)] as [string, string])}
+                disabled={disabled}
+                onChange={(v) => stage({ punchInReminderHour: Number(v) })}
+              />
+            </StagedToggle>
+          )}
+
+          {section === "holidays" && <HolidayCalendarsEditor readOnly={readOnly} query={calendars} />}
+
+          {section === "reasons" && (
+            <div className="grid gap-4">
+              <StagedToggle
+                id="att-reasons"
+                label="Ask for a reason on empty past days"
+                hint="When someone logs time for a past working day that has no entries at all, they pick a reason. No approval — it is an explanation."
+                checked={values.missedDayReasonEnabled}
+                disabled={disabled}
+                changed={changed("missedDayReasonEnabled")}
+                onChange={(v) => stage({ missedDayReasonEnabled: v })}
+              />
+              <MissedReasonsEditor readOnly={readOnly} query={reasons} />
+            </div>
+          )}
+
+          {section === "leave-types" && <LeaveTypesSection readOnly={readOnly} />}
+          {section === "leave-settings" && (
+            <LeaveSettingsPanel query={leaveCfg} saved={savedLeave} values={leaveValues} readOnly={readOnly} enabledTypes={enabledTypes} onChange={stageLeave} />
+          )}
+          {section === "leave-balances" && <BalanceAdjustments readOnly={readOnly} />}
+
+          {section === "sources" && (
+            <AttendanceSourcesSection readOnly={readOnly} locked={!entitlements.attendanceIntegrationsEnabled} settings={saved} onSaveSettings={(p) => saveNow.mutate(p)} />
+          )}
+
+          {section === "analytics" && (
+            <div className="grid gap-4">
+              {!entitlements.attendanceAiInsightsEnabled && <PlanNote text="AI insights are part of the Enterprise plan." />}
+              <StagedToggle
+                id="att-ai-self"
+                label="Insights for each person about themselves"
+                hint="Their own patterns only."
+                checked={values.aiInsightsSelf}
+                disabled={disabled || !entitlements.attendanceAiInsightsEnabled}
+                changed={changed("aiInsightsSelf")}
+                onChange={(v) => stage({ aiInsightsSelf: v })}
+              />
+              <StagedToggle
+                id="att-ai-manager"
+                label="Insights for managers about their team"
+                hint="Aggregates only — never raw location, face data or anyone's free-text notes."
+                checked={values.aiInsightsManager}
+                disabled={disabled || !entitlements.attendanceAiInsightsEnabled}
+                changed={changed("aiInsightsManager")}
+                onChange={(v) => stage({ aiInsightsManager: v })}
+              />
+              <StagedToggle
+                id="att-ai-org"
+                label="Organisation-wide insights for super admins"
+                hint="Aggregates across the workspace."
+                checked={values.aiInsightsOrg}
+                disabled={disabled || !entitlements.attendanceAiInsightsEnabled}
+                changed={changed("aiInsightsOrg")}
+                onChange={(v) => stage({ aiInsightsOrg: v })}
+              />
+              <StagedNumber id="att-min-group" label="Smallest group an aggregate may describe" hint="Below this, an average is really one person. Minimum 3." value={values.minGroupSize} min={3} max={100} disabled={disabled} onChange={(v) => stage({ minGroupSize: v })} />
+              <StagedSegment
+                label="Refresh AI suggestions"
+                hint="AI suggestions are reused for this long; rule-based suggestions are always current."
+                value={values.aiInsightsFrequency}
+                disabled={disabled || !entitlements.attendanceAiInsightsEnabled}
+                onChange={(v) => stage({ aiInsightsFrequency: v })}
+                options={[
+                  { value: "DAILY", label: "Daily" },
+                  { value: "WEEKLY", label: "Weekly" }
+                ]}
+              />
+              <StagedToggle
+                id="att-lateness"
+                label="Measure punch-ins against an expected start time"
+                hint="Off by default. Without it, analytics compare each person with their own usual time, never with a rule. It is informational: nobody is asked to explain."
+                checked={values.latenessEnabled}
+                disabled={disabled}
+                changed={changed("latenessEnabled")}
+                onChange={(v) => stage({ latenessEnabled: v })}
+              >
+                <StagedSelect id="att-expected-start" label="Expected start" hint="In each person's own timezone." value={String(values.expectedStartMinute)} options={EXPECTED_START_OPTIONS} disabled={disabled} onChange={(v) => stage({ expectedStartMinute: Number(v) })} />
+              </StagedToggle>
+            </div>
+          )}
+
+          {section === "privacy" && (
+            <div className="grid gap-4">
+              <div className="grid min-w-0 gap-1.5">
+                <Label htmlFor="att-consent">Location consent text</Label>
+                <Textarea
+                  id="att-consent"
+                  rows={4}
+                  maxLength={2000}
+                  disabled={disabled}
+                  value={values.locationConsentText ?? ""}
+                  placeholder="Shown the first time someone is asked for their location. Leave empty for the built-in wording."
+                  onChange={(e) => stage({ locationConsentText: e.target.value.trim() === "" ? null : e.target.value })}
+                />
+                <p className="text-xs text-muted-foreground">Say what is kept, for how long and who can see it. People read this before their first punch with location.</p>
+              </div>
+              <StagedNumber id="att-retention" label="Keep raw location, IP and device for (days)" hint="After this the evidence is cleared; the punch time and source are kept." value={values.locationRetentionDays} min={1} max={3650} disabled={disabled} onChange={(v) => stage({ locationRetentionDays: v })} />
+            </div>
+          )}
+
+          {!on && section !== "overview" && <p className="text-xs text-muted-foreground">Attendance is off, so nothing here affects anyone yet.</p>}
+        </div>
+      </div>
+
+      {dirty > 0 && !readOnly && (
+        <DirtyBar changes={[...changes, ...leaveChanges]} saving={saveAll.isPending} onDiscard={() => { setDraft({}); setLeaveDraft({}); }} onSave={() => runInBackground(requestSave())} />
+      )}
+
+      <ImpactDialog confirm={confirm} onCancel={() => setConfirm(null)} onConfirm={() => saveAll.mutate()} />
     </div>
   );
 }
 
-/** A part's tile: off when its own switch is off; live only when the module is effective too. */
-function partState(enabled: boolean, on: boolean): SectionState {
-  if (!enabled) return "off";
-  return on ? "live" : "ready";
+function LeaveSettingsPanel({ query, saved, values, readOnly, enabledTypes, onChange }: Readonly<{ query: { isLoading: boolean; isError: boolean; refetch: () => Promise<unknown> }; saved: LeaveSettings | undefined; values: LeaveSettings | null; readOnly: boolean; enabledTypes: number; onChange: (patch: Partial<LeaveSettings>) => void }>) {
+  if (query.isLoading) return <Skeleton className="h-40 w-full" />;
+  if (query.isError || !values || !saved) return <CardError message="Leave settings could not be loaded." onRetry={() => runInBackground(query.refetch())} />;
+  return <LeaveSettingsFields saved={saved} values={values} readOnly={readOnly} enabledTypes={enabledTypes} onChange={onChange} />;
 }
 
-function listState(failed: boolean, enabled: boolean, on: boolean): SectionState {
-  return failed ? "attention" : partState(enabled, on);
+function DirtyBar({ changes, saving, onDiscard, onSave }: Readonly<{ changes: Array<{ label: string; from: string; to: string }>; saving: boolean; onDiscard: () => void; onSave: () => void }>) {
+  const n = changes.length;
+  const preview = changes.slice(0, 2).map((c) => c.label + ": " + c.from + " → " + c.to).join(" · ") + (n > 2 ? " · +" + (n - 2) + " more" : "");
+  return (
+    <div className="sticky bottom-[68px] z-30 flex flex-wrap items-center gap-3 rounded-lg border border-primary/40 bg-card p-3 pr-16 shadow-lg lg:bottom-4" role="region" aria-label="Unsaved changes">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold tabular-nums">{n} unsaved {n === 1 ? "change" : "changes"}</p>
+        <p className="truncate text-xs text-muted-foreground">{preview}</p>
+      </div>
+      <Button variant="ghost" className="min-h-[44px]" disabled={saving} onClick={onDiscard}>Discard</Button>
+      <Button className="min-h-[44px]" disabled={saving} onClick={onSave}>{saving ? "Saving…" : "Save"}</Button>
+    </div>
+  );
 }
 
-function buildBoard(input: {
-  settings: AttendanceSettings;
-  on: boolean;
-  calendars?: HolidayCalendarRow[];
-  calendarsFailed: boolean;
-  reasons?: MissedReasonOptionRow[];
-  reasonsFailed: boolean;
-  integrationsLocked: boolean;
-}): BoardEntry[] {
-  const { settings, on, calendars, reasons } = input;
-  const holidayCount = (calendars ?? []).reduce((n, c) => n + c.holidays.length, 0);
-  const enabledReasons = (reasons ?? []).filter((r) => r.enabled).length;
-  const aiOn = settings.aiInsightsSelf || settings.aiInsightsManager || settings.aiInsightsOrg;
-  const punchOff = settings.punchInMode === "OFF";
-  const soon = { state: "off" as const, stateLabel: "Soon" };
-  return [
-    { id: "overview", name: "Overview", blurb: "The master switch for the whole module.", Icon: LayoutDashboard, state: on ? "live" : "off", stateLabel: on ? "On" : "Off" },
-    { id: "punch-in", name: "Punch-in", blurb: "Whether and how people mark the start of their day.", Icon: Fingerprint, value: punchOff ? undefined : settings.punchInMode.toLowerCase(), state: partState(!punchOff, on), stateLabel: punchOff ? "Off" : undefined },
-    { id: "reminders", name: "Reminders", blurb: "A nudge for anyone who has not punched in by the set hour.", Icon: BellRing, value: settings.punchInReminderEnabled ? hourLabel(settings.punchInReminderHour) : undefined, state: partState(settings.punchInReminderEnabled, on) },
-    { id: "holidays", name: "Working days & holidays", blurb: "Holiday calendars and who follows which.", Icon: CalendarDays, value: calendars ? `${calendars.length} cal · ${holidayCount} days` : undefined, state: listState(input.calendarsFailed, holidayCount > 0, false) },
-    { id: "reasons", name: "Missed-day reasons", blurb: "What people may choose when a past working day has no time.", Icon: MessageSquareWarning, value: reasons ? `${enabledReasons} enabled` : undefined, state: listState(input.reasonsFailed, settings.missedDayReasonEnabled, on) },
-    { id: "leave", name: "Leave types", blurb: "Coming in phase B.", Icon: Plane, ...soon },
-    { id: "approvals", name: "Approvals", blurb: "Coming in phase B.", Icon: UserCheck, ...soon },
-    { id: "sources", name: "Sources & integrations", blurb: "Biometric devices, HRMS, API, MCP and CSV.", Icon: Plug, state: input.integrationsLocked ? "off" : "ready", stateLabel: input.integrationsLocked ? "Locked" : undefined },
-    { id: "analytics", name: "Analytics & AI", blurb: "AI suggestions over attendance aggregates.", Icon: Sparkles, state: partState(aiOn, on) },
-    { id: "privacy", name: "Privacy & retention", blurb: "Location consent wording and how long raw evidence is kept.", Icon: ShieldCheck, value: `${settings.locationRetentionDays} days`, state: "ready" }
-  ];
+function ImpactDialog({ confirm, onCancel, onConfirm }: Readonly<{ confirm: { reasons: string[]; people: number | null } | null; onCancel: () => void; onConfirm: () => void }>) {
+  const people = confirm?.people;
+  let title = "This affects everyone";
+  if (people != null) title = "This affects " + people + (people === 1 ? " person" : " people");
+  return (
+    <AlertDialog open={Boolean(confirm)} onOpenChange={(o) => !o && onCancel()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="grid gap-2">
+              <ul className="list-disc pl-5">{confirm?.reasons.map((r) => <li key={r}>{r}</li>)}</ul>
+              <p>Save these changes?</p>
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Go back</AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm}>Save changes</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/** Which nav sections hold unsaved values, so the nav can say where the work is. */
+function dirtySections(changes: Array<{ key: string }>, leaveChanges: unknown[]): Set<string> {
+  const map: Record<string, string> = {
+    attendanceEnabled: "overview",
+    punchInMode: "punch-in",
+    locationMode: "punch-in",
+    punchInFaceRequired: "punch-in",
+    faceFailureRule: "punch-in",
+    punchInReminderEnabled: "reminders",
+    punchInReminderHour: "reminders",
+    missedDayReasonEnabled: "reasons",
+    aiInsightsSelf: "analytics",
+    aiInsightsManager: "analytics",
+    aiInsightsOrg: "analytics",
+    minGroupSize: "analytics",
+    aiInsightsFrequency: "analytics",
+    latenessEnabled: "analytics",
+    expectedStartMinute: "analytics",
+    locationConsentText: "privacy",
+    locationRetentionDays: "privacy"
+  };
+  const out = new Set(changes.map((c) => map[c.key]).filter(Boolean));
+  if (leaveChanges.length > 0) out.add("leave-settings");
+  return out;
+}
+
+function SectionNav({ sections, value, onChange, dirtySections: dirtySet }: Readonly<{ sections: NavSection[]; value: string; onChange: (id: string) => void; dirtySections: Set<string> }>) {
+  const groups = ["Attendance", "Leave", "Workspace"] as const;
+  return (
+    <>
+      <div className="lg:hidden">
+        <Label htmlFor="att-section-select" className="sr-only">
+          Settings section
+        </Label>
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger id="att-section-select" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {sections.map((s) => (
+              <SelectItem key={s.id} value={s.id}>
+                {s.label}
+                {dirtySet.has(s.id) ? " •" : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <nav aria-label="Settings sections" className="hidden content-start gap-4 lg:grid">
+        {groups.map((g) => {
+          const items = sections.filter((s) => s.group === g);
+          if (items.length === 0) return null;
+          return (
+            <div key={g} className="grid gap-0.5">
+              <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{g}</p>
+              {items.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  aria-current={value === s.id ? "page" : undefined}
+                  onClick={() => onChange(s.id)}
+                  className={cn(
+                    "focus-ring flex min-h-[40px] items-center justify-between gap-2 rounded-md px-3 text-left text-sm transition-colors",
+                    value === s.id ? "bg-primary/10 font-semibold text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                >
+                  <span className="truncate">{s.label}</span>
+                  {dirtySet.has(s.id) && <span className="h-2 w-2 shrink-0 rounded-full bg-primary" role="img" aria-label="Unsaved changes" />}
+                </button>
+              ))}
+            </div>
+          );
+        })}
+      </nav>
+    </>
+  );
+}
+
+function PresetPicker({ active, disabled, onPick }: Readonly<{ active: PresetId; disabled: boolean; onPick: (id: PresetId) => void }>) {
+  return (
+    <div className="grid gap-2">
+      <Label>Start from a preset</Label>
+      <p className="text-xs text-muted-foreground">A preset fills the values below. Nothing is saved until you press Save, and you can still change each one.</p>
+      <div role="radiogroup" aria-label="Preset" className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        {PRESETS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            role="radio"
+            aria-checked={active === p.id}
+            disabled={disabled}
+            onClick={() => onPick(p.id)}
+            className={cn(
+              "focus-ring grid min-h-[44px] min-w-0 gap-0.5 rounded-lg border p-3 text-left transition-colors disabled:opacity-60",
+              active === p.id ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border bg-card hover:bg-muted/50"
+            )}
+          >
+            <span className="text-sm font-semibold">{p.label}</span>
+            <span className="text-xs text-muted-foreground">{p.blurb}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -384,95 +580,12 @@ const EXPECTED_START_OPTIONS: Array<[string, string]> = Array.from({ length: 19 
   return [String(minute), `${String(Math.floor(minute / 60)).padStart(2, "0")}:${minute % 60 === 0 ? "00" : "30"}`];
 });
 
-function ChoiceField({
-  id,
-  label,
-  hint,
-  value,
-  options,
-  disabled,
-  onChange
-}: {
-  id: string;
-  label: string;
-  hint: string;
-  value: string;
-  options: Array<[string, string]>;
-  disabled: boolean;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <div className="grid min-w-0 gap-1.5">
-      <Label htmlFor={id}>{label}</Label>
-      <Select value={value} onValueChange={onChange} disabled={disabled}>
-        <SelectTrigger id={id} className="w-full min-w-0">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map(([v, text]) => (
-            <SelectItem key={v} value={v}>{text}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <p className="text-xs text-muted-foreground">{hint}</p>
-    </div>
-  );
-}
-
-function NumberField({
-  id,
-  label,
-  hint,
-  value,
-  min,
-  max,
-  disabled,
-  onCommit
-}: {
-  id: string;
-  label: string;
-  hint: string;
-  value: number;
-  min: number;
-  max: number;
-  disabled: boolean;
-  onCommit: (v: number) => void;
-}) {
-  return (
-    <div className="grid min-w-0 gap-1.5 sm:max-w-xs">
-      <Label htmlFor={id}>{label}</Label>
-      <Input
-        id={id}
-        type="number"
-        min={min}
-        max={max}
-        disabled={disabled}
-        defaultValue={value}
-        onBlur={(e) => {
-          const next = Number(e.target.value);
-          if (Number.isInteger(next) && next >= min && next <= max && next !== value) onCommit(next);
-        }}
-      />
-      <p className="text-xs text-muted-foreground">{hint}</p>
-    </div>
-  );
-}
-
 function PlanNote({ text }: { text: string }) {
   return (
     <p className="flex items-center gap-2 text-xs text-muted-foreground">
       <Lock className="h-3 w-3 shrink-0" />
       {text}
     </p>
-  );
-}
-
-function ComingSoon({ text, locked }: { text: string; locked: boolean }) {
-  return (
-    <div className="grid gap-2 rounded-lg border border-dashed border-border p-4">
-      <p className="text-sm text-muted-foreground">{text}</p>
-      {locked && <PlanNote text="Part of the Enterprise plan." />}
-    </div>
   );
 }
 

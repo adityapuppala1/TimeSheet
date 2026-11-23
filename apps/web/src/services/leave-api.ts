@@ -1,0 +1,180 @@
+/**
+ * Client for /api/leave (V17 Phase B) — balances, requests, the approver inbox, the team calendar and
+ * the super-admin configuration. Days are computed by the server (the preview endpoint mirrors the
+ * apply rules), so no screen ever sends or trusts a `days` figure from the client.
+ */
+import { api } from "./api";
+
+export type LeaveHalf = "FULL" | "FIRST_HALF" | "SECOND_HALF";
+export type LeaveStatus = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
+export type LeaveAccrual = "YEARLY_UPFRONT" | "MONTHLY_PRORATA";
+
+export interface LeaveTypeRow {
+  id: string;
+  code: string;
+  name: string;
+  colour: string | null;
+  annualQuota: number;
+  accrual: LeaveAccrual;
+  carryForwardMax: number;
+  allowHalfDay: boolean;
+  isPaid: boolean;
+  requiresApproval: boolean;
+  requiresDocumentAfterDays: number | null;
+  allowNegative: boolean;
+  enabled: boolean;
+  sortOrder: number;
+}
+
+export interface LeaveBalance {
+  leaveType: LeaveTypeRow;
+  balance: number;
+  accrued: number;
+  carriedForward: number;
+  used: number;
+  adjusted: number;
+  expired: number;
+  pending: number;
+  available: number;
+  projectedYearEnd: number;
+  expiringAtYearEnd: number;
+}
+
+export interface LeaveBalances {
+  leaveYear: number;
+  from: string;
+  to: string;
+  yearStartMonth: number;
+  balances: LeaveBalance[];
+}
+
+export interface LeaveRequestRow {
+  id: string;
+  user?: { id: string; name: string; email: string; avatarUrl: string | null };
+  leaveType: { id: string; code: string; name: string; colour: string | null; isPaid: boolean };
+  startDate: string;
+  endDate: string;
+  startHalf: LeaveHalf;
+  endHalf: LeaveHalf;
+  days: number;
+  leaveYear: number;
+  /** Present on the requester's own rows and in the approver inbox payload; no screen shows it to a manager. */
+  reason?: string | null;
+  status: LeaveStatus;
+  attachment: { name: string | null; mimeType: string | null; size: number | null; url: string } | null;
+  approverId: string | null;
+  decidedAt: string | null;
+  decisionNote?: string | null;
+  overriddenBySuperAdmin: boolean;
+  cancelledAt: string | null;
+  source: string;
+  createdAt: string;
+  /** Inbox only: what the requester has left of this type if the request is approved. */
+  balanceAfter?: number | null;
+}
+
+/** A team-calendar entry: no reason, note or document by design. */
+export type TeamLeaveItem = Omit<LeaveRequestRow, "reason" | "decisionNote" | "attachment"> & { user: NonNullable<LeaveRequestRow["user"]> };
+
+export interface LeavePreview {
+  ok: boolean;
+  problems: Array<{ code: string; message: string }>;
+  days: number;
+  excluded: Array<{ date: string; reason: "WEEKEND" | "HOLIDAY"; label: string }>;
+  balanceBefore: number | null;
+  balanceAfter: number | null;
+  allowNegative: boolean;
+  overlap: { requestId: string; startDate: string; endDate: string } | null;
+  documentRequired: boolean;
+  requiresApproval: boolean;
+  approver: { id: string; name: string; avatarUrl: string | null } | null;
+}
+
+export interface PreviewParams {
+  typeId: string;
+  start: string;
+  end: string;
+  startHalf?: LeaveHalf;
+  endHalf?: LeaveHalf;
+}
+
+export interface ApplyPayload {
+  leaveTypeId: string;
+  startDate: string;
+  endDate: string;
+  startHalf?: LeaveHalf;
+  endHalf?: LeaveHalf;
+  reason?: string;
+  document?: File | null;
+}
+
+export interface BulkResult {
+  id: string;
+  ok: boolean;
+  status?: LeaveStatus;
+  error?: string;
+  httpStatus?: number;
+}
+
+export interface ExpectedHours {
+  from: string;
+  to: string;
+  workingDays: number;
+  holidays: number;
+  leaveDays: number;
+  expectedDays: number;
+  dailyHours: number;
+  expectedHours: number;
+}
+
+export interface LeaveSettings {
+  leaveEnabled: boolean;
+  leaveYearStartMonth: number;
+  trustExternalApprovals: boolean;
+  leaveApprovalFallback: "ADMINS" | "SUPER_ADMINS";
+}
+
+export type LeaveTypeInput = Omit<LeaveTypeRow, "id" | "sortOrder"> & { sortOrder?: number };
+
+export const LEAVE_STATUS_KEY = ["leave", "status"] as const;
+
+export const leaveApi = {
+  status: async () => (await api.get<{ enabled: boolean; leaveYearStartMonth: number }>("/leave/status")).data,
+  types: async () => (await api.get<{ items: LeaveTypeRow[] }>("/leave/types")).data.items,
+  balances: async (year?: number) => (await api.get<LeaveBalances>("/leave/me/balances", { params: year ? { year } : {} })).data,
+  requests: async (status?: LeaveStatus) => (await api.get<{ items: LeaveRequestRow[] }>("/leave/me/requests", { params: status ? { status } : {} })).data.items,
+  preview: async (params: PreviewParams) => (await api.get<LeavePreview>("/leave/me/preview", { params })).data,
+  apply: async (payload: ApplyPayload) => {
+    const { document, ...fields } = payload;
+    if (document) {
+      const form = new FormData();
+      for (const [k, v] of Object.entries(fields)) if (v !== undefined && v !== "") form.append(k, String(v));
+      form.append("document", document);
+      return (await api.post<{ request: LeaveRequestRow; autoApproved: boolean }>("/leave/me/requests", form)).data;
+    }
+    return (await api.post<{ request: LeaveRequestRow; autoApproved: boolean }>("/leave/me/requests", fields)).data;
+  },
+  cancel: async (id: string) => (await api.post<LeaveRequestRow>(`/leave/me/requests/${id}/cancel`)).data,
+  expectedHours: async (from: string, to: string) => (await api.get<ExpectedHours>("/leave/me/expected-hours", { params: { from, to } })).data,
+  inbox: async (status: LeaveStatus | "ALL" = "PENDING") =>
+    (await api.get<{ total: number; items: LeaveRequestRow[] }>("/leave/inbox", { params: { status, pageSize: 100 } })).data,
+  decide: async (id: string, decision: "APPROVE" | "REJECT", note?: string) =>
+    (await api.post<LeaveRequestRow>(`/leave/inbox/${id}/decision`, { decision, note })).data,
+  // validateStatus lets the 207 body through whatever the per-item outcome was.
+  bulkDecide: async (ids: string[], decision: "APPROVE" | "REJECT", note?: string) =>
+    (await api.post<{ results: BulkResult[] }>("/leave/inbox/bulk-decision", { ids, decision, note })).data.results,
+  team: async (from: string, to: string) => (await api.get<{ from: string; to: string; items: TeamLeaveItem[] }>("/leave/team", { params: { from, to } })).data.items
+};
+
+const ADMIN = "/leave/admin";
+
+export const leaveAdminApi = {
+  settings: async () =>
+    (await api.get<{ settings: LeaveSettings; entitled: boolean; effective: boolean }>(`${ADMIN}/settings`)).data,
+  updateSettings: async (payload: Partial<LeaveSettings>) => (await api.put<LeaveSettings>(`${ADMIN}/settings`, payload)).data,
+  types: async () => (await api.get<{ items: LeaveTypeRow[] }>(`${ADMIN}/types`)).data.items,
+  createType: async (payload: LeaveTypeInput & { code: string }) => (await api.post<LeaveTypeRow>(`${ADMIN}/types`, payload)).data,
+  updateType: async (id: string, payload: Partial<LeaveTypeInput>) => (await api.put<LeaveTypeRow>(`${ADMIN}/types/${id}`, payload)).data,
+  adjust: async (payload: { userId: string; leaveTypeId: string; delta: number; reason: string; leaveYear?: number }) =>
+    (await api.post(`${ADMIN}/adjustments`, payload)).data
+};

@@ -65,8 +65,8 @@ vi.mock("../../src/config/prisma.js", () => ({
       findMany: async () => {
         count("timesheet.findMany");
         return [
-          { userId: "r1", status: "DRAFT", totalHours: 2 },
-          { userId: "r1", status: "SUBMITTED", totalHours: 1.5 }
+          { userId: "r1", workDate: new Date("2026-11-20T00:00:00Z"), status: "DRAFT", totalHours: 2 },
+          { userId: "r1", workDate: new Date("2026-11-20T00:00:00Z"), status: "SUBMITTED", totalHours: 1.5 }
         ];
       }
     },

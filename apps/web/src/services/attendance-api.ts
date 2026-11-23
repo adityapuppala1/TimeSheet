@@ -84,7 +84,9 @@ const BASE = "/attendance/admin";
 export const attendanceAdminApi = {
   settings: {
     get: async () => (await api.get<AttendanceSettingsResponse>(`${BASE}/settings`)).data,
-    update: async (payload: Partial<AttendanceSettings>) => (await api.put<AttendanceSettings>(`${BASE}/settings`, payload)).data
+    update: async (payload: Partial<AttendanceSettings>) => (await api.put<AttendanceSettings>(`${BASE}/settings`, payload)).data,
+    /** How many people a workspace-wide change reaches. */
+    impact: async () => (await api.get<{ people: number }>(`${BASE}/impact`)).data
   },
   calendars: {
     list: async () => (await api.get<HolidayCalendarRow[]>(`${BASE}/calendars`)).data,
@@ -128,6 +130,7 @@ export interface AttendancePunchRecord {
   id: string;
   workDate: string;
   punchInAt: string;
+  punchOutAt: string | null;
   source: "WEB" | "API" | "WEBHOOK" | "MCP" | "CSV";
   /** The integration's own name when it has one ("Front door biometric"), else the kind. */
   sourceLabel: string;
@@ -149,6 +152,9 @@ export interface MyToday {
   status?: AttendanceDayStatus;
   isWorkingDay?: boolean;
   holidayName?: string | null;
+  /** Present only when the admin switched lateness on. */
+  latenessEnabled?: boolean;
+  expectedStartMinute?: number;
   record?: AttendancePunchRecord | null;
   steps?: PunchStep[];
 }
@@ -169,8 +175,18 @@ export const attendanceApi = {
   missedDayCheck: async (date: string) =>
     (await api.get<{ date: string; required: boolean; options: MissedReasonOption[] }>("/attendance/missed-reasons/check", { params: { date } })).data,
   punchIn: async (payload: PunchInPayload) =>
-    (await api.post<{ created: boolean; record: AttendancePunchRecord }>("/attendance/punch-in", payload)).data
+    (await api.post<{ created: boolean; record: AttendancePunchRecord }>("/attendance/punch-in", payload)).data,
+  /** V17 UI v2: stamps today's web punch with the server clock; no body. */
+  punchOut: async () => (await api.post<{ updated: boolean; record: AttendancePunchRecord }>("/attendance/punch-out")).data,
+  myHolidays: async (from: string, to: string) => (await api.get<MyHolidays>("/attendance/me/holidays", { params: { from, to } })).data
 };
+
+export interface MyHolidays {
+  calendar: { id: string; name: string } | null;
+  from: string;
+  to: string;
+  holidays: Array<{ id: string; date: string; name: string; isOptional: boolean }>;
+}
 
 /* ------------------------------------------------------------------ *
  * Sources & integrations (V17 A3) — /api/attendance/admin/integrations
@@ -261,6 +277,8 @@ export interface TeamDayRow {
   user: { id: string; name: string; email: string; avatarUrl: string | null; title: string };
   status: TeamDayStatus;
   holidayName: string | null;
+  /** Approved leave on the day: the type code and the portion taken. No reason, ever. */
+  leave?: { type: string; half: "FULL" | "FIRST_HALF" | "SECOND_HALF" } | null;
   /** Never a coordinate: `location` is a coarse label decided server-side. */
   punch: {
     punchInAt: string;
@@ -305,8 +323,15 @@ export interface MyHistoryDay {
   status: TeamDayStatus;
   holidayName: string | null;
   punchInAt: string | null;
+  punchOutAt: string | null;
   sourceLabel: string | null;
   face: "PASSED" | "FLAGGED" | "NONE" | null;
+  isWorkingDay: boolean;
+  /** Approved leave on the day: the type code and the portion taken. */
+  leave: { type: string; half: "FULL" | "FIRST_HALF" | "SECOND_HALF" } | null;
+  /** Timesheet hours logged that day, null when none. */
+  hours: number | null;
+  reasonCode: string | null;
 }
 
 export interface TeamDayParams {
@@ -386,6 +411,15 @@ export interface MyAnalytics {
   lateness: Lateness;
   summary: SelfSummary;
   upcomingHolidays: UpcomingHoliday[];
+  leave?: LeaveAnalyticsOut | null;
+}
+
+export interface LeaveAnalyticsOut {
+  audience: AnalyticsAudience;
+  utilisation: Array<{ code: string; name: string; days: number; people: number }> | null;
+  upcoming: { requests: number; people: number; entries: Array<{ name?: string; typeCode: string; startDate: string; endDate: string; status: string }> | null };
+  coverage: Array<{ weekStart: string; peopleOff: number; teamSize: number; share: number; atRisk: boolean }> | null;
+  expiring: Array<{ typeCode: string; days: number; yearEnd: string }> | null;
 }
 
 export interface AnalyticsPersonRow {
@@ -424,6 +458,9 @@ export interface OrgAnalytics {
   minGroupSize: number;
   lateness: Lateness;
   overall: GroupSummary;
+  /** Daily presence across everyone; null while the group is below the k-anonymity floor. */
+  trend: Array<{ date: string; presenceRate: number | null; absenceRate: number | null; present: number; absent: number }> | null;
+  hours: { logged: number; expected: number } | null;
   byManager: Array<GroupSummary & { managerId: string | null; managerName: string }>;
   bySource: Array<{ source: PunchSourceKind; people: number; suppressed: boolean; punches: number | null }>;
   face: { suppressed: boolean; checks: number | null; passRate: number | null; flagRate: number | null };
@@ -431,6 +468,7 @@ export interface OrgAnalytics {
   integrations: SourceHealth[];
   holidays: { dates: number; personDays: number };
   upcomingHolidays: UpcomingHoliday[];
+  leave?: LeaveAnalyticsOut | null;
 }
 
 export interface AttendanceInsight {

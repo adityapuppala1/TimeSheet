@@ -14,7 +14,9 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Circle, Clock, LogOut, MapPin, ScanFace, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, Circle, Clock, Loader2, LogOut, MapPin, ScanFace, X } from "lucide-react";
+import { durationText, minutesLate } from "../lib/attendance-status";
+import { cn } from "../lib/utils";
 import { Link, useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { useAuthStore } from "../store/auth";
@@ -81,50 +83,152 @@ function primaryLabel(phase: Phase, consentFirst: boolean): string {
   return consentFirst ? "Agree and punch in" : "Punch in";
 }
 
-/** How many of the listed steps are complete, for the checkmarks. */
-function completedSteps(phase: Phase, wantsLocation: boolean): number {
-  if (phase === "face" || phase === "face-failed" || phase === "submitting") return wantsLocation ? 1 : 0;
-  return 0;
+/** Where each checklist item stands, from the phase the flow is in. */
+type StepState = "idle" | "active" | "done" | "failed";
+
+function stepStates(phase: Phase, wantsLocation: boolean, wantsFace: boolean, locationGranted: boolean): { location: StepState; face: StepState } {
+  let location: StepState = "idle";
+  if (phase === "locating") location = "active";
+  else if (phase === "location-blocked") location = "failed";
+  else if (phase === "face" || phase === "face-failed" || phase === "submitting" || phase === "done") location = wantsLocation && locationGranted ? "done" : "idle";
+  let face: StepState = "idle";
+  if (phase === "face") face = "active";
+  else if (phase === "face-failed") face = "failed";
+  else if ((phase === "submitting" || phase === "done") && wantsFace) face = "done";
+  return { location, face };
 }
 
-type StepItem = { key: string; icon: typeof MapPin; label: string };
+type StepItem = { key: string; icon: typeof MapPin; label: string; state: StepState };
 
-function StepList({ items, completed }: Readonly<{ items: StepItem[]; completed: number }>) {
+const STEP_COPY: Record<StepState, string> = { idle: "Waiting", active: "In progress", done: "Done", failed: "Needs attention" };
+
+/** The inline 2-step checklist under the button: spinner while it runs, a check when done. */
+function StepChecklist({ items }: Readonly<{ items: StepItem[] }>) {
   if (items.length === 0) return null;
   return (
-    <ol className="grid gap-2" aria-label="Punch-in steps">
-      {items.map((step, i) => {
-        const done = i < completed;
-        return (
-          <li key={step.key} className={`flex items-center gap-3 rounded-lg border p-3 text-sm ${done ? "border-success/40 bg-success/5" : "border-border"}`}>
-            {done ? <CheckCircle2 className="h-4 w-4 shrink-0 text-success" /> : <Circle className="h-4 w-4 shrink-0 text-muted-foreground" />}
-            <step.icon className="h-4 w-4 shrink-0 text-primary" />
-            <span className="min-w-0">{step.label}</span>
-          </li>
-        );
-      })}
+    <ol className="grid gap-2" aria-label="Punch-in checks">
+      {items.map((step) => (
+        <li
+          key={step.key}
+          className={cn(
+            "flex min-h-[44px] items-center gap-3 rounded-lg border px-3 text-sm",
+            step.state === "done" && "border-success/40 bg-success/5",
+            step.state === "failed" && "border-destructive/40 bg-destructive/5",
+            step.state === "idle" && "border-border",
+            step.state === "active" && "border-primary/50 bg-primary/5"
+          )}
+        >
+          <span className="grid h-5 w-5 shrink-0 place-items-center" aria-hidden="true">
+            {step.state === "done" && <CheckCircle2 className="h-5 w-5 text-success" />}
+            {step.state === "active" && <Loader2 className="h-4 w-4 text-primary motion-safe:animate-spin" />}
+            {step.state === "failed" && <AlertCircle className="h-5 w-5 text-destructive" />}
+            {step.state === "idle" && <Circle className="h-4 w-4 text-muted-foreground" />}
+          </span>
+          <step.icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="min-w-0 flex-1">{step.label}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">{STEP_COPY[step.state]}</span>
+        </li>
+      ))}
     </ol>
   );
 }
 
-function PunchInDone({ punchedAt, onDone }: Readonly<{ punchedAt: string | null; onDone?: () => void }>) {
+/** The one place in the app where seconds tick: the punch-in dialog, where the moment matters. */
+function LiveClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  return (
+    <div className="grid justify-items-center gap-1 py-1 text-center">
+      <p className="text-5xl font-black leading-none tracking-tight tabular-nums" aria-label={`The time is ${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}>
+        {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+      </p>
+      <p className="text-sm text-muted-foreground">{now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>
+    </div>
+  );
+}
+
+/** How long the success state stays before the dialog closes itself. */
+export const SUCCESS_AUTOCLOSE_MS = 2000;
+
+function PunchInDone({ punchedAt, lateMinutes, onDone }: Readonly<{ punchedAt: string | null; lateMinutes: number; onDone?: () => void }>) {
   const reduced = usePrefersReducedMotion();
   const time = punchedAt ? new Date(punchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  useEffect(() => {
+    if (!onDone) return;
+    const id = window.setTimeout(onDone, SUCCESS_AUTOCLOSE_MS);
+    return () => window.clearTimeout(id);
+  }, [onDone]);
   return (
-    <div className="grid justify-items-center gap-3 py-4 text-center" role="status" aria-live="polite">
+    <div className="grid justify-items-center gap-3 py-6 text-center" role="status" aria-live="polite">
       <span className={`grid h-14 w-14 place-items-center rounded-full bg-success/15 text-success ${reduced ? "" : "punch-in-check"}`}>
-        <CheckCircle2 className="h-8 w-8" />
+        <CheckCircle2 className="h-8 w-8" aria-hidden="true" />
       </span>
-      <p className="text-base font-semibold">You're punched in{time ? ` at ${time}` : ""}</p>
-      <p className="text-sm text-muted-foreground">Have a good day.</p>
+      <p className="text-lg font-semibold">Punched in{time ? ` ${time}` : ""}</p>
+      <p className="text-sm text-muted-foreground">
+        {lateMinutes > 0 ? `${durationText(lateMinutes)} after the expected start. No action needed.` : "Have a good day."}
+      </p>
       {onDone && (
-        <Button className="mt-1 w-full sm:w-auto" onClick={onDone}>
-          Continue
+        <Button variant="ghost" className="min-h-[44px]" onClick={onDone}>
+          Close
         </Button>
       )}
     </div>
   );
 }
+
+/**
+ * Already punched in: "In since 09:02 · 7h 39m" and a secondary Punch out. Used by the Today card on
+ * My attendance and wherever a punched-in state is shown. Duration updates once a minute.
+ */
+export function PunchedInPanel({ record, onChanged, className }: Readonly<{ record: NonNullable<MyToday["record"]>; onChanged?: () => void; className?: string }>) {
+  const queryClient = useQueryClient();
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+  const out = useMutation({
+    mutationFn: attendanceApi.punchOut,
+    onSuccess: (result) => {
+      toast.success(result.updated ? "Punched out" : "You were already punched out");
+      runInBackground(queryClient.invalidateQueries({ queryKey: MY_TODAY_QUERY_KEY }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: ["attendance", "me"] }));
+      onChanged?.();
+    },
+    onError: (err: unknown) => toast.error("Could not punch out", { description: (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Try again." })
+  });
+  const since = new Date(record.punchInAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const until = record.punchOutAt ? new Date(record.punchOutAt) : now;
+  const minutes = Math.max(0, Math.floor((until.getTime() - new Date(record.punchInAt).getTime()) / 60_000));
+  const duration = durationText(minutes);
+  return (
+    <div className={cn("flex min-w-0 flex-wrap items-center justify-between gap-3", className)}>
+      <p className="min-w-0 text-sm" aria-live="polite">
+        {record.punchOutAt ? (
+          <>
+            <span className="font-semibold">Out at {new Date(record.punchOutAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+            <span className="text-muted-foreground"> · in {since} · {duration}</span>
+          </>
+        ) : (
+          <>
+            <span className="font-semibold">In since {since}</span>
+            <span className="text-muted-foreground"> · {duration}</span>
+          </>
+        )}
+      </p>
+      {!record.punchOutAt && record.source === "WEB" && (
+        <Button variant="outline" className="min-h-[44px]" disabled={out.isPending} onClick={() => out.mutate()}>
+          <LogOut className="mr-2 h-4 w-4" aria-hidden="true" />
+          {out.isPending ? "Punching out…" : "Punch out"}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 
 function FaceFailedNotice({ allowFlagged }: Readonly<{ allowFlagged: boolean }>) {
   return (
@@ -145,8 +249,9 @@ function FaceFailedNotice({ allowFlagged }: Readonly<{ allowFlagged: boolean }>)
 export function PunchInSteps({
   today,
   onDone,
-  onPhaseChange
-}: Readonly<{ today: MyToday; onDone?: () => void; onPhaseChange?: (phase: Phase) => void }>) {
+  onPhaseChange,
+  onSkip
+}: Readonly<{ today: MyToday; onDone?: () => void; onPhaseChange?: (phase: Phase) => void; onSkip?: () => void }>) {
   const queryClient = useQueryClient();
   const [phase, setPhaseState] = useState<Phase>("ready");
   const [error, setError] = useState<string | null>(null);
@@ -215,16 +320,40 @@ export function PunchInSteps({
     }
   };
 
-  const stepItems = [
-    ...(wantsLocation ? [{ key: "LOCATION", icon: MapPin, label: required ? "Share your location" : "Share your location (optional)" }] : []),
-    ...(wantsFace ? [{ key: "FACE", icon: ScanFace, label: "Confirm it's you" }] : [])
+  const states = stepStates(phase, wantsLocation, wantsFace, coords.current.lat != null);
+  const stepItems: StepItem[] = [
+    ...(wantsLocation
+      ? [{ key: "LOCATION", icon: MapPin, label: required ? "Confirm your work location" : "Confirm your work location (optional)", state: states.location }]
+      : []),
+    ...(wantsFace ? [{ key: "FACE", icon: ScanFace, label: "Confirm it's you", state: states.face }] : [])
   ];
-  if (phase === "done") return <PunchInDone punchedAt={punchedAt} onDone={onDone} />;
   const allowFlagged = today.faceFailureRule === "ALLOW_FLAGGED";
+  const lateMinutes = today.latenessEnabled && punchedAt ? minutesLate(punchedAt, today.expectedStartMinute) : 0;
+  if (phase === "done") return <PunchInDone punchedAt={punchedAt} lateMinutes={lateMinutes} onDone={onDone} />;
+  const busy = phase === "locating" || phase === "submitting" || phase === "face";
 
   return (
     <div className="grid gap-4">
-      <StepList items={stepItems} completed={completedSteps(phase, wantsLocation)} />
+      <LiveClock />
+
+      <Button
+        autoFocus
+        className="h-[56px] w-full text-base"
+        onClick={() => {
+          if (phase === "face-failed") {
+            afterLocation();
+            return;
+          }
+          runInBackground(start());
+        }}
+        disabled={busy}
+        aria-busy={busy}
+      >
+        {busy ? <Loader2 className="mr-2 h-5 w-5 motion-safe:animate-spin" aria-hidden="true" /> : <Clock className="mr-2 h-5 w-5" aria-hidden="true" />}
+        {primaryLabel(phase, Boolean(today.consentNeeded) && wantsLocation)}
+      </Button>
+
+      <StepChecklist items={stepItems} />
 
       {wantsLocation && today.consentNeeded && phase === "ready" && (
         <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
@@ -252,26 +381,16 @@ export function PunchInSteps({
         </p>
       )}
 
-      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-        {phase === "face-failed" && allowFlagged && (
-          <Button variant="outline" onClick={() => punch.mutate(null)}>
-            Punch in anyway
-          </Button>
-        )}
-        <Button
-          onClick={() => {
-            if (phase === "face-failed") {
-              afterLocation();
-              return;
-            }
-            runInBackground(start());
-          }}
-          disabled={phase === "locating" || phase === "submitting" || phase === "face"}
-        >
-          <Clock className="mr-2 h-4 w-4" />
-          {primaryLabel(phase, Boolean(today.consentNeeded) && wantsLocation)}
+      {phase === "face-failed" && allowFlagged && (
+        <Button variant="outline" className="min-h-[44px] w-full" onClick={() => punch.mutate(null)}>
+          Punch in anyway
         </Button>
-      </div>
+      )}
+      {onSkip && !busy && (
+        <button type="button" onClick={onSkip} className="focus-ring min-h-[44px] justify-self-center rounded-md px-3 text-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+          Not now
+        </button>
+      )}
 
       {wantsFace && (
         <FaceVerificationDialog
@@ -361,15 +480,15 @@ export function PunchInController() {
   };
 
   const title = `Good ${greeting()}, ${user.name?.split(" ")[0] ?? "there"}`;
-  const description = data.holidayName ? `Today is ${data.holidayName}.` : "Punch in to start your day.";
-  const body = <PunchInSteps today={data} onDone={finish} onPhaseChange={setActivePhase} />;
+  const description = data.holidayName ? `Today is ${data.holidayName}.` : "Ready to start your day?";
+  const body = <PunchInSteps today={data} onDone={finish} onPhaseChange={setActivePhase} onSkip={surface === "dialog" ? dismiss : undefined} />;
 
   if (surface === "gate") return <PunchInGateOverlay title={title} body={body} />;
 
   if (isPhone) {
     return (
       <Sheet open onOpenChange={(open) => !open && dismiss()}>
-        <SheetContent side="bottom" className="max-h-[90dvh] overflow-y-auto rounded-t-2xl pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+        <SheetContent side="bottom" className="max-h-[85dvh] overflow-y-auto rounded-t-2xl pb-[max(1.5rem,env(safe-area-inset-bottom))]">
           <SheetHeader className="text-left">
             <SheetTitle>{title}</SheetTitle>
             <SheetDescription>{description}</SheetDescription>
@@ -381,7 +500,7 @@ export function PunchInController() {
   }
   return (
     <Dialog open onOpenChange={(open) => !open && dismiss()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-[440px]">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>

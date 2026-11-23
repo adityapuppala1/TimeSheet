@@ -700,6 +700,16 @@ export interface LeavePreview {
   approver: { id: string; name: string; avatarUrl: string | null } | null;
 }
 
+/** assertSpanAllowed as data: the leave year, or the problem that stops the request. */
+function spanLimits(span: { startDate: string; endDate: string }, today: string, startMonth: number): { leaveYear: number; problem: { code: string; message: string } | null } {
+  try {
+    return { leaveYear: assertSpanAllowed(span, today, startMonth, false), problem: null };
+  } catch (error) {
+    if (!(error instanceof AppError)) throw error;
+    return { leaveYear: leaveYearOf(span.startDate, startMonth), problem: { code: String(error.code ?? "LEAVE_OUT_OF_RANGE"), message: error.message } };
+  }
+}
+
 /**
  * Read-only mirror of applyLeave's checks, for the Apply screen's live summary. It reuses the same
  * pure functions (spanErrors, countLeaveDays, findClash) so the number shown is the number charged.
@@ -727,15 +737,9 @@ export async function previewLeave(userId: string, q: z.infer<typeof previewQuer
   const settings = await getAttendanceSettings();
   const startMonth = settings.leaveYearStartMonth ?? 1;
   const today = todayKeyFor(now, person.timezone, serverTimezone);
-  let leaveYear = leaveYearOf(q.start, startMonth);
-  if (!shape.length) {
-    try {
-      leaveYear = assertSpanAllowed(span, today, startMonth, false);
-    } catch (error) {
-      if (!(error instanceof AppError)) throw error;
-      problems.push({ code: String(error.code ?? "LEAVE_OUT_OF_RANGE"), message: error.message });
-    }
-  }
+  const limits = shape.length ? { leaveYear: leaveYearOf(q.start, startMonth), problem: null } : spanLimits(span, today, startMonth);
+  const leaveYear = limits.leaveYear;
+  if (limits.problem) problems.push(limits.problem);
   const base = {
     allowNegative: type.allowNegative,
     documentRequired: false,

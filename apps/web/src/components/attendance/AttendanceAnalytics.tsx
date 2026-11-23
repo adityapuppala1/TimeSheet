@@ -13,8 +13,9 @@
  * INSIGHTS: Sparkles marks an AI suggestion, Lightbulb a rule-based one. Rule suggestions are
  * always present; AI ones only when the workspace switched them on for this audience.
  */
+import { runInBackground } from "../../lib/run-in-background";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, BarChart3, CalendarDays, Clock, EyeOff, Hourglass, Lightbulb, Plug, ShieldCheck, Sparkles, TrendingUp, Users2 } from "lucide-react";
+import { AlertTriangle, ArrowRight, CalendarDays, Clock, EyeOff, Hourglass, Lightbulb, Sparkles, TrendingUp, Users2, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as ChartTip, XAxis, YAxis } from "recharts";
 import {
@@ -34,10 +35,12 @@ import {
   type AnalyticsAudience,
   type AttendanceInsight,
   type GroupSummary,
-  type OrgAnalytics,
   type TeamAnalytics
 } from "../../services/attendance-api";
+import { splitInsightDetail } from "../../lib/org-kpis";
 import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
+import { CardError } from "./attendance-ui";
 import { Card, CardContent } from "../ui/card";
 import { EmptyState } from "../ui/empty-state";
 import { Skeleton } from "../ui/skeleton";
@@ -80,12 +83,12 @@ export function RangeSelector({ value, onChange }: Readonly<{ value: RangeDays; 
   );
 }
 
-function useRange(initial: RangeDays = 30) {
+export function useRange(initial: RangeDays = 30) {
   const [days, setDays] = useState<RangeDays>(initial);
   return { days, setDays, ...rangeFor(days, todayKey()) };
 }
 
-function SectionCard({ title, description, children, className }: Readonly<{ title: string; description?: string; children: ReactNode; className?: string }>) {
+export function SectionCard({ title, description, children, className }: Readonly<{ title: string; description?: string; children: ReactNode; className?: string }>) {
   return (
     <Card className={cn("min-w-0", className)}>
       <CardContent className="grid min-w-0 gap-3 p-4">
@@ -105,7 +108,7 @@ function suppressedText(people: number | undefined, min: number): string {
   return `Hidden to protect individuals: ${who} in this group, and figures are only shown for ${min} or more.`;
 }
 
-function SuppressedNote({ people, min }: Readonly<{ people?: number; min: number }>) {
+export function SuppressedNote({ people, min }: Readonly<{ people?: number; min: number }>) {
   return (
     <p className="flex items-start gap-2 rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
       <EyeOff className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -115,7 +118,7 @@ function SuppressedNote({ people, min }: Readonly<{ people?: number; min: number
 }
 
 /** A labelled bar list — readable as text, no chart needed for a handful of categories. */
-function CountBars({ rows, empty }: Readonly<{ rows: Array<{ key: string; label: string; count: number }>; empty: string }>) {
+export function CountBars({ rows, empty }: Readonly<{ rows: Array<{ key: string; label: string; count: number }>; empty: string }>) {
   if (rows.length === 0) return <p className="text-xs text-muted-foreground">{empty}</p>;
   const max = Math.max(...rows.map((r) => r.count));
   return (
@@ -135,7 +138,7 @@ function CountBars({ rows, empty }: Readonly<{ rows: Array<{ key: string; label:
   );
 }
 
-function AnalyticsSkeleton() {
+export function AnalyticsSkeleton() {
   return (
     <div className="grid gap-3" aria-busy="true" aria-label="Loading analytics">
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
@@ -148,7 +151,7 @@ function AnalyticsSkeleton() {
   );
 }
 
-function LoadError() {
+export function LoadError() {
   return <EmptyState compact icon={AlertTriangle} title="Analytics aren't available" description="The module may be off, or this view is not open to your role." />;
 }
 
@@ -156,15 +159,18 @@ function LoadError() {
 
 export function InsightsList({ audience, from, to }: Readonly<{ audience: AnalyticsAudience; from: string; to: string }>) {
   const q = useQuery({ queryKey: ["attendance", "insights", audience, from, to], queryFn: () => attendanceAnalyticsApi.insights(audience, from, to) });
+  // Dismissed for this visit only: nothing is saved, so a dismissed card is back next session.
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const shown = (q.data?.insights ?? []).filter((i) => !dismissed.has(i.id));
   return (
-    <SectionCard title="Suggestions" description="Built from the figures above. AI suggestions are marked with a sparkle.">
+    <SectionCard title="Suggestions" description="What stands out in this range, the figures behind it and one thing to try.">
       {q.isLoading && <Skeleton className="h-24 w-full" />}
-      {q.isError && <p className="text-xs text-muted-foreground">Suggestions aren't available right now.</p>}
-      {q.data && q.data.insights.length === 0 && <p className="text-xs text-muted-foreground">Nothing stands out in this range.</p>}
-      {q.data && q.data.insights.length > 0 && (
-        <ul className="grid gap-2">
-          {q.data.insights.map((i) => (
-            <InsightItem key={i.id} insight={i} />
+      {q.isError && <CardError message="Suggestions are not available right now." onRetry={() => runInBackground(q.refetch())} />}
+      {q.data && shown.length === 0 && <p className="text-xs text-muted-foreground">{q.data.insights.length === 0 ? "Nothing stands out in this range." : "All suggestions dismissed for this visit."}</p>}
+      {shown.length > 0 && (
+        <ul className="grid gap-2 lg:grid-cols-2">
+          {shown.map((i) => (
+            <InsightCard key={i.id} insight={i} onDismiss={() => setDismissed((prev) => new Set(prev).add(i.id))} />
           ))}
         </ul>
       )}
@@ -172,23 +178,30 @@ export function InsightsList({ audience, from, to }: Readonly<{ audience: Analyt
   );
 }
 
-function insightTone(insight: AttendanceInsight): string {
-  if (insight.source === "ai") return "text-primary";
-  return insight.severity === "warn" ? "text-warning" : "text-muted-foreground";
-}
-
-function InsightItem({ insight }: Readonly<{ insight: AttendanceInsight }>) {
-  const Icon = insight.source === "ai" ? Sparkles : Lightbulb;
+/** Observation (title), evidence, then one suggested action — labelled AI suggestion or Rule. */
+export function InsightCard({ insight, onDismiss }: Readonly<{ insight: AttendanceInsight; onDismiss: () => void }>) {
+  const ai = insight.source === "ai";
+  const Icon = ai ? Sparkles : Lightbulb;
+  const { evidence, action } = splitInsightDetail(insight.detail ?? "");
   return (
-    <li className="flex min-w-0 gap-3 rounded-lg border border-border p-3 motion-safe:animate-in motion-safe:fade-in">
-      <Icon
-        className={cn("mt-0.5 h-4 w-4 shrink-0", insightTone(insight))}
-        aria-label={insight.source === "ai" ? "AI suggestion" : "Rule-based suggestion"}
-      />
-      <div className="min-w-0">
-        <p className="text-sm font-medium">{insight.title}</p>
-        {insight.detail && <p className="text-xs text-muted-foreground">{insight.detail}</p>}
+    <li className="grid min-w-0 gap-2 rounded-lg border border-border bg-card p-3 motion-safe:animate-in motion-safe:fade-in">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <Badge variant={ai ? "info" : "muted"} className="gap-1">
+          <Icon className="h-3 w-3" aria-hidden="true" />
+          {ai ? "AI suggestion" : "Rule"}
+        </Badge>
+        <Button variant="ghost" size="icon" aria-label={`Dismiss: ${insight.title}`} onClick={onDismiss}>
+          <X className="h-4 w-4" aria-hidden="true" />
+        </Button>
       </div>
+      <p className="text-sm font-semibold">{insight.title}</p>
+      {evidence && <p className="text-xs text-muted-foreground">{evidence}</p>}
+      {action && (
+        <p className="flex items-start gap-1.5 rounded-md bg-muted/60 px-2 py-1.5 text-xs">
+          <ArrowRight className="mt-0.5 h-3 w-3 shrink-0 text-primary" aria-hidden="true" />
+          <span>{action}</span>
+        </p>
+      )}
     </li>
   );
 }
@@ -260,7 +273,7 @@ export function MyAnalyticsSection() {
 
 /* ------------------------------------- group ------------------------------------- */
 
-function HistogramChart({ data, ariaLabel, xKey, valueLabel }: Readonly<{ data: Array<Record<string, string | number>>; ariaLabel: string; xKey: string; valueLabel: string }>) {
+export function HistogramChart({ data, ariaLabel, xKey, valueLabel }: Readonly<{ data: Array<Record<string, string | number>>; ariaLabel: string; xKey: string; valueLabel: string }>) {
   const reduced = usePrefersReducedMotion();
   return (
     <div className="h-52 w-full min-w-0" role="img" aria-label={ariaLabel}>
@@ -277,7 +290,7 @@ function HistogramChart({ data, ariaLabel, xKey, valueLabel }: Readonly<{ data: 
   );
 }
 
-function GroupFigures({ group, min, drifting }: Readonly<{ group: GroupSummary; min: number; drifting?: number }>) {
+export function GroupFigures({ group, min, drifting }: Readonly<{ group: GroupSummary; min: number; drifting?: number }>) {
   if (group.suppressed || !group.aggregates) return <SuppressedNote people={group.people} min={min} />;
   const a = group.aggregates;
   const weekdays = a.absencesByWeekday.map((count, i) => ({ key: String(i), label: WEEKDAY_SHORT[i], count })).filter((r) => r.count > 0);
@@ -348,123 +361,6 @@ export function TeamInsightsView() {
           <InsightsList audience="team" from={range.from} to={range.to} />
         </>
       )}
-    </section>
-  );
-}
-
-/* ---------------------------------- organisation ---------------------------------- */
-
-function HealthBadge({ enabled, silent, days }: Readonly<{ enabled: boolean; silent: boolean; days: number | null }>) {
-  if (!enabled) return <Badge variant="muted">Off</Badge>;
-  if (silent) return <Badge variant="warning">Silent {days}d</Badge>;
-  return <Badge variant="success">Healthy</Badge>;
-}
-
-function IntegrationHealth({ data }: Readonly<{ data: OrgAnalytics }>) {
-  if (data.integrations.length === 0) return <p className="text-xs text-muted-foreground">No integrations configured.</p>;
-  return (
-    <ul className="grid min-w-0 gap-2">
-      {data.integrations.map((s) => {
-        const silent = s.enabled && (s.silentWorkingDays ?? 0) >= 2;
-        return (
-          <li key={s.id} className="grid min-w-0 gap-1 rounded-md border border-border px-3 py-2">
-            <div className="flex min-w-0 items-center justify-between gap-2">
-              <span className="truncate text-sm font-medium">{s.name}</span>
-              <HealthBadge enabled={s.enabled} silent={silent} days={s.silentWorkingDays} />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {Object.entries(s.counts).map(([k, n]) => `${n} ${k.toLowerCase()}`).join(" · ") || "No events in range"}
-              {s.lastEventAt ? ` · last ${new Date(s.lastEventAt).toLocaleString()}` : " · never sent"}
-            </p>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function ByManager({ data }: Readonly<{ data: OrgAnalytics }>) {
-  return (
-    <ul className="grid min-w-0 gap-2">
-      {data.byManager.map((t) => (
-        <li key={t.managerId ?? "none"} className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md border border-border px-3 py-2">
-          <span className="min-w-0 truncate text-sm font-medium">{t.managerName}</span>
-          <span className="text-xs text-muted-foreground">
-            {t.people} people ·{" "}
-            {t.suppressed || !t.aggregates ? "hidden (small group)" : `presence ${pctText(t.aggregates.presenceRate)} · no timesheet ${t.aggregates.presentNoTimesheet.days}`}
-          </span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-export function OrgAnalyticsView() {
-  const range = useRange();
-  const q = useQuery({ queryKey: ["attendance", "analytics", "org", range.from, range.to], queryFn: () => attendanceAnalyticsApi.org(range.from, range.to) });
-  const d = q.data;
-  return (
-    <section aria-label="Organisation analytics" className="grid min-w-0 gap-3">
-      <div className="flex justify-end">
-        <RangeSelector value={range.days} onChange={range.setDays} />
-      </div>
-      {q.isLoading && <AnalyticsSkeleton />}
-      {q.isError && <LoadError />}
-      {d && (
-        <>
-          <GroupFigures group={d.overall} min={d.minGroupSize} />
-          <div className="grid min-w-0 gap-3 lg:grid-cols-2">
-            <SectionCard title="By team" description="Grouped by manager. Small teams are hidden.">
-              <ByManager data={d} />
-            </SectionCard>
-            <SectionCard title="Sign-in times" description="Successful sign-ins per hour, in each person's timezone.">
-              {d.loginHistogram.hours ? (
-                <HistogramChart
-                  data={d.loginHistogram.hours.map((count, h) => ({ hour: minuteText(h * 60), count }))}
-                  xKey="hour"
-                  valueLabel="Sign-ins"
-                  ariaLabel={`Sign-ins by hour, ${d.loginHistogram.hours.reduce((a, b) => a + b, 0)} in total`}
-                />
-              ) : (
-                <SuppressedNote min={d.minGroupSize} />
-              )}
-            </SectionCard>
-            <SectionCard title="Sources" description="Punch-ins by where they came from.">
-              <CountBars
-                rows={d.bySource.filter((s) => !s.suppressed && s.punches).map((s) => ({ key: s.source, label: s.source.toLowerCase(), count: s.punches ?? 0 }))}
-                empty="No source is used by enough people to show."
-              />
-            </SectionCard>
-            <SectionCard title="Face checks at punch-in">
-              {d.face.suppressed ? (
-                <SuppressedNote min={d.minGroupSize} />
-              ) : (
-                <div className="grid grid-cols-3 gap-2">
-                  <StatCard label="Checks" value={d.face.checks ?? 0} icon={<ShieldCheck className="h-4 w-4" />} />
-                  <StatCard label="Passed" value={pctText(d.face.passRate)} />
-                  <StatCard label="Flagged" value={pctText(d.face.flagRate)} />
-                </div>
-              )}
-            </SectionCard>
-            <SectionCard title="Integration health" description="Events per source in this range, and how long since each last sent.">
-              <IntegrationHealth data={d} />
-            </SectionCard>
-            <SectionCard title="Holidays">
-              <div className="grid grid-cols-2 gap-2">
-                <StatCard label="Holiday dates" value={d.holidays.dates} icon={<CalendarDays className="h-4 w-4" />} />
-                <StatCard label="Person-days off" value={d.holidays.personDays} icon={<BarChart3 className="h-4 w-4" />} />
-              </div>
-              {d.upcomingHolidays.length > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  Next 14 days: {d.upcomingHolidays.map((h) => `${h.name} (${shortDate(h.date)})`).join(", ")}
-                </p>
-              )}
-            </SectionCard>
-          </div>
-          <InsightsList audience="org" from={range.from} to={range.to} />
-        </>
-      )}
-      {!d && !q.isLoading && !q.isError && <EmptyState compact icon={Plug} title="Nothing to show" />}
     </section>
   );
 }

@@ -244,6 +244,10 @@ const router = createBrowserRouter([
       { path: "attendance", element: <PageShell><AttendancePage /></PageShell> },
       { path: "attendance/team", element: <PageShell><AttendancePage /></PageShell> },
       { path: "attendance/org", element: <PageShell><AttendancePage /></PageShell> },
+      // V17 UI v2: leave. One page, three sub-routes; the page itself explains when leave is off.
+      { path: "attendance/leave", element: <PageShell><AttendancePage /></PageShell> },
+      { path: "attendance/leave/requests", element: <PageShell><AttendancePage /></PageShell> },
+      { path: "attendance/leave/holidays", element: <PageShell><AttendancePage /></PageShell> },
       { path: "approvals", element: <RequirePermission permission={permissions.TIMESHEETS_APPROVE}><PageShell><ApprovalsPage /></PageShell></RequirePermission> },
       { path: "users", element: <RequirePermission permission={permissions.USERS_MANAGE}><PageShell><UsersPage /></PageShell></RequirePermission> },
       { path: "projects", element: <RequirePermission permission={permissions.PROJECTS_MANAGE}><PageShell><ProjectsPage /></PageShell></RequirePermission> },
