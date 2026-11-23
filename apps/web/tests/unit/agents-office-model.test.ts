@@ -13,6 +13,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  spreadApart,
+  stackCeiling,
   buildNavGrid,
   castPeople,
   COFFEE_SPOT,
@@ -237,5 +239,30 @@ describe("label declutter with bubbles", () => {
     const lifts = declutter([{ x: 0, y: 200, h: 90 }, { x: 10, y: 150 }], 150, 40);
     expect(lifts[0]).toBe(0);
     expect(150 - lifts[1]).toBeLessThanOrEqual(200 - 90);
+  });
+});
+
+describe("label keep-out and spreading", () => {
+  const legend = { left: 10, top: 10, right: 260, bottom: 40 };
+  const feed = { left: 700, top: 50, right: 960, bottom: 200 };
+
+  it("keeps a stack under the HUD panel it sits beneath, else 8 px from the top", () => {
+    expect(stackCeiling(100, 78, [legend, feed])).toBe(46);
+    expect(stackCeiling(800, 78, [legend, feed])).toBe(206);
+    expect(stackCeiling(450, 78, [legend, feed])).toBe(8);
+  });
+
+  it("pushes colliding stacks apart sideways and leaves separate ones alone", () => {
+    const shift = spreadApart(
+      [
+        { x: 100, top: 10, bottom: 50 },
+        { x: 120, top: 20, bottom: 60 },
+        { x: 600, top: 10, bottom: 50 }
+      ],
+      150
+    );
+    expect(120 + shift[1] - (100 + shift[0])).toBeGreaterThanOrEqual(150);
+    expect(shift[2]).toBe(0);
+    expect(spreadApart([{ x: 100, top: 0, bottom: 40 }, { x: 100, top: 100, bottom: 140 }], 150)).toEqual([0, 0]);
   });
 });

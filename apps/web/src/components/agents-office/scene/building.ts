@@ -128,6 +128,14 @@ function paintLightPools(ctx: CanvasRenderingContext2D, theme: StudioTheme) {
   }
 }
 
+/** A lit laptop's lid logo: pale on a dark room, saturated on a light one. */
+const litLogoColour = (theme: StudioTheme): number => (theme === "dark" ? 0xe0f2fe : 0x0ea5e9);
+
+function markLit(lit: Set<number>, index: number, on: boolean) {
+  if (on) lit.add(index);
+  else lit.delete(index);
+}
+
 function floorTexture(theme: StudioTheme): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
   canvas.width = FLOOR.w * PX;
@@ -335,7 +343,7 @@ export function buildOffice(theme: StudioTheme): Building {
     const logoMat = track(new THREE.MeshBasicMaterial({ color: 0x64748b, toneMapped: false }));
     logos.push(logoMat);
     const logo = new THREE.Mesh(unit, logoMat);
-    logo.scale.set(0.06, 0.06, 0.004);
+    logo.scale.set(0.09, 0.09, 0.004);
     logo.position.z = 0.012;
     live.add(lid, screen, logo);
     group.add(live);
@@ -400,12 +408,17 @@ export function buildOffice(theme: StudioTheme): Building {
   const styleSpills = (next: StudioTheme) => {
     for (const m of spillMats) {
       m.blending = next === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending;
-      m.color.setHex(next === "dark" ? 0x7dd3fc : 0x38bdf8);
-      m.opacity = next === "dark" ? 0.6 : 0.38;
+      // On the light floor an additive glow vanishes; a deeper blue at higher opacity reads instead.
+      m.color.setHex(next === "dark" ? 0x7dd3fc : 0x0284c7);
+      m.opacity = next === "dark" ? 0.6 : 0.5;
       m.needsUpdate = true;
     }
   };
   styleSpills(theme);
+  // The lit logo on the lid's back is what the camera sees: pale on a dark room, saturated on a light one
+  // (a pale logo on the light-grey lid was invisible).
+  let litLogo = litLogoColour(theme);
+  const lit = new Set<number>();
 
   const camLocal = new THREE.Vector3();
   return {
@@ -415,7 +428,8 @@ export function buildOffice(theme: StudioTheme): Building {
       if (!screen) return;
       screen.emissiveIntensity = on ? 1.1 : 0;
       screen.color.setHex(on ? 0x0ea5e9 : screenOff);
-      logos[index].color.setHex(on ? 0xe0f2fe : 0x64748b);
+      logos[index].color.setHex(on ? litLogo : 0x64748b);
+      markLit(lit, index, on);
       spills[index].visible = on;
     },
     setTheme(next) {
@@ -428,6 +442,8 @@ export function buildOffice(theme: StudioTheme): Building {
       skirtMat.color.setHex(PALETTE[next].skirting);
       windowMat.emissiveIntensity = next === "dark" ? 0.25 : 0.55;
       styleSpills(next);
+      litLogo = litLogoColour(next);
+      for (const i of lit) logos[i].color.setHex(litLogo);
     },
     update(camera, dt) {
       camLocal.copy(camera.position);

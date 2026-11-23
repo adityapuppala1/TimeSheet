@@ -343,7 +343,7 @@ export function AgentOffice({
 
       {/* Top bar: legend on the left, view controls on the right. */}
       <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-wrap items-start justify-between gap-2">
-        <ul className={cn("pointer-events-auto flex flex-wrap gap-x-3 gap-y-1 rounded-full px-3 py-1.5 text-[11px]", glass)} aria-label="What the colours mean">
+        <ul data-office-keepout className={cn("pointer-events-auto flex flex-wrap gap-x-3 gap-y-1 rounded-full px-3 py-1.5 text-[11px]", glass)} aria-label="What the colours mean">
           {LEGEND.map((mood) => (
             <li key={mood} className="flex items-center gap-1.5 text-muted-foreground">
               <span className="h-2 w-2 rounded-full" style={{ background: moodCss(mood) }} aria-hidden="true" />
@@ -351,7 +351,7 @@ export function AgentOffice({
             </li>
           ))}
         </ul>
-        <div className={cn("pointer-events-auto flex items-center gap-0.5 rounded-full p-0.5", glass)}>
+        <div data-office-keepout className={cn("pointer-events-auto flex items-center gap-0.5 rounded-full p-0.5", glass)}>
           <IconButton label="Zoom in" onClick={() => handleRef.current?.zoom(0.8)} icon={<Plus className="h-3.5 w-3.5" />} />
           <IconButton label="Zoom out" onClick={() => handleRef.current?.zoom(1.25)} icon={<Minus className="h-3.5 w-3.5" />} />
           <IconButton
@@ -494,7 +494,7 @@ function FeedPanel({
 }>) {
   if (live && feed.length === 0) return null;
   return (
-    <div className={cn("absolute right-3 top-14 hidden w-64 rounded-xl p-2.5 text-xs md:block", className)} aria-label="Activity">
+    <div data-office-keepout className={cn("absolute right-3 top-14 hidden w-64 rounded-xl p-2.5 text-xs md:block", className)} aria-label="Activity">
       <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Activity</p>
       <ul className="space-y-1.5" aria-live="polite">
         {!live && <li className="text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">Replay · {clockTime(officeTime)}</li>}

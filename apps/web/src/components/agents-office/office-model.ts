@@ -503,6 +503,54 @@ function overlaps(a: LabelBox, b: LabelBox, w: number): boolean {
   return Math.abs(a.x - b.x) < w && aBottom - a.h < bBottom && bBottom - b.h < aBottom;
 }
 
+/** A screen rectangle (CSS px, relative to the canvas) that labels must stay out of — a HUD panel. */
+export interface ScreenRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/**
+ * The highest a label stack centred at `x` (half-width `half`) may reach: just under any HUD panel it
+ * would sit beneath, or `margin` from the canvas top. Pure, unit-tested.
+ */
+export function stackCeiling(x: number, half: number, keepOut: readonly ScreenRect[], margin = 8): number {
+  let top = margin;
+  for (const r of keepOut) {
+    if (x + half > r.left && x - half < r.right) top = Math.max(top, r.bottom + 6);
+  }
+  return top;
+}
+
+/**
+ * After lifting and clamping, two stacks can still collide (both pinned under the same ceiling). Push
+ * each colliding pair apart sideways by half their overlap each — a few passes, ≤ 8 boxes. `boxes`
+ * carry their final top/bottom; returns a horizontal shift per box in px. Pure, unit-tested.
+ */
+export function spreadApart(boxes: readonly { x: number; top: number; bottom: number }[], w: number, gap = 4): number[] {
+  const xs = boxes.map((b) => b.x);
+  for (let pass = 0; pass < 4; pass += 1) {
+    let moved = false;
+    for (let i = 0; i < boxes.length; i += 1) {
+      for (let j = i + 1; j < boxes.length; j += 1) moved = pushPair(boxes, xs, i, j, w + gap) || moved;
+    }
+    if (!moved) break;
+  }
+  return xs.map((x, i) => x - boxes[i].x);
+}
+
+/** Push stacks i and j apart by half their overlap each, if they collide. Returns whether they moved. */
+function pushPair(boxes: readonly { top: number; bottom: number }[], xs: number[], i: number, j: number, span: number): boolean {
+  const vertical = boxes[i].top < boxes[j].bottom && boxes[j].top < boxes[i].bottom;
+  const overlap = span - Math.abs(xs[i] - xs[j]);
+  if (!vertical || overlap <= 0) return false;
+  const dir = xs[i] <= xs[j] ? -1 : 1;
+  xs[i] += (dir * overlap) / 2;
+  xs[j] -= (dir * overlap) / 2;
+  return true;
+}
+
 /** Up to two initials for an agent's avatar disc ("Risk watch" → "RW"); "?" for a blank name. */
 export const initialsOf = (name: string): string =>
   name

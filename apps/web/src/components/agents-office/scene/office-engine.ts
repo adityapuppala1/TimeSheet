@@ -48,6 +48,9 @@ import type { OfficeView } from "../office-activity";
 import { freeSlots, shouldWaitAtDoor, steer, type Mover } from "../office-steering";
 import {
   declutter,
+  spreadApart,
+  stackCeiling,
+  type ScreenRect,
   BIN,
   buildNavGrid,
   castPeople,
@@ -1090,7 +1093,20 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
 
   /** Lift name tags that would land on top of each other (screen space, every frame — ≤ 8 tags). */
   const anchorAt = new THREE.Vector3();
-  function arrangeLabels() {
+  /** HUD panels over the canvas (legend, controls, activity feed) — re-measured twice a second, not per frame. */
+  let keepOut: ScreenRect[] = [];
+  let keepOutAt = -1;
+  function measureKeepOut(now: number) {
+    if (now - keepOutAt < 0.5 && keepOutAt >= 0) return;
+    keepOutAt = now;
+    const origin = host.getBoundingClientRect();
+    keepOut = [...(host.parentElement?.querySelectorAll<HTMLElement>("[data-office-keepout]") ?? [])]
+      .map((el) => el.getBoundingClientRect())
+      .filter((r) => r.width > 0 && r.height > 0)
+      .map((r) => ({ left: r.left - origin.left, top: r.top - origin.top, right: r.right - origin.left, bottom: r.bottom - origin.top }));
+  }
+  function arrangeLabels(now: number) {
+    measureKeepOut(now);
     const present = [...actors.values()].filter((a) => a.act !== "away");
     const boxes = present.map((a) => {
       a.person.labelAnchor(anchorAt).project(camera);
@@ -1099,12 +1115,19 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     const k = compact();
     // Keep the widest label (the task card) inside the canvas, with an 8 px margin.
     const half = (CARD_W * k) / 2 + 8;
-    declutter(boxes, TAG_W * k, TAG_H * k).forEach((lift, i) => {
-      const x = boxes[i].x;
-      const inside = Math.min(width() - half, Math.max(half, x));
-      // Never lift a stack off the top of the canvas — a slight overlap beats a missing name.
-      const ceiling = Math.max(0, boxes[i].y - boxes[i].h - 8);
-      present[i].person.setLift(Math.min(lift, ceiling) / k, (inside - x) / k);
+    const placed = declutter(boxes, TAG_W * k, TAG_H * k).map((lift, i) => {
+      const x = Math.min(width() - half, Math.max(half, boxes[i].x));
+      // Never let a stack rise off the top of the canvas or under a HUD panel: clamp the lift, and if
+      // even the unlifted stack is too tall for the space above its anchor, lower it (negative lift).
+      const ceiling = stackCeiling(x, (TAG_W * k) / 2, keepOut);
+      const final = Math.min(lift, boxes[i].y - boxes[i].h - ceiling);
+      return { x, lift: final, top: boxes[i].y - final - boxes[i].h, bottom: boxes[i].y - final };
+    });
+    // Stacks pinned under the same ceiling can still collide: push them apart sideways.
+    const shift = spreadApart(placed, TAG_W * k);
+    placed.forEach((p, i) => {
+      const x = Math.min(width() - half, Math.max(half, p.x + shift[i]));
+      present[i].person.setLift(p.lift / k, (x - boxes[i].x) / k);
     });
   }
 
@@ -1245,7 +1268,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     const cameraMoving = rig.step(dt, follow, anyone && !selectedId && down === null);
     const wallsMoving = building.update(camera, dt);
     refreshInfo(dt);
-    arrangeLabels();
+    arrangeLabels(clock);
     activityProps.update();
     const flowing = flows.update(clock, dt);
     return anyone || cameraMoving || wallsMoving || flowing || down !== null;
