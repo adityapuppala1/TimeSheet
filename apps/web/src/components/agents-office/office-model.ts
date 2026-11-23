@@ -405,6 +405,104 @@ export function turnBetween(from: number, to: number): number {
   return d;
 }
 
+/* ------------------------------------------------------------------ what the office shows */
+
+/** The task card's title while an agent works its zone — the job in four words. */
+export const TASK_TITLE: Readonly<Record<Archetype, string>> = {
+  triage: "Sorting new tickets",
+  planner: "Planning the work",
+  risk: "Scoring project risk",
+  security: "Screening findings",
+  reporter: "Writing the recap",
+  balancer: "Balancing the load",
+  assistant: "Helping out"
+};
+
+/**
+ * How work flows between the specialists' rooms: what one produces, the next consumes. Drawn as a
+ * line between the two rooms; packets travel along it only while the upstream agent is REALLY working
+ * (`activeFlows`), so a moving packet always means a live run, never ambience.
+ */
+export const PIPELINE: ReadonlyArray<readonly [Archetype, Archetype]> = [
+  ["triage", "planner"],
+  ["planner", "risk"],
+  ["planner", "balancer"],
+  ["risk", "security"],
+  ["risk", "reporter"]
+];
+
+export interface Flow {
+  from: Archetype;
+  to: Archetype;
+  /** Both ends are running right now — a live hand-off, drawn brighter. */
+  both: boolean;
+}
+
+/** The pipeline links that carry packets, given which archetypes are working and which are present. */
+export function activeFlows(working: ReadonlySet<Archetype>, present: ReadonlySet<Archetype>): Flow[] {
+  return PIPELINE.filter(([from, to]) => working.has(from) && present.has(to)).map(([from, to]) => ({ from, to, both: working.has(to) }));
+}
+
+/** Short spoken lines for office life — what a speech bubble says. Ambience, so deliberately generic. */
+const CHAT_OPEN = ["Got a sec?", "Seen this?", "Quick one…", "Morning!", "How's it going?"] as const;
+const CHAT_REPLY = ["Sure!", "On it", "Looks good", "Ha, yes", "Let me check"] as const;
+const STANDUP = ["On track", "No blockers", "Shipping today", "Need a review", "Done ✓", "Next up…"] as const;
+
+export type Line = "open" | "reply" | "standup";
+
+/** A seeded line for a speaker; `turn` picks a different line each time they speak. */
+export function speechLine(kind: Line, seed: number, turn: number): string {
+  const pool = { open: CHAT_OPEN, reply: CHAT_REPLY, standup: STANDUP }[kind];
+  return pool[Math.abs(seed + turn * 7) % pool.length];
+}
+
+/** A label's on-screen box (CSS px): its anchor and how far its stack has been lifted. */
+interface LabelBox {
+  x: number;
+  /** Screen y of the anchor (the stack's bottom before lifting). */
+  y: number;
+  /** Height of this label's whole stack: the tag, plus a bubble or task card when one is showing. */
+  h: number;
+  lift: number;
+}
+
+/**
+ * Screen-space declutter: lift label stacks so none overlap. Greedy, nearest-the-viewer first (lowest
+ * on screen), each later stack rising above whatever it would cover. `w` is the tag width, `h` the
+ * default stack height (a box may carry its own `h`). Returns each box's lift in px. Pure, unit-tested.
+ */
+export function declutter(boxes: readonly { x: number; y: number; h?: number }[], w: number, h: number, gap = 3): number[] {
+  const order = boxes.map((_, i) => i).sort((i, j) => boxes[j].y - boxes[i].y);
+  const placed: LabelBox[] = [];
+  const lifts = new Array<number>(boxes.length).fill(0);
+  for (const i of order) {
+    const box: LabelBox = { x: boxes[i].x, y: boxes[i].y, h: boxes[i].h ?? h, lift: 0 };
+    for (let pass = 0; pass < placed.length; pass += 1) {
+      const blocker = placed.find((p) => overlaps(p, box, w));
+      if (!blocker) break;
+      box.lift = box.y - (blocker.y - blocker.lift - blocker.h) + gap;
+    }
+    placed.push(box);
+    lifts[i] = box.lift;
+  }
+  return lifts;
+}
+
+function overlaps(a: LabelBox, b: LabelBox, w: number): boolean {
+  const aBottom = a.y - a.lift;
+  const bBottom = b.y - b.lift;
+  return Math.abs(a.x - b.x) < w && aBottom - a.h < bBottom && bBottom - b.h < aBottom;
+}
+
+/** Up to two initials for an agent's avatar disc ("Risk watch" → "RW"); "?" for a blank name. */
+export const initialsOf = (name: string): string =>
+  name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join("") || "?";
+
 /* ------------------------------------------------------------------ people */
 
 /** The model file each specialist wears. */

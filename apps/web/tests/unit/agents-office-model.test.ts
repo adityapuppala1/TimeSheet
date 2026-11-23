@@ -31,6 +31,12 @@ import {
   runFeed,
   turnBetween,
   ZONE_OF,
+  activeFlows,
+  declutter,
+  initialsOf,
+  PIPELINE,
+  speechLine,
+  TASK_TITLE,
   zoneSpot,
   type Vec2
 } from "../../src/components/agents-office/office-model";
@@ -169,5 +175,67 @@ describe("the run feed", () => {
 
   it("is empty when nothing has run — it never invents activity", () => {
     expect(runFeed([{ id: "a", name: "Planner", runs: { recent: [] } }])).toEqual([]);
+  });
+});
+
+describe("what the office shows", () => {
+  const set = (...xs: Archetype[]) => new Set<Archetype>(xs);
+
+  it("names every specialist's task for its card", () => {
+    for (const archetype of Object.keys(ZONE_OF) as Archetype[]) expect(TASK_TITLE[archetype].length).toBeGreaterThan(3);
+  });
+
+  it("only moves packets out of a room whose agent is really working", () => {
+    const all = set("triage", "planner", "risk", "security", "reporter", "balancer");
+    expect(activeFlows(set(), all)).toEqual([]);
+    expect(activeFlows(set("triage"), all)).toEqual([{ from: "triage", to: "planner", both: false }]);
+    expect(activeFlows(set("triage", "planner"), all).find((f) => f.from === "triage")?.both).toBe(true);
+  });
+
+  it("never draws a hand-off to an agent that is not in the office", () => {
+    expect(activeFlows(set("triage"), set("triage"))).toEqual([]);
+    for (const [from, to] of PIPELINE) expect(from).not.toBe(to);
+  });
+
+  it("speaks in short, stable lines that change turn by turn", () => {
+    expect(speechLine("open", 3, 0)).toBe(speechLine("open", 3, 0));
+    expect(speechLine("standup", 1, 0)).not.toBe(speechLine("standup", 1, 1));
+    for (let t = 0; t < 10; t += 1) expect(speechLine("reply", -5, t).length).toBeLessThanOrEqual(16);
+  });
+});
+
+describe("avatar initials", () => {
+  it("takes up to two initials and never returns an empty face", () => {
+    expect(initialsOf("Risk watch")).toBe("RW");
+    expect(initialsOf("Triage")).toBe("T");
+    expect(initialsOf("  load  balancer team ")).toBe("LB");
+    expect(initialsOf("   ")).toBe("?");
+  });
+});
+
+describe("label declutter", () => {
+  it("leaves labels that do not touch where they are", () => {
+    expect(declutter([{ x: 0, y: 100 }, { x: 500, y: 100 }], 150, 40)).toEqual([0, 0]);
+  });
+
+  it("stacks overlapping tags so none cover another, nearest the viewer staying put", () => {
+    const boxes = [
+      { x: 0, y: 100 },
+      { x: 20, y: 110 },
+      { x: 10, y: 105 }
+    ];
+    const lifts = declutter(boxes, 150, 40);
+    expect(lifts[1]).toBe(0); // lowest on screen = nearest the camera
+    const bottoms = boxes.map((b, i) => b.y - lifts[i]).sort((a, b) => a - b);
+    for (let i = 1; i < bottoms.length; i += 1) expect(bottoms[i] - bottoms[i - 1]).toBeGreaterThanOrEqual(40);
+  });
+});
+
+describe("label declutter with bubbles", () => {
+  it("clears a neighbour's speech bubble, not just its tag", () => {
+    // The near label carries a bubble (stack 90 px tall); the far one sits 50 px above its anchor.
+    const lifts = declutter([{ x: 0, y: 200, h: 90 }, { x: 10, y: 150 }], 150, 40);
+    expect(lifts[0]).toBe(0);
+    expect(150 - lifts[1]).toBeLessThanOrEqual(200 - 90);
   });
 });

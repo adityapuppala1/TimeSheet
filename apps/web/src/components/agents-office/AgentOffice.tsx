@@ -28,11 +28,11 @@ import { currentTheme, subscribeTheme } from "../../lib/theme";
 import { useMediaQuery } from "../../lib/use-media-query";
 import { cn } from "../../lib/utils";
 import type { AgentRosterEntry } from "../../services/api";
-import { AgentPortrait } from "../agents-studio/AgentPortrait";
 import type { StudioAgent } from "../agents-studio/scene/types";
 import { agentTintIndex, archetypeFor, ARCHETYPE_ROLE, moodCss, MOOD_LABEL, moodFor, type Mood } from "../agents-studio/studio-model";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { AgentAvatar } from "./AgentAvatar";
 import { MAX_AGENTS, runFeed, type FeedLine } from "./office-model";
 import type { OfficeHandle } from "./scene/office-engine";
 
@@ -315,7 +315,7 @@ export function AgentOffice({
       {selected && (
         <div className={cn("absolute inset-x-3 bottom-3 z-10 animate-fade-in rounded-xl p-3 shadow-lg sm:inset-x-auto sm:left-3 sm:w-[26rem]", glass)}>
           <div className="flex items-start gap-2.5">
-            <AgentPortrait tint={selected.tint} mood={selected.mood} size={40} animate={!reduced} />
+            <AgentAvatar name={selected.name} emoji={selected.emoji} tint={selected.tint} mood={selected.mood} size={40} animate={!reduced} />
             <div className="min-w-0 flex-1">
               <p className="flex flex-wrap items-center gap-1.5 font-medium leading-tight">
                 {selected.name}
@@ -430,7 +430,7 @@ function Backdrop({
                 active && "bg-background/80 ring-2 ring-primary/60"
               )}
             >
-              <AgentPortrait tint={a.tint} mood={loading ? "off" : a.mood} size={72} animate={!reduced && !loading} className={loading ? "animate-pulse" : undefined} />
+              <AgentAvatar name={a.name} emoji={a.emoji} tint={a.tint} mood={loading ? "off" : a.mood} size={64} animate={!reduced && !loading} className={loading ? "animate-pulse" : undefined} />
               <span className="max-w-full truncate text-xs font-medium">{a.name}</span>
               <span className="text-[10px] text-muted-foreground">{loading ? "…" : MOOD_LABEL[a.mood]}</span>
             </button>

@@ -5,13 +5,23 @@
  * only export; AgentOffice.tsx owns the DOM around it.
  *
  * WHAT DRIVES AN AGENT (office-model.ts `goalFor`): its REAL mood. Switched off → it walks out of the
- * door. A run queued or running → it stands up and walks to its zone, and that room's equipment runs
- * flat out. A recent failed run → it stands at its desk waving for help. A run just finished → it
- * cheers and lobs a paper ball at the bin (a real projectile in the physics world). Otherwise it sits
- * at its desk, laptop lit. A real goal always interrupts office life, never the other way round.
+ * door. A run queued or running → it stands up and walks to its zone, a task card appears over it and
+ * that room's equipment runs flat out. A recent failed run → it stands at its desk waving for help. A
+ * run just finished → it cheers and lobs a paper ball at the bin (a real projectile in the physics
+ * world). Otherwise it sits at its desk, laptop lit. A real goal always interrupts office life.
  *
  * OFFICE LIFE (coffee, chats, stand-ups) is seeded ambience for agents with nothing running, reported
- * through `onLife` so the UI can label it as idle. Zone equipment captions are still "simulated".
+ * through `onLife` so the UI can label it as idle. Zone equipment captions and the task card's text
+ * are tagged "Simulated". Hand-off packets between rooms move only while the upstream agent really works.
+ *
+ * LOOK: ACES tone mapping over an sRGB output, a soft image-based light from three's RoomEnvironment
+ * (prefiltered once with PMREM), a warm key light with soft shadows and a cool fill. Post-processing
+ * (SSAO, outline, bloom) was weighed and left out: each is a full-screen pass that roughly doubles the
+ * frame cost on a laptop iGPU, and the baked light pools, contact shadows and emissive highlight buy
+ * most of the look for none of it.
+ *
+ * FILES: camera.ts (orbit rig), building.ts (the office, cut-away walls), people.ts (a person),
+ * labels.ts (tags, bubbles, task cards), flows.ts (hand-off and conversation arcs), physics.ts.
  *
  * FRAME POLICY: lib/render-loop.ts — nothing off screen or in a background tab, 30fps, and a rest
  * state when everyone is away and the camera is still. Reduced motion: no loop, nobody walks (they
@@ -20,11 +30,14 @@
  * Loaded by dynamic import only: three.js, Rapier and the models never reach another page.
  */
 import * as THREE from "three";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { createRenderLoop, type RenderLoopHandle } from "../../../lib/render-loop";
-import { hashSeed, mulberry32 } from "../../agents-studio/studio-model";
+import { AGENT_PALETTE, hashSeed, mulberry32, type Archetype } from "../../agents-studio/studio-model";
 import { buildSim, type Sim } from "../../agents-studio/scene/sims";
 import type { StudioAgent, StudioTheme } from "../../agents-studio/scene/types";
 import {
+  activeFlows,
+  declutter,
   BIN,
   buildNavGrid,
   castPeople,
@@ -32,7 +45,6 @@ import {
   DESKS,
   equipmentCentre,
   findPath,
-  FLOOR,
   goalFor,
   headingTo,
   idlePause,
@@ -42,6 +54,8 @@ import {
   OUTSIDE,
   pickIdleActivity,
   roomById,
+  speechLine,
+  TASK_TITLE,
   turnBetween,
   WALK_SPEED,
   ZONE_OF,
@@ -52,6 +66,9 @@ import {
   type Vec2
 } from "../office-model";
 import { buildOffice } from "./building";
+import { createCameraRig, FOV } from "./camera";
+import { createFlows, type ArcSpec } from "./flows";
+import { CARD_W, LABEL_UNIT, TAG_H, TAG_W } from "./labels";
 import { createPerson, type Person } from "./people";
 import { createPhysics, type PropKind } from "./physics";
 
@@ -79,6 +96,14 @@ export interface OfficeHandle {
 
 type Act = "away" | "walk" | "seated" | "zone" | "alert" | "cheer" | "coffee" | "chat" | "meeting";
 
+interface Slide {
+  from: Vec2;
+  to: Vec2;
+  fromHeading: number;
+  toHeading: number;
+  t: number;
+}
+
 interface Actor {
   agent: StudioAgent;
   person: Person;
@@ -86,6 +111,8 @@ interface Actor {
   deskIndex: number;
   pos: Vec2;
   heading: number;
+  /** Current walking speed (m/s): eases up from a standstill and down into the last waypoint. */
+  speed: number;
   act: Act;
   goal: Goal;
   path: Vec2[];
@@ -98,16 +125,20 @@ interface Actor {
   busy: boolean;
   partner: Actor | null;
   rand: () => number;
+  seed: number;
   stuck: number;
   ghost: number;
-  /** Plain-words account of what it is doing. */
+  /** Plain-words account of what it is doing (the selection panel). */
   label: string;
+  /** The same in two or three words (the name tag). */
+  status: string;
+  slide: Slide | null;
   sim: Sim | null;
 }
 
-const FOV = 38;
 const SIM_SCALE = 0.85;
 const FAR_AWAY: Vec2 = { x: 0, z: 40 };
+const SLIDE_S = 0.55;
 const PROPS: ReadonlyArray<[PropKind, number, number]> = [
   ["ball", -6.2, 2.4],
   ["ball", 6.2, 6.4],
@@ -119,53 +150,104 @@ const PROPS: ReadonlyArray<[PropKind, number, number]> = [
 ];
 const PAPERS = 6;
 const PROP_COLOR: Readonly<Record<PropKind, number>> = { ball: 0xf97316, box: 0xc8a27a, paper: 0xf8fafc };
+const ALERT_LABEL = "Needs a look — its last run failed or was blocked";
 
-export async function createOffice(host: HTMLElement, events: OfficeEvents, opts: { reducedMotion: boolean; theme: StudioTheme }): Promise<OfficeHandle> {
-  const instant = opts.reducedMotion;
-  const width = () => host.clientWidth || 1;
-  const height = () => host.clientHeight || 1;
+const smoothstep = (t: number) => t * t * (3 - 2 * t);
 
-  const solid = obstacles();
-  const grid = buildNavGrid(solid);
-  const physics = await createPhysics(solid);
-
-  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
-  renderer.setSize(width(), height());
+function createRenderer(host: HTMLElement, small: boolean) {
+  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: "high-performance" });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, small ? 2 : 1.5));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   const canvas = renderer.domElement;
   canvas.style.cssText = "width:100%;height:100%;display:block;touch-action:none;cursor:grab";
   host.appendChild(canvas);
+  return renderer;
+}
 
+/** Soft image-based light plus a warm key (with shadows) and a cool fill. */
+function createLights(scene: THREE.Scene, renderer: THREE.WebGLRenderer, small: boolean) {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const room = new RoomEnvironment();
+  const env = pmrem.fromScene(room, 0.04).texture;
+  room.dispose();
+  pmrem.dispose();
+  scene.environment = env;
+  const hemi = new THREE.HemisphereLight(0xfff8ef, 0x8a7f72, 0.55);
+  const sun = new THREE.DirectionalLight(0xffe4bd, 2.3);
+  sun.position.set(-8, 17, 11);
+  sun.castShadow = true;
+  sun.shadow.mapSize.setScalar(small ? 1024 : 2048);
+  sun.shadow.bias = -0.0004;
+  sun.shadow.normalBias = 0.02;
+  sun.shadow.radius = 3;
+  Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 12, bottom: -12, near: 2, far: 45 });
+  const fill = new THREE.DirectionalLight(0xc7dcff, 0.45);
+  fill.position.set(10, 8, -6);
+  scene.add(hemi, sun, fill);
+  return {
+    apply(theme: StudioTheme) {
+      const dark = theme === "dark";
+      scene.environmentIntensity = dark ? 0.22 : 0.42;
+      hemi.intensity = dark ? 0.32 : 0.55;
+      sun.intensity = dark ? 1.35 : 2.3;
+      sun.color.setHex(dark ? 0xffd6a0 : 0xffe4bd);
+      fill.intensity = dark ? 0.35 : 0.45;
+    },
+    dispose() {
+      env.dispose();
+    }
+  };
+}
+
+export async function createOffice(host: HTMLElement, events: OfficeEvents, opts: { reducedMotion: boolean; theme: StudioTheme }): Promise<OfficeHandle> {
+  const instant = opts.reducedMotion;
+  const width = () => host.clientWidth || 1;
+  const height = () => host.clientHeight || 1;
+  const small = width() < 640;
+
+  const solid = obstacles();
+  const grid = buildNavGrid(solid);
+  const physics = await createPhysics(solid);
+
+  const renderer = createRenderer(host, small);
+  renderer.setSize(width(), height());
+  const canvas = renderer.domElement;
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(FOV, width() / height(), 0.1, 200);
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x94a3b8, 1.2);
-  const sun = new THREE.DirectionalLight(0xfff4e0, 2.4);
-  sun.position.set(-9, 18, 10);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.bias = -0.0006;
-  Object.assign(sun.shadow.camera, { left: -17, right: 17, top: 14, bottom: -14, near: 1, far: 50 });
-  scene.add(hemi, sun);
+  const rig = createCameraRig(camera, instant);
+  const lights = createLights(scene, renderer, small);
+  /** Labels shrink a little on a phone, where three tags would otherwise cover the office. */
+  const compact = () => (width() < 640 ? 0.78 : 1);
+  const fitLabels = () => {
+    LABEL_UNIT.value = ((2 * Math.tan((FOV * Math.PI) / 360)) / height()) * compact();
+  };
+  fitLabels();
 
   let theme = opts.theme;
   const building = buildOffice(theme);
   scene.add(building.group);
+  const flows = createFlows();
+  scene.add(flows.group);
 
   // ---- loose props, mirrored from the physics world ------------------------------------------------
   const propGeo: Record<PropKind, THREE.BufferGeometry> = {
-    ball: new THREE.SphereGeometry(0.11, 16, 12),
+    ball: new THREE.SphereGeometry(0.11, 20, 14),
     box: new THREE.BoxGeometry(0.34, 0.34, 0.34),
     paper: new THREE.IcosahedronGeometry(0.06, 0)
   };
-  const propMats: THREE.Material[] = [];
+  const propMat: Record<PropKind, THREE.Material> = {
+    ball: new THREE.MeshStandardMaterial({ color: PROP_COLOR.ball, roughness: 0.45 }),
+    box: new THREE.MeshStandardMaterial({ color: PROP_COLOR.box, roughness: 0.85 }),
+    paper: new THREE.MeshStandardMaterial({ color: PROP_COLOR.paper, roughness: 0.9, flatShading: true })
+  };
   const propMeshes: THREE.Mesh[] = [];
   const addProp = (kind: PropKind, x: number, y: number, z: number) => {
     physics.addProp(kind, x, y, z);
-    const material = new THREE.MeshStandardMaterial({ color: PROP_COLOR[kind], roughness: 0.6, flatShading: kind === "paper" });
-    propMats.push(material);
-    const mesh = new THREE.Mesh(propGeo[kind], material);
+    const mesh = new THREE.Mesh(propGeo[kind], propMat[kind]);
     mesh.castShadow = true;
     propMeshes.push(mesh);
     scene.add(mesh);
@@ -189,25 +271,40 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   const say = (a: Actor, text: string) => events.onLife(a.agent.id, text);
   const idleNow = () => [...actors.values()].filter((a) => a.act === "seated" && a.goal === "desk" && !a.busy);
 
+  function doing(a: Actor, label: string, status: string) {
+    a.label = label;
+    if (a.status === status) return;
+    a.status = status;
+    a.person.setStatus(status);
+  }
+
   function place(a: Actor, at: Vec2, heading: number) {
     a.pos = { x: at.x, z: at.z };
     a.heading = heading;
+    a.slide = null;
     physics.placePerson(a.agent.id, at);
     a.person.root.position.set(at.x, 0, at.z);
     a.person.root.rotation.y = heading;
   }
 
-  function sit(a: Actor, seat: Seat, act: Act, label: string) {
-    place(a, seat.seat, seat.heading);
-    a.person.play("sit");
+  /** Ease from where it stands into a spot (a chair, a work position), turning as it goes. */
+  function settleAt(a: Actor, at: Vec2, heading: number) {
+    if (instant) return place(a, at, heading);
+    physics.placePerson(a.agent.id, at);
+    a.slide = { from: { ...a.pos }, to: { x: at.x, z: at.z }, fromHeading: a.heading, toHeading: heading, t: 0 };
+  }
+
+  function sit(a: Actor, seat: Seat, act: Act, label: string, status: string) {
+    settleAt(a, seat.seat, seat.heading);
+    a.person.play("sit", 0.45);
     a.act = act;
-    a.label = label;
+    doing(a, label, status);
   }
 
   /** Walk to a point, then do something. Under reduced motion nobody walks: they are simply there. */
-  function walkTo(a: Actor, target: Vec2, label: string, then: () => void) {
+  function walkTo(a: Actor, target: Vec2, label: string, status: string, then: () => void) {
     building.setLaptop(a.deskIndex, false);
-    a.label = label;
+    doing(a, label, status);
     a.then = then;
     if (instant) {
       place(a, target, a.heading);
@@ -217,7 +314,8 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     a.path = findPath(grid, a.pos, target) ?? [target];
     a.act = "walk";
     a.stuck = 0;
-    a.person.play("walk", 0.25);
+    a.speed = Math.min(a.speed, 0.3);
+    a.person.play("walk", 0.3);
   }
 
   function finishWalk(a: Actor) {
@@ -236,8 +334,9 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
 
   function goDesk(a: Actor, label = "Heading back to the desk") {
     enter(a);
-    walkTo(a, a.desk.access, label, () => {
-      sit(a, a.desk, "seated", a.agent.archetype === "assistant" && a.goal === "zone" ? "Working at the desk" : "At the desk");
+    walkTo(a, a.desk.access, label, "Back to the desk", () => {
+      const working = a.agent.archetype === "assistant" && a.goal === "zone";
+      sit(a, a.desk, "seated", working ? "Working at the desk" : "At the desk", working ? "Working at the desk" : "At the desk");
       building.setLaptop(a.deskIndex, true);
       a.idleIn = idlePause(a.rand);
     });
@@ -245,9 +344,9 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
 
   function goAway(a: Actor) {
     if (a.act === "away") return;
-    walkTo(a, OUTSIDE, "Heading out — switched off", () => {
+    walkTo(a, OUTSIDE, "Heading out — switched off", "Heading out", () => {
       a.act = "away";
-      a.label = "Switched off";
+      doing(a, "Switched off", "Switched off");
       a.person.root.visible = false;
       place(a, FAR_AWAY, 0);
     });
@@ -258,22 +357,23 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     const spot = zoneSpot(roomId);
     if (!spot) return goDesk(a, "Starting the run at the desk");
     enter(a);
-    walkTo(a, spot.stand, `Walking to ${roomById(roomId)?.label ?? "the zone"}`, () => {
-      place(a, spot.stand, headingTo(spot.stand, spot.face));
+    walkTo(a, spot.stand, `Walking to ${roomById(roomId)?.label ?? "the zone"}`, `To ${roomById(roomId)?.label ?? "the zone"}`, () => {
+      settleAt(a, spot.stand, headingTo(spot.stand, spot.face));
       a.act = "zone";
       a.timer = 0;
+      doing(a, TASK_TITLE[a.agent.archetype], TASK_TITLE[a.agent.archetype]);
       a.person.play("point");
     });
   }
 
   function goAlert(a: Actor) {
     enter(a);
-    walkTo(a, a.desk.access, "Flagging a problem", () => {
-      place(a, a.desk.access, 0);
+    walkTo(a, a.desk.access, "Flagging a problem", "Flagging a problem", () => {
+      settleAt(a, a.desk.access, 0);
       a.act = "alert";
-      a.label = "Needs a look — its last run failed or was blocked";
+      doing(a, ALERT_LABEL, "Needs a look");
       a.person.play("wave");
-      a.person.setBubble("!");
+      a.person.setBubble("⚠ Run failed");
     });
   }
 
@@ -282,26 +382,29 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     a.path = [];
     a.then = null;
     a.act = "cheer";
-    a.label = "Just finished a run";
+    doing(a, "Just finished a run", "Run finished");
     a.timer = 2.4;
     a.person.play("cheer", 0.15);
-    a.person.setBubble("✓");
+    a.person.setBubble("Done! ✓");
     physics.tossPaper(firstPaper + (nextPaper % PAPERS), { x: a.pos.x, y: 1.9, z: a.pos.z });
     nextPaper += 1;
   }
 
-  /** Drop whatever office life it was in — a real goal always wins. */
-  function interrupt(a: Actor) {
+  function hush(a: Actor) {
     a.person.setTalking(false);
     a.person.setBubble(null);
+    a.person.lookAt(null);
     a.busy = false;
+  }
+
+  /** Drop whatever office life it was in — a real goal always wins. */
+  function interrupt(a: Actor) {
+    hush(a);
     const partner = a.partner;
     a.partner = null;
     if (!partner) return;
     partner.partner = null;
-    partner.busy = false;
-    partner.person.setTalking(false);
-    partner.person.setBubble(null);
+    hush(partner);
   }
 
   const GOAL_ACTION: Readonly<Record<Goal, (a: Actor) => void>> = { away: goAway, zone: goZone, alert: goAlert, celebrate, desk: goDesk };
@@ -315,7 +418,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   function settle(a: Actor) {
     if (a.goal === "away") {
       a.act = "away";
-      a.label = "Switched off";
+      doing(a, "Switched off", "Switched off");
       a.person.root.visible = false;
       place(a, FAR_AWAY, 0);
       return;
@@ -330,17 +433,21 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     if (spot) {
       place(a, spot.stand, headingTo(spot.stand, spot.face));
       a.act = "zone";
+      doing(a, TASK_TITLE[a.agent.archetype], TASK_TITLE[a.agent.archetype]);
       a.person.play("point", 0);
       return;
     }
     if (a.goal === "alert") {
       a.act = "alert";
-      a.label = "Needs a look — its last run failed or was blocked";
+      doing(a, ALERT_LABEL, "Needs a look");
       a.person.play("wave", 0);
-      a.person.setBubble("!");
+      a.person.setBubble("⚠ Run failed");
       return;
     }
-    sit(a, a.desk, "seated", "At the desk");
+    place(a, a.desk.seat, a.desk.heading);
+    a.person.play("sit", 0);
+    a.act = "seated";
+    doing(a, "At the desk", "At the desk");
     building.setLaptop(a.deskIndex, true);
     a.idleIn = 8 + idlePause(a.rand) * a.rand();
     if (a.goal === "celebrate") celebrate(a);
@@ -352,19 +459,17 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     return 0;
   }
 
-  async function addActor(agent: StudioAgent, file: string, walkIn: boolean) {
-    loading.add(agent.id);
-    const person = await createPerson(file, agent.name, agent.tint, agent.mood);
-    loading.delete(agent.id);
-    if (dead || actors.has(agent.id)) return person.dispose();
+  function newActor(agent: StudioAgent, person: Person): Actor {
     const deskIndex = freeDesk();
-    const a: Actor = {
+    const seed = hashSeed(agent.id);
+    return {
       agent,
       person,
       desk: DESKS[deskIndex],
       deskIndex,
       pos: { ...FAR_AWAY },
       heading: 0,
+      speed: 0,
       act: "away",
       goal: goalFor(agent.mood),
       path: [],
@@ -373,14 +478,24 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
       idleIn: 10,
       busy: false,
       partner: null,
-      rand: mulberry32(hashSeed(agent.id)),
+      rand: mulberry32(seed),
+      seed,
       stuck: 0,
       ghost: 0,
       label: "",
+      status: "",
+      slide: null,
       sim: null
     };
-    const roomId = ZONE_OF[agent.archetype];
-    const room = roomById(roomId);
+  }
+
+  async function addActor(agent: StudioAgent, file: string, walkIn: boolean) {
+    loading.add(agent.id);
+    const person = await createPerson(file, agent.name, agent.tint, agent.mood);
+    loading.delete(agent.id);
+    if (dead || actors.has(agent.id)) return person.dispose();
+    const a = newActor(agent, person);
+    const room = roomById(ZONE_OF[agent.archetype]);
     if (room) {
       a.sim = buildSim(agent.archetype, agent.id, 0x38bdf8);
       const centre = equipmentCentre(room);
@@ -440,12 +555,12 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   // ---- office life -------------------------------------------------------------------------------------
   function startCoffee(a: Actor) {
     a.busy = true;
-    walkTo(a, COFFEE_SPOT.stand, "Getting a coffee", () => {
-      place(a, COFFEE_SPOT.stand, headingTo(COFFEE_SPOT.stand, COFFEE_SPOT.face));
+    walkTo(a, COFFEE_SPOT.stand, "Getting a coffee", "Coffee break", () => {
+      settleAt(a, COFFEE_SPOT.stand, headingTo(COFFEE_SPOT.stand, COFFEE_SPOT.face));
       a.act = "coffee";
       a.timer = 5;
       a.person.play("idle");
-      a.person.setBubble("☕");
+      a.person.setBubble("☕ Coffee break");
       say(a, "is getting a coffee");
     });
   }
@@ -455,12 +570,13 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     host.busy = true;
     a.partner = host;
     host.partner = a;
-    walkTo(a, host.desk.access, `Stopping by ${host.agent.name}'s desk`, () => {
-      place(a, host.desk.access, headingTo(host.desk.access, host.desk.seat));
+    walkTo(a, host.desk.access, `Stopping by ${host.agent.name}'s desk`, `To ${host.agent.name}`, () => {
+      settleAt(a, host.desk.access, headingTo(host.desk.access, host.desk.seat));
       a.act = "chat";
-      a.timer = 7;
+      a.timer = 8;
+      doing(a, `Chatting with ${host.agent.name}`, `Chatting with ${host.agent.name}`);
+      doing(host, `Chatting with ${a.agent.name}`, `Chatting with ${a.agent.name}`);
       a.person.play("idle");
-      a.person.setBubble("💬");
       say(a, `is chatting with ${host.agent.name}`);
     });
   }
@@ -469,9 +585,9 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     members.forEach((m, i) => {
       m.busy = true;
       const seat = MEETING_SEATS[i];
-      walkTo(m, seat.access, "Heading to a stand-up", () => {
-        sit(m, seat, "meeting", "In a stand-up");
-        m.timer = 11;
+      walkTo(m, seat.access, "Heading to a stand-up", "To the stand-up", () => {
+        sit(m, seat, "meeting", "In a stand-up", "In a stand-up");
+        m.timer = 12;
       });
     });
     say(members[0], `called a stand-up with ${members.length - 1} others`);
@@ -487,11 +603,24 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   }
 
   function endLife(a: Actor) {
+    const host = a.partner;
     interrupt(a);
+    if (host?.act === "seated") doing(host, "At the desk", "At the desk");
     goDesk(a);
   }
 
   // ---- per-frame behaviour -----------------------------------------------------------------------------
+  /** Metres left along the path — to slow into the last waypoint instead of stopping dead. */
+  function remaining(a: Actor): number {
+    let total = 0;
+    let from = a.pos;
+    for (const p of a.path) {
+      total += Math.hypot(p.x - from.x, p.z - from.z);
+      from = p;
+    }
+    return total;
+  }
+
   function stepWalk(a: Actor, dt: number) {
     const target = a.path[0];
     if (!target) return finishWalk(a);
@@ -502,7 +631,12 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
       a.path.shift();
       return;
     }
-    const step = Math.min(dist, WALK_SPEED * dt);
+    // Ease in from a standstill, ease out into the destination; slow down for sharp turns.
+    const turn = Math.abs(turnBetween(a.heading, headingTo(a.pos, target)));
+    const want = WALK_SPEED * Math.min(1, Math.max(0.35, remaining(a) / 0.9)) * (turn > 1.2 ? 0.55 : 1);
+    a.speed += (want - a.speed) * Math.min(1, dt * 3.5);
+    a.person.setPace(a.speed / WALK_SPEED);
+    const step = Math.min(dist, a.speed * dt);
     const next = physics.movePerson(a.agent.id, (dx / dist) * step, (dz / dist) * step, a.ghost > 0);
     const moved = Math.hypot(next.x - a.pos.x, next.z - a.pos.z);
     a.stuck = moved < step * 0.3 ? a.stuck + dt : 0;
@@ -513,9 +647,21 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
       place(a, target, a.heading);
       a.stuck = 0;
     }
-    a.heading += turnBetween(a.heading, headingTo(a.pos, target)) * Math.min(1, dt * 9);
+    a.heading += turnBetween(a.heading, headingTo(a.pos, target)) * Math.min(1, dt * 7);
     a.person.root.position.set(a.pos.x, 0, a.pos.z);
     a.person.root.rotation.y = a.heading;
+  }
+
+  function stepSlide(a: Actor, dt: number) {
+    const s = a.slide;
+    if (!s) return;
+    s.t = Math.min(1, s.t + dt / SLIDE_S);
+    const k = smoothstep(s.t);
+    a.pos = { x: s.from.x + (s.to.x - s.from.x) * k, z: s.from.z + (s.to.z - s.from.z) * k };
+    a.heading = s.fromHeading + turnBetween(s.fromHeading, s.toHeading) * k;
+    a.person.root.position.set(a.pos.x, 0, a.pos.z);
+    a.person.root.rotation.y = a.heading;
+    if (s.t >= 1) a.slide = null;
   }
 
   function stepSeated(a: Actor, dt: number) {
@@ -527,7 +673,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   function stepZone(a: Actor, dt: number) {
     // Alternate pointing at the equipment with standing back to watch it.
     a.timer += dt;
-    a.person.play(a.timer % 9 < 5.5 ? "point" : "idle", 0.4);
+    a.person.play(a.timer % 9 < 5.5 ? "point" : "idle", 0.5);
   }
 
   function stepTimed(a: Actor, dt: number) {
@@ -535,21 +681,30 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     if (a.timer <= 0) endLife(a);
   }
 
+  const headOf = (a: Actor, y: number) => new THREE.Vector3(a.pos.x, y, a.pos.z);
+
   function stepChat(a: Actor, dt: number) {
     const host = a.partner;
     if (!host || host.goal !== "desk") return endLife(a);
-    const mine = Math.floor(a.timer / 1.7) % 2 === 0;
+    const turn = Math.floor((8 - a.timer) / 2);
+    const mine = turn % 2 === 0;
     a.person.setTalking(mine);
     host.person.setTalking(!mine);
-    host.person.setBubble(mine ? null : "💬");
+    const kind = turn === 0 ? "open" : "reply";
+    a.person.setBubble(mine ? speechLine(kind, a.seed, turn) : null);
+    host.person.setBubble(mine ? null : speechLine("reply", host.seed, turn));
+    a.person.lookAt(headOf(host, 1.2));
+    host.person.lookAt(headOf(a, 1.6));
     stepTimed(a, dt);
   }
 
   function stepMeeting(a: Actor, dt: number) {
     const seated = [...actors.values()].filter((m) => m.act === "meeting");
-    const speaker = seated[Math.floor(clock / 2.2) % Math.max(1, seated.length)];
+    const turn = Math.floor(clock / 2.4);
+    const speaker = seated[turn % Math.max(1, seated.length)];
     a.person.setTalking(speaker === a);
-    a.person.setBubble(speaker === a ? "💬" : null);
+    a.person.setBubble(speaker === a ? speechLine("standup", a.seed, turn) : null);
+    a.person.lookAt(speaker && speaker !== a ? headOf(speaker, 1.2) : null);
     stepTimed(a, dt);
   }
 
@@ -578,56 +733,115 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     return a.act === "away" ? 0 : 0.18;
   }
 
+  /** The hovered person glances at the camera; everyone else looks where their activity says. */
+  function glance(a: Actor) {
+    if (a.agent.id !== hoveredId || a.act === "chat" || a.act === "meeting") return;
+    a.person.lookAt(camera.position);
+  }
+
   function stepActors(dt: number): boolean {
     let anyone = false;
     for (const a of actors.values()) {
+      stepSlide(a, dt);
       STEP[a.act](a, dt);
       a.sim?.update(clock, dt, simIntensity(a));
       if (a.act === "away") continue;
       anyone = true;
+      glance(a);
       a.person.update(dt, clock);
     }
     return anyone;
   }
 
-  // ---- camera ------------------------------------------------------------------------------------------
-  const view = { yaw: 0, pitch: 0.74, dist: 30, target: new THREE.Vector3(0, 0.6, 1.4) };
-  const goal = { yaw: 0, pitch: 0.74, dist: 30, target: new THREE.Vector3(0, 0.6, 1.4) };
-  let wheelZoom = false;
-
-  function overviewDist(): number {
-    const half = Math.tan((FOV * Math.PI) / 360);
-    return Math.max((FLOOR.w / 2 + 2.2) / (half * camera.aspect), (FLOOR.d / 2 + 3) / half) * 0.78;
+  // ---- task cards and flows (refreshed a few times a second, not every frame) ---------------------------
+  function cardFor(a: Actor) {
+    if (a.act !== "zone" || !a.sim) return null;
+    return { icon: a.agent.emoji, title: TASK_TITLE[a.agent.archetype], caption: a.sim.caption(), accent: AGENT_PALETTE[a.agent.tint % AGENT_PALETTE.length].css };
   }
 
-  function resetView() {
-    goal.yaw = 0;
-    goal.pitch = 0.74;
-    goal.dist = overviewDist();
-    goal.target.set(0, 0.6, 1.4);
-    wake();
+  function zoneAnchor(archetype: Archetype): THREE.Vector3 | null {
+    const room = roomById(ZONE_OF[archetype]);
+    if (!room) return null;
+    const c = equipmentCentre(room);
+    return new THREE.Vector3(c.x, 1.7, c.z);
   }
 
-  function stepCamera(dt: number): boolean {
-    const followed = selectedId ? actors.get(selectedId) : undefined;
-    if (followed && followed.act !== "away") goal.target.set(followed.pos.x, 1, followed.pos.z);
-    const k = instant ? 1 : 1 - Math.exp(-dt * 4);
-    view.yaw += (goal.yaw - view.yaw) * k;
-    view.pitch += (goal.pitch - view.pitch) * k;
-    view.dist += (goal.dist - view.dist) * k;
-    view.target.lerp(goal.target, k);
-    const flat = Math.cos(view.pitch) * view.dist;
-    camera.position.set(view.target.x + Math.sin(view.yaw) * flat, view.target.y + Math.sin(view.pitch) * view.dist, view.target.z + Math.cos(view.yaw) * flat);
-    camera.lookAt(view.target);
-    return Math.abs(goal.yaw - view.yaw) + Math.abs(goal.pitch - view.pitch) + Math.abs(goal.dist - view.dist) / 10 + view.target.distanceTo(goal.target) > 0.004;
+  function pipelineArcs(): ArcSpec[] {
+    const present = [...actors.values()].filter((a) => a.act !== "away");
+    const working = new Set(present.filter((a) => a.act === "zone").map((a) => a.agent.archetype));
+    const there = new Set(present.map((a) => a.agent.archetype));
+    const arcs: ArcSpec[] = [];
+    for (const f of activeFlows(working, there)) {
+      const from = zoneAnchor(f.from);
+      const to = zoneAnchor(f.to);
+      if (from && to) arcs.push({ key: `p-${f.from}-${f.to}`, from, to, color: 0x38bdf8, lift: 1.6, strength: f.both ? 1 : 0.65, twoWay: false });
+    }
+    return arcs;
+  }
+
+  function talkArcs(): ArcSpec[] {
+    const arcs: ArcSpec[] = [];
+    for (const a of actors.values()) {
+      if (a.act === "chat" && a.partner) arcs.push({ key: `c-${a.agent.id}`, from: headOf(a, 1.75), to: headOf(a.partner, 1.35), color: 0x34d399, lift: 0.5, strength: 0.5, twoWay: true });
+    }
+    const meeting = [...actors.values()].filter((m) => m.act === "meeting" && !m.slide);
+    const speaker = meeting[Math.floor(clock / 2.4) % Math.max(1, meeting.length)];
+    for (const m of meeting) {
+      if (speaker && m !== speaker) arcs.push({ key: `m-${m.agent.id}`, from: headOf(speaker, 1.35), to: headOf(m, 1.35), color: 0xa5b4fc, lift: 0.45, strength: 0.4, twoWay: false });
+    }
+    return arcs;
+  }
+
+  let infoAcc = 0;
+  function refreshInfo(dt: number) {
+    infoAcc += dt;
+    if (infoAcc < 0.4) return;
+    infoAcc = 0;
+    for (const a of actors.values()) a.person.card.set(cardFor(a));
+    flows.set([...pipelineArcs(), ...talkArcs()]);
+    const a = actors.get(selectedId ?? hoveredId ?? "");
+    if (!a) return;
+    if (a.act === "zone" && a.sim) events.onCaption(a.agent.id, a.sim.caption(), true);
+    else events.onCaption(a.agent.id, a.label, false);
+  }
+
+  /** Lift name tags that would land on top of each other (screen space, every frame — ≤ 8 tags). */
+  const anchorAt = new THREE.Vector3();
+  function arrangeLabels() {
+    const present = [...actors.values()].filter((a) => a.act !== "away");
+    const boxes = present.map((a) => {
+      a.person.labelAnchor(anchorAt).project(camera);
+      return { x: ((anchorAt.x + 1) / 2) * width(), y: ((1 - anchorAt.y) / 2) * height(), h: a.person.stackHeight() * compact() };
+    });
+    const k = compact();
+    // Keep the widest label (the task card) inside the canvas, with an 8 px margin.
+    const half = (CARD_W * k) / 2 + 8;
+    declutter(boxes, TAG_W * k, TAG_H * k).forEach((lift, i) => {
+      const x = boxes[i].x;
+      const inside = Math.min(width() - half, Math.max(half, x));
+      // Never lift a stack off the top of the canvas — a slight overlap beats a missing name.
+      const ceiling = Math.max(0, boxes[i].y - boxes[i].h - 8);
+      present[i].person.setLift(Math.min(lift, ceiling) / k, (inside - x) / k);
+    });
+  }
+
+  // ---- selection and hover -----------------------------------------------------------------------------
+  function emphasise() {
+    for (const a of actors.values()) {
+      let level: 0 | 1 | 2 = 0;
+      if (a.agent.id === selectedId) level = 2;
+      else if (a.agent.id === hoveredId) level = 1;
+      a.person.setEmphasis(level);
+      if (level === 0 && a.act !== "chat" && a.act !== "meeting") a.person.lookAt(null);
+    }
   }
 
   function select(id: string | null) {
     wantedId = id;
     selectedId = id && actors.has(id) ? id : null;
-    for (const a of actors.values()) a.person.setSelected(a.agent.id === selectedId);
-    if (selectedId) goal.dist = Math.min(goal.dist, 9.5);
-    else resetView();
+    emphasise();
+    if (selectedId) rig.closeIn(9);
+    else rig.resetView();
     wake();
   }
 
@@ -670,15 +884,19 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
       const dy = e.clientY - down.y;
       if (!down.dragged && Math.hypot(dx, dy) < 5) return;
       down = { x: e.clientX, y: e.clientY, dragged: true };
-      goal.yaw -= dx * 0.006;
-      goal.pitch = Math.min(1.4, Math.max(0.3, goal.pitch + dy * 0.005));
+      rig.orbit(dx, dy);
       canvas.style.cursor = "grabbing";
       return wake();
     }
     const rect = aim(e);
     const over = pickActor();
-    hoveredId = over?.agent.id ?? null;
+    const next = over?.agent.id ?? null;
     canvas.style.cursor = over ? "pointer" : "grab";
+    if (next !== hoveredId) {
+      hoveredId = next;
+      emphasise();
+      wake();
+    }
     events.onHover(hoveredId, e.clientX - rect.left, e.clientY - rect.top);
   };
   const onUp = (e: PointerEvent) => {
@@ -694,6 +912,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   };
   const onLeave = () => {
     hoveredId = null;
+    emphasise();
     events.onHover(null, 0, 0);
   };
   const onWheel = (e: WheelEvent) => {
@@ -712,23 +931,13 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   canvas.addEventListener("wheel", onWheel, { passive: false });
   canvas.addEventListener("webglcontextlost", onLost);
 
+  let wheelZoom = false;
   function zoom(factor: number) {
-    goal.dist = Math.min(46, Math.max(4.5, goal.dist * factor));
+    rig.zoom(factor);
     wake();
   }
 
   // ---- frame -------------------------------------------------------------------------------------------
-  let captionAcc = 0;
-  function emitCaption(dt: number) {
-    captionAcc += dt;
-    if (captionAcc < 0.4) return;
-    captionAcc = 0;
-    const a = actors.get(selectedId ?? hoveredId ?? "");
-    if (!a) return;
-    if (a.act === "zone" && a.sim) events.onCaption(a.agent.id, a.sim.caption(), true);
-    else events.onCaption(a.agent.id, a.label, false);
-  }
-
   function syncProps() {
     const states = physics.props();
     for (let i = 0; i < states.length; i += 1) {
@@ -743,9 +952,14 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     const anyone = stepActors(dt);
     physics.step(dt);
     syncProps();
-    const cameraMoving = stepCamera(dt);
-    emitCaption(dt);
-    return anyone || cameraMoving || down !== null;
+    const followed = selectedId ? actors.get(selectedId) : undefined;
+    const follow = followed && followed.act !== "away" ? new THREE.Vector3(followed.pos.x, 0, followed.pos.z) : null;
+    const cameraMoving = rig.step(dt, follow, anyone && !selectedId && down === null);
+    const wallsMoving = building.update(camera, dt);
+    refreshInfo(dt);
+    arrangeLabels();
+    const flowing = flows.update(clock, dt);
+    return anyone || cameraMoving || wallsMoving || flowing || down !== null;
   }
 
   let loop: RenderLoopHandle | undefined;
@@ -763,6 +977,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   function wake() {
     if (dead) return;
     if (!instant) return loop?.wake();
+    infoAcc = 1;
     for (let i = 0; i < 12; i += 1) step(0.05);
     renderer.render(scene, camera);
   }
@@ -770,22 +985,20 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   function applyTheme(next: StudioTheme) {
     theme = next;
     building.setTheme(next);
-    hemi.intensity = next === "dark" ? 0.7 : 1.2;
-    sun.intensity = next === "dark" ? 1.5 : 2.4;
+    lights.apply(next);
   }
 
   const observer = new ResizeObserver(() => {
     renderer.setSize(width(), height());
     camera.aspect = width() / height();
     camera.updateProjectionMatrix();
-    if (!selectedId) goal.dist = overviewDist();
+    fitLabels();
+    rig.refit(selectedId !== null);
     wake();
   });
   observer.observe(host);
 
   applyTheme(theme);
-  goal.dist = overviewDist();
-  view.dist = goal.dist;
   if (!instant) loop = createRenderLoop({ host, fps: 30, render: frame });
 
   return {
@@ -796,7 +1009,10 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
       wake();
     },
     zoom,
-    resetView,
+    resetView: () => {
+      rig.resetView();
+      wake();
+    },
     setWheelZoom: (enabled) => {
       wheelZoom = enabled;
     },
@@ -812,8 +1028,10 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
       canvas.removeEventListener("webglcontextlost", onLost);
       for (const a of [...actors.values()]) removeActor(a);
       building.dispose();
+      flows.dispose();
+      lights.dispose();
       for (const g of Object.values(propGeo)) g.dispose();
-      for (const m of propMats) m.dispose();
+      for (const m of Object.values(propMat)) m.dispose();
       physics.dispose();
       renderer.dispose();
       canvas.remove();
