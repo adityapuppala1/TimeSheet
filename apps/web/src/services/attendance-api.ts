@@ -243,3 +243,84 @@ export const attendanceIntegrationsApi = {
   commitCsv: async (payload: { csv: string; matchField: AttendanceMatchField; sourceId?: string | null }) =>
     (await api.post<CsvCommitSummary>(`${INT}/import/commit`, payload)).data
 };
+
+/* ------------------------------------------------------------------ *
+ * Team Activity + my history (V17 A5) — /api/attendance/team, /me/history
+ * ------------------------------------------------------------------ */
+
+export type TeamDayStatus = "WEEKEND" | "HOLIDAY" | "LEAVE" | "PRESENT" | "ABSENT" | "PENDING";
+export type PunchSourceKind = "WEB" | "API" | "WEBHOOK" | "MCP" | "CSV";
+
+export interface TeamDayRow {
+  user: { id: string; name: string; email: string; avatarUrl: string | null; title: string };
+  status: TeamDayStatus;
+  holidayName: string | null;
+  /** Never a coordinate: `location` is a coarse label decided server-side. */
+  punch: {
+    punchInAt: string;
+    source: PunchSourceKind;
+    sourceLabel: string;
+    location: "Location shared" | "Network only" | "Not captured";
+    face: "PASSED" | "FLAGGED" | "NONE";
+  } | null;
+  timesheet: { state: "SUBMITTED" | "DRAFT" | "NONE"; hours: number };
+  missedReason: { code: string; note: string | null } | null;
+  reminderSent: boolean;
+}
+
+export interface TeamDayResponse {
+  date: string;
+  summary: Record<TeamDayStatus, number>;
+  total: number;
+  page: number;
+  pageSize: number;
+  rows: TeamDayRow[];
+}
+
+export type TimelineKind =
+  | "LOGIN"
+  | "PUNCH_IN"
+  | "TIMESHEET_CREATED"
+  | "TIMESHEET_SUBMITTED"
+  | "TIMESHEET_UPDATED"
+  | "MISSED_REASON"
+  | "REMINDER_EMAIL"
+  | "LEAVE";
+
+export interface TimelineEvent {
+  kind: TimelineKind;
+  at: string;
+  label: string;
+  detail: string | null;
+}
+
+export interface MyHistoryDay {
+  date: string;
+  status: TeamDayStatus;
+  holidayName: string | null;
+  punchInAt: string | null;
+  sourceLabel: string | null;
+  face: "PASSED" | "FLAGGED" | "NONE" | null;
+}
+
+export interface TeamDayParams {
+  date?: string;
+  search?: string;
+  status?: TeamDayStatus;
+  source?: PunchSourceKind;
+  page?: number;
+  pageSize?: number;
+}
+
+export const attendanceTeamApi = {
+  teamDay: async (params: TeamDayParams) => (await api.get<TeamDayResponse>("/attendance/team/today", { params })).data,
+  timeline: async (userId: string, from: string, to: string) =>
+    (
+      await api.get<{ user: { id: string; name: string; timezone: string | null }; events: TimelineEvent[] }>(
+        `/attendance/team/${encodeURIComponent(userId)}/timeline`,
+        { params: { from, to } }
+      )
+    ).data,
+  myHistory: async (from: string, to: string) =>
+    (await api.get<{ from: string; to: string; days: MyHistoryDay[] }>("/attendance/me/history", { params: { from, to } })).data
+};

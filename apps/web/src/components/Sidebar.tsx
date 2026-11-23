@@ -17,6 +17,7 @@ import {
   ChevronRight,
   ClipboardList,
   FileClock,
+  Fingerprint,
   FileStack,
   FileText,
   FolderKanban,
@@ -61,6 +62,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { brandingApi, brandingLogoUrl, fileUrl, projectApi } from "../services/api";
 import { useMediaQuery } from "../lib/use-media-query";
+import { attendanceApi, MY_TODAY_QUERY_KEY } from "../services/attendance-api";
 
 /**
  * Section headings group the nav so 15 items don't read as one undifferentiated list.
@@ -99,6 +101,9 @@ export interface NavItem {
    *  a key of the server-computed `effective` object — see lib/use-planning.ts. Omit for items
    *  that are always available. */
   feature?: keyof PlanningEffective;
+  /** V17 A5: shown only while Attendance is on for the workspace (toggle AND plan) — read from the
+   *  same /attendance/me/today answer the punch-in pop-up already fetches, so it costs no request. */
+  attendance?: boolean;
 }
 
 /** Exported so the product tour builds its itinerary from the SAME list and the SAME visibility
@@ -151,6 +156,7 @@ export const nav: NavItem[] = [
   // who has just met Agents and Workflows can find the thing that explains how they relate.
   { to: "/app/ai", label: "AI overview", icon: Sparkles, role: "SUPER_ADMIN", section: "Plan" },
 
+  { to: "/app/attendance", label: "Attendance", icon: Fingerprint, section: "Team", attendance: true },
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
   // ONE entry, no permission gate — the page adapts instead of there being two of it. An approver
   // gets the queue, SLA metrics and reports roll-up; everybody else gets the org chart alone, which
@@ -196,8 +202,10 @@ export const nav: NavItem[] = [
 export function isVisible(
   item: NavItem,
   user?: { role: string; permissions: string[] },
-  features?: PlanningEffective
+  features?: PlanningEffective,
+  attendanceOn = false
 ): boolean {
+  if (item.attendance && !attendanceOn) return false;
   if (item.role && user?.role !== item.role) return false;
   if (item.permission && !user?.permissions.includes(item.permission)) return false;
   // A feature-gated item is hidden when `features` hasn't loaded yet, not shown. Flashing a link
@@ -205,6 +213,19 @@ export function isVisible(
   // until something says otherwise.
   if (item.feature && !features?.[item.feature]) return false;
   return true;
+}
+
+/** Whether Attendance is on for this workspace. Shares the punch-in pop-up's cache entry. */
+function useAttendanceOn(): boolean {
+  const user = useAuthStore((s) => s.user);
+  const today = useQuery({
+    queryKey: MY_TODAY_QUERY_KEY,
+    queryFn: attendanceApi.myToday,
+    enabled: Boolean(user),
+    staleTime: 60_000,
+    retry: false
+  });
+  return Boolean(today.data?.enabled);
 }
 
 function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavigate?: () => void; slim?: boolean }) {
@@ -560,7 +581,8 @@ export function Sidebar() {
   // an empty hidden box costs one element — but its contents are built only where they show.
   const wide = useMediaQuery("(min-width: 1024px)");
   const { features } = usePlanningFeatures();
-  const visible = nav.filter((item) => isVisible(item, user, features));
+  const attendanceOn = useAttendanceOn();
+  const visible = nav.filter((item) => isVisible(item, user, features, attendanceOn));
   const avatarSrc = fileUrl(user?.avatarUrl);
   // Defaults to expanded — the responsive e2e suite (and first-time users) must find every link
   // visible with no interaction; slim is an opt-in the browser remembers.
@@ -675,7 +697,8 @@ export function Sidebar() {
 export function MobileDrawerNav({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const user = useAuthStore((s) => s.user);
   const { features } = usePlanningFeatures();
-  const visible = nav.filter((item) => isVisible(item, user, features));
+  const attendanceOn = useAttendanceOn();
+  const visible = nav.filter((item) => isVisible(item, user, features, attendanceOn));
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -695,7 +718,8 @@ export function MobileDrawerNav({ open, onOpenChange }: { open: boolean; onOpenC
 export function MobileNav() {
   const user = useAuthStore((s) => s.user);
   const { features } = usePlanningFeatures();
-  const visible = nav.filter((item) => isVisible(item, user, features)).slice(0, 5);
+  const attendanceOn = useAttendanceOn();
+  const visible = nav.filter((item) => isVisible(item, user, features, attendanceOn)).slice(0, 5);
   return (
     <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-border bg-background/95 px-1 py-1.5 shadow-soft backdrop-blur-xl lg:hidden">
       {visible.map((item) => (

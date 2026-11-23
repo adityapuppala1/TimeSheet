@@ -65,6 +65,19 @@ export async function findLeaveForDay(_userId: string, _dateKey: string): Promis
   return null;
 }
 
+/**
+ * Phase B hook, batched (V17 A5): approved leave for many people over a date range, as a lookup.
+ * Team Activity judges a whole team's day at once and must not ask per person; Phase B fills this
+ * with ONE query. Returns "no leave" for everyone until then.
+ */
+export async function findLeaveInRange(
+  _userIds: readonly string[],
+  _from: string,
+  _to: string
+): Promise<(userId: string, dateKey: string) => { type: string } | null> {
+  return () => null;
+}
+
 /** The person's holiday on `dateKey`: their own calendar, else the workspace default. */
 export async function findHoliday(holidayCalendarId: string | null, dateKey: string): Promise<{ name: string } | null> {
   const calendarId =

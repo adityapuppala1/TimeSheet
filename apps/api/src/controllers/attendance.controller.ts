@@ -13,10 +13,19 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
-import { getMyToday, punchIn } from "../services/attendance-punch.service.js";
+import { assertAttendanceOn, getMyToday, punchIn } from "../services/attendance-punch.service.js";
 import { isoDate } from "../services/attendance-settings.service.js";
 import { listEnabledMissedReasonOptions, missedDayReasonState } from "../services/missed-day-reason.service.js";
 import { userClock } from "../services/user-clock.service.js";
+import {
+  getMyHistory,
+  getPersonTimeline,
+  getTeamDay,
+  MAX_HISTORY_DAYS,
+  MAX_TIMELINE_DAYS,
+  spanDays
+} from "../services/attendance-team.service.js";
+import { AppError } from "../middleware/error.js";
 
 export const attendanceRouter = Router();
 
@@ -69,4 +78,48 @@ attendanceRouter.get("/missed-reasons/check", requireAuth, async (req, res) => {
   const date = isoDate.parse(req.query.date);
   const today = (await userClock(req.user!.id)).today.toISOString().slice(0, 10);
   res.json({ date, ...(await missedDayReasonState(req.user!.id, date, today)) });
+});
+
+/* ----------------------------- Team Activity (V17 A5) ----------------------------- */
+
+const dayStatuses = ["WEEKEND", "HOLIDAY", "LEAVE", "PRESENT", "ABSENT", "PENDING"] as const;
+const sourceKinds = ["WEB", "API", "WEBHOOK", "MCP", "CSV"] as const;
+
+/** Parsed here, not by validate(): validate() discards its parse, and these are query strings. */
+const teamDayQuery = z.object({
+  date: isoDate.optional(),
+  search: z.string().max(120).optional(),
+  status: z.enum(dayStatuses).optional(),
+  source: z.enum(sourceKinds).optional(),
+  managerId: z.string().min(1).max(64).optional(),
+  page: z.coerce.number().int().min(1).max(10_000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25)
+});
+
+/** A from/to window, both required, ordered, and no longer than `maxDays`. */
+function rangeQuery(query: unknown, maxDays: number) {
+  const { from, to } = z.object({ from: isoDate, to: isoDate }).parse(query);
+  if (to < from) throw new AppError(422, "`to` must be on or after `from`.");
+  if (spanDays(from, to) > maxDays) throw new AppError(422, `Ask for at most ${maxDays} days at a time.`);
+  return { from, to };
+}
+
+attendanceRouter.get("/team/today", requireAuth, async (req, res) => {
+  await assertAttendanceOn();
+  const q = teamDayQuery.parse(req.query);
+  // "Today" is the viewer's own day unless they picked one.
+  const date = q.date ?? (await userClock(req.user!.id)).today.toISOString().slice(0, 10);
+  res.json(await getTeamDay({ id: req.user!.id, role: req.user!.role }, { ...q, date }));
+});
+
+attendanceRouter.get("/team/:userId/timeline", requireAuth, async (req, res) => {
+  await assertAttendanceOn();
+  const { from, to } = rangeQuery(req.query, MAX_TIMELINE_DAYS);
+  res.json(await getPersonTimeline({ id: req.user!.id, role: req.user!.role }, String(req.params.userId), from, to));
+});
+
+attendanceRouter.get("/me/history", requireAuth, async (req, res) => {
+  await assertAttendanceOn();
+  const { from, to } = rangeQuery(req.query, MAX_HISTORY_DAYS);
+  res.json(await getMyHistory(req.user!.id, from, to));
 });

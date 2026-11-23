@@ -74,6 +74,7 @@ const AIActivityLog = lazy(() => import("./pages/AIActivityLog").then((m) => ({ 
 const Insights = lazy(() => import("./pages/Insights").then((m) => ({ default: m.Insights })));
 const SecurityInsightsPage = lazy(() => import("./pages/SecurityInsights").then((m) => ({ default: m.SecurityInsightsPage })));
 const Team = lazy(() => import("./pages/Team").then((m) => ({ default: m.Team })));
+const AttendancePage = lazy(() => import("./pages/Attendance").then((m) => ({ default: m.AttendancePage })));
 const WorkspaceSettingsPage = lazy(() =>
   import("./pages/WorkspaceSettings").then((m) => ({ default: m.WorkspaceSettingsPage }))
 );
@@ -238,6 +239,10 @@ const router = createBrowserRouter([
       // metrics and direct-reports roll-up only to an approver (see pages/Team.tsx). One page
       // rather than a second, employee-facing copy of the same chart.
       { path: "team", element: <PageShell><Team /></PageShell> },
+      // V17 A5. Open to everyone: "My attendance" is your own days; the Team tab inside is shown to
+      // managing roles and the API scopes every row (direct reports, or everyone for an admin).
+      { path: "attendance", element: <PageShell><AttendancePage /></PageShell> },
+      { path: "attendance/team", element: <PageShell><AttendancePage /></PageShell> },
       { path: "approvals", element: <RequirePermission permission={permissions.TIMESHEETS_APPROVE}><PageShell><ApprovalsPage /></PageShell></RequirePermission> },
       { path: "users", element: <RequirePermission permission={permissions.USERS_MANAGE}><PageShell><UsersPage /></PageShell></RequirePermission> },
       { path: "projects", element: <RequirePermission permission={permissions.PROJECTS_MANAGE}><PageShell><ProjectsPage /></PageShell></RequirePermission> },
