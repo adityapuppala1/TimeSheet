@@ -12,7 +12,16 @@
  *
  * OFFICE LIFE (coffee, chats, stand-ups) is seeded ambience for agents with nothing running, reported
  * through `onLife` so the UI can label it as idle. Zone equipment captions and the task card's text
- * are tagged "Simulated". Hand-off packets between rooms move only while the upstream agent really works.
+ * are tagged "Simulated".
+ *
+ * REAL ACTIVITY (`setActivity`, from office-activity.ts over GET /agents/office-activity): a hand-off arc
+ * between two rooms exists only when the server linked one agent's run to another's, and the upstream
+ * agent carries a parcel labelled with the real item to the next room once it is free; agents whose
+ * runs overlap on the same project leave their zones for the meeting room, whose wall screen shows the
+ * shared item while each quotes its own run's summary; each waiting run is a real crate on a pile in its
+ * room; idle colleagues walk over to a deep queue — a VISUAL cue only, labelled "Helping (visual)".
+ * People give way to each other (office-steering.ts): personal space, stepping aside head-on, waiting at
+ * a busy doorway, and taking a free spot around a zone rather than standing in someone.
  *
  * LOOK: ACES tone mapping over an sRGB output, a soft image-based light from three's RoomEnvironment
  * (prefiltered once with PMREM), a warm key light with soft shadows and a cool fill. Post-processing
@@ -35,19 +44,22 @@ import { createRenderLoop, type RenderLoopHandle } from "../../../lib/render-loo
 import { AGENT_PALETTE, hashSeed, mulberry32, type Archetype } from "../../agents-studio/studio-model";
 import { buildSim, type Sim } from "../../agents-studio/scene/sims";
 import type { StudioAgent, StudioTheme } from "../../agents-studio/scene/types";
+import type { OfficeView } from "../office-activity";
+import { freeSlots, shouldWaitAtDoor, steer, type Mover } from "../office-steering";
 import {
-  activeFlows,
   declutter,
   BIN,
   buildNavGrid,
   castPeople,
   COFFEE_SPOT,
   DESKS,
+  DOORWAYS,
   equipmentCentre,
   findPath,
   goalFor,
   headingTo,
   idlePause,
+  isWalkable,
   MAX_AGENTS,
   MEETING_SEATS,
   obstacles,
@@ -62,11 +74,13 @@ import {
   zoneSpot,
   type Desk,
   type Goal,
+  type RoomId,
   type Seat,
   type Vec2
 } from "../office-model";
 import { buildOffice } from "./building";
 import { createCameraRig, FOV } from "./camera";
+import { createActivityProps } from "./activity-props";
 import { createFlows, type ArcSpec } from "./flows";
 import { CARD_W, LABEL_UNIT, TAG_H, TAG_W } from "./labels";
 import { createPerson, type Person } from "./people";
@@ -78,12 +92,16 @@ export interface OfficeEvents {
   /** What the agent in focus is doing. `simulated` marks a zone-equipment caption (an illustration). */
   onCaption(id: string, text: string, simulated: boolean): void;
   /** A piece of office life (idle ambience), for the feed. */
-  onLife(agentId: string, text: string): void;
+  /** `real` marks a line backed by real data (a hand-off delivered), not office life. */
+  onLife(agentId: string, text: string, real: boolean): void;
   onLost(): void;
 }
 
 export interface OfficeHandle {
   setAgents(agents: readonly StudioAgent[]): void;
+  /** What REAL activity (office-activity.ts `viewAt`) says is happening now: hand-offs, a meeting,
+   *  queues, and the idle colleagues walking over to help (visual only). */
+  setActivity(view: OfficeView): void;
   select(id: string | null): void;
   setTheme(theme: StudioTheme): void;
   /** Multiply the camera distance (<1 zooms in). */
@@ -94,7 +112,17 @@ export interface OfficeHandle {
   destroy(): void;
 }
 
-type Act = "away" | "walk" | "seated" | "zone" | "alert" | "cheer" | "coffee" | "chat" | "meeting";
+/** "huddle" is a REAL meeting (overlapping runs on one item); "meeting" is an idle stand-up.
+ *  "deliver" ends a real hand-off; "help" is the visual-only walk to an overloaded queue. */
+type Act = "away" | "walk" | "seated" | "zone" | "alert" | "cheer" | "coffee" | "chat" | "meeting" | "huddle" | "deliver" | "help";
+
+interface Courier {
+  key: string;
+  toId: string;
+  title: string | null;
+  /** Office clock time after which an undelivered hand-off is dropped. */
+  expires: number;
+}
 
 interface Slide {
   from: Vec2;
@@ -134,6 +162,16 @@ interface Actor {
   status: string;
   slide: Slide | null;
   sim: Sim | null;
+  /** A real hand-off this agent should carry to the next room once it is free. */
+  courier: Courier | null;
+  /** The real meeting it belongs to (overlapping runs on a shared item), if any. */
+  meetingKey: string | null;
+  /** Whose overloaded queue it walks over to (visual only). */
+  helpFor: string | null;
+  /** Seconds spent waiting at a doorway for someone else to come through. */
+  doorWait: number;
+  /** The parcel it carries on a hand-off. */
+  packet: THREE.Mesh | null;
 }
 
 const SIM_SCALE = 0.85;
@@ -149,8 +187,21 @@ const PROPS: ReadonlyArray<[PropKind, number, number]> = [
   ["box", -3.0, 7.0]
 ];
 const PAPERS = 6;
-const PROP_COLOR: Readonly<Record<PropKind, number>> = { ball: 0xf97316, box: 0xc8a27a, paper: 0xf8fafc };
+const PROP_COLOR: Readonly<Record<PropKind, number>> = {
+  ball: 0xf97316,
+  box: 0xc8a27a,
+  paper: 0xf8fafc,
+  crate: 0xfbbf24
+};
 const ALERT_LABEL = "Needs a look — its last run failed or was blocked";
+const DOOR_PATIENCE_S = 2.5;
+const COURIER_TTL_S = 180;
+const HUDDLE_TURN_S = 3.2;
+const HUDDLE_STOCK = ["On it", "Agreed", "Let me check", "Looks good", "Next step?"] as const;
+const shortTitle = (t: string | null) => {
+  const text = t ?? "an item";
+  return text.length > 26 ? `${text.slice(0, 25)}…` : text;
+};
 
 const smoothstep = (t: number) => t * t * (3 - 2 * t);
 
@@ -232,17 +283,35 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   scene.add(building.group);
   const flows = createFlows();
   scene.add(flows.group);
+  const packetGeo = new THREE.BoxGeometry(0.26, 0.18, 0.2);
+  const packetMat = new THREE.MeshStandardMaterial({
+    color: 0x38bdf8,
+    roughness: 0.5,
+    emissive: 0x0ea5e9,
+    emissiveIntensity: 0.35
+  });
+  /** What real activity says right now (setActivity); empty until the first poll lands. */
+  let view: OfficeView = {
+    working: new Set(),
+    handoffs: [],
+    meeting: null,
+    queues: {},
+    helpers: []
+  };
+  const seenHandoffs = new Set<string>();
 
   // ---- loose props, mirrored from the physics world ------------------------------------------------
   const propGeo: Record<PropKind, THREE.BufferGeometry> = {
     ball: new THREE.SphereGeometry(0.11, 20, 14),
     box: new THREE.BoxGeometry(0.34, 0.34, 0.34),
-    paper: new THREE.IcosahedronGeometry(0.06, 0)
+    paper: new THREE.IcosahedronGeometry(0.06, 0),
+    crate: new THREE.BoxGeometry(0.3, 0.3, 0.3)
   };
   const propMat: Record<PropKind, THREE.Material> = {
     ball: new THREE.MeshStandardMaterial({ color: PROP_COLOR.ball, roughness: 0.45 }),
     box: new THREE.MeshStandardMaterial({ color: PROP_COLOR.box, roughness: 0.85 }),
-    paper: new THREE.MeshStandardMaterial({ color: PROP_COLOR.paper, roughness: 0.9, flatShading: true })
+    paper: new THREE.MeshStandardMaterial({ color: PROP_COLOR.paper, roughness: 0.9, flatShading: true }),
+    crate: new THREE.MeshStandardMaterial({ color: PROP_COLOR.crate, roughness: 0.6 })
   };
   const propMeshes: THREE.Mesh[] = [];
   const addProp = (kind: PropKind, x: number, y: number, z: number) => {
@@ -256,6 +325,10 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   const firstPaper = PROPS.length;
   for (let i = 0; i < PAPERS; i += 1) addProp("paper", BIN.x + (i % 2) * 0.08 - 0.04, 0.15 + i * 0.13, BIN.z);
   let nextPaper = 0;
+  const activityProps = createActivityProps(scene, physics, (x, y, z) => {
+    addProp("crate", x, y, z);
+    return propMeshes.length - 1;
+  });
 
   // ---- actors ----------------------------------------------------------------------------------------
   const actors = new Map<string, Actor>();
@@ -268,7 +341,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   let dead = false;
   let clock = 0;
 
-  const say = (a: Actor, text: string) => events.onLife(a.agent.id, text);
+  const say = (a: Actor, text: string, real = false) => events.onLife(a.agent.id, text, real);
   const idleNow = () => [...actors.values()].filter((a) => a.act === "seated" && a.goal === "desk" && !a.busy);
 
   function doing(a: Actor, label: string, status: string) {
@@ -353,6 +426,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   }
 
   function goZone(a: Actor) {
+    if (a.meetingKey && view.meeting?.key === a.meetingKey) return goHuddle(a);
     const roomId = ZONE_OF[a.agent.archetype];
     const spot = zoneSpot(roomId);
     if (!spot) return goDesk(a, "Starting the run at the desk");
@@ -391,6 +465,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   }
 
   function hush(a: Actor) {
+    carryPacket(a, false);
     a.person.setTalking(false);
     a.person.setBubble(null);
     a.person.lookAt(null);
@@ -405,6 +480,73 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     if (!partner) return;
     partner.partner = null;
     hush(partner);
+  }
+
+  // ---- real activity: meetings, hand-offs, helpers ---------------------------------------------------
+  /** Where an agent works: its zone's stand spot, or beside its desk for the assistant. */
+  function workSpot(agent: Actor): Vec2 {
+    return zoneSpot(ZONE_OF[agent.agent.archetype])?.stand ?? agent.desk.access;
+  }
+
+  /** A free spot near `centre`, away from where everybody else stands (office-steering.ts). */
+  function slotNear(a: Actor, centre: Vec2): Vec2 {
+    const taken = [...actors.values()].filter((o) => o !== a && o.act !== "away").map((o) => o.pos);
+    return freeSlots(centre, 1, taken, (p) => isWalkable(grid, p), 0.9, a.pos)[0] ?? centre;
+  }
+
+  function goHuddle(a: Actor) {
+    const meeting = view.meeting;
+    const index = meeting ? meeting.agentIds.indexOf(a.agent.id) : -1;
+    const seat = MEETING_SEATS[index];
+    if (!meeting || !seat) return;
+    enter(a);
+    for (const m of actors.values()) if (m.act === "meeting") endLife(m);
+    walkTo(a, seat.access, `Walking to a meeting on ${meeting.title}`, "To a meeting", () => {
+      sit(a, seat, "huddle", `In a meeting on ${meeting.title} — runs overlapping on the same item`, "In a meeting");
+    });
+  }
+
+  function carryPacket(a: Actor, on: boolean) {
+    if (on && !a.packet) {
+      a.packet = new THREE.Mesh(packetGeo, packetMat);
+      a.packet.position.set(0, 1.0, 0.3);
+      a.packet.castShadow = true;
+      a.person.root.add(a.packet);
+    }
+    if (a.packet) a.packet.visible = on;
+  }
+
+  function startCourier(a: Actor) {
+    const job = a.courier;
+    a.courier = null;
+    const to = job ? actors.get(job.toId) : undefined;
+    if (!job || !to || job.expires < clock) return;
+    a.busy = true;
+    const target = slotNear(a, workSpot(to));
+    const title = shortTitle(job.title);
+    carryPacket(a, true);
+    walkTo(a, target, `Handing ${title} to ${to.agent.name}`, "Handing off", () => {
+      settleAt(a, target, headingTo(target, to.pos));
+      a.act = "deliver";
+      a.timer = 3.5;
+      a.person.play("point");
+      a.person.setBubble(`📦 ${title}`);
+      say(a, `handed ${title} to ${to.agent.name}`, true);
+    });
+  }
+
+  function startHelp(a: Actor) {
+    const owner = a.helpFor ? actors.get(a.helpFor) : undefined;
+    if (!owner) return;
+    a.busy = true;
+    const target = slotNear(a, workSpot(owner));
+    walkTo(a, target, `Helping with ${owner.agent.name}'s queue (visual only)`, "Helping (visual)", () => {
+      settleAt(a, target, headingTo(target, workSpot(owner)));
+      a.act = "help";
+      a.person.play("idle");
+      a.person.setBubble("🤝 Lending a hand");
+      a.timer = 2.5;
+    });
   }
 
   const GOAL_ACTION: Readonly<Record<Goal, (a: Actor) => void>> = { away: goAway, zone: goZone, alert: goAlert, celebrate, desk: goDesk };
@@ -485,7 +627,12 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
       label: "",
       status: "",
       slide: null,
-      sim: null
+      sim: null,
+      courier: null,
+      meetingKey: null,
+      helpFor: null,
+      doorWait: 0,
+      packet: null
     };
   }
 
@@ -510,7 +657,8 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     if (agent.id === wantedId) select(wantedId);
     if (walkIn) applyGoal(a);
     else settle(a);
-    wake();
+    // Real activity that arrived before this person loaded now applies to them too.
+    setActivity(view);
   }
 
   function removeActor(a: Actor) {
@@ -549,6 +697,74 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
       else if (!loading.has(agent.id)) void addActor(agent, cast[i], populated);
     });
     populated = true;
+    wake();
+  }
+
+  // ---- real activity in ----------------------------------------------------------------------------------
+  /** A new real hand-off: the upstream agent will carry it over once it is free (stepSeated). */
+  function syncHandoffs() {
+    for (const h of view.handoffs) {
+      const from = actors.get(h.fromAgentId);
+      // Not marked seen until both people exist: models load asynchronously after the first poll.
+      if (seenHandoffs.has(h.key) || !from || !actors.has(h.toAgentId)) continue;
+      seenHandoffs.add(h.key);
+      from.courier = {
+        key: h.key,
+        toId: h.toAgentId,
+        title: h.title,
+        expires: clock + COURIER_TTL_S
+      };
+    }
+  }
+
+  function syncMeeting() {
+    const meeting = view.meeting;
+    const members = new Set(meeting?.agentIds ?? []);
+    for (const a of actors.values()) {
+      const key = meeting && members.has(a.agent.id) ? meeting.key : null;
+      if (key === a.meetingKey) continue;
+      a.meetingKey = key;
+      if (a.goal === "zone") applyGoal(a);
+    }
+    const names = (meeting?.agentIds ?? []).map((id) => actors.get(id)?.agent.name ?? "An agent");
+    activityProps.setMeeting(meeting ? { title: meeting.title, names } : null);
+  }
+
+  function syncHelpers() {
+    const helpFor = new Map(view.helpers.map((h) => [h.helperId, h.agentId]));
+    for (const a of actors.values()) {
+      const next = helpFor.get(a.agent.id) ?? null;
+      if (next === a.helpFor) continue;
+      a.helpFor = next;
+      if (a.act === "help") endLife(a);
+    }
+  }
+
+  /** Where an agent's queue piles up: beside its zone's equipment, or beside its desk. */
+  function queueSpot(a: Actor): Vec2 {
+    const room = roomById(ZONE_OF[a.agent.archetype] as RoomId);
+    if (!room) return { x: a.desk.desk.x - 1.05, z: a.desk.desk.z };
+    const c = equipmentCentre(room);
+    return { x: c.x + 1.0, z: c.z + 1.9 };
+  }
+
+  function syncQueues() {
+    const stacks = [...actors.values()]
+      .filter((a) => (view.queues[a.agent.id] ?? 0) > 0)
+      .map((a) => ({
+        key: a.agent.id,
+        at: queueSpot(a),
+        depth: view.queues[a.agent.id] ?? 0
+      }));
+    activityProps.setQueues(stacks);
+  }
+
+  function setActivity(next: OfficeView) {
+    view = next;
+    syncHandoffs();
+    syncMeeting();
+    syncHelpers();
+    syncQueues();
     wake();
   }
 
@@ -599,7 +815,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     const choice = pickIdleActivity(a.rand, others.length + 1);
     if (choice === "coffee") startCoffee(a);
     else if (choice === "chat") startChat(a, others[Math.floor(a.rand() * others.length)]);
-    else if (choice === "standup") startStandup([a, ...others].slice(0, MEETING_SEATS.length));
+    else if (choice === "standup" && !view.meeting) startStandup([a, ...others].slice(0, MEETING_SEATS.length));
   }
 
   function endLife(a: Actor) {
@@ -621,6 +837,27 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     return total;
   }
 
+  const facing = (a: Actor): Vec2 => (a.act === "walk" ? { x: Math.sin(a.heading), z: Math.cos(a.heading) } : { x: 0, z: 0 });
+  const moverOf = (a: Actor): Mover => ({
+    id: a.agent.id,
+    pos: a.pos,
+    dir: facing(a),
+    priority: a.seed
+  });
+
+  /** Spatial awareness (office-steering.ts): wait at a busy doorway, else bend around people nearby. */
+  function giveWay(a: Actor, want: Vec2, dt: number): { dir: Vec2; pace: number } {
+    const others = [...actors.values()].filter((o) => o !== a && o.act !== "away").map(moverOf);
+    const self = { ...moverOf(a), dir: want };
+    if (a.doorWait < DOOR_PATIENCE_S && shouldWaitAtDoor(self, others, DOORWAYS)) {
+      a.doorWait += dt;
+      a.person.setPace(0);
+      return { dir: want, pace: 0 };
+    }
+    if (!shouldWaitAtDoor(self, others, DOORWAYS)) a.doorWait = 0;
+    return steer(self, want, others);
+  }
+
   function stepWalk(a: Actor, dt: number) {
     const target = a.path[0];
     if (!target) return finishWalk(a);
@@ -636,8 +873,10 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     const want = WALK_SPEED * Math.min(1, Math.max(0.35, remaining(a) / 0.9)) * (turn > 1.2 ? 0.55 : 1);
     a.speed += (want - a.speed) * Math.min(1, dt * 3.5);
     a.person.setPace(a.speed / WALK_SPEED);
-    const step = Math.min(dist, a.speed * dt);
-    const next = physics.movePerson(a.agent.id, (dx / dist) * step, (dz / dist) * step, a.ghost > 0);
+    const { dir, pace } = giveWay(a, { x: dx / dist, z: dz / dist }, dt);
+    const step = Math.min(dist, a.speed * pace * dt);
+    if (step <= 1e-4) return;
+    const next = physics.movePerson(a.agent.id, dir.x * step, dir.z * step, a.ghost > 0);
     const moved = Math.hypot(next.x - a.pos.x, next.z - a.pos.z);
     a.stuck = moved < step * 0.3 ? a.stuck + dt : 0;
     a.ghost = a.stuck > 1.2 ? 1.5 : a.ghost - dt;
@@ -665,7 +904,12 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   }
 
   function stepSeated(a: Actor, dt: number) {
-    if (instant || a.busy || a.goal !== "desk") return;
+    if (a.busy || a.goal !== "desk") return;
+    // Real work first: a hand-off to carry, then a queue to help with (visual only). Both run under
+    // reduced motion too — the person is simply placed there.
+    if (a.courier) return startCourier(a);
+    if (a.helpFor) return startHelp(a);
+    if (instant) return;
     a.idleIn -= dt;
     if (a.idleIn <= 0) startIdleLife(a);
   }
@@ -708,6 +952,33 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     stepTimed(a, dt);
   }
 
+  /** A real meeting: speakers take turns; each quotes its own run's summary, or a stock phrase without one. */
+  function stepHuddle(a: Actor) {
+    const meeting = view.meeting;
+    if (!meeting || a.meetingKey !== meeting.key) return;
+    const seated = meeting.agentIds.map((id) => actors.get(id)).filter((m): m is Actor => m?.act === "huddle");
+    const turn = Math.floor(clock / HUDDLE_TURN_S);
+    const speaker = seated[turn % Math.max(1, seated.length)];
+    const mine = speaker === a;
+    a.person.setTalking(mine);
+    const real = meeting.lines[a.agent.id];
+    a.person.setBubble(mine ? (real ?? HUDDLE_STOCK[Math.abs(a.seed + turn) % HUDDLE_STOCK.length]) : null);
+    a.person.lookAt(speaker && !mine ? headOf(speaker, 1.2) : null);
+  }
+
+  function stepDeliver(a: Actor, dt: number) {
+    a.timer -= dt;
+    if (a.timer > 0) return;
+    endLife(a);
+  }
+
+  function stepHelp(a: Actor, dt: number) {
+    if (!a.helpFor || a.goal !== "desk") return endLife(a);
+    a.timer -= dt;
+    if (a.timer <= 0) a.person.setBubble(null);
+    a.person.play(Math.floor(clock / 4 + a.seed) % 2 === 0 ? "point" : "idle", 0.5);
+  }
+
   function stepCheer(a: Actor, dt: number) {
     a.timer -= dt;
     if (a.timer > 0 || a.goal === "celebrate") return;
@@ -725,7 +996,10 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     cheer: stepCheer,
     coffee: stepTimed,
     chat: stepChat,
-    meeting: stepMeeting
+    meeting: stepMeeting,
+    huddle: stepHuddle,
+    deliver: stepDeliver,
+    help: stepHelp
   };
 
   function simIntensity(a: Actor): number {
@@ -735,7 +1009,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
 
   /** The hovered person glances at the camera; everyone else looks where their activity says. */
   function glance(a: Actor) {
-    if (a.agent.id !== hoveredId || a.act === "chat" || a.act === "meeting") return;
+    if (a.agent.id !== hoveredId || a.act === "chat" || a.act === "meeting" || a.act === "huddle") return;
     a.person.lookAt(camera.position);
   }
 
@@ -766,15 +1040,24 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     return new THREE.Vector3(c.x, 1.7, c.z);
   }
 
-  function pipelineArcs(): ArcSpec[] {
-    const present = [...actors.values()].filter((a) => a.act !== "away");
-    const working = new Set(present.filter((a) => a.act === "zone").map((a) => a.agent.archetype));
-    const there = new Set(present.map((a) => a.agent.archetype));
+  /** Hand-off arcs: drawn ONLY for real links between two runs (the server's rule), room to room. */
+  function handoffArcs(): ArcSpec[] {
     const arcs: ArcSpec[] = [];
-    for (const f of activeFlows(working, there)) {
-      const from = zoneAnchor(f.from);
-      const to = zoneAnchor(f.to);
-      if (from && to) arcs.push({ key: `p-${f.from}-${f.to}`, from, to, color: 0x38bdf8, lift: 1.6, strength: f.both ? 1 : 0.65, twoWay: false });
+    for (const h of view.handoffs) {
+      const from = actors.get(h.fromAgentId);
+      const to = actors.get(h.toAgentId);
+      if (!from || !to) continue;
+      const a = zoneAnchor(from.agent.archetype) ?? headOf(from, 1.7);
+      const b = zoneAnchor(to.agent.archetype) ?? headOf(to, 1.7);
+      arcs.push({
+        key: `h-${h.key}`,
+        from: a,
+        to: b,
+        color: 0x38bdf8,
+        lift: 1.6,
+        strength: 1,
+        twoWay: false
+      });
     }
     return arcs;
   }
@@ -798,7 +1081,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     if (infoAcc < 0.4) return;
     infoAcc = 0;
     for (const a of actors.values()) a.person.card.set(cardFor(a));
-    flows.set([...pipelineArcs(), ...talkArcs()]);
+    flows.set([...handoffArcs(), ...talkArcs()]);
     const a = actors.get(selectedId ?? hoveredId ?? "");
     if (!a) return;
     if (a.act === "zone" && a.sim) events.onCaption(a.agent.id, a.sim.caption(), true);
@@ -832,7 +1115,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
       if (a.agent.id === selectedId) level = 2;
       else if (a.agent.id === hoveredId) level = 1;
       a.person.setEmphasis(level);
-      if (level === 0 && a.act !== "chat" && a.act !== "meeting") a.person.lookAt(null);
+      if (level === 0 && a.act !== "chat" && a.act !== "meeting" && a.act !== "huddle") a.person.lookAt(null);
     }
   }
 
@@ -867,7 +1150,10 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
   }
 
   function flickProp(): boolean {
-    const hit = raycaster.intersectObjects(propMeshes, false)[0];
+    const hit = raycaster.intersectObjects(
+      propMeshes.filter((m) => m.visible),
+      false
+    )[0];
     if (!hit) return false;
     const away = new THREE.Vector3().subVectors(hit.point, camera.position).setY(0).normalize();
     physics.flick(propMeshes.indexOf(hit.object as THREE.Mesh), away.x, away.z);
@@ -942,6 +1228,8 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     const states = physics.props();
     for (let i = 0; i < states.length; i += 1) {
       const s = states[i];
+      propMeshes[i].visible = s.enabled;
+      if (!s.enabled) continue;
       propMeshes[i].position.set(s.position.x, s.position.y, s.position.z);
       propMeshes[i].quaternion.set(s.rotation.x, s.rotation.y, s.rotation.z, s.rotation.w);
     }
@@ -958,6 +1246,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
     const wallsMoving = building.update(camera, dt);
     refreshInfo(dt);
     arrangeLabels();
+    activityProps.update();
     const flowing = flows.update(clock, dt);
     return anyone || cameraMoving || wallsMoving || flowing || down !== null;
   }
@@ -1003,6 +1292,7 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
 
   return {
     setAgents,
+    setActivity,
     select,
     setTheme: (next) => {
       applyTheme(next);
@@ -1029,6 +1319,9 @@ export async function createOffice(host: HTMLElement, events: OfficeEvents, opts
       for (const a of [...actors.values()]) removeActor(a);
       building.dispose();
       flows.dispose();
+      activityProps.dispose();
+      packetGeo.dispose();
+      packetMat.dispose();
       lights.dispose();
       for (const g of Object.values(propGeo)) g.dispose();
       for (const m of Object.values(propMat)) m.dispose();

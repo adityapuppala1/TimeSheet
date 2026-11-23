@@ -5677,7 +5677,39 @@ export interface AgentLedgerHistory {
   measuredDays: number;
 }
 
+/** GET /agents/office-activity — the last 24h of real runs for the Agents Office replay. Hand-offs are
+ *  derived server-side (same flow, or same project within 30 min); hidden projects come back untitled. */
+export interface OfficeRunEvent {
+  runId: string;
+  agentId: string;
+  capability: string;
+  status: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  entity: { type: "project"; id: string; title: string } | null;
+  summary: string | null;
+}
+export interface OfficeHandoff {
+  fromRunId: string;
+  toRunId: string;
+  fromAgentId: string;
+  toAgentId: string;
+  kind: "flow" | "project";
+  at: string;
+  title: string | null;
+}
+export interface OfficeActivity {
+  since: string;
+  until: string;
+  events: OfficeRunEvent[];
+  queues: Record<string, number>;
+  handoffs: OfficeHandoff[];
+  truncated: boolean;
+}
+
 export const agentRosterApi = {
+  officeActivity: async () => (await api.get<OfficeActivity>("/agents/office-activity")).data,
   list: async () => (await api.get<AgentRosterEntry[]>("/agents")).data,
   ledger: async () => (await api.get<AgentLedgerSummary>("/agents/ledger")).data,
   ledgerHistory: async (days = 30) => (await api.get<AgentLedgerHistory>("/agents/ledger/history", { params: { days } })).data,

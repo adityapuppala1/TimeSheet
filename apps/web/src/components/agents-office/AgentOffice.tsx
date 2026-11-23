@@ -10,6 +10,10 @@
  *   - "Office life" lines (coffee, chats, stand-ups) are idle ambience and are labelled that way.
  *   - What a room's equipment shows while an agent works it is an illustration, tagged "Simulated".
  *   - "Watch it work" previews an agent at its zone without it having a real run; the panel says so.
+ *   - Hand-offs, meetings and queue piles come from the last 24h of real runs (`activity`, see
+ *     office-activity.ts); a colleague walking over to help a deep queue is a visual cue, labelled so.
+ *   - The timeline replays those 24h in the office (moods then come from the events, not the roster);
+ *     "Live" returns to now.
  *
  * COST AND FALLBACKS: three.js, the Rapier physics engine and the character models load only when this
  * mounts. No real GPU, a failed chunk or a lost context shows the same agents as 2D portraits. Reduced
@@ -21,24 +25,90 @@
  *
  * WHO renders this: pages/Agents.tsx, above the roster.
  */
-import { ArrowDown, Eye, EyeOff, Maximize2, Minimize2, Minus, Play, Plus, Power, RotateCcw, Square, X } from "lucide-react";
+import { ArrowDown, Eye, EyeOff, Maximize2, Minimize2, Minus, Pause, Play, Plus, Power, Radio, RotateCcw, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isSoftwareWebGl } from "../../lib/webgl";
 import { currentTheme, subscribeTheme } from "../../lib/theme";
 import { useMediaQuery } from "../../lib/use-media-query";
 import { cn } from "../../lib/utils";
-import type { AgentRosterEntry } from "../../services/api";
+import type { AgentRosterEntry, OfficeActivity } from "../../services/api";
 import type { StudioAgent } from "../agents-studio/scene/types";
 import { agentTintIndex, archetypeFor, ARCHETYPE_ROLE, moodCss, MOOD_LABEL, moodFor, type Mood } from "../agents-studio/studio-model";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { AgentAvatar } from "./AgentAvatar";
+import { describeView, feedAt, replayBounds, viewAt } from "./office-activity";
 import { MAX_AGENTS, runFeed, type FeedLine } from "./office-model";
 import type { OfficeHandle } from "./scene/office-engine";
 
 const HIDE_KEY = "ts.agents.office.hidden";
 const PREVIEW_MS = 30_000;
 const LEGEND: ReadonlyArray<Mood> = ["working", "idle", "attention", "off"];
+/** Replay speeds: office time per real second. */
+const SPEEDS: ReadonlyArray<{ value: number; label: string }> = [
+  { value: 60, label: "1 min/s" },
+  { value: 300, label: "5 min/s" },
+  { value: 900, label: "15 min/s" },
+  { value: 3600, label: "1 h/s" }
+];
+const REPLAY_TICK_MS = 250;
+const LIVE_HANDOFF_MS = 5 * 60_000;
+
+/** The feed's run lines: the roster's recent runs live, or the runs as they stood at the replayed time. */
+function feedFor(entries: readonly AgentRosterEntry[], activity: OfficeActivity | null, live: boolean, at: number): FeedLine[] {
+  if (live) return runFeed(entries, 5);
+  return feedAt(activity, at, (id) => entries.find((e) => e.id === id)?.name ?? "An agent");
+}
+
+/** What real activity shows at the office time, and each agent's mood then. */
+function useOfficeState(
+  entries: readonly AgentRosterEntry[],
+  activity: OfficeActivity | null,
+  o: {
+    live: boolean;
+    officeTime: number;
+    now: number;
+    speed: number;
+    previews: ReadonlySet<string>;
+  }
+) {
+  const { live, officeTime, now, speed, previews } = o;
+  const view = useMemo(() => {
+    const idleIds = entries.filter((e) => e.enabled && (!live || moodFor(e, now, false) === "idle")).map((e) => e.id);
+    return viewAt(activity, officeTime, {
+      live,
+      handoffWindowMs: live ? LIVE_HANDOFF_MS : speed * 15_000,
+      idleIds
+    });
+  }, [activity, officeTime, live, speed, entries, now]);
+  const agents = useMemo<StudioAgent[]>(
+    () =>
+      entries.slice(0, MAX_AGENTS).map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        emoji: entry.emoji,
+        archetype: archetypeFor(entry),
+        tint: agentTintIndex(entry.templateKey ?? entry.id),
+        mood: live ? moodFor(entry, now, previews.has(entry.id)) : replayMood(entry, view.working),
+        previewing: live && previews.has(entry.id)
+      })),
+    [entries, now, previews, live, view]
+  );
+  return { view, agents };
+}
+
+/** In replay, an agent's mood is what the events say it was doing then, not today's roster state. */
+function replayMood(entry: AgentRosterEntry, working: ReadonlySet<string>): Mood {
+  if (!entry.enabled) return "off";
+  return working.has(entry.id) ? "working" : "idle";
+}
+
+/** "14:05", or "Sun 14:05" when it is not today — the replay spans two calendar days. */
+const clockTime = (t: number) => {
+  const d = new Date(t);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+};
 
 type Status = "loading" | "ready" | "unavailable";
 
@@ -65,7 +135,8 @@ export function AgentOffice({
   canManage,
   busy,
   onToggle,
-  onOpenDetails
+  onOpenDetails,
+  activity = null
 }: Readonly<{
   entries: readonly AgentRosterEntry[];
   selectedId: string | null;
@@ -74,6 +145,8 @@ export function AgentOffice({
   busy: boolean;
   onToggle: (id: string, enabled: boolean) => void;
   onOpenDetails: (id: string) => void;
+  /** GET /agents/office-activity: the last 24h of real runs; null while loading or unavailable. */
+  activity?: OfficeActivity | null;
 }>) {
   const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
   const [hidden, setHidden] = useState(readHidden);
@@ -84,6 +157,10 @@ export function AgentOffice({
   const [life, setLife] = useState<FeedLine[]>([]);
   const [previews, setPreviews] = useState<ReadonlySet<string>>(new Set());
   const [now, setNow] = useState(() => Date.now());
+  /** null = live; otherwise the office time being replayed. */
+  const [replayAt, setReplayAt] = useState<number | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(300);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<OfficeHandle | null>(null);
@@ -98,25 +175,43 @@ export function AgentOffice({
     };
   }, []);
 
-  const agents = useMemo<StudioAgent[]>(
-    () =>
-      entries.slice(0, MAX_AGENTS).map((entry) => ({
-        id: entry.id,
-        name: entry.name,
-        emoji: entry.emoji,
-        archetype: archetypeFor(entry),
-        tint: agentTintIndex(entry.templateKey ?? entry.id),
-        mood: moodFor(entry, now, previews.has(entry.id)),
-        previewing: previews.has(entry.id)
-      })),
-    [entries, now, previews]
-  );
+  useEffect(() => {
+    if (!playing) return;
+    const id = setInterval(() => {
+      setReplayAt((t) => {
+        const next = (t ?? Date.now()) + REPLAY_TICK_MS * speed;
+        if (next < Date.now()) return next;
+        setPlaying(false);
+        return null;
+      });
+    }, REPLAY_TICK_MS);
+    return () => clearInterval(id);
+  }, [playing, speed]);
+
+  const live = replayAt === null;
+  const officeTime = replayAt ?? now;
+  const { view, agents } = useOfficeState(entries, activity, {
+    live,
+    officeTime,
+    now,
+    speed,
+    previews
+  });
   const byId = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
-  const runs = useMemo(() => runFeed(entries, 5), [entries]);
+  const nameOf = (id: string) => byId.get(id)?.name ?? "An agent";
+  const runs = useMemo(() => feedFor(entries, activity, live, officeTime), [entries, live, activity, officeTime]);
+  const happening = describeView(view, nameOf);
 
   /** Add a piece of office life to the feed, keeping the four most recent. */
-  const pushLife = (agentId: string, text: string) => {
-    const line: FeedLine = { key: `life-${agentId}-${Date.now()}`, agentId, agentName: byId.get(agentId)?.name ?? "An agent", text, at: Date.now(), kind: "life" };
+  const pushLife = (agentId: string, text: string, real = false) => {
+    const line: FeedLine = {
+      key: `life-${agentId}-${Date.now()}`,
+      agentId,
+      agentName: byId.get(agentId)?.name ?? "An agent",
+      text,
+      at: Date.now(),
+      kind: real ? "run" : "life"
+    };
     setLife((lines) => [line, ...lines].slice(0, 4));
   };
   const pushLifeRef = useRef(pushLife);
@@ -152,7 +247,7 @@ export function AgentOffice({
             onHover: (id, x, y) => setHover(id ? { id, x, y } : null),
             onSelect: (id) => onSelectRef.current(id),
             onCaption: (id, text, simulated) => setCaption({ id, text, simulated }),
-            onLife: (agentId, text) => pushLifeRef.current(agentId, text),
+            onLife: (agentId, text, real) => pushLifeRef.current(agentId, text, real),
             onLost: () => setStatus("unavailable")
           },
           { reducedMotion: reduced, theme: currentTheme() }
@@ -176,6 +271,7 @@ export function AgentOffice({
   }, [hidden, reduced]);
 
   useEffect(() => handleRef.current?.setAgents(agents), [agents]);
+  useEffect(() => handleRef.current?.setActivity(view), [view, status]);
   useEffect(() => handleRef.current?.select(selectedId), [selectedId]);
   useEffect(() => handleRef.current?.setWheelZoom(full), [full, status]);
   useEffect(() => {
@@ -228,7 +324,7 @@ export function AgentOffice({
     );
   }
 
-  const feed = [...life, ...runs];
+  const feed = live ? [...life, ...runs] : runs;
   const glass = "border border-border bg-background/85 backdrop-blur";
 
   return (
@@ -276,29 +372,7 @@ export function AgentOffice({
       </div>
 
       {/* The feed: real runs, and office life labelled as such. */}
-      {status === "ready" && feed.length > 0 && (
-        <div className={cn("absolute right-3 top-14 hidden w-64 rounded-xl p-2.5 text-xs md:block", glass)} aria-label="Activity">
-          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Activity</p>
-          <ul className="space-y-1.5" aria-live="polite">
-            {feed.slice(0, 7).map((line) => (
-              <li key={line.key} className="flex items-start gap-1.5">
-                <span
-                  className={cn(
-                    "mt-px shrink-0 rounded px-1 text-[9px] font-semibold uppercase tracking-wide",
-                    line.kind === "run" ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"
-                  )}
-                >
-                  {line.kind === "run" ? "Run" : "Idle"}
-                </span>
-                <button type="button" className="min-w-0 flex-1 text-left hover:underline" onClick={() => onSelect(line.agentId)}>
-                  <span className="font-medium">{line.agentName}</span> <span className="text-muted-foreground">{line.text}</span>
-                </button>
-                <span className="shrink-0 tabular-nums text-muted-foreground">{ago(line.at)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {status === "ready" && <FeedPanel feed={feed} live={live} officeTime={officeTime} className={glass} onSelect={onSelect} />}
 
       {hover && hovered && !selected && (
         <div
@@ -370,11 +444,27 @@ export function AgentOffice({
         </div>
       )}
 
+      <ReplayControls
+        activity={activity}
+        hiddenOnPhone={Boolean(selected)}
+        className={glass}
+        now={now}
+        at={officeTime}
+        replayAt={replayAt}
+        playing={playing}
+        speed={speed}
+        setReplayAt={setReplayAt}
+        setPlaying={setPlaying}
+        setSpeed={setSpeed}
+      />
+
       {status === "ready" && !selected && (
-        <p className={cn("pointer-events-none absolute bottom-3 left-3 hidden rounded-full px-3 py-1 text-[11px] text-muted-foreground sm:block", glass)}>
+        <p className={cn("pointer-events-none absolute bottom-3 left-3 hidden rounded-full px-3 py-1 text-[11px] text-muted-foreground xl:block", glass)}>
           Drag to look around · click a person to follow · click a ball to flick it
         </p>
       )}
+
+      <HappeningList lines={happening} replayAt={replayAt} />
 
       <ul className="sr-only" aria-label="Agents in the office">
         {agents.map((a) => (
@@ -386,6 +476,202 @@ export function AgentOffice({
         ))}
       </ul>
     </section>
+  );
+}
+
+function FeedPanel({
+  feed,
+  live,
+  officeTime,
+  className,
+  onSelect
+}: Readonly<{
+  feed: readonly FeedLine[];
+  live: boolean;
+  officeTime: number;
+  className: string;
+  onSelect: (id: string) => void;
+}>) {
+  if (live && feed.length === 0) return null;
+  return (
+    <div className={cn("absolute right-3 top-14 hidden w-64 rounded-xl p-2.5 text-xs md:block", className)} aria-label="Activity">
+      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Activity</p>
+      <ul className="space-y-1.5" aria-live="polite">
+        {!live && <li className="text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">Replay · {clockTime(officeTime)}</li>}
+        {!live && feed.length === 0 && <li className="text-muted-foreground">No runs yet at this time.</li>}
+        {feed.slice(0, 7).map((line) => (
+          <li key={line.key} className="flex items-start gap-1.5">
+            <span className={cn("mt-px shrink-0 rounded px-1 text-[9px] font-semibold uppercase tracking-wide", line.kind === "run" ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")}>
+              {line.kind === "run" ? "Run" : "Idle"}
+            </span>
+            <button type="button" className="min-w-0 flex-1 text-left hover:underline" onClick={() => onSelect(line.agentId)}>
+              <span className="font-medium">{line.agentName}</span> <span className="text-muted-foreground">{line.text}</span>
+            </button>
+            <span className="shrink-0 tabular-nums text-muted-foreground">{ago(line.at)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function HappeningList({ lines, replayAt }: Readonly<{ lines: readonly string[]; replayAt: number | null }>) {
+  const label = replayAt === null ? "What is happening in the office" : `What was happening at ${clockTime(replayAt)}`;
+  return (
+    <ul className="sr-only" aria-label={label}>
+      {lines.map((line) => (
+        <li key={line}>{line}</li>
+      ))}
+    </ul>
+  );
+}
+
+/** Wires the timeline to the office's replay state; renders nothing until activity has loaded. */
+function ReplayControls({
+  activity,
+  hiddenOnPhone,
+  className,
+  now,
+  at,
+  replayAt,
+  playing,
+  speed,
+  setReplayAt,
+  setPlaying,
+  setSpeed
+}: Readonly<{
+  activity: OfficeActivity | null;
+  hiddenOnPhone: boolean;
+  className: string;
+  now: number;
+  at: number;
+  replayAt: number | null;
+  playing: boolean;
+  speed: number;
+  setReplayAt: (t: number | null) => void;
+  setPlaying: (fn: (p: boolean) => boolean) => void;
+  setSpeed: (s: number) => void;
+}>) {
+  if (!activity) return null;
+  const live = replayAt === null;
+  const play = () => {
+    if (live) setReplayAt(replayBounds(activity, Date.now()).from);
+    setPlaying((p) => !p);
+  };
+  const goLive = () => {
+    setPlaying(() => false);
+    setReplayAt(null);
+  };
+  return (
+    <Timeline
+      className={cn(className, hiddenOnPhone && "hidden sm:flex")}
+      activity={activity}
+      now={now}
+      at={at}
+      live={live}
+      playing={playing}
+      speed={speed}
+      onScrub={setReplayAt}
+      onPlay={play}
+      onSpeed={setSpeed}
+      onLive={goLive}
+    />
+  );
+}
+
+/** The replay scrubber: the last 24h of real runs, played back in the office. */
+function Timeline({
+  className,
+  activity,
+  now,
+  at,
+  live,
+  playing,
+  speed,
+  onScrub,
+  onPlay,
+  onSpeed,
+  onLive
+}: Readonly<{
+  className: string;
+  activity: OfficeActivity;
+  now: number;
+  at: number;
+  live: boolean;
+  playing: boolean;
+  speed: number;
+  onScrub: (t: number) => void;
+  onPlay: () => void;
+  onSpeed: (s: number) => void;
+  onLive: () => void;
+}>) {
+  const { from, to } = replayBounds(activity, now);
+  const span = Math.max(1, to - from);
+  const value = Math.min(to, Math.max(from, at));
+  return (
+    <div
+      role="group"
+      aria-label="Replay the last 24 hours"
+      className={cn("absolute bottom-3 right-3 z-10 flex w-[min(26rem,calc(100%-1.5rem))] items-center gap-2 rounded-xl px-2.5 py-2 text-xs", className)}
+    >
+      <button
+        type="button"
+        onClick={onPlay}
+        aria-label={playing ? "Pause the replay" : "Play the replay"}
+        aria-pressed={playing}
+        className="focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      >
+        {playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+      </button>
+      <div className="relative min-w-0 flex-1">
+        {/* Hand-off ticks: where real work passed between agents. */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-0" aria-hidden="true">
+          {activity.handoffs.map((h) => (
+            <span key={`${h.fromRunId}>${h.toRunId}`} className="absolute -top-1 h-1.5 w-0.5 rounded bg-sky-500" style={{ left: `${((Date.parse(h.at) - from) / span) * 100}%` }} />
+          ))}
+        </div>
+        <input
+          type="range"
+          min={from}
+          max={to}
+          step={60_000}
+          value={value}
+          onChange={(e) => onScrub(Number(e.target.value))}
+          aria-label="Office time"
+          aria-valuetext={live ? `Live, ${clockTime(now)}` : `Replaying ${clockTime(value)}`}
+          className="block w-full accent-primary"
+        />
+      </div>
+      <span className="shrink-0 whitespace-nowrap text-right tabular-nums text-muted-foreground">{clockTime(value)}</span>
+      <label className="sr-only" htmlFor="office-replay-speed">
+        Replay speed
+      </label>
+      <select
+        id="office-replay-speed"
+        value={speed}
+        onChange={(e) => onSpeed(Number(e.target.value))}
+        className="focus-ring h-7 shrink-0 rounded-md border border-border bg-background px-1 text-[11px]"
+      >
+        {SPEEDS.map((s) => (
+          <option key={s.value} value={s.value}>
+            {s.label}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={onLive}
+        aria-pressed={live}
+        aria-label={live ? "Showing live" : "Back to live"}
+        className={cn(
+          "focus-ring flex h-7 shrink-0 items-center gap-1 rounded-full px-2 font-medium transition-colors",
+          live ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" : "bg-muted text-foreground hover:bg-muted/70"
+        )}
+      >
+        <Radio className="h-3 w-3" aria-hidden="true" />
+        Live
+      </button>
+    </div>
   );
 }
 

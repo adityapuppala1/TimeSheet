@@ -29,13 +29,16 @@ const WORLD_GROUPS = groups(GROUP_WORLD, GROUP_WORLD | GROUP_PEOPLE);
 const BODY_HALF = 0.55;
 const BODY_Y = BODY_HALF + AGENT_RADIUS + 0.02;
 
-export type PropKind = "ball" | "box" | "paper";
+/** "crate" is a queued run: a real stacked body per waiting run in a room (scene/activity-props.ts). */
+export type PropKind = "ball" | "box" | "paper" | "crate";
 
 export interface PropState {
   kind: PropKind;
   /** Written every step: position then quaternion, for the mesh to copy. */
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
+  /** False while a pooled body is parked out of the simulation. */
+  enabled: boolean;
 }
 
 export interface Physics {
@@ -46,6 +49,9 @@ export interface Physics {
   placePerson(id: string, at: Vec2): void;
   addProp(kind: PropKind, x: number, y: number, z: number): number;
   props(): readonly PropState[];
+  /** Take a pooled prop out of the world, or drop it back in at a point (at rest). */
+  parkProp(index: number): void;
+  dropProp(index: number, x: number, y: number, z: number): void;
   /** Flick a prop: an impulse along (dx, dz) with some lift. */
   flick(index: number, dx: number, dz: number): void;
   /** Throw a paper ball from a hand toward the bin on a ballistic arc. */
@@ -57,7 +63,8 @@ export interface Physics {
 const PROP_SHAPE: Readonly<Record<PropKind, { radius: number; density: number; bounce: number }>> = {
   ball: { radius: 0.11, density: 0.6, bounce: 0.72 },
   box: { radius: 0.17, density: 0.35, bounce: 0.15 },
-  paper: { radius: 0.06, density: 0.12, bounce: 0.3 }
+  paper: { radius: 0.06, density: 0.12, bounce: 0.3 },
+  crate: { radius: 0.15, density: 0.5, bounce: 0.05 }
 };
 
 export async function createPhysics(solid: readonly Rect[]): Promise<Physics> {
@@ -122,13 +129,29 @@ export async function createPhysics(solid: readonly Rect[]): Promise<Physics> {
     addProp(kind, x, y, z) {
       const shape = PROP_SHAPE[kind];
       const body = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, y, z).setLinearDamping(0.25).setAngularDamping(0.6).setCcdEnabled(kind === "paper"));
-      const desc = kind === "box" ? RAPIER.ColliderDesc.cuboid(shape.radius, shape.radius, shape.radius) : RAPIER.ColliderDesc.ball(shape.radius);
+      const desc = kind === "box" || kind === "crate" ? RAPIER.ColliderDesc.cuboid(shape.radius, shape.radius, shape.radius) : RAPIER.ColliderDesc.ball(shape.radius);
       world.createCollider(desc.setDensity(shape.density).setRestitution(shape.bounce).setFriction(0.7), body);
       propBodies.push(body);
-      propStates.push({ kind, position: { x, y, z }, rotation: { x: 0, y: 0, z: 0, w: 1 } });
+      propStates.push({ kind, position: { x, y, z }, rotation: { x: 0, y: 0, z: 0, w: 1 }, enabled: true });
       return propBodies.length - 1;
     },
     props: () => propStates,
+    parkProp(index) {
+      const body = propBodies[index];
+      if (!body) return;
+      body.setEnabled(false);
+      propStates[index].enabled = false;
+    },
+    dropProp(index, x, y, z) {
+      const body = propBodies[index];
+      if (!body) return;
+      body.setTranslation({ x, y, z }, true);
+      body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+      body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      body.setEnabled(true);
+      propStates[index].enabled = true;
+    },
     flick(index, dx, dz) {
       const body = propBodies[index];
       if (!body) return;
@@ -152,6 +175,7 @@ export async function createPhysics(solid: readonly Rect[]): Promise<Physics> {
       world.timestep = Math.min(dt, 1 / 20);
       world.step();
       for (let i = 0; i < propBodies.length; i += 1) {
+        if (!propStates[i].enabled) continue;
         const t = propBodies[i].translation();
         const r = propBodies[i].rotation();
         // Anything that escapes the world comes back onto the open floor.

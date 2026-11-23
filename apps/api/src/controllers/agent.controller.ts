@@ -35,6 +35,8 @@ import {
   updateProfile
 } from "../services/agent-profile.service.js";
 import { summariseLedger } from "../services/agent-ledger.service.js";
+import { getOfficeActivity } from "../services/agent-office-activity.service.js";
+import { ticketProjectScope } from "../services/ticket.service.js";
 import { getLedgerHistory } from "../services/agent-ledger-history.service.js";
 import { audit } from "../services/audit.service.js";
 import { isPlanningCapabilityAllowed } from "../services/plan-limits.service.js";
@@ -77,6 +79,23 @@ agentRouter.get("/ledger/history", requirePermission(permissions.TICKETS_VIEW), 
   await assertRosterAllowed();
   const days = Math.min(90, Math.max(7, Number(req.query.days ?? 30)));
   res.json(await getLedgerHistory(days));
+});
+
+/**
+ * The Agents Office's replay feed: the last 24h of runs, queue depths and derived hand-offs. Same
+ * permission and plan gate as the roster it decorates; project titles follow the ticket visibility
+ * scope, so the office never names a project its viewer could not open (see the service header).
+ */
+const officeActivitySchema = z.object({
+  query: z.object({ since: z.iso.datetime({ offset: true }).optional() }).strict()
+});
+
+agentRouter.get("/office-activity", requirePermission(permissions.TICKETS_VIEW), validate(officeActivitySchema), async (req, res) => {
+  await assertRosterAllowed();
+  // validate() checks but does not hand back its parse, so the handler parses again for the type.
+  const { since } = officeActivitySchema.shape.query.parse(req.query);
+  const scope = await ticketProjectScope(req);
+  res.json(await getOfficeActivity(since ? new Date(since) : new Date(0), scope));
 });
 
 agentRouter.get("/catalogue", requirePermission(permissions.TICKETS_VIEW), async (_req, res) => {

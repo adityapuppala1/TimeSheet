@@ -138,6 +138,9 @@ export const WALLS: readonly Rect[] = [
   ...wallX(2.5, 8.6, FLOOR.w / 2, WALL_LOW)
 ];
 
+/** The middle of every doorway people squeeze through: the four back rooms and the front door. */
+export const DOORWAYS: readonly Vec2[] = [{ x: -8.5, z: BACK_Z }, { x: -3.75, z: BACK_Z }, { x: 1.85, z: BACK_Z }, { x: 7.75, z: BACK_Z }, DOOR];
+
 /* ------------------------------------------------------------------ furniture */
 
 export interface Seat {
@@ -243,6 +246,12 @@ export function buildNavGrid(solid: readonly Rect[] = obstacles()): NavGrid {
 }
 
 const isFree = (grid: NavGrid, c: number, r: number) => inGrid(c, r) && grid.blocked[r * COLS + c] === 0;
+
+/** Whether a person could stand at this point (its nav cell is free). */
+export function isWalkable(grid: NavGrid, p: Vec2): boolean {
+  const [c, r] = cellOf(p);
+  return isFree(grid, c, r);
+}
 
 /** The free cell nearest a point — seats and stand spots sit right beside furniture, often in a blocked cell. */
 function nearestFree(grid: NavGrid, p: Vec2): [number, number] | null {

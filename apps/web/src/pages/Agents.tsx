@@ -105,6 +105,16 @@ export function AgentsPage() {
 
   const roster = useQuery({ queryKey: ["agents"], queryFn: agentRosterApi.list, retry: false });
   const ledger = useQuery({ queryKey: ["agents", "ledger"], queryFn: agentRosterApi.ledger, retry: false });
+  // The office's replay feed. 30 s is plenty for a decoration; TanStack pauses interval polling in a
+  // background tab by default (refetchIntervalInBackground: false).
+  const officeActivity = useQuery({
+    queryKey: ["agents", "office-activity"],
+    queryFn: agentRosterApi.officeActivity,
+    retry: false,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    enabled: roster.isSuccess
+  });
   const catalogue = useQuery({ queryKey: ["agents", "catalogue"], queryFn: agentRosterApi.catalogue, enabled: galleryOpen });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["agents"] });
@@ -214,6 +224,7 @@ export function AgentsPage() {
               canManage={isSuperAdmin}
               busy={toggle.isPending}
               onToggle={(id, enabled) => toggle.mutate({ id, enabled })}
+              activity={officeActivity.data ?? null}
               onOpenDetails={(id) => {
                 document.getElementById(`agent-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
               }}

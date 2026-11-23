@@ -145,7 +145,8 @@ export interface Bubble {
   dispose(): void;
 }
 
-export const BUBBLE_W = 132;
+/** Wide enough for a short real line from a run (office-activity.ts caps them at 34 characters). */
+export const BUBBLE_W = 196;
 export const BUBBLE_H = 40;
 
 export function createBubble(): Bubble {
