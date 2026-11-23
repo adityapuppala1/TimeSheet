@@ -37,6 +37,8 @@ export type NotificationCategory =
   | "deadline.reminder"
   | "reminder.daily"
   | "reminder.escalation"
+  /** V17 A4: "you haven't punched in yet" at GlobalAttendanceSettings.punchInReminderHour. */
+  | "reminder.punch_in"
   | "ticket.assigned"
   | "ticket.status_changed"
   | "ticket.commented"
@@ -169,6 +171,7 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "deadline.reminder": "emailDeadlineReminder",
   "reminder.daily": "emailDailyReminder",
   "reminder.escalation": "emailDailyEscalation",
+  "reminder.punch_in": "emailPunchInReminder",
   "ticket.assigned": "emailTicketAssigned",
   "ticket.status_changed": "emailTicketStatusChanged",
   "ticket.commented": "emailTicketCommented",

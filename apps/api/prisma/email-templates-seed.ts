@@ -400,6 +400,23 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
     })
   },
 
+  "reminder.punch_in": {
+    subject: "You haven't punched in yet ({{date}})",
+    bodyHtml: shell({
+      preheader: "Log in and punch in so today's attendance is recorded.",
+      accent: COLORS.accent,
+      body: [
+        heading("Hi {{name}}, you haven't punched in yet"),
+        lead("We haven't recorded a punch-in for you on <strong>{{date}}</strong>."),
+        para("Log in to TimeSphere and punch in so your attendance for today is recorded. It takes a few seconds."),
+        infoCard([{ label: "Date", value: "{{date}}", emphasize: true }], COLORS.accent),
+        button("Open TimeSphere and punch in", "{{appUrl}}/app", COLORS.accent),
+        muted("Already punched in through a badge reader or another system? It can take a few minutes to arrive - you can ignore this.")
+      ].join("\n"),
+      footerNote: "Sent at the punch-in reminder hour set in Workspace Settings - Attendance & Leave, on your working days only."
+    })
+  },
+
   "reminder.escalation.manager": {
     subject: "{{employeeName}} missed yesterday's timesheet",
     bodyHtml: shell({

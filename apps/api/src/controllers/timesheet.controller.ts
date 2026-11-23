@@ -40,6 +40,7 @@ import {
 } from "../services/face.service.js";
 import { parseDayWindow, workDateFilter } from "../utils/date-window.js";
 import { assertWorkDateInWindow } from "../utils/timesheet-window.js";
+import { assertMissedDayReason, saveMissedDayReason } from "../services/missed-day-reason.service.js";
 import { getTimesheetBackdateDays } from "../services/timesheet-policy.service.js";
 import { userClock } from "../services/user-clock.service.js";
 import {
@@ -66,7 +67,11 @@ const inputSchema = z.object({
     /// required when the workspace's face-verification policy covers this user + action —
     /// services/face.service.ts#isFaceVerificationRequired decides, and the gate in
     /// saveTimesheet enforces it. Ignored entirely for drafts.
-    faceVerificationId: z.string().uuid().optional().or(z.literal(""))
+    faceVerificationId: z.string().uuid().optional().or(z.literal("")),
+    /// V17 A4: why a past working day with no entries was missed. Only read when the rule in
+    /// services/missed-day-reason.service.ts applies; ignored otherwise.
+    missedReasonCode: z.string().max(40).optional().or(z.literal("")),
+    missedReasonNote: z.string().max(2000).optional().or(z.literal(""))
   })
 });
 
@@ -615,6 +620,15 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
   if (hours > 12) throw new AppError(422, "A single entry cannot exceed 12 hours");
   // Before the identity gate, so a refused pairing does not spend somebody's face check.
   await assertModuleBelongs(req.body.projectId, req.body.moduleId, req.body.submoduleId || null);
+  // V17 A4: the first entry on a past working day needs a reason. Asked here, before the face check
+  // is spent. Saved in the entry's own transaction below; two racing first entries that both carry
+  // a reason collapse into one row (upsert), and one without a reason was refused here.
+  const missedReason = await assertMissedDayReason(
+    req.user.id,
+    workDate.toISOString().slice(0, 10),
+    authorToday.toISOString().slice(0, 10),
+    { code: req.body.missedReasonCode, note: req.body.missedReasonNote }
+  );
 
   // Identity gate. Only on SUBMITTED: a draft is private working state, and demanding a webcam
   // capture every time someone saves a half-finished row would be hostile without adding any
@@ -695,7 +709,7 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
       });
       if (overlaps) throw new AppError(409, "This time range overlaps another entry");
 
-      return tx.timesheet.create({
+      const created = await tx.timesheet.create({
         data: {
           projectId: req.body.projectId,
           moduleId: req.body.moduleId,
@@ -723,6 +737,11 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
         },
         include: { attachments: true, project: true, module: true, submodule: true, ticket: { select: { key: true, title: true } }, user: { include: { manager: true } } }
       });
+      // Same transaction as the entry: a reason without its entry, or the reverse, never exists.
+      if (missedReason) {
+        await saveMissedDayReason(tx, { userId: req.user.id, workDate, code: missedReason.code, note: missedReason.note, timesheetId: created.id });
+      }
+      return created;
     },
     { isolationLevel: "Serializable", timeout: 8000 }
   );

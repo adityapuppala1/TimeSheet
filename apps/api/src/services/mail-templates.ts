@@ -490,6 +490,16 @@ export const templates = {
         paragraph(button("Log time now", appUrl("/app/timesheet"), ACCENT))
     ),
 
+  /** V17 A4: the punch-in reminder — sent only on a working day with no punch from ANY source yet. */
+  punchInReminder: (params: { name: string; date: string }) =>
+    shell(
+      { title: "You haven't punched in yet", preheader: `No punch-in recorded for ${params.date} yet.`, accentColor: ACCENT },
+      heading(`Hi ${escape(params.name.split(" ")[0])}, you haven't punched in yet`) +
+        paragraph(`We haven't recorded a punch-in for you on <strong>${escape(params.date)}</strong>. Log in and punch in so your attendance for today is recorded.`) +
+        paragraph(button("Open TimeSphere and punch in", appUrl("/app"), ACCENT)) +
+        paragraph(`<span style="color:${MUTED};">Already punched in through a badge reader or another system? It can take a few minutes to arrive — you can ignore this.</span>`)
+    ),
+
   /**
    * The two change-management messages.
    *

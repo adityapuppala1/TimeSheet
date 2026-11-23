@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { readMissedDayRefusal } from "../lib/missed-day-reason";
 import { AlertTriangle, CalendarRange, Check, MessageSquare, RefreshCw, Sparkles, Ticket } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
@@ -85,6 +86,11 @@ export function WeekDraftPanel() {
           );
           ok++;
         } catch (error) {
+          // V17 A4: a missed working day needs a reason first, which this bulk list cannot ask for.
+          if (readMissedDayRefusal(error)) {
+            failed[rowKey(s)] = `Nothing was logged on ${s.workDate}, so it needs a reason first. Log one entry for that day in the form below (it will ask why), then add these.`;
+            continue;
+          }
           const message = (error as { response?: { data?: { message?: string } } }).response?.data?.message;
           failed[rowKey(s)] = message ?? "This row could not be saved.";
         }

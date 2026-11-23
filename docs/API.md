@@ -3175,6 +3175,27 @@ delivery cannot be refreshed. Rate limit: 120 requests/minute per IP. **Send tes
 settings signs a test delivery server-side and runs it through the same handler: it is verified
 and logged (marked *test*) and never creates attendance.
 
+### Missed-day reason (timesheet create)
+
+When **Attendance & Leave → Require a reason for missed days** is on (and the plan includes
+attendance), the FIRST entry a person creates for a past working day with no entries — not a
+weekend per the workspace's working days, not a holiday in their calendar — must carry a reason.
+It applies to every create path (`POST /api/timesheets/draft|submit[-with-files]`, the MCP
+`log_timesheet_entry` tool, the in-app assistant). There is no approval; it is asked once per day.
+
+Body fields: `missedReasonCode` (an enabled reason code) and `missedReasonNote` (required when that
+reason is marked *requires note*, e.g. `OTHER`). Without them the create is refused:
+
+```json
+422 { "message": "...", "code": "MISSED_DAY_REASON_REQUIRED",
+      "details": { "field": "missedReasonCode", "workDate": "2026-11-17",
+                   "options": [{ "code": "SICK", "label": "Sick", "requiresNote": false }] } }
+```
+
+`MISSED_DAY_REASON_INVALID` (same shape) means the code is not enabled or the note is missing.
+Signed-in clients can ask ahead: `GET /api/attendance/missed-reasons/options` and
+`GET /api/attendance/missed-reasons/check?date=YYYY-MM-DD` → `{ date, required, options }`.
+
 ### Outbound webhooks
 
 Configured alongside API keys in **Workspace Settings → Public API**. Each webhook subscribes to

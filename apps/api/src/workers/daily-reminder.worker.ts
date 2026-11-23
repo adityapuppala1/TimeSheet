@@ -12,7 +12,12 @@ import {
   type ZonedParts
 } from "../utils/recipient-time.js";
 import { serverTimezone } from "../config/env.js";
+import { templates } from "../services/mail-templates.js";
 import { runOncePerTick } from "../services/job-claim.service.js";
+import { getAttendanceSettings } from "../services/attendance-settings.service.js";
+import { findHoliday, findLeaveForDay, isAttendanceOn } from "../services/attendance-punch.service.js";
+import { resolveDayStatus } from "../services/attendance-day-status.js";
+import { getPlanningSettings } from "../services/planning.service.js";
 
 /**
  * Daily reminder + next-day escalation worker.
@@ -264,6 +269,76 @@ export async function runEscalationReminders(now: Date = new Date()): Promise<{ 
   return { employees, managers };
 }
 
+/* ===================== 11 AM punch-in reminder (V17 A4) ===================== */
+
+/**
+ * "You haven't punched in yet", at GlobalAttendanceSettings.punchInReminderHour in the RECIPIENT's
+ * timezone. A separate firing with its own category ("reminder.punch_in") and template, so the two
+ * firings above are untouched — none of their queries, copy or idempotency keys change.
+ *
+ * Fires only when the module is on (workspace toggle + plan), the reminder is enabled and punching
+ * in is not OFF. Per person: the same population as the timesheet reminder (getTargetUsers), and
+ * only when resolveDayStatus says PENDING — so a weekend (per the workspace's working days), a
+ * holiday in their calendar, leave (Phase B) or a punch from ANY source (web, API, webhook, MCP,
+ * CSV) all stay silent. Idempotent per recipient-day through the Notification table, like the rest.
+ */
+export async function runPunchInReminders(now: Date = new Date()): Promise<{ sent: number }> {
+  const settings = await getAttendanceSettings();
+  if (!settings?.attendanceEnabled || !settings.punchInReminderEnabled || settings.punchInMode === "OFF") return { sent: 0 };
+  if (!(await isAttendanceOn())) return { sent: 0 };
+
+  const planning = await getPlanningSettings();
+  const users = await getTargetUsers();
+  let sent = 0;
+
+  for (const user of users) {
+    const parts = recipientNow(now, user.timezone);
+    if (parts.hour !== settings.punchInReminderHour) continue;
+    const dateKey = parts.dateKey;
+
+    const [holiday, leave, record] = await Promise.all([
+      findHoliday(user.holidayCalendarId ?? null, dateKey),
+      findLeaveForDay(user.id, dateKey),
+      prisma.attendanceRecord.findUnique({
+        where: { userId_workDate: { userId: user.id, workDate: dateKeyToUtc(dateKey) } },
+        select: { id: true }
+      })
+    ]);
+    const day = resolveDayStatus({
+      dateKey,
+      workingDays: planning.workingDays,
+      holiday,
+      leave,
+      punchedIn: Boolean(record),
+      now,
+      timeZone: user.timezone,
+      fallbackZone: workspaceZone()
+    });
+    // PENDING is the only "working day, not in yet" verdict for today (ABSENT needs the day over).
+    if (day.status !== "PENDING") continue;
+    if (await alreadyNotifiedToday(user.id, "reminder.punch_in", startOfZonedDayUtc(now, user.timezone, workspaceZone()))) continue;
+
+    await dispatchNotification({
+      userId: user.id,
+      category: "reminder.punch_in",
+      title: "You haven't punched in yet",
+      body: `No punch-in recorded for ${dateKey} yet. Punch in so today's attendance is recorded.`,
+      link: "/app",
+      email: {
+        templateKey: "reminder.punch_in",
+        vars: { name: user.name, date: dateKey },
+        fallback: {
+          subject: `You haven't punched in yet (${dateKey})`,
+          html: templates.punchInReminder({ name: user.name, date: dateKey })
+        }
+      }
+    });
+    sent += 1;
+  }
+
+  return { sent };
+}
+
 /* ================================ scheduler =============================== */
 
 /**
@@ -287,6 +362,13 @@ async function tick(now: Date = new Date()) {
     if (result.sent > 0) console.info(`[reminder.daily] sent ${result.sent}`);
   } catch (error) {
     console.error("[reminder.daily] failed:", (error as Error).message);
+  }
+
+  try {
+    const result = await runPunchInReminders(now);
+    if (result.sent > 0) console.info(`[reminder.punch_in] sent ${result.sent}`);
+  } catch (error) {
+    console.error("[reminder.punch_in] failed:", (error as Error).message);
   }
 
   try {

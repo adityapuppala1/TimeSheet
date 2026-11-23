@@ -2315,6 +2315,9 @@ model GlobalNotificationSettings {
   emailWeeklyDigest         Boolean @default(false)
   emailDailyReminder        Boolean @default(true)
   emailDailyEscalation      Boolean @default(true)
+  /// V17 A4: the 11:00 "you haven't punched in" reminder (workers/daily-reminder.worker.ts). Only
+  /// ever fires when attendance is on and its own punchInReminderEnabled is set, so ON here is safe.
+  emailPunchInReminder      Boolean @default(true)
   emailTicketAssigned       Boolean @default(true)
   emailTicketStatusChanged  Boolean @default(true)
   emailTicketCommented      Boolean @default(true)

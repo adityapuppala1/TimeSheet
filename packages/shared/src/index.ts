@@ -599,6 +599,8 @@ export interface NotificationPreferences {
   emailPracticeUpdate: boolean;
   emailDailyReminder: boolean;
   emailDailyEscalation: boolean;
+  /** V17 A4: the punch-in reminder. Fires only with attendance on and its reminder enabled. */
+  emailPunchInReminder: boolean;
   emailTicketAssigned: boolean;
   emailTicketStatusChanged: boolean;
   emailTicketCommented: boolean;
@@ -673,6 +675,7 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailPracticeUpdate",
   "emailDailyReminder",
   "emailDailyEscalation",
+  "emailPunchInReminder",
   "emailTicketAssigned",
   "emailTicketStatusChanged",
   "emailTicketCommented",

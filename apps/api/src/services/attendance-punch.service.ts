@@ -66,7 +66,7 @@ export async function findLeaveForDay(_userId: string, _dateKey: string): Promis
 }
 
 /** The person's holiday on `dateKey`: their own calendar, else the workspace default. */
-async function findHoliday(holidayCalendarId: string | null, dateKey: string): Promise<{ name: string } | null> {
+export async function findHoliday(holidayCalendarId: string | null, dateKey: string): Promise<{ name: string } | null> {
   const calendarId =
     holidayCalendarId ??
     (await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true } }))?.id ??

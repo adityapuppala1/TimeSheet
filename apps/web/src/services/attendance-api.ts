@@ -4,6 +4,7 @@
  * analytics client in later steps, and they belong together.
  */
 import { api } from "./api";
+import type { MissedReasonOption } from "../lib/missed-day-reason";
 
 export type PunchInMode = "OFF" | "OPTIONAL" | "MANDATORY";
 export type AttendanceLocationMode = "OFF" | "OPTIONAL" | "REQUIRED";
@@ -158,6 +159,9 @@ export const MY_TODAY_QUERY_KEY = ["attendance", "me", "today"] as const;
 
 export const attendanceApi = {
   myToday: async () => (await api.get<MyToday>("/attendance/me/today")).data,
+  /** V17 A4: does logging the first entry on `date` need a "why was this day missed?" reason? */
+  missedDayCheck: async (date: string) =>
+    (await api.get<{ date: string; required: boolean; options: MissedReasonOption[] }>("/attendance/missed-reasons/check", { params: { date } })).data,
   punchIn: async (payload: PunchInPayload) =>
     (await api.post<{ created: boolean; record: AttendancePunchRecord }>("/attendance/punch-in", payload)).data
 };

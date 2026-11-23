@@ -30,6 +30,8 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "reminder.daily": ["name", "date", "deadlineHour", "appUrl"],
   "reminder.escalation.employee": ["name", "missedDate", "managerName", "appUrl"],
   "reminder.escalation.manager": ["managerName", "employeeName", "missedDate", "employeeEmail", "appUrl"],
+  // V17 A4 attendance
+  "reminder.punch_in": ["name", "date", "appUrl"],
 
   // Ticketing
   "ticket.assigned": ["assigneeName", "ticketKey", "title", "priority", "assignedBy", "type", "module", "description", "appUrl"],
@@ -90,6 +92,8 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "reminder.daily": "Daily 4 PM nudge to log today's timesheet (weekdays only).",
   "reminder.escalation.employee": "Next-morning escalation reminder to the employee for a missed log day.",
   "reminder.escalation.manager": "Next-morning notification to the manager when a report missed yesterday's log.",
+  "reminder.punch_in":
+    "Punch-in reminder at the hour set under Attendance & Leave (11:00 by default), in each person's timezone — only on their working days, never on a holiday, and only when no punch has arrived from any source.",
 
   "ticket.assigned": "Sent to the assignee when a ticket is assigned to them.",
   "ticket.status_changed": "Sent to the reporter, assignee, and watchers when a ticket's status changes.",
@@ -225,6 +229,7 @@ export function sampleVariables(key: string): Record<string, string> {
       name: "Aanya Sharma", missedDate: "2026-05-26",
       managerName: "Mira Kapoor", appUrl: "https://timesphere.local"
     },
+    "reminder.punch_in": { name: "Aanya Sharma", date: "2026-05-27", appUrl: "https://timesphere.local" },
     "reminder.escalation.manager": {
       managerName: "Mira Kapoor", employeeName: "Aanya Sharma",
       employeeEmail: "aanya@example.com", missedDate: "2026-05-26",
@@ -523,6 +528,10 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
     html: compiledTemplates.escalation({
       targetName: V("name"), employeeName: V("name"), managerName: V("managerName"), date: V("missedDate"), project: "-"
     })
+  },
+  "reminder.punch_in": {
+    subject: "You haven't punched in yet ({{date}})",
+    html: compiledTemplates.punchInReminder({ name: V("name"), date: V("date") })
   },
   "reminder.escalation.manager": {
     subject: "{{employeeName}} missed a timesheet on {{missedDate}}",

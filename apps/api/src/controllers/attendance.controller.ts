@@ -14,6 +14,9 @@ import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { getMyToday, punchIn } from "../services/attendance-punch.service.js";
+import { isoDate } from "../services/attendance-settings.service.js";
+import { listEnabledMissedReasonOptions, missedDayReasonState } from "../services/missed-day-reason.service.js";
+import { userClock } from "../services/user-clock.service.js";
 
 export const attendanceRouter = Router();
 
@@ -48,4 +51,22 @@ attendanceRouter.post("/punch-in", requireAuth, validate(z.object({ body: punchI
     userAgent: typeof ua === "string" ? ua : null
   });
   res.status(result.created ? 201 : 200).json(result);
+});
+
+/**
+ * V17 A4: the enabled "why was this day missed?" options, for any signed-in person (the timesheet
+ * form renders them). Labels and codes only — nothing an employee should not see.
+ */
+attendanceRouter.get("/missed-reasons/options", requireAuth, async (_req, res) => {
+  res.json({ options: await listEnabledMissedReasonOptions() });
+});
+
+/**
+ * V17 A4: would creating an entry on `date` need a reason, for ME, right now? The form asks this when
+ * the date changes so the prompt shows before Save; saveTimesheet enforces the same rule regardless.
+ */
+attendanceRouter.get("/missed-reasons/check", requireAuth, async (req, res) => {
+  const date = isoDate.parse(req.query.date);
+  const today = (await userClock(req.user!.id)).today.toISOString().slice(0, 10);
+  res.json({ date, ...(await missedDayReasonState(req.user!.id, date, today)) });
 });

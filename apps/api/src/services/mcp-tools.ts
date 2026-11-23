@@ -525,7 +525,16 @@ const TOOLS: readonly McpToolRegistration[] = [
       activityType: z.string().min(2).max(60).describe("e.g. Development, Testing, Meeting, Bug Fixing"),
       taskDescription: z.string().min(10).max(5000).describe("What was actually done, at least 10 characters"),
       ticketKey: z.string().min(1).max(20).optional().describe("Ticket to attribute the time to, e.g. \"WEB-142\""),
-      notes: z.string().max(5000).optional()
+      notes: z.string().max(5000).optional(),
+      missedReasonCode: z
+        .string()
+        .max(40)
+        .optional()
+        .describe(
+          "Only when a previous call was refused with MISSED_DAY_REASON_REQUIRED: the reason code the PERSON chose " +
+            "from the options listed in that refusal (e.g. SICK, FORGOT). Ask them; never pick one yourself."
+        ),
+      missedReasonNote: z.string().max(2000).optional().describe("Required with a reason the refusal marks as needing a note (e.g. OTHER), in the person's words.")
     },
     permission: permissions.TIMESHEETS_WRITE,
     mutating: true,

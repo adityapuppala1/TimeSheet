@@ -21,10 +21,14 @@ export class AppError extends Error {
    *  parse prose — e.g. "MAINTENANCE", where the right reaction (show the maintenance page)
    *  differs from every other 503 (show the outage banner). Human text stays the main channel. */
   public code?: string;
+  /** Optional structured payload a client needs to recover without a second request (e.g. the
+   *  reason options for MISSED_DAY_REASON_REQUIRED). Never put anything secret in here. */
+  public details?: Record<string, unknown>;
 
-  constructor(public statusCode: number, message: string, options?: { code?: string }) {
+  constructor(public statusCode: number, message: string, options?: { code?: string; details?: Record<string, unknown> }) {
     super(message);
     this.code = options?.code;
+    this.details = options?.details;
   }
 }
 
@@ -105,7 +109,8 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
     message: error.message || "Unexpected server error",
     // Only present when an AppError carries one — absent otherwise, so no client is tempted to
     // treat "no code" as a code.
-    ...(error instanceof AppError && error.code ? { code: error.code } : {})
+    ...(error instanceof AppError && error.code ? { code: error.code } : {}),
+    ...(error instanceof AppError && error.details ? { details: error.details } : {})
   });
 };
 
