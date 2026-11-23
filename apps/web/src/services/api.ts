@@ -4232,7 +4232,7 @@ export interface FaceVerifyResult {
 
 /** Mirrors `FaceContext` in apps/api/src/services/face.service.ts — not imported from there since
  *  the web app doesn't depend on API source, but named the same to keep the two in sync by eye. */
-export type FaceContext = "TIMESHEET" | "TICKET" | "APPROVAL";
+export type FaceContext = "TIMESHEET" | "TICKET" | "APPROVAL" | "PUNCH_IN";
 
 export interface FaceAttemptRow {
   id: string;

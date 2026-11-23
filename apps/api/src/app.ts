@@ -67,6 +67,7 @@ import { agentRouter } from "./controllers/agent.controller.js";
 import { automationFlowRouter } from "./controllers/automation-flow.controller.js";
 import { changeRouter } from "./controllers/change.controller.js";
 import { attendanceSettingsRouter } from "./controllers/attendance-settings.controller.js";
+import { attendanceRouter } from "./controllers/attendance.controller.js";
 import { goalRouter } from "./controllers/goal.controller.js";
 import { inboxRouter } from "./controllers/inbox.controller.js";
 import { portfolioRouter } from "./controllers/portfolio.controller.js";
@@ -579,6 +580,10 @@ app.use("/api/portfolios", portfolioRouter);
 app.use("/api/goals", goalRouter);
 app.use("/api/changes", changeRouter);
 app.use("/api/attendance/admin", attendanceSettingsRouter);
+// The punch is idempotent but writes evidence and may spend a face check. Per IP, so the budget has
+// to cover a whole office behind one NAT arriving at 9:00 — 120 a minute does, and still stops a loop.
+app.use("/api/attendance/punch-in", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true }));
+app.use("/api/attendance", attendanceRouter);
 // The inbox is a personal surface: no permission, no entitlement, every route scoped to the
 // caller's own rows. It sits beside /notifications rather than inside it because the bell is a
 // glance and the inbox is a queue with triage state — see controllers/inbox.controller.ts.

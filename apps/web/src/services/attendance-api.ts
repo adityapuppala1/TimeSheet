@@ -104,3 +104,55 @@ export const attendanceAdminApi = {
     }
   }
 };
+
+/* ------------------------------------------------------------------ *
+ * Employee routes (V17 A2) — /api/attendance/me/today and /punch-in. Any signed-in person.
+ * ------------------------------------------------------------------ */
+
+export type AttendanceDayStatus = "WEEKEND" | "HOLIDAY" | "LEAVE" | "PRESENT" | "ABSENT" | "PENDING";
+export type PunchStep = "LOCATION" | "FACE";
+
+export interface AttendancePunchRecord {
+  id: string;
+  workDate: string;
+  punchInAt: string;
+  source: "WEB" | "API" | "WEBHOOK" | "MCP" | "CSV";
+  /** The integration's own name when it has one ("Front door biometric"), else the kind. */
+  sourceLabel: string;
+  flagged: boolean;
+  faceVerified: boolean;
+  hasLocation: boolean;
+}
+
+/** Only what the pop-up needs; admin configuration never reaches a non-admin. */
+export interface MyToday {
+  enabled: boolean;
+  punchInMode?: PunchInMode;
+  locationMode?: AttendanceLocationMode;
+  faceRequired?: boolean;
+  faceFailureRule?: AttendanceFaceFailureRule;
+  consentText?: string;
+  consentNeeded?: boolean;
+  dateKey?: string;
+  status?: AttendanceDayStatus;
+  isWorkingDay?: boolean;
+  holidayName?: string | null;
+  record?: AttendancePunchRecord | null;
+  steps?: PunchStep[];
+}
+
+export interface PunchInPayload {
+  lat?: number | null;
+  lng?: number | null;
+  accuracyM?: number | null;
+  consentAccepted?: boolean;
+  verificationId?: string | null;
+}
+
+export const MY_TODAY_QUERY_KEY = ["attendance", "me", "today"] as const;
+
+export const attendanceApi = {
+  myToday: async () => (await api.get<MyToday>("/attendance/me/today")).data,
+  punchIn: async (payload: PunchInPayload) =>
+    (await api.post<{ created: boolean; record: AttendancePunchRecord }>("/attendance/punch-in", payload)).data
+};

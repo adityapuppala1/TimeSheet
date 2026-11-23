@@ -1,0 +1,294 @@
+/**
+ * Attendance (V17 A2) — the employee half: "what is my day?" and "punch me in".
+ *
+ * THE GATE: workspace toggle AND plan entitlement, like change management. Two forms of the same
+ * predicate for the same reason change.service.ts has two: the pop-up's status read is made by
+ * every signed-in person on every page load, so "attendance is off" must be a normal 200 answer
+ * there (isAttendanceOn), while the punch itself refuses with a message naming what is off
+ * (assertAttendanceOn).
+ *
+ * WHAT A NON-ADMIN SEES: only what the pop-up needs to run its steps (mode, location mode, whether
+ * face is required, the consent wording). Never the reminder hour, AI toggles, retention or group
+ * size — those are admin configuration, and GET /api/attendance/admin/settings stays admin-only.
+ *
+ * IDEMPOTENT BY CONSTRUCTION: AttendanceRecord is unique on (userId, workDate). A second punch the
+ * same day — a double click, two tabs, a biometric punch that arrived first — returns the existing
+ * row and never consumes a face verification or rewrites evidence. The P2002 catch covers the race
+ * where two requests both saw "no record yet".
+ */
+import type { AttendanceRecord, AttendanceSourceKind } from "@prisma/client";
+import { prisma } from "../config/prisma.js";
+import { requireTenantContext } from "../config/tenant-context.js";
+import { serverTimezone } from "../config/env.js";
+import { AppError } from "../middleware/error.js";
+import { getAttendanceSettings } from "./attendance-settings.service.js";
+import { resolveDayStatus, todayKeyFor, type AttendanceDayStatus } from "./attendance-day-status.js";
+import { consumeVerification, getFaceSettings, isFaceFeatureAllowedForOrg } from "./face.service.js";
+import { getPlanningSettings } from "./planning.service.js";
+import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
+import { audit } from "./audit.service.js";
+
+/** Shown when the admin left locationConsentText empty. Plain about what is kept and for how long. */
+export const DEFAULT_LOCATION_CONSENT =
+  "When you punch in, your workspace records your approximate location, network address and browser so attendance can be verified. It is kept for a limited time set by your administrator and is visible only to people who manage attendance.";
+
+const SOURCE_LABELS: Record<AttendanceSourceKind, string> = {
+  WEB: "Web",
+  API: "API",
+  WEBHOOK: "Integration",
+  MCP: "AI assistant",
+  CSV: "Import"
+};
+
+export async function isAttendanceOn(): Promise<boolean> {
+  const settings = await getAttendanceSettings();
+  if (!settings?.attendanceEnabled) return false;
+  return isPlanningCapabilityAllowed(requireTenantContext().orgId, "attendanceEnabled");
+}
+
+export async function assertAttendanceOn(): Promise<void> {
+  const settings = await getAttendanceSettings();
+  if (!settings?.attendanceEnabled) {
+    throw new AppError(403, "Attendance is off for this workspace. A super admin can enable it in Workspace Settings → Attendance & Leave.");
+  }
+  if (!(await isPlanningCapabilityAllowed(requireTenantContext().orgId, "attendanceEnabled"))) {
+    throw new AppError(403, "Attendance & Leave is not included in this plan. Upgrade to Team or Enterprise to use it.");
+  }
+}
+
+/**
+ * Phase B hook: approved leave covering the day. Deliberately returns nothing today so the
+ * resolver's order is already final and Phase B only fills this in.
+ */
+export async function findLeaveForDay(_userId: string, _dateKey: string): Promise<{ type: string } | null> {
+  return null;
+}
+
+/** The person's holiday on `dateKey`: their own calendar, else the workspace default. */
+async function findHoliday(holidayCalendarId: string | null, dateKey: string): Promise<{ name: string } | null> {
+  const calendarId =
+    holidayCalendarId ??
+    (await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true } }))?.id ??
+    null;
+  if (!calendarId) return null;
+  return prisma.holiday.findFirst({
+    where: { calendarId, date: new Date(`${dateKey}T00:00:00Z`) },
+    select: { name: true }
+  });
+}
+
+/**
+ * Face is required for a punch only when the attendance setting asks for it AND face verification
+ * is switched on AND the plan includes it. The entitlement half fails OPEN, the same rule as
+ * isFaceVerificationRequired: a billing change must not lock everyone out of punching in.
+ */
+export async function isPunchInFaceRequired(punchInFaceRequired: boolean): Promise<boolean> {
+  if (!punchInFaceRequired) return false;
+  const face = await getFaceSettings();
+  if (!face?.enabled) return false;
+  return isFaceFeatureAllowedForOrg();
+}
+
+export function publicRecord(record: (AttendanceRecord & { sourceRef?: { name: string } | null }) | null) {
+  if (!record) return null;
+  return {
+    id: record.id,
+    workDate: record.workDate.toISOString().slice(0, 10),
+    punchInAt: record.punchInAt.toISOString(),
+    source: record.source,
+    // A named integration ("Front door biometric") says more than its kind ever could.
+    sourceLabel: record.sourceRef?.name ?? SOURCE_LABELS[record.source],
+    flagged: record.flagged,
+    faceVerified: Boolean(record.faceAttemptId) && !record.flagged,
+    hasLocation: record.lat != null && record.lng != null
+  };
+}
+
+export type PunchStep = "LOCATION" | "FACE";
+
+export interface MyTodayResponse {
+  enabled: boolean;
+  punchInMode?: "OFF" | "OPTIONAL" | "MANDATORY";
+  locationMode?: "OFF" | "OPTIONAL" | "REQUIRED";
+  faceRequired?: boolean;
+  faceFailureRule?: "BLOCK" | "ALLOW_FLAGGED";
+  consentText?: string;
+  consentNeeded?: boolean;
+  dateKey?: string;
+  status?: AttendanceDayStatus;
+  isWorkingDay?: boolean;
+  holidayName?: string | null;
+  record?: ReturnType<typeof publicRecord>;
+  steps?: PunchStep[];
+}
+
+async function loadUser(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { timezone: true, holidayCalendarId: true, attendanceLocationConsentAt: true }
+  });
+  if (!user) throw new AppError(404, "User not found");
+  return user;
+}
+
+export async function getMyToday(userId: string, now: Date = new Date()): Promise<MyTodayResponse> {
+  if (!(await isAttendanceOn())) return { enabled: false };
+  const [settings, planning, user] = await Promise.all([getAttendanceSettings(), getPlanningSettings(), loadUser(userId)]);
+  const dateKey = todayKeyFor(now, user.timezone, serverTimezone);
+  const [holiday, leave, record, faceRequired] = await Promise.all([
+    findHoliday(user.holidayCalendarId, dateKey),
+    findLeaveForDay(userId, dateKey),
+    prisma.attendanceRecord.findUnique({
+      where: { userId_workDate: { userId, workDate: new Date(`${dateKey}T00:00:00Z`) } },
+      include: { sourceRef: { select: { name: true } } }
+    }),
+    isPunchInFaceRequired(settings.punchInFaceRequired)
+  ]);
+  const day = resolveDayStatus({
+    dateKey,
+    workingDays: planning.workingDays,
+    holiday,
+    leave,
+    punchedIn: Boolean(record),
+    now,
+    timeZone: user.timezone,
+    fallbackZone: serverTimezone
+  });
+  const steps: PunchStep[] = [];
+  if (settings.locationMode !== "OFF") steps.push("LOCATION");
+  if (faceRequired) steps.push("FACE");
+  return {
+    enabled: true,
+    punchInMode: settings.punchInMode,
+    locationMode: settings.locationMode,
+    faceRequired,
+    faceFailureRule: settings.faceFailureRule,
+    consentText: settings.locationConsentText?.trim() || DEFAULT_LOCATION_CONSENT,
+    consentNeeded: settings.locationMode !== "OFF" && !user.attendanceLocationConsentAt,
+    dateKey,
+    status: day.status,
+    isWorkingDay: day.isWorkingDay,
+    holidayName: day.holidayName,
+    record: publicRecord(record),
+    steps
+  };
+}
+
+export interface PunchInInput {
+  userId: string;
+  lat?: number | null;
+  lng?: number | null;
+  accuracyM?: number | null;
+  consentAccepted?: boolean;
+  verificationId?: string | null;
+  ip: string | null;
+  userAgent: string | null;
+  now?: Date;
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (error as { code?: string } | null)?.code === "P2002";
+}
+
+type PunchLocation = { lat: number; lng: number; accuracyM: number | null };
+
+/** Location by mode. OFF stores nothing even if the client sent it — the admin said not to collect it. */
+function resolveLocation(mode: "OFF" | "OPTIONAL" | "REQUIRED", input: PunchInInput, hasConsent: boolean): PunchLocation | null {
+  if (mode === "OFF") return null;
+  if (typeof input.lat !== "number" || typeof input.lng !== "number") {
+    if (mode === "REQUIRED") {
+      throw new AppError(422, "Your workspace requires your location to punch in. Allow location access in your browser and try again.");
+    }
+    return null;
+  }
+  if (!hasConsent && input.consentAccepted !== true) {
+    throw new AppError(422, "Please accept the location notice before punching in.");
+  }
+  return { lat: input.lat, lng: input.lng, accuracyM: input.accuracyM == null ? null : Math.round(input.accuracyM) };
+}
+
+/**
+ * Face. Reuses the /face/verify flow: the client verifies with context PUNCH_IN and presents the
+ * single-use id, which consumeVerification checks for owner, context, outcome, age and reuse.
+ */
+async function resolveFace(
+  settings: { punchInFaceRequired: boolean; faceFailureRule: "BLOCK" | "ALLOW_FLAGGED" },
+  input: PunchInInput
+): Promise<{ faceAttemptId: string | null; flagged: boolean }> {
+  if (!(await isPunchInFaceRequired(settings.punchInFaceRequired))) return { faceAttemptId: null, flagged: false };
+  try {
+    const id = await consumeVerification({ verificationId: input.verificationId, userId: input.userId, context: "PUNCH_IN" });
+    return { faceAttemptId: id, flagged: false };
+  } catch (error) {
+    if (settings.faceFailureRule === "BLOCK" || !(error instanceof AppError)) throw error;
+  }
+  // ALLOW_FLAGGED: the punch stands, marked for review. Keep the failed attempt's id only when it
+  // really is this person's PUNCH_IN attempt, so the reviewer can see the scores behind it.
+  if (!input.verificationId) return { faceAttemptId: null, flagged: true };
+  const attempt = await prisma.faceVerificationAttempt.findUnique({
+    where: { id: input.verificationId },
+    select: { userId: true, context: true }
+  });
+  const own = attempt?.userId === input.userId && attempt.context === "PUNCH_IN";
+  return { faceAttemptId: own ? input.verificationId : null, flagged: true };
+}
+
+export async function punchIn(input: PunchInInput): Promise<{ created: boolean; record: NonNullable<ReturnType<typeof publicRecord>> }> {
+  await assertAttendanceOn();
+  const now = input.now ?? new Date();
+  const settings = await getAttendanceSettings();
+  if (settings.punchInMode === "OFF") {
+    throw new AppError(403, "Punching in from the web is not enabled for this workspace.");
+  }
+  const user = await loadUser(input.userId);
+  const dateKey = todayKeyFor(now, user.timezone, serverTimezone);
+  const workDate = new Date(`${dateKey}T00:00:00Z`);
+  const include = { sourceRef: { select: { name: true } } } as const;
+
+  // Idempotency first: a second punch must not burn a face verification or overwrite evidence.
+  const existing = await prisma.attendanceRecord.findUnique({ where: { userId_workDate: { userId: input.userId, workDate } }, include });
+  if (existing) return { created: false, record: publicRecord(existing)! };
+
+  const location = resolveLocation(settings.locationMode, input, Boolean(user.attendanceLocationConsentAt));
+  const { faceAttemptId, flagged } = await resolveFace(settings, input);
+
+  let record;
+  try {
+    record = await prisma.$transaction(async (tx) => {
+      if (location && !user.attendanceLocationConsentAt) {
+        await tx.user.update({ where: { id: input.userId }, data: { attendanceLocationConsentAt: now } });
+      }
+      return tx.attendanceRecord.create({
+        data: {
+          userId: input.userId,
+          workDate,
+          punchInAt: now,
+          lat: location?.lat ?? null,
+          lng: location?.lng ?? null,
+          accuracyM: location?.accuracyM ?? null,
+          ip: input.ip?.slice(0, 64) ?? null,
+          userAgent: input.userAgent ?? null,
+          faceAttemptId,
+          flagged,
+          source: "WEB"
+        },
+        include
+      });
+    });
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    const winner = await prisma.attendanceRecord.findUnique({ where: { userId_workDate: { userId: input.userId, workDate } }, include });
+    if (!winner) throw error;
+    return { created: false, record: publicRecord(winner)! };
+  }
+
+  // Never the coordinates in the audit log: it is read far more widely than attendance is.
+  await audit(input.userId, "attendance.punched_in", "AttendanceRecord", record.id, {
+    workDate: dateKey,
+    source: "WEB",
+    hasLocation: Boolean(location),
+    faceVerified: Boolean(faceAttemptId) && !flagged,
+    flagged
+  });
+  return { created: true, record: publicRecord(record)! };
+}

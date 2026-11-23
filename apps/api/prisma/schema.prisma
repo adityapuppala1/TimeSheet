@@ -369,6 +369,9 @@ model User {
   /// (HolidayCalendar.isDefault), so a fresh workspace needs no per-person assignment at all.
   /// SetNull on delete: removing a calendar drops people back to the default, never orphans them.
   holidayCalendarId String?
+  /// When this person first accepted the workspace's location-consent wording for punch-in (V17 A2).
+  /// NULL = never asked yet; the punch-in dialog shows the consent text before the first location read.
+  attendanceLocationConsentAt DateTime?
   holidayCalendar   HolidayCalendar?   @relation(fields: [holidayCalendarId], references: [id], onDelete: SetNull)
   attendanceRecords AttendanceRecord[]
   missedDayReasons  MissedDayReason[]
