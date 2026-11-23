@@ -1151,6 +1151,17 @@ export interface PlanTierLimits {
    *  to record a change it actually made, whatever its plan says. */
   maxChangePolicies: number;
 
+  /* --- Attendance, leave & holidays (V17) ---------------------------------------------------- */
+  /** Punch-in, holiday calendars and missed-day reasons. Fails CLOSED like every capability here:
+   *  a tier that loses it keeps every record, it just stops collecting new ones. */
+  attendanceEnabled: boolean;
+  /** Leave types, balances and approvals (phase B). Enterprise only — it is an HR system of record. */
+  leaveManagementEnabled: boolean;
+  /** API-key scopes, signed webhooks, CSV and MCP ingest from biometric/HRMS sources. */
+  attendanceIntegrationsEnabled: boolean;
+  /** AI suggestions over attendance aggregates. Gated because it spends model budget. */
+  attendanceAiInsightsEnabled: boolean;
+
   /* --- Weekly AI/ML Practice Update (3.5.0) ------------------------------------------------ */
   /**
    * The consolidated leadership digest — draft, review, send, and the Monday cadence.
@@ -1268,6 +1279,10 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxGoals: 0,
     changeManagementEnabled: false,
     maxChangePolicies: 0,
+    attendanceEnabled: false,
+    leaveManagementEnabled: false,
+    attendanceIntegrationsEnabled: false,
+    attendanceAiInsightsEnabled: false,
     practiceUpdateEnabled: false,
     // No automatic backups on Starter. The pre-deletion snapshot the retention programme takes is
     // NOT this — every workspace gets one of those, on every plan.
@@ -1304,6 +1319,12 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     // what Enterprise buys off, not the capability.
     changeManagementEnabled: true,
     maxChangePolicies: 5,
+    // Team gets the everyday half of attendance — punch-in, holiday calendars, missed-day reasons.
+    // Leave (an HR system of record), external ingest and AI analytics are what Enterprise buys.
+    attendanceEnabled: true,
+    leaveManagementEnabled: false,
+    attendanceIntegrationsEnabled: false,
+    attendanceAiInsightsEnabled: false,
     // A practice update is a management artefact, and Team is where a workspace has managers in it.
     practiceUpdateEnabled: true,
     // WEEKLY, and one destination. A weekly off-site copy is the honest floor for a paying team:
@@ -1336,6 +1357,10 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxGoals: UNLIMITED_PLAN_ITEMS,
     changeManagementEnabled: true,
     maxChangePolicies: UNLIMITED_PLAN_ITEMS,
+    attendanceEnabled: true,
+    leaveManagementEnabled: true,
+    attendanceIntegrationsEnabled: true,
+    attendanceAiInsightsEnabled: true,
     practiceUpdateEnabled: true,
     // DAILY, dedicated, with room for several destinations — a primary bucket plus an off-site
     // copy is a normal enterprise requirement, not an exotic one. HOURLY exists in the model and

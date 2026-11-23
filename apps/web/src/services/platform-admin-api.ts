@@ -236,7 +236,11 @@ export const PLAN_CAPABILITIES = [
   { key: "aiPmCopilotEnabled", label: "AI PM copilot", hint: "The proposal-based planning copilot. Spends AI budget." },
   { key: "goalsEnabled", label: "Goals / OKRs", hint: "Measured goals with progress. Paired with the Max goals quota." },
   { key: "changeManagementEnabled", label: "Change management", hint: "Raise, assess, approve, schedule and review changes. Paired with Max change policies." },
-  { key: "practiceUpdateEnabled", label: "Weekly AI/ML practice update", hint: "The consolidated leadership digest. Gated for what it aggregates — every project, everyone's hours, every open finding — not for what it costs." }
+  { key: "practiceUpdateEnabled", label: "Weekly AI/ML practice update", hint: "The consolidated leadership digest. Gated for what it aggregates — every project, everyone's hours, every open finding — not for what it costs." },
+  { key: "attendanceEnabled", label: "Attendance & holidays", hint: "Punch-in, holiday calendars and missed-day reasons. Every workspace still opts in from its own settings." },
+  { key: "leaveManagementEnabled", label: "Leave management", hint: "Leave types, balances and approvals. Requires Attendance." },
+  { key: "attendanceIntegrationsEnabled", label: "Attendance integrations", hint: "Punches from API keys, signed webhooks, CSV and MCP (biometric devices, HRMS)." },
+  { key: "attendanceAiInsightsEnabled", label: "Attendance AI insights", hint: "AI suggestions over attendance aggregates. Spends AI budget." }
 ] as const;
 
 /** The countable ceilings. `0` means the tier cannot use that resource at all; 1,000,000 is the

@@ -112,7 +112,11 @@ export type PlanningCapability =
   | "aiPmCopilotEnabled"
   | "goalsEnabled"
   | "changeManagementEnabled"
-  | "practiceUpdateEnabled";
+  | "practiceUpdateEnabled"
+  | "attendanceEnabled"
+  | "leaveManagementEnabled"
+  | "attendanceIntegrationsEnabled"
+  | "attendanceAiInsightsEnabled";
 
 export type PlanningQuota =
   | "maxPortfolios"
@@ -147,6 +151,10 @@ export async function getPlanningEntitlements(orgId: string): Promise<Record<Pla
     goalsEnabled: Boolean(value("goalsEnabled")),
     changeManagementEnabled: Boolean(value("changeManagementEnabled")),
     practiceUpdateEnabled: Boolean(value("practiceUpdateEnabled")),
+    attendanceEnabled: Boolean(value("attendanceEnabled")),
+    leaveManagementEnabled: Boolean(value("leaveManagementEnabled")),
+    attendanceIntegrationsEnabled: Boolean(value("attendanceIntegrationsEnabled")),
+    attendanceAiInsightsEnabled: Boolean(value("attendanceAiInsightsEnabled")),
     maxPortfolios: value<number>("maxPortfolios"),
     maxRequestForms: value<number>("maxRequestForms"),
     maxBlueprints: value<number>("maxBlueprints"),

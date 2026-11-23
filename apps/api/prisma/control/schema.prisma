@@ -835,6 +835,14 @@ model PlanTierLimit {
   /// change it actually made because it hit a plan limit. 0 = the tier cannot use the module.
   maxChangePolicies       Int     @default(0)
 
+  /// --- Attendance, leave & holidays (V17) ----------------------------------------------------
+  /// Same restrictive-default rule as every block above; the migration that adds these runs the
+  /// guarded UPDATE with the real Team/Enterprise values from PLAN_TIER_LIMITS.
+  attendanceEnabled             Boolean @default(false)
+  leaveManagementEnabled        Boolean @default(false)
+  attendanceIntegrationsEnabled Boolean @default(false)
+  attendanceAiInsightsEnabled   Boolean @default(false)
+
   /// --- Managed backups (3.14.0) --------------------------------------------------------------
   /// The most frequent AUTOMATIC backup this tier may schedule. `NONE` means the tier cannot use
   /// the backup module at all, which is Starter's default — the same restrictive-default rule as

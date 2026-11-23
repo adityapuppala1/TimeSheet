@@ -102,6 +102,7 @@ import { SsoSettingsCard } from "./settings/SsoSettingsCard";
 import { CompanyDomainsCard } from "./settings/CompanyDomainsCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
+import { AttendanceSettingsCard } from "./settings/AttendanceSettingsCard";
 import { BrandingSettingsCard } from "./settings/BrandingSettingsCard";
 import { MaintenanceSettingsCard } from "./settings/MaintenanceSettingsCard";
 import { ChangeManagementSettingsCard } from "./settings/ChangeManagementSettingsCard";
@@ -287,6 +288,7 @@ export function WorkspaceSettingsPage() {
           <TabsTrigger value="chat-integrations">Chat integrations</TabsTrigger>
           <TabsTrigger value="security-devops">Security & DevOps</TabsTrigger>
           <TabsTrigger value="face-verification">Face verification</TabsTrigger>
+          <TabsTrigger value="attendance">Attendance & Leave</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
           <TabsTrigger value="billing">Billing</TabsTrigger>
           <TabsTrigger value="public-api">Public API</TabsTrigger>
@@ -344,6 +346,10 @@ export function WorkspaceSettingsPage() {
 
         <TabsContent value="face-verification">
           <FaceVerificationSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="attendance">
+          <AttendanceSettingsCard readOnly={!isSuperAdmin} />
         </TabsContent>
 
         <TabsContent value="security-devops">
