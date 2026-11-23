@@ -72,7 +72,7 @@ export function assertTeamScope(role: string): TeamScope {
 }
 
 /** The people `actorId` may see, as a Prisma filter. */
-function peopleWhere(scope: TeamScope, actorId: string, managerFilter?: string | null): Prisma.UserWhereInput {
+export function peopleWhere(scope: TeamScope, actorId: string, managerFilter?: string | null): Prisma.UserWhereInput {
   if (scope.unrestricted) return { ...COUNTED_PEOPLE, ...(managerFilter ? { managerId: managerFilter } : {}) };
   return { ...COUNTED_PEOPLE, managerId: actorId };
 }
@@ -110,7 +110,7 @@ function addDays(dateKey: string, days: number): string {
 }
 
 /** Holidays for a set of calendars over a date range, keyed `calendarId|dateKey`. One query. */
-async function loadHolidays(calendarIds: Array<string | null>, from: string, to: string) {
+export async function loadHolidays(calendarIds: Array<string | null>, from: string, to: string) {
   const defaultId = calendarIds.some((id) => !id)
     ? ((await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true } }))?.id ?? null)
     : null;

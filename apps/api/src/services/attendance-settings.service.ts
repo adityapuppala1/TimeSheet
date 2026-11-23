@@ -65,6 +65,11 @@ export const attendanceSettingsBody = z
     aiInsightsOrg: z.boolean(),
     // Below 3 an "average" identifies a person; 3 is the floor, not a recommendation.
     minGroupSize: z.number().int().min(3).max(100),
+    // V17 A6: how long an AI suggestion set is reused, and the opt-in lateness measure.
+    aiInsightsFrequency: z.enum(["DAILY", "WEEKLY"]),
+    latenessEnabled: z.boolean(),
+    // Minutes after local midnight; 5:00-14:00 covers every sane office start.
+    expectedStartMinute: z.number().int().min(300).max(840),
     locationConsentText: z.string().trim().max(2000).nullable(),
     locationRetentionDays: z.number().int().min(1).max(3650),
     // A3 conflict priorities for sourceless punches (attendance-ingest.service.ts#rankOf).

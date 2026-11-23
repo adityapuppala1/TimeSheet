@@ -271,6 +271,33 @@ export function AttendanceSettingsCard({ readOnly }: { readOnly: boolean }) {
             disabled={disabled}
             onCommit={(v) => save({ minGroupSize: v })}
           />
+          <ChoiceField
+            id="att-ai-frequency"
+            label="Refresh AI suggestions"
+            hint="AI suggestions are reused for this long; rule-based suggestions are always current."
+            value={settings.aiInsightsFrequency}
+            options={[["DAILY", "Daily"], ["WEEKLY", "Weekly"]]}
+            disabled={disabled || !entitlements.attendanceAiInsightsEnabled}
+            onChange={(v) => save({ aiInsightsFrequency: v as AttendanceSettings["aiInsightsFrequency"] })}
+          />
+          <ToggleRow
+            label="Measure punch-ins against an expected start time"
+            hint="Off by default. Without it, analytics compare each person with their own usual time, never with a rule."
+            checked={settings.latenessEnabled}
+            disabled={disabled}
+            onChange={(v) => save({ latenessEnabled: v })}
+          />
+          {settings.latenessEnabled && (
+            <ChoiceField
+              id="att-expected-start"
+              label="Expected start"
+              hint="In each person's own timezone."
+              value={String(settings.expectedStartMinute)}
+              options={EXPECTED_START_OPTIONS}
+              disabled={disabled}
+              onChange={(v) => save({ expectedStartMinute: Number(v) })}
+            />
+          )}
         </SectionGroup>
       </SettingsSection>
 
@@ -349,6 +376,12 @@ function buildBoard(input: {
 /* ------------------------------------------------------------------ *
  * Small fields
  * ------------------------------------------------------------------ */
+
+/** 05:00 to 14:00 in half hours — the server accepts 300-840. */
+const EXPECTED_START_OPTIONS: Array<[string, string]> = Array.from({ length: 19 }, (_, i) => {
+  const minute = 300 + i * 30;
+  return [String(minute), `${String(Math.floor(minute / 60)).padStart(2, "0")}:${minute % 60 === 0 ? "00" : "30"}`];
+});
 
 function ChoiceField({
   id,

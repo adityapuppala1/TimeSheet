@@ -23,6 +23,12 @@ export interface AttendanceSettings {
   aiInsightsManager: boolean;
   aiInsightsOrg: boolean;
   minGroupSize: number;
+  /** V17 A6: how long AI suggestions are reused. */
+  aiInsightsFrequency: "DAILY" | "WEEKLY";
+  /** Off by default: no on-time % unless an admin sets an expected start. */
+  latenessEnabled: boolean;
+  /** Minutes after local midnight, 300-840. */
+  expectedStartMinute: number;
   locationConsentText: string | null;
   locationRetentionDays: number;
   /** A3 conflict priorities for punches without a source row. Higher wins; webhooks rank 1000+. */
@@ -323,4 +329,130 @@ export const attendanceTeamApi = {
     ).data,
   myHistory: async (from: string, to: string) =>
     (await api.get<{ from: string; to: string; days: MyHistoryDay[] }>("/attendance/me/history", { params: { from, to } })).data
+};
+
+/* ----------------------------- Analytics (V17 A6) ----------------------------- */
+
+export type AnalyticsAudience = "me" | "team" | "org";
+
+export interface AnalyticsRangeOut {
+  from: string;
+  to: string;
+  days: number;
+  workingDays: number;
+}
+
+export interface SelfSummary {
+  statusCounts: Record<TeamDayStatus, number>;
+  presenceRate: number | null;
+  onTimeRate: number | null;
+  medianPunchMinute: number | null;
+  driftMinutesPerWeek: number | null;
+  punchTrend: Array<{ date: string; minute: number }>;
+  hours: { logged: number; expected: number };
+  missedReasons: Record<string, number>;
+  sources: Partial<Record<PunchSourceKind, number>>;
+  absencesByWeekday: number[];
+  presentNoTimesheetDays: number;
+  closedPresentDays: number;
+}
+
+export interface GroupSummary {
+  people: number;
+  suppressed: boolean;
+  aggregates: {
+    presenceRate: number | null;
+    absenceRate: number | null;
+    punchHistogram: Array<{ bucket: string; count: number }>;
+    presentNoTimesheet: { days: number; rate: number | null };
+    missedReasons: Record<string, number>;
+    absencesByWeekday: number[];
+  } | null;
+}
+
+export interface UpcomingHoliday {
+  date: string;
+  name: string;
+}
+
+export interface Lateness {
+  enabled: boolean;
+  expectedStartMinute: number;
+}
+
+export interface MyAnalytics {
+  audience: "me";
+  range: AnalyticsRangeOut;
+  lateness: Lateness;
+  summary: SelfSummary;
+  upcomingHolidays: UpcomingHoliday[];
+}
+
+export interface AnalyticsPersonRow {
+  userId: string;
+  name: string;
+  presenceRate: number | null;
+  medianPunchMinute: number | null;
+  driftMinutesPerWeek: number | null;
+  drifting: boolean;
+  absentDays: number;
+}
+
+export interface TeamAnalytics {
+  audience: "team";
+  range: AnalyticsRangeOut;
+  minGroupSize: number;
+  lateness: Lateness;
+  group: GroupSummary;
+  people: AnalyticsPersonRow[];
+  upcomingHolidays: UpcomingHoliday[];
+}
+
+export interface SourceHealth {
+  id: string;
+  name: string;
+  kind: PunchSourceKind;
+  enabled: boolean;
+  counts: Record<string, number>;
+  lastEventAt: string | null;
+  silentWorkingDays: number | null;
+}
+
+export interface OrgAnalytics {
+  audience: "org";
+  range: AnalyticsRangeOut;
+  minGroupSize: number;
+  lateness: Lateness;
+  overall: GroupSummary;
+  byManager: Array<GroupSummary & { managerId: string | null; managerName: string }>;
+  bySource: Array<{ source: PunchSourceKind; people: number; suppressed: boolean; punches: number | null }>;
+  face: { suppressed: boolean; checks: number | null; passRate: number | null; flagRate: number | null };
+  loginHistogram: { suppressed: boolean; hours: number[] | null };
+  integrations: SourceHealth[];
+  holidays: { dates: number; personDays: number };
+  upcomingHolidays: UpcomingHoliday[];
+}
+
+export interface AttendanceInsight {
+  id: string;
+  title: string;
+  detail: string;
+  severity: "info" | "warn";
+  source: "rule" | "ai";
+}
+
+export interface InsightsResponse {
+  audience: AnalyticsAudience;
+  aiStatus: "off" | "fresh" | "cached" | "unavailable";
+  insights: AttendanceInsight[];
+}
+
+const rangeParams = (from: string, to: string) => ({ params: { from, to } });
+
+export const attendanceAnalyticsApi = {
+  me: async (from: string, to: string) => (await api.get<MyAnalytics>("/attendance/analytics/me", rangeParams(from, to))).data,
+  team: async (from: string, to: string) => (await api.get<TeamAnalytics>("/attendance/analytics/team", rangeParams(from, to))).data,
+  org: async (from: string, to: string) => (await api.get<OrgAnalytics>("/attendance/analytics/org", rangeParams(from, to))).data,
+  insights: async (audience: AnalyticsAudience, from: string, to: string) =>
+    (await api.get<InsightsResponse>(`/attendance/analytics/${audience}/insights`, rangeParams(from, to))).data
 };

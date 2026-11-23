@@ -3,6 +3,9 @@
  * person's day as a timeline). One page with two sub-routes rather than two pages, so the sidebar
  * carries one entry and A6's analytics can join as a third tab.
  *
+ * V17 A6 adds analytics: an Analytics section under My attendance, an "Insights" tab inside Team,
+ * and an "Organisation" tab for admins (components/attendance/AttendanceAnalytics.tsx).
+ *
  * VISIBILITY: the Team tab shows only for the roles the server's teamScopeFor accepts; the server
  * still decides per request (a manager sees direct reports only, an admin everyone), so the tab is
  * convenience, not the control. Locations arrive as coarse labels — the API never sends coordinates.
@@ -29,6 +32,9 @@ import {
 import { useMemo, useState } from "react";
 import { NavLink, useLocation } from "react-router";
 import { PageHeader } from "../components/PageHeader";
+import { MyAnalyticsSection, OrgAnalyticsView, TeamInsightsView } from "../components/attendance/AttendanceAnalytics";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
+import { ORG_VIEW_ROLES } from "../lib/attendance-analytics";
 import { initialsFor } from "../components/AccountMenu";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
@@ -84,17 +90,21 @@ export function AttendancePage() {
   const role = useAuthStore((s) => s.user?.role ?? "");
   const { pathname } = useLocation();
   const canSeeTeam = TEAM_VIEW_ROLES.has(role);
+  const canSeeOrg = ORG_VIEW_ROLES.has(role);
   const onTeam = pathname.startsWith("/app/attendance/team");
+  const onOrg = pathname.startsWith("/app/attendance/org");
+  const tabs = [
+    { to: "/app/attendance", label: "My attendance", end: true },
+    { to: "/app/attendance/team", label: "Team", end: false },
+    ...(canSeeOrg ? [{ to: "/app/attendance/org", label: "Organisation", end: false }] : [])
+  ];
 
   return (
     <div className="grid min-w-0 gap-5">
       <PageHeader title="Attendance" description="Punch-ins, day status and timesheet activity." icon={Fingerprint} />
       {canSeeTeam && (
         <nav aria-label="Attendance views" className="flex gap-1 border-b border-border">
-          {[
-            { to: "/app/attendance", label: "My attendance", end: true },
-            { to: "/app/attendance/team", label: "Team", end: false }
-          ].map((tab) => (
+          {tabs.map((tab) => (
             <NavLink
               key={tab.to}
               to={tab.to}
@@ -111,11 +121,33 @@ export function AttendancePage() {
           ))}
         </nav>
       )}
-      {onTeam && canSeeTeam && <TeamView />}
+      {onTeam && canSeeTeam && (
+        <Tabs defaultValue="today" className="grid min-w-0 gap-4">
+          <TabsList className="w-fit">
+            <TabsTrigger value="today">Today</TabsTrigger>
+            <TabsTrigger value="insights">Insights</TabsTrigger>
+          </TabsList>
+          <TabsContent value="today" className="min-w-0">
+            <TeamView />
+          </TabsContent>
+          <TabsContent value="insights" className="min-w-0">
+            <TeamInsightsView />
+          </TabsContent>
+        </Tabs>
+      )}
       {onTeam && !canSeeTeam && (
         <EmptyState icon={Users2} title="Team attendance is for managers" description="Ask an admin if you need to see your team's attendance." />
       )}
-      {!onTeam && <MyAttendanceView />}
+      {onOrg && canSeeOrg && <OrgAnalyticsView />}
+      {onOrg && !canSeeOrg && (
+        <EmptyState icon={Users2} title="Organisation analytics are for admins" description="Ask an admin if you need workspace-wide attendance figures." />
+      )}
+      {!onTeam && !onOrg && (
+        <div className="grid min-w-0 gap-6">
+          <MyAttendanceView />
+          <MyAnalyticsSection />
+        </div>
+      )}
     </div>
   );
 }

@@ -6121,6 +6121,11 @@ enum AttendanceLocationMode {
 /// What happens when the punch-in face check fails. ALLOW_FLAGGED exists because a camera that
 /// cannot see someone at 9am must not cost them a day's attendance — it records the punch and
 /// puts the attempt in the review queue instead.
+enum AttendanceInsightFrequency {
+  DAILY
+  WEEKLY
+}
+
 enum AttendanceFaceFailureRule {
   BLOCK
   ALLOW_FLAGGED
@@ -6176,6 +6181,15 @@ model GlobalAttendanceSettings {
   aiInsightsOrg     Boolean @default(false)
   /// Never show an aggregate over fewer people than this — below it an "average" is one person.
   minGroupSize      Int     @default(5)
+  /// How long an AI suggestion set is reused before the model is asked again (V17 A6). Rule-based
+  /// suggestions are recomputed on every request; only the paid call is cached.
+  aiInsightsFrequency AttendanceInsightFrequency @default(WEEKLY)
+  /// Lateness is OFF by default: many workspaces run flexible hours, and "late" against a start
+  /// time nobody agreed to is an accusation, not a metric. Off, analytics report each person's
+  /// punch-in trend against their OWN median instead of an on-time percentage.
+  latenessEnabled     Boolean @default(false)
+  /// Expected local start, minutes after midnight (600 = 10:00). Only read when latenessEnabled.
+  expectedStartMinute Int     @default(600)
 
   /// Shown the first time someone is asked for their location. NULL = the built-in wording.
   locationConsentText   String? @db.Text
@@ -6373,4 +6387,17 @@ model MissedDayReason {
 
   @@unique([userId, workDate])
   @@index([workDate])
+}
+
+/// V17 A6: one cached AI suggestion set per audience + scope + date range. Rule-based insights are
+/// never stored — they are free to recompute. `cacheKey` is `${audience}:${scope}:${from}:${to}`.
+model AttendanceInsightCache {
+  id        String   @id @default(uuid())
+  cacheKey  String   @unique @db.VarChar(191)
+  /// The model's suggestions only (title + detail strings). Never the aggregate that was sent.
+  insights  Json
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
 }

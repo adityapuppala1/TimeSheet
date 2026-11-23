@@ -243,6 +243,7 @@ const router = createBrowserRouter([
       // managing roles and the API scopes every row (direct reports, or everyone for an admin).
       { path: "attendance", element: <PageShell><AttendancePage /></PageShell> },
       { path: "attendance/team", element: <PageShell><AttendancePage /></PageShell> },
+      { path: "attendance/org", element: <PageShell><AttendancePage /></PageShell> },
       { path: "approvals", element: <RequirePermission permission={permissions.TIMESHEETS_APPROVE}><PageShell><ApprovalsPage /></PageShell></RequirePermission> },
       { path: "users", element: <RequirePermission permission={permissions.USERS_MANAGE}><PageShell><UsersPage /></PageShell></RequirePermission> },
       { path: "projects", element: <RequirePermission permission={permissions.PROJECTS_MANAGE}><PageShell><ProjectsPage /></PageShell></RequirePermission> },

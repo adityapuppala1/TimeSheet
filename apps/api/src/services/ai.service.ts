@@ -923,6 +923,13 @@ export async function assertAIFeatureEnabled(feature: AIFeatureToggle): Promise<
   return settings;
 }
 
+/** The master switch alone, for a capability whose own toggle lives outside GlobalAISettings. */
+async function assertAIMasterEnabled(): Promise<Awaited<ReturnType<typeof getGlobalAISettings>>> {
+  const settings = await getGlobalAISettings();
+  if (!settings.aiEnabled) throw new AppError(403, "AI features are disabled for this workspace.");
+  return settings;
+}
+
 /**
  * Throws a 402 if the current calendar month's estimated AI spend has hit the configured cap.
  * `null`/`undefined` means "no cap configured" (the org admin left GlobalAISettings.monthlyBudgetUsd
@@ -1879,8 +1886,13 @@ function startOfWeek(date: Date): Date {
  * feature is broken" (see the incident this comment was added for: Groq promoted to priority 0,
  * asked for "google/gemma-4-31b-it" — Nvidia's model name, still sitting in the legacy field).
  */
-async function preflight(feature: AIFeatureToggle) {
-  const settings = await assertAIFeatureEnabled(feature);
+/**
+ * `feature` is null for a capability whose switch lives OUTSIDE GlobalAISettings — V17 A6
+ * attendance insights are gated per audience by GlobalAttendanceSettings plus a plan entitlement,
+ * checked by the caller. The master switch, the budget and the provider are still enforced here.
+ */
+async function preflight(feature: AIFeatureToggle | null) {
+  const settings = feature ? await assertAIFeatureEnabled(feature) : await assertAIMasterEnabled();
 
   // Plan-tier enforcement (Phase B7): clamp the org's own optional budget against its plan
   // tier's ceiling on every call, rather than validating once at write-time — if a platform
@@ -3691,6 +3703,72 @@ export async function suggestStaleTicketNextAction(params: {
     promptFallbackReason: p.fallbackReason
   });
   return result.text?.trim() || null;
+}
+
+/* --------------------------- Attendance insights (V17 A6) -------------------------------- */
+
+export interface AttendanceAiInsight {
+  title: string;
+  detail: string;
+}
+
+/**
+ * Lines of `- Title: detail` (or `- Title — detail`) to suggestions. Tolerant on purpose: this is
+ * free text so the prompt stays admin-editable (a JSON prompt is not), and a model that drops the
+ * dash or the separator still yields something readable rather than nothing. Capped at four.
+ */
+export function parseAttendanceInsightLines(text: string): AttendanceAiInsight[] {
+  const out: AttendanceAiInsight[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim();
+    if (line.length < 8) continue;
+    const sep = /\s[—–-]\s|:\s/.exec(line);
+    const title = (sep ? line.slice(0, sep.index) : line).replace(/\*+/g, "").trim().slice(0, 120);
+    const detail = (sep ? line.slice(sep.index + sep[0].length) : "").replace(/\*+/g, "").trim().slice(0, 400);
+    if (title) out.push({ title, detail });
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+/**
+ * Phrases attendance AGGREGATES as up to four suggestions. `facts` is built ONLY by
+ * attendance-analytics.service.ts#buildAiPayload — an allowlist of counts, rates and pseudonymous
+ * labels; no names, emails, coordinates, IPs, face data or free-text notes ever reach this call
+ * (tests/unit/attendance-analytics.test.ts proves it). The per-audience switch and the plan
+ * entitlement are the caller's to check; this enforces the master switch, budget and provider.
+ *
+ * Callers treat a throw as "rule-based only this time" — never as an error for the user.
+ */
+export async function generateAttendanceInsights(params: {
+  audience: "self" | "team" | "org";
+  facts: string;
+  userId?: string;
+}): Promise<AttendanceAiInsight[]> {
+  const { settings } = await preflight(null);
+  const audienceLabel = {
+    self: "one employee, about their own attendance",
+    team: "a manager, about their direct reports as a group",
+    org: "a workspace administrator, about the whole organisation"
+  }[params.audience];
+  const p = await resolvePrompt("attendance_insights", { audienceLabel, facts: params.facts });
+
+  const model = economyModelFor(settings);
+  const startedAt = Date.now();
+  const result = await callChat(settings, { feature: "attendance_insights", model, tier: "economy", maxTokens: 500, prompt: p.text });
+  await logAIUsage({
+    feature: "attendance_insights",
+    params: { audience: params.audience, facts: params.facts },
+    model: result.model,
+    provider: result.provider,
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
+    userId: params.userId,
+    promptVersionId: p.promptVersionId,
+    promptFallbackReason: p.fallbackReason
+  });
+  return parseAttendanceInsightLines(result.text ?? "");
 }
 
 /* ------------------------------- Face review summary ------------------------------------- */

@@ -26,6 +26,15 @@ import {
   spanDays
 } from "../services/attendance-team.service.js";
 import { AppError } from "../middleware/error.js";
+import {
+  defaultRange,
+  getInsights,
+  getMyAnalytics,
+  getOrgAnalytics,
+  getTeamAnalytics,
+  MAX_RANGE_DAYS,
+  type AnalyticsAudience
+} from "../services/attendance-analytics.service.js";
 
 export const attendanceRouter = Router();
 
@@ -122,4 +131,35 @@ attendanceRouter.get("/me/history", requireAuth, async (req, res) => {
   await assertAttendanceOn();
   const { from, to } = rangeQuery(req.query, MAX_HISTORY_DAYS);
   res.json(await getMyHistory(req.user!.id, from, to));
+});
+
+/* ----------------------------- Analytics (V17 A6) ----------------------------- */
+
+/** from/to are optional together: neither = the last 30 days ending on the viewer's today. */
+async function analyticsRange(query: Record<string, unknown>, userId: string) {
+  if (query.from === undefined && query.to === undefined) {
+    return defaultRange((await userClock(userId)).today.toISOString().slice(0, 10));
+  }
+  return rangeQuery(query, MAX_RANGE_DAYS);
+}
+
+attendanceRouter.get("/analytics/me", requireAuth, async (req, res) => {
+  await assertAttendanceOn();
+  res.json(await getMyAnalytics(req.user!.id, await analyticsRange(req.query, req.user!.id)));
+});
+
+attendanceRouter.get("/analytics/team", requireAuth, async (req, res) => {
+  await assertAttendanceOn();
+  res.json(await getTeamAnalytics({ id: req.user!.id, role: req.user!.role }, await analyticsRange(req.query, req.user!.id)));
+});
+
+attendanceRouter.get("/analytics/org", requireAuth, async (req, res) => {
+  await assertAttendanceOn();
+  res.json(await getOrgAnalytics({ id: req.user!.id, role: req.user!.role }, await analyticsRange(req.query, req.user!.id)));
+});
+
+attendanceRouter.get("/analytics/:audience/insights", requireAuth, async (req, res) => {
+  await assertAttendanceOn();
+  const audience = z.enum(["me", "team", "org"]).parse(req.params.audience) as AnalyticsAudience;
+  res.json(await getInsights({ id: req.user!.id, role: req.user!.role }, audience, await analyticsRange(req.query, req.user!.id)));
 });

@@ -151,6 +151,12 @@ describe("the allowlist is a security boundary, not a config list", () => {
     }
   });
 
+  it("lists attendance_insights, and it cannot drop its figures", () => {
+    // V17 A6: free text (so editable), and {{facts}} is the only data the model gets.
+    expect(editable.has("attendance_insights")).toBe(true);
+    expect(getPromptSpec("attendance_insights")!.required).toEqual(["facts"]);
+  });
+
   it("excludes the face capabilities", () => {
     // These sit inside the biometric compliance regime, and their prompts are part of what it
     // promises. Same reasoning as their place on the content-capture denylist.

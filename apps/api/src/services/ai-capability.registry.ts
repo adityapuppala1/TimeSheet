@@ -503,6 +503,20 @@ const CAPABILITIES: ReadonlyArray<AiCapabilitySpec> = [
     tools: []
   },
 
+  // ── Attendance (V17 A6).
+  {
+    id: "attendance_insights",
+    title: "Attendance insights",
+    description: "Phrases attendance aggregates as suggestions. The figures are computed in code; it only words them.",
+    // Gated per audience by GlobalAttendanceSettings (aiInsightsSelf/Manager/Org) plus the
+    // attendanceAiInsightsEnabled plan entitlement, not by a GlobalAISettings column.
+    featureToggle: null,
+    maxLevel: "SUGGEST",
+    ceilingReason: "It describes how people work. A machine may point at a pattern; it never acts on one.",
+    actsOnUntrustedInput: false,
+    tools: []
+  },
+
   // ── Operations diagnostics.
   {
     id: "email_failure_triage",
