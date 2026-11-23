@@ -63,6 +63,7 @@
     "deepmerge-ts": "^8.0.2",
     "image-size": "^2.0.4",
     "mariadb": "~3.4.7",
-    "mysql2": "^3.24.5"
+    "mysql2": "^3.24.5",
+    "effect": "^3.22.5"
   }
 }
