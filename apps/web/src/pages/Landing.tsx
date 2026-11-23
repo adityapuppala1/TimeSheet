@@ -193,6 +193,14 @@ const TOUR = [
     image: "/product/agents.png"
   },
   {
+    id: "agents-office",
+    label: "Agents Office",
+    icon: Building2,
+    title: "Watch the teammates work",
+    body: "The roster as a small 3D office: each teammate is a person whose ring shows whether it is working, idle, off or needs a look. Hand-offs between runs draw a line from one desk to the next, two runs on the same item meet in the meeting room, queues stack up at a desk — and a timeline replays the last 24 hours. Illustrative touches are labelled as such; the work they sit on is real.",
+    image: "/product/agents-office.png"
+  },
+  {
     id: "studio",
     label: "Workflow Studio",
     icon: Workflow,
@@ -336,6 +344,13 @@ const FEATURES: Feature[] = [
     gate: "aiPmCopilotEnabled",
     title: "AI teammates you can name, scope and switch off",
     body: "Named agents assembled from the AI capabilities already running here, each owning its own — one capability, one owner, so two of them can never quietly do the same job. A teammate holds no licensed seat, cannot sign in, and has no mailbox. Every run shows what it was allowed to do, what it did, and what it cost, against a daily spend ceiling you set."
+  },
+  {
+    icon: Building2,
+    group: "Plan & forecast",
+    gate: "aiPmCopilotEnabled",
+    title: "An office you can watch them work in",
+    body: "The Agents page opens on a 3D office where each teammate is a person: working, on duty, off, or asking for a look. Real hand-offs, meetings over a shared item and queued runs show as they happen, and a timeline replays the last 24 hours. What is only illustration is labelled SIMULATED or Idle, never passed off as work."
   },
   {
     icon: Workflow,

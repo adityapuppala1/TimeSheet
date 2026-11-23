@@ -234,6 +234,7 @@ export const GALLERY = [
   ["security.png", "Security — findings that become owned tickets"],
   ["settings-ai.png", "AI controls — one screen governs every model call"],
   ["agents.png", "AI teammates — named, scoped, switchable"],
+  ["agents-office.png", "Agents Office — the teammates at work, with 24h replay"],
   ["studio.png", "Requirements Studio — an interview that becomes tickets"],
   ["requirements.png", "Requirements — the structured document it produces"],
   ["practice-update.png", "Weekly practice update — counted, drafted, reviewed"]

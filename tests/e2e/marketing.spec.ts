@@ -23,6 +23,7 @@ const PRODUCT_IMAGES = [
   "/product/settings-ai.png",
   "/product/goals.png",
   "/product/agents.png",
+  "/product/agents-office.png",
   "/product/studio.png",
   "/product/practice-update.png",
   "/product/requirements.png",

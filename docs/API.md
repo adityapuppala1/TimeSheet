@@ -932,6 +932,11 @@ permission system, and the first thing a second permission system does is disagr
 
 - `GET /agents` — the roster, each entry carrying its capabilities with **resolved** autonomy
   (clamps applied), today's spend, and its five most recent runs.
+- `GET /agents/office-activity?since=` — what the Agents Office draws: the last 24 hours of runs
+  (`events`, capped at 400), each agent's waiting `queues`, and derived `handoffs` (capped at 150). A
+  hand-off is conservative — a different agent's run created within 30 minutes of a completed run on
+  the same flow or project — and a run on a project the viewer cannot see keeps its timing but loses
+  its project and summary, and is never used for a hand-off. Same permission as `GET /agents`.
 - `GET /agents/catalogue` — the built-in gallery plus the full capability catalogue with ceilings, in
   one call because the "add a teammate" dialog needs both and two round trips is two chances to
   render half a dialog.

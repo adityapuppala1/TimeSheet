@@ -622,6 +622,24 @@ export const HELP_ARTICLES: HelpArticle[] = [
     keywords: ["agents", "teammates", "workflows", "automation", "propose", "suggestions"]
   },
   {
+    id: "agents-office",
+    category: "AI",
+    title: "The Agents Office: watching your AI teammates work",
+    where: "Sidebar → Agents, the 3D office at the top of the page",
+    when: "To see at a glance which teammates are working, handing work on, meeting over the same item, or need a look — and to replay the last 24 hours.",
+    steps: [
+      "Open Agents. Each teammate is a person in the office; the ring under their feet and their name tag use the legend's colours: Working, On duty, Needs a look, Off.",
+      "Drag to look around, use + and − to zoom, and the circular arrow to reset the view. Full screen hides the rest of the page; the eye icon hides the office entirely and the page remembers that.",
+      "Click a person (or a line in the Activity panel) to follow them. A card shows what they are doing; Details opens their roster card. Super admins also get Power off / Power on there.",
+      "What is real: who is working, failed and queued runs, hand-offs (a line between two people when one run's item is picked up by another teammate's run), and meetings (two runs overlapping on the same item). Hand-offs appear in the Activity panel as Run lines.",
+      "What is illustrative: the task card's caption and progress bar carry a SIMULATED chip, and coffee breaks, chats and stand-ups are office life, labelled Idle in the Activity panel.",
+      "Use the timeline at the bottom right to replay the last 24 hours: press play (choose a speed such as 5 min/s) or drag to a time. The Activity panel then reads Replay with the time shown; Live returns to now.",
+      "On a device without hardware 3D graphics the office shows a flat panel of the same teammates instead; with reduced motion requested the camera snaps rather than glides. The roster below always holds the same information."
+    ],
+    screenshot: "agents-office.png",
+    keywords: ["agents office", "office", "3d", "agents", "hand-off", "handoff", "meeting", "replay", "timeline", "activity", "queue"]
+  },
+  {
     id: "ai-settings",
     category: "AI",
     title: "AI settings: keys, budgets and quality",

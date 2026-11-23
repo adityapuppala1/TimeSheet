@@ -10,6 +10,36 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 6.4.0 — the Agents Office: watch your AI teammates work, and replay their last 24 hours — 2026-11-23
+
+A new view at the top of the Agents page. Nothing to configure and no migration; it reads the runs your teammates already record.
+
+### 🤖 Agents: a 3D office where each AI teammate is a person
+
+- **The Agents page now opens on a small 3D office.** Each teammate is a person with its own desk and working
+  area; the ring under its feet and its name tag say whether it is working, on duty, off, or needs a look
+  (a failed run), using the same colours as the legend.
+- **What it shows as work is real**, read from a new endpoint, `GET /api/agents/office-activity` (the last 24 hours
+  of runs, the same permission as the Agents page): a **hand-off** draws a line between two desks when one run's
+  item is picked up by another teammate's run, two runs overlapping on the same item **meet in the meeting room**,
+  queued runs **stack up** at a desk, and hand-offs appear in the Activity panel as Run lines.
+- **Replay the last 24 hours** from the timeline at the bottom right — play at 1 min/s to 1 h/s or drag to a time.
+  The Activity panel reads *Replay* with the time, and Live returns to now.
+- **Illustration is labelled as illustration.** The task card over a working teammate carries a SIMULATED chip,
+  and coffee breaks, chats and stand-ups are tagged Idle in the feed — never passed off as work.
+- **Click a person to follow them**; the card shows what they are doing, Details opens their roster card, and
+  super admins can power a teammate on or off from there. Drag to look around, zoom, reset, go full screen, or
+  hide the office (the page remembers).
+- **Light on the machine:** the office renders only while something moves, at 30 fps, never in a background tab,
+  and falls back to a flat panel on a device without hardware 3D graphics.
+
+### 🎨 Polish
+
+- Name tags, speech bubbles and task cards stay inside the canvas and out from under the legend and the
+  Activity panel, and crowded tags spread apart sideways instead of stacking on top of each other.
+- A lit laptop is now visible in the light theme too.
+- The README gains a **Screenshots** gallery, and the landing page and pitch exports show the office.
+
 ## 6.3.4 — timesheet entries can only be dated so far back, and your workspace decides how far — 2026-11-12
 
 One policy, set by a super admin. Run the usual update step so the new setting's column exists; nothing else to configure.
