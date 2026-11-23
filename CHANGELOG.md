@@ -10,6 +10,27 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🕘 Attendance, holidays and missed-day reasons (Phase A; off for every workspace until an admin opts in)
+
+- **A plan-tier module.** Attendance is on Team and above; integrations and AI insights are Enterprise. A platform
+  administrator can override each of the four entitlements (`attendanceEnabled`, `leaveManagementEnabled`,
+  `attendanceIntegrationsEnabled`, `attendanceAiInsightsEnabled`) per workspace. The server refuses calls without
+  it and the UI shows the upgrade note.
+- **Punch in.** A dialog (a bottom sheet on a phone) after sign-in, in Off, Optional (dismissible, then a banner) or
+  Mandatory (locks the app to Profile and sign-out) mode, with optional location (consent first) and face
+  verification. One day-status rule serves everywhere: weekend, holiday, then punched in from any source, else absent.
+- **Punches from anywhere.** One ingest service behind the web prompt, a public API (`attendance:read` /
+  `attendance:write` key grants), a signed webhook for devices and HRMS, MCP tools, and CSV import, with
+  source priorities and a delivery log. Settings → Attendance & Leave → Sources & integrations.
+- **Holiday calendars** with a default and per-person assignment.
+- **Reminder and missed-day reason.** A punch-in reminder through the existing email pipeline (its own template and
+  category; the 17:00 reminder is unchanged), and a mandatory, editable reason the first time someone logs time for a
+  past working day that has none, on web, API and MCP.
+- **Attendance page.** My attendance, Team (today status, source, location, face result, reminders, and a person
+  timeline sheet) and Organisation, with rule-based insights and plan-gated AI suggestions built only from aggregates.
+- **Settings polish.** Row deletes use the app's confirm dialog; empty lists use the standard empty state.
+- Leave management and approvals are Phase B and not in this release.
+
 ## 6.4.0 — the Agents Office: watch your AI teammates work, and replay their last 24 hours — 2026-11-23
 
 A new view at the top of the Agents page. Nothing to configure and no migration; it reads the runs your teammates already record.

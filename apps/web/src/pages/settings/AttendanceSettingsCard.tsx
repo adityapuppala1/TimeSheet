@@ -28,12 +28,12 @@ import {
   Plus,
   ShieldCheck,
   Sparkles,
-  Trash2,
   UserCheck
 } from "lucide-react";
 import { SectionBoard, SectionGroup, SettingsSection, ToggleRow, useOpenSections, type BoardEntry, type SectionState } from "../../components/settings/settings-sections";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { EmptyState } from "../../components/ui/empty-state";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -50,6 +50,7 @@ import {
   type HolidayRow,
   type MissedReasonOptionRow
 } from "../../services/attendance-api";
+import { AttendanceConfirmDelete } from "./AttendanceConfirmDelete";
 import { AttendanceSourcesSection } from "./AttendanceSourcesSection";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
@@ -514,7 +515,9 @@ function HolidayCalendarsEditor({ readOnly, query }: { readOnly: boolean; query:
       <p className="text-xs text-muted-foreground">
         Weekends come from the working days under Planning. Everyone follows the default calendar unless assigned another.
       </p>
-      {list.length === 0 && <p className="text-sm text-muted-foreground">No calendars yet. The first one you add becomes the default.</p>}
+      {list.length === 0 && (
+        <EmptyState compact icon={CalendarDays} title="No holiday calendars yet" description="The first calendar you add becomes the default for everyone." />
+      )}
       {list.map((calendar) => (
         <div key={calendar.id} className="grid min-w-0 gap-3 rounded-lg border border-border p-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -528,17 +531,15 @@ function HolidayCalendarsEditor({ readOnly, query }: { readOnly: boolean; query:
                 </Button>
               )}
               {!calendar.isDefault && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  aria-label={`Delete ${calendar.name}`}
+                <AttendanceConfirmDelete
+                  label={`Delete ${calendar.name}`}
+                  title={`Delete "${calendar.name}"?`}
+                  description={`This removes the calendar and its ${calendar.holidays.length} holidays. People assigned to it fall back to the default.`}
+                  className="text-destructive hover:text-destructive"
+                  iconClassName="h-4 w-4"
                   disabled={readOnly || remove.isPending}
-                  onClick={() => {
-                    if (window.confirm(`Delete "${calendar.name}" and its ${calendar.holidays.length} holidays? People assigned to it fall back to the default.`)) remove.mutate(calendar.id);
-                  }}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                  onConfirm={() => remove.mutate(calendar.id)}
+                />
               )}
             </div>
           </div>
@@ -617,9 +618,13 @@ function HolidayList({ calendarId, holidays, readOnly, onChanged }: { calendarId
                     <Button size="sm" variant="ghost" aria-label={`Edit ${h.name}`} onClick={() => setEditing({ id: h.id, date: h.date, name: h.name, isOptional: h.isOptional })}>
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
-                    <Button size="sm" variant="ghost" aria-label={`Delete ${h.name}`} disabled={remove.isPending} onClick={() => remove.mutate(h.id)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                    <AttendanceConfirmDelete
+                      label={`Delete ${h.name}`}
+                      title={`Delete "${h.name}"?`}
+                      description={`${h.date} stops counting as a holiday for everyone on this calendar.`}
+                      disabled={remove.isPending}
+                      onConfirm={() => remove.mutate(h.id)}
+                    />
                   </>
                 )}
               </li>
@@ -688,6 +693,9 @@ function MissedReasonsEditor({ readOnly, query }: { readOnly: boolean; query: Li
 
   return (
     <div className="grid min-w-0 gap-2">
+      {(query.data ?? []).length === 0 && (
+        <EmptyState compact icon={MessageSquareWarning} title="No reasons yet" description="Add the choices people can give for a past day with no time. Nothing is asked until at least one is enabled." />
+      )}
       <ul className="grid min-w-0 gap-2">
         {(query.data ?? []).map((r) => (
           <li key={r.id} className="grid min-w-0 gap-2 rounded-md border border-border p-2 sm:flex sm:flex-wrap sm:items-center">
@@ -713,9 +721,13 @@ function MissedReasonsEditor({ readOnly, query }: { readOnly: boolean; query: Li
                 Enabled
               </label>
               {!readOnly && (
-                <Button size="sm" variant="ghost" aria-label={`Delete ${r.code}`} disabled={remove.isPending} onClick={() => remove.mutate(r.id)}>
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                <AttendanceConfirmDelete
+                  label={`Delete ${r.code}`}
+                  title={`Delete the "${r.label}" reason?`}
+                  description="People can no longer pick it. Days already submitted with it keep it."
+                  disabled={remove.isPending}
+                  onConfirm={() => remove.mutate(r.id)}
+                />
               )}
             </div>
           </li>

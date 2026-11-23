@@ -385,6 +385,23 @@ The essentials for a production go-live, roughly in the order a new customer wou
    OAuth), Public API keys/webhooks. Each is independently opt-in; skip what the customer doesn't
    use.
 9. **Plan tier / billing**, if not already set during provisioning above.
+10. **Attendance** (optional; Workspace Settings → Attendance & Leave). Off for every workspace until
+    someone opts in, and a plan entitlement:
+    - **Plan tier.** `attendanceEnabled` is on Team and Enterprise (not Starter);
+      `attendanceIntegrationsEnabled` and `attendanceAiInsightsEnabled` are Enterprise;
+      `leaveManagementEnabled` is reserved for the leave phase. To grant one to a single workspace
+      without changing its plan, use Platform console → the workspace → Feature overrides. Without the
+      entitlement the tab shows an upgrade note and the API answers 403.
+    - **Turn it on.** A super admin opens the tab, switches **Overview** on, then picks the punch-in mode
+      (Off / Optional / Mandatory) and whether location and face verification are off, optional or
+      required. Working days come from Planning settings; set them first.
+    - **Holidays and reasons.** Add a holiday calendar (the first becomes the default) and review the
+      missed-day reasons people can choose.
+    - **Reminder.** The punch-in reminder is an email: it also needs the *Punch-in reminder* category
+      enabled under Email notifications and a working Mail server (step 2).
+    - **Sources & integrations.** Add a source per device or HRMS, copy its signed-webhook URL and secret
+      (shown once), press *Send test event*, then watch the delivery log. API keys need the
+      `attendance:write` / `attendance:read` grant. See [docs/API.md](API.md#attendance-endpoints).
 
 ---
 

@@ -228,6 +228,128 @@ export const HELP_ARTICLES: HelpArticle[] = [
     keywords: ["status", "draft", "pending", "approved", "rejected", "resubmit", "history"]
   },
   {
+    id: "attendance-punch-in",
+    category: "Timesheets",
+    title: "Punch in for the day",
+    where: "The punch-in prompt when you open the app, or Sidebar → Attendance (shown once your workspace turns attendance on)",
+    when: "When your workspace has attendance on and you want to mark the start of your working day, or you were asked to.",
+    steps: [
+      "Open the app on a working day. If you have not punched in, a prompt appears (a bottom sheet on a phone).",
+      "If your workspace asks for location, accept the one-time consent and allow the browser to share it. If the browser cannot, your network address is used instead where the workspace allows it.",
+      "If your workspace asks for face verification, follow the on-screen check. A weak enrolment links you to the pose wizard to improve it.",
+      "Press Punch in. A short confirmation shows and the prompt does not return that day.",
+      "Optional mode: you can dismiss the prompt, then the banner, and either stays away for the rest of the day. Mandatory mode: the app is locked to Profile and sign-out until you punch in."
+    ],
+    notes:
+      "A punch recorded by a device, HRMS, API or CSV import counts too, and you then see a small notice instead of the prompt. Weekends and workspace holidays never ask. Punch-in time, source and (if collected) location are visible to your manager and the workspace's admins.",
+    keywords: ["punch", "punch in", "attendance", "check in", "clock in", "location", "face", "mandatory", "banner"]
+  },
+  {
+    id: "attendance-missed-day-reason",
+    category: "Timesheets",
+    title: "Give a reason for a missed day",
+    where: "Sidebar → Timesheet → log time for a past working day",
+    when: "When you add the first entry for a past working day that has no time logged and your workspace requires a reason.",
+    steps: [
+      "Pick the past date and fill the entry as usual.",
+      "A reason field appears. Choose one of the listed reasons (for example Sick, Travel or Forgot).",
+      "If the reason needs a note (Other always does), write it in the note box.",
+      "Save or submit. The reason is recorded once for that day."
+    ],
+    notes:
+      "There is no approval step. Weekends and workspace holidays never ask. The same rule applies to the API and the AI assistant, which answer with a clear field error naming the reason code.",
+    keywords: ["missed day", "reason", "forgot", "sick", "past date", "backdate", "attendance"]
+  },
+  {
+    id: "attendance-my-attendance",
+    category: "Timesheets",
+    title: "See my attendance and insights",
+    where: "Sidebar → Attendance → My attendance",
+    when: "When you want your recent punch-ins, day status and your own patterns.",
+    steps: [
+      "Open Sidebar → Attendance. My attendance is the first tab.",
+      "Read the last 30 days: each day shows its status (present, weekend, holiday or absent) and your punch-in time.",
+      "Scroll to the analytics for your own punch-in consistency and timesheet follow-through.",
+      "Where your plan includes AI insights and your admin turned them on for individuals, suggestions appear beside the numbers; otherwise you get the rule-based tips."
+    ],
+    notes: "Only you see this view. Suggestions are built from aggregates, never raw coordinates, face data or anyone else's text.",
+    keywords: ["my attendance", "history", "insights", "analytics", "punch history", "suggestions"]
+  },
+  {
+    id: "attendance-team-activity",
+    category: "People & roles",
+    title: "Check team attendance and a person's timeline",
+    roles: ["MANAGER", "TEAM_LEAD", "ADMIN", "SUPER_ADMIN"],
+    where: "Sidebar → Attendance → Team",
+    when: "When you want to know who has punched in today, who is missing a timesheet, or what one person did on a given day.",
+    steps: [
+      "Open Sidebar → Attendance → Team. Today lists everyone you can see with their day status.",
+      "Filter by status or by source (web, API, webhook, MCP, CSV), or search by name.",
+      "Open a row to see punch time, source, location and face result where collected, timesheet status, missed-day reasons and reminder emails.",
+      "Use the date range in the sheet to walk back through the person's days, up to 31 at a time.",
+      "Switch to Insights for team aggregates and suggestions."
+    ],
+    notes:
+      "Managers see their direct reports; admins and super admins see everyone. Insights for groups smaller than the workspace minimum are suppressed so no individual can be inferred.",
+    keywords: ["team", "attendance", "who punched in", "absent", "timeline", "manager", "reminders", "insights"]
+  },
+  {
+    id: "attendance-org-insights",
+    category: "Dashboards & reports",
+    title: "Read organisation-wide attendance insights",
+    roles: ["ADMIN", "SUPER_ADMIN"],
+    where: "Sidebar → Attendance → Organisation",
+    when: "When you want punch-in and timesheet patterns across the whole workspace.",
+    steps: [
+      "Open Sidebar → Attendance → Organisation.",
+      "Read the rates for the default window (the last 30 days).",
+      "Open the suggestions panel: rule-based tips always show; AI suggestions appear when the plan includes them and Attendance & Leave → Analytics & AI allows organisation insights."
+    ],
+    notes:
+      "Aggregates only: small groups are hidden, and no raw location or face data is exposed here. AI suggestions are cached for the frequency chosen in settings.",
+    keywords: ["organisation", "organization", "org", "analytics", "attendance insights", "AI suggestions"]
+  },
+  {
+    id: "attendance-setup",
+    category: "Workspace settings",
+    title: "Switch on and configure Attendance",
+    roles: ADMIN,
+    where: "Workspace Settings → Attendance & Leave",
+    when: "When you want punch-in, holiday calendars and missed-day reasons for the workspace.",
+    steps: [
+      "Check your plan: attendance is on Team and above; integrations and AI insights are Enterprise (a platform administrator can also grant them per workspace). Without it the tab shows an upgrade note and the server refuses the calls.",
+      "Open Workspace Settings → Attendance & Leave and switch Overview on (a super admin makes the changes; admins can read).",
+      "Punch-in: choose Off, Optional or Mandatory, and whether location and face verification are off, optional or required.",
+      "Reminders: set the hour for the punch-in nudge. It only goes to people on a working day with no punch from any source.",
+      "Working days & holidays: add a calendar (the first is the default), then its holidays; assign another calendar to people who follow a different one.",
+      "Missed-day reasons: keep, edit or add reasons and mark which need a note. Deleting asks you to confirm.",
+      "Privacy & retention: set the location consent wording and how many days raw location evidence is kept."
+    ],
+    notes:
+      "Everything defaults to off for existing workspaces. Working days come from the Planning settings. The Leave and Approvals sections are placeholders until leave management ships.",
+    keywords: ["attendance", "settings", "enable", "holiday", "calendar", "reasons", "punch in mode", "plan", "tier", "retention"]
+  },
+  {
+    id: "attendance-sources",
+    category: "Workspace settings",
+    title: "Send attendance from devices, HRMS, API or CSV",
+    roles: ADMIN,
+    where: "Workspace Settings → Attendance & Leave → Sources & integrations",
+    when: "When punches come from a biometric device, an HRMS or another system and should count the same as a web punch-in.",
+    steps: [
+      "Open Sources & integrations (needs the attendance-integrations entitlement, Enterprise by default).",
+      "Add a source: name it, choose the person field it matches on (email, employee code or external id) and a priority.",
+      "Copy the webhook URL and the secret shown once. Sign each request with HMAC and send an idempotency key; replayed or stale requests are rejected.",
+      "Press Send test event to prove signing works. It is logged as a test and records no attendance.",
+      "For scripts, issue a Public API key with the attendance:write or attendance:read grant and call POST /attendance/punches. MCP clients get the punch_in, get_my_attendance and list_holidays tools.",
+      "For a one-off load, import a CSV: validate first, then commit.",
+      "Check the delivery log for unmatched people and replay them after fixing the employee code."
+    ],
+    notes:
+      "When two sources report the same day the higher priority wins and the other punch is kept for audit. Deleting a source stops it immediately; past records and the log stay. Reference: docs/API.md.",
+    keywords: ["integration", "webhook", "biometric", "hrms", "api key", "csv import", "mcp", "source", "device", "hmac"]
+  },
+  {
     id: "approve-timesheets",
     category: "Timesheets",
     title: "Approving or rejecting timesheets",

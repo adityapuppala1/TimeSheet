@@ -3175,6 +3175,39 @@ delivery cannot be refreshed. Rate limit: 120 requests/minute per IP. **Send tes
 settings signs a test delivery server-side and runs it through the same handler: it is verified
 and logged (marked *test*) and never creates attendance.
 
+### Attendance (signed-in app): team, timeline, history, analytics
+
+These are the routes behind the Attendance page. They use the normal session cookie / bearer token
+(not the public API keys above) and every one is refused when the workspace has attendance off or
+its plan lacks it. Dates are `YYYY-MM-DD`.
+
+- `GET /api/attendance/me/today` — the caller's day: status, punch (if any) and what the punch-in
+  prompt should do.
+- `POST /api/attendance/punch-in` — `{ lat?, lng?, accuracyM?, consentAccepted?, verificationId? }`.
+  `201` when it created the punch, `200` when one already existed (from any source).
+- `GET /api/attendance/team/today?date=&search=&status=&source=&managerId=&page=1&pageSize=25` — one
+  day for the people the caller may see: managers get their direct reports, admins and super admins
+  everyone. Each row carries status, punch time, source, location/face result where collected,
+  timesheet status, missed-day reason and reminders sent. `pageSize` is at most 100.
+- `GET /api/attendance/team/:userId/timeline?from=&to=` — one person's events (login, punch,
+  timesheet create/update, reason, reminder emails). Same visibility rule; at most 31 days.
+- `GET /api/attendance/me/history?from=&to=` — the caller's own days; at most 93 days.
+- `GET /api/attendance/analytics/me|team|org?from=&to=` — aggregates. `team` is scoped like the team
+  screen; `org` is for admins and super admins. `from` and `to` are optional together (default: the
+  last 30 days ending today); at most 180 days. Groups under the minimum size are suppressed
+  (k-anonymity), and raw GPS, face data and other people's free text are never returned.
+- `GET /api/attendance/analytics/me|team|org/insights?from=&to=` — `{ audience, range, aiStatus,
+  insights[] }`: rule-based insights always, plus AI suggestions when the plan includes them and the
+  audience is enabled in settings. AI output is cached per audience for the configured frequency.
+
+Admin configuration (super admin writes, admin reads) lives under `/api/attendance/admin`:
+`GET|PUT /settings`; `GET|POST /calendars`, `PUT|DELETE /calendars/:id`; holidays at
+`POST /calendars/:id/holidays` and `PUT|DELETE /calendars/:id/holidays/:holidayId`;
+`GET|POST /missed-reasons`, `PUT|DELETE /missed-reasons/:id`. Sources and integrations are under
+`/api/attendance/admin/integrations`: `GET|POST /sources`, `DELETE /sources/:id`,
+`POST /sources/:id/rotate-secret`, `POST /sources/:id/test`, `GET /events` (delivery log),
+`POST /events/:id/replay`, and `POST /import/preview` then `POST /import/commit` for CSV.
+
 ### Missed-day reason (timesheet create)
 
 When **Attendance & Leave → Require a reason for missed days** is on (and the plan includes

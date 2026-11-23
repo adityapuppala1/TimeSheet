@@ -9,10 +9,12 @@
  */
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Bot, Copy, FileSpreadsheet, KeyRound, Plug, RefreshCw, RotateCcw, Send, Trash2, Webhook } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, Copy, FileSpreadsheet, KeyRound, Plug, RefreshCw, RotateCcw, Send, Webhook } from "lucide-react";
 import { SectionGroup } from "../../components/settings/settings-sections";
+import { AttendanceConfirmDelete } from "./AttendanceConfirmDelete";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -87,7 +89,7 @@ export function AttendanceSourcesSection({
 function ListState({ loading, failed, empty, failText, emptyText, children }: { loading: boolean; failed: boolean; empty: boolean; failText: string; emptyText: string; children: ReactNode }) {
   if (loading) return <Skeleton className="h-20 w-full" />;
   if (failed) return <p className="text-sm text-destructive">{failText}</p>;
-  if (empty) return <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">{emptyText}</p>;
+  if (empty) return <EmptyState compact icon={Plug} title={emptyText} />;
   return <>{children}</>;
 }
 
@@ -192,9 +194,15 @@ function SourcesList({ readOnly }: { readOnly: boolean }) {
                     <ArrowDown className="h-3.5 w-3.5" />
                   </Button>
                   <Switch aria-label={`${s.name} enabled`} checked={s.enabled} disabled={readOnly} onCheckedChange={(v) => update.mutate({ id: s.id, enabled: v })} />
-                  <Button size="icon" variant="ghost" className="h-9 w-9 text-destructive" aria-label={`Delete ${s.name}`} disabled={readOnly} onClick={() => remove.mutate(s.id)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  <AttendanceConfirmDelete
+                    label={`Delete ${s.name}`}
+                    title={`Delete "${s.name}"?`}
+                    description="Its secret stops working immediately and the device or system can no longer send attendance. Past records and the delivery log are kept."
+                    className="h-9 w-9 px-0 text-destructive hover:text-destructive"
+                    iconClassName="h-4 w-4"
+                    disabled={readOnly}
+                    onConfirm={() => remove.mutate(s.id)}
+                  />
                 </div>
               </div>
               <div className="flex min-w-0 flex-wrap items-center gap-2">
