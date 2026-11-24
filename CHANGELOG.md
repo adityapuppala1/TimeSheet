@@ -23,6 +23,16 @@ as days anyone owed a timesheet on. With the module off, every screen and API re
 - Nothing to run beyond `update.sh` (or `migrate deploy` plus the tenant fan-out). Nothing switches on by itself.
 - After a super admin enables Attendance or Leave, expect lower Plan hours and fewer gaps on the Home dashboard
   for anyone on leave or on a holiday. That is the intended change, not a data fault.
+- **Cancelling someone else's leave now needs a comment, super admins included.** `POST
+  /api/leave/me/requests/:id/cancel` answers `422 LEAVE_CANCEL_COMMENT_REQUIRED` without `{ "comment": "…" }` when
+  the request is not yours. A script or HRMS bridge that cancelled other people's leave as an admin must send one.
+  In the app the Cancel leave dialog will not submit until the comment has text. Cancelling your own leave is unchanged.
+- **Optional holidays now count only for people who opted in.** An optional holiday used to be a day off for
+  everyone on the calendar; it is now a working day for anyone who has not taken it on their Holidays screen. Tell
+  people to opt in, and set a yearly cap per calendar if you want one.
+- **The weekly digest template gains `{{expectedHoursHtml}}`.** A tenant migration adds it to the default
+  `digest.weekly` template only when that template is still the untouched default (SHA-256 guard); an admin-edited
+  template is left as it is. It renders nothing with Attendance & Leave off.
 
 ### ✨ Features: Attendance, leave and holiday calendars
 
@@ -54,8 +64,23 @@ as days anyone owed a timesheet on. With the module off, every screen and API re
   aggregates, cached per day or week over the last 30 days, with a per-user rate limit and never a per-person figure.
 - **Public API and webhooks.** New key grants `attendance:read`, `attendance:write`, `leave:read` and `leave:write`
   (`READ`/`WRITE` never imply them), and leave events on the signed webhook. See `docs/API.md`.
+- **Weekly digest: expected hours.** With Attendance & Leave on, the Monday digest states the week's expected hours
+  after holidays and approved leave, next to the hours logged. Off, the email is unchanged.
+- **Leave everywhere it is asked about.** Cells for leave and holidays on the Daily logging status grid link to the
+  leave request (your own), the team leave calendar (a manager's or admin's reports) or the holiday calendar. The
+  timesheet entry screen says "You're on leave today (PL)" or "Holiday: Diwali" on such a day. Profile and the
+  People edit dialog show the leave balance (another person's only to a super admin), who approves the person's
+  leave and a link to attendance history. The sidebar's Attendance item shows how many leave requests wait on you.
+- **Super admins cancel approved leave from the app.** Attendance → Team → Leave calendar lists approved leave that
+  has not ended, each with Cancel leave… and a required comment that the person is told.
+- **Optional holidays, opt-in.** The Holidays screen shows how many optional holidays you have taken against the
+  calendar's cap and lets you take or drop each one, with the reason shown when a choice is disabled. Admins set
+  "Optional holidays per person per year" on each calendar.
+- **Ask AI and MCP know about leave.** Ask AI answers "who's off this week / on a date", "my leave balance" and "my
+  leave requests"; MCP adds `who_is_off` beside `apply_leave`, `get_leave_balance` and `list_my_leave`. Who's off
+  is scoped like the Team view, and none of them ever returns a leave reason.
 - **Help.** New articles for punching in, missed-day reasons, my attendance, team activity, organisation insights,
-  applying for and approving leave, and setting the module up. Ask AI answers from the same articles.
+  applying for and approving leave, cancelling someone's leave, taking an optional holiday, and setting the module up. Ask AI answers from the same articles.
 
 ### 📊 On the dashboard and in Reports: leave, holidays and absence
 
@@ -83,7 +108,7 @@ Only when Attendance or Leave is on and in the plan; otherwise these screens are
 - **Draft my week asks the missed-day reason.** A past working day with nothing logged now gets the same "Why was this
   day missed?" fields inline, sent with that day's first draft.
 - **Admins can cancel approved leave.** SUPER_ADMIN and ADMIN can cancel someone's approved (even started) leave with a
-  required comment; the balance is reversed once through the ledger, the cancel is audited and the person is told.
+  required comment (now also required of a super admin, see the upgrade notes); the balance is reversed once through the ledger, the cancel is audited and the person is told.
 - **Optional holidays.** People opt into optional holidays from their holiday list
   (`PUT/DELETE /api/attendance/me/optional-holidays/:id`), up to the calendar's new `maxOptionalPerYear`. An opted-in
   optional holiday is a holiday for that person everywhere; one not taken is a working day.

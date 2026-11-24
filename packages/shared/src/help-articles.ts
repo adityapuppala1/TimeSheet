@@ -287,7 +287,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Filter by status or by source (web, API, webhook, MCP, CSV), or search by name.",
       "Open a row to see punch time, source, location and face result where collected, timesheet status, missed-day reasons and reminder emails.",
       "Use the date range in the sheet to walk back through the person's days, up to 31 at a time.",
-      "Switch to Insights for team aggregates and suggestions."
+      "Switch to Insights for team aggregates and suggestions.",
+      "On the Team board, the Late tile counts everyone in your scope who punched in after the expected start (only when an admin switched lateness on), not just the people on the current page. A suggestion you dismiss under Insights stays dismissed for that view and date range, on every device."
     ],
     notes:
       "Managers see their direct reports; admins and super admins see everyone. Insights for groups smaller than the workspace minimum are suppressed so no individual can be inferred.",
@@ -364,7 +365,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "My requests lists every request with its state. Cancel one that is still open from there; Holidays shows your calendar."
     ],
     notes:
-      "Approved leave and holidays reduce your expected hours and never ask for a missed-day reason. Leave sent in from an HRMS may arrive already approved or wait for a re-approve, depending on how your admin set the integration.",
+      "Your Profile shows your leave balance, who approves your leave and a link to your attendance history. On a day you are on leave or on a holiday the timesheet entry screen says so (for example \"You're on leave today (PL)\"), and on the Home dashboard's logging grid a leave or holiday cell links to your request or the holiday calendar. Ask AI can answer \"what's my leave balance?\" and \"is my leave approved?\"; it never repeats a reason. Approved leave and holidays reduce your expected hours and never ask for a missed-day reason. Leave sent in from an HRMS may arrive already approved or wait for a re-approve, depending on how your admin set the integration.",
     keywords: ["leave", "time off", "vacation", "sick", "casual", "balance", "half day", "holiday", "apply", "request"]
   },
   {
@@ -378,11 +379,45 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Open Sidebar → Attendance → Team. Approvals lists the requests waiting on you (on a wide screen it sits beside the board).",
       "Open a request to see the dates, type, balance and any document, then Approve or Reject. A rejection can carry a reason.",
       "To clear several, switch on bulk mode, tick the requests and approve them together after the confirmation.",
-      "The Leave calendar tab shows who is away and when."
+      "The Leave calendar tab shows who is away and when.",
+      "The Attendance item in the sidebar shows a count of the requests waiting on you; it refreshes every couple of minutes."
     ],
     notes:
-      "If a person has no manager, an admin approves; a super admin can override. A decision cannot be undone from this screen. Reasons are visible to approvers only.",
+      "If a person has no manager, an admin approves; a super admin can override. A decision cannot be undone from this screen. Reasons are visible to approvers only. Ask AI's \"who's off this week?\" (and the MCP tool who_is_off) answers for your reports only, with names, types and dates, never a reason.",
     keywords: ["approve leave", "reject leave", "bulk approve", "leave calendar", "approvals", "manager", "team"]
+  },
+  {
+    id: "leave-cancel-admin",
+    category: "Timesheets",
+    title: "Cancel someone's approved leave (super admin)",
+    roles: ["SUPER_ADMIN"],
+    where: "Sidebar → Attendance → Team → Leave calendar → Cancel someone's approved leave",
+    when: "When approved leave has to be withdrawn, for example a booking made in error, including leave that has already started.",
+    steps: [
+      "Open Sidebar → Attendance → Team and choose the Leave calendar tab.",
+      "Under Cancel someone's approved leave, find the person and press Cancel leave….",
+      "Write a comment saying why. It is required: the person is told it and it is kept in the audit log.",
+      "Press Cancel leave. The days go back to the person's balance."
+    ],
+    notes:
+      "Changed in 7.0.0: a super admin now needs a comment to cancel someone else's leave (the API answers 422 LEAVE_CANCEL_COMMENT_REQUIRED without one). Cancelling your own leave needs no comment.",
+    keywords: ["cancel leave", "withdraw leave", "revoke leave", "super admin", "comment", "credit reversal"]
+  },
+  {
+    id: "optional-holidays",
+    category: "Timesheets",
+    title: "Take an optional holiday",
+    where: "Sidebar → Attendance → Leave → Holidays",
+    when: "When your calendar has optional holidays (festivals you choose from) and you want one off.",
+    steps: [
+      "Open Sidebar → Attendance → Leave → Holidays and use the List view.",
+      "The line above the list shows how many optional holidays you have taken this year and the limit, if there is one.",
+      "Press Take this day on an optional holiday. It becomes a day off for you: your expected hours drop and no missed-day reason is asked.",
+      "Changed your mind? Press Taken · Drop before the day."
+    ],
+    notes:
+      "Since 7.0.0 an optional holiday counts only for people who opted in; everyone else works it as a normal day. When a choice is disabled the reason is shown beside it: the day has passed, or you have taken all the optional holidays your calendar allows this year.",
+    keywords: ["optional holiday", "restricted holiday", "floating holiday", "opt in", "festival", "holiday limit"]
   },
   {
     id: "leave-setup",
@@ -395,6 +430,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Confirm the plan includes leave management (Enterprise by default; a platform administrator can grant it per workspace).",
       "Add leave types such as PL, CL and SL, each with its yearly allowance, accrual (monthly or all at once), carry-forward, whether half days are allowed and when a document is required.",
       "Add holiday calendars and their holidays; assign a calendar to people who follow a different one.",
+      "Mark a holiday Optional if people choose it, and set \"Optional holidays per person per year\" on the calendar (empty = no limit). An optional holiday is a day off only for the people who opt in on their Holidays screen.",
       "Choose who approves when there is no manager (any admin, or super admins only).",
       "If an HRMS sends leave in on the signed webhook, choose whether its approvals are trusted (recorded as approved) or re-approved here (queued for your approvers).",
       "Switch leave on. Balances start from the allowance and follow a ledger you can read."
@@ -575,9 +611,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Hover, tap or tab to a cell to list that person's activities for the day: project, activity, time range and duration, with the number of entries and the total hours underneath.",
       "The last column reads days filled out of working days so far, hours logged out of planned hours (8 hours for each working day so far), and the percentage. It can pass 100% when someone works extra or on a day off.",
       "You only see the people you are entitled to: employees see themselves, managers see themselves and their direct reports, and admins see everyone.",
-      "When Attendance or Leave is switched on for your workspace, the grid also shows days off. A blue cell with a plane and a code such as PL is a day of approved leave; a violet cell with a star is a holiday, and its popover names it. A small ½ marks a half day of leave, and a small A on a red cell means the person did not punch in that day. Leave and holiday days are not gaps: they are left out of the days-filled ratio, the people-with-gaps count and Plan hours (a half day plans 4 hours). If someone logged time on a day off, the cell is still green and the popover says it was a leave day or a holiday. The Day timeline labels a person's lane On leave, Holiday or Not punched in, and Reports → Attendance & leave totals it all per person, with a CSV export.",
+      "When Attendance or Leave is switched on for your workspace, the grid also shows days off. A blue cell with a plane and a code such as PL is a day of approved leave; a violet cell with a star is a holiday, and its popover names it. A small ½ marks a half day of leave, and a small A on a red cell means the person did not punch in that day. Leave and holiday days are not gaps: they are left out of the days-filled ratio, the people-with-gaps count and Plan hours (a half day plans 4 hours). If someone logged time on a day off, the cell is still green and the popover says it was a leave day or a holiday. The popover links on: a holiday to the holiday calendar, your own leave to your leave requests, and a report's leave to the team leave calendar (managers and admins only; nobody else's leave links anywhere, and no link ever shows a reason). The Day timeline labels a person's lane On leave, Holiday or Not punched in, and Reports → Attendance & leave totals it all per person, with a CSV export.",
       "Admins in a workspace with several managers also get a strip of team chips above the grid — people, hours against plan and how many have gaps. Click a chip, or use the manager picker in the expanded view, to narrow the grid to one team. Each team has a roll-up row showing how many of the team logged on each day; click it to collapse or expand the team. Large workspaces start with the teams collapsed, and Show more loads further people.",
-      "The Monday weekly digest email carries the same grid for the week just finished — one cell per day, green for logged and red for a working day with nothing — with days filled, hours against plan and the percentage. Employees get their own week, managers get themselves and their team, and admins get everyone, with a by-team table and the people who missed the most days listed first (up to 40 rows). Hours in that grid include drafts and pending entries, so they can be higher than the approved hours elsewhere in the email."
+      "The Monday weekly digest email carries the same grid for the week just finished — one cell per day, green for logged and red for a working day with nothing — with days filled, hours against plan and the percentage. Employees get their own week, managers get themselves and their team, and admins get everyone, with a by-team table and the people who missed the most days listed first (up to 40 rows). Hours in that grid include drafts and pending entries, so they can be higher than the approved hours elsewhere in the email. With Attendance or Leave on, the digest also states your expected hours for the week after holidays and approved leave, next to what you logged."
     ],
     keywords: ["logging status", "who has logged", "missing timesheet", "unfilled", "gaps", "manager", "team", "compliance", "daily", "planned hours", "home", "weekly digest", "monday email", "digest", "leave", "holiday", "absent", "punch in", "attendance"]
   },
@@ -698,7 +734,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Rate answers with the thumbs — ratings feed the workspace's quality datasets.",
       "Expand Tool evidence to inspect the recorded calls. Scoped ticket searches include links to the ticket rows they returned; other arguments are audit context and may be truncated.",
       "Choose an answer style in the header: Default, Concise, Detailed or Checklist. It is saved to your profile, so it follows you to your phone and to any other browser you sign in from; choosing Default deletes it rather than storing it, on the server as well as here. It affects ordinary Ask AI answers, not report or workflow generation, and never changes permissions.",
-      "The one thing it writes is a DRAFT timesheet entry, which you review and submit yourself."
+      "The one thing it writes is a DRAFT timesheet entry, which you review and submit yourself.",
+      "With leave on, ask \"who's off this week?\", \"who is on leave on Friday?\", \"what's my leave balance?\" or \"is my leave approved?\". Who's off is scoped like the Team view (your reports if you manage people, everyone for an admin, otherwise just you), and no answer ever contains a leave reason."
     ],
     notes: "It answers only about this product and workspace — no web search, no outside knowledge. Off-topic questions get a polite fixed refusal.",
     keywords: ["ask ai", "assistant", "chat", "question", "slash", "capabilities", "chart"]

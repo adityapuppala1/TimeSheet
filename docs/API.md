@@ -3217,9 +3217,22 @@ its plan lacks it. Dates are `YYYY-MM-DD`.
 - `GET /api/attendance/analytics/me|team|org/insights?from=&to=` — `{ audience, range, aiStatus,
   insights[] }`: rule-based insights always, plus AI suggestions when the plan includes them and the
   audience is enabled in settings. AI output is cached per audience for the configured frequency.
+- `POST /api/attendance/analytics/me|team|org/insights/:insightId/dismiss?from=&to=` (7.0.0) — `204`.
+  The suggestion stays dismissed for this person, audience and range (stored, not per browser).
+- `GET /api/attendance/team/today` (7.0.0) also returns `late`: how many people in scope punched in
+  after the expected start (counted server-side over everyone in scope, not just the page), or `null`
+  when lateness is off.
+- `GET /api/attendance/me/holidays?from=&to=` — the caller's calendar (own, else the default). 7.0.0:
+  `{ calendar, from, to, holidays: [{ id, date, name, isOptional, optedIn }], maxOptionalPerYear,
+  optionalTakenByYear: { "2026": 1 } }`.
+- `PUT /api/attendance/me/optional-holidays/:holidayId` / `DELETE` the same (7.0.0) — opt into or out
+  of an optional holiday. An optional holiday counts as a day off (expected hours, the dashboard grid,
+  missed-day reasons) only for people who opted in. `422 HOLIDAY_NOT_OPTIONAL`, `409 HOLIDAY_PASSED`,
+  `409 OPTIONAL_HOLIDAY_LIMIT` at the calendar's yearly cap.
 
 Admin configuration (super admin writes, admin reads) lives under `/api/attendance/admin`:
-`GET|PUT /settings`; `GET|POST /calendars`, `PUT|DELETE /calendars/:id`; holidays at
+`GET|PUT /settings`; `GET|POST /calendars`, `PUT|DELETE /calendars/:id` (7.0.0: `maxOptionalPerYear`,
+a whole number 0–366 or `null` for no limit — optional holidays one person may take per calendar year); holidays at
 `POST /calendars/:id/holidays` and `PUT|DELETE /calendars/:id/holidays/:holidayId`;
 `GET|POST /missed-reasons`, `PUT|DELETE /missed-reasons/:id`. Sources and integrations are under
 `/api/attendance/admin/integrations`: `GET|POST /sources`, `DELETE /sources/:id`,
@@ -3284,7 +3297,7 @@ or two approvers at once produce exactly one debit and one `409 LEAVE_ALREADY_DE
 | `GET /me/requests?status=&year=` | self | `{ items: LeaveRequest[] }` |
 | `GET /me/requests/:id` | self | `LeaveRequest` (404 for anyone else's) |
 | `POST /me/requests` | self | JSON or multipart (`document` = supporting file): `{ leaveTypeId \| leaveTypeCode, startDate, endDate, startHalf?, endHalf?, reason? }` → `201 { request: LeaveRequest, autoApproved }` |
-| `POST /me/requests/:id/cancel` | self; SUPER_ADMIN any | → `LeaveRequest`. Pending: cancelled. Approved and not started: cancelled with a `CREDIT_REVERSAL`. Started: SUPER_ADMIN only. |
+| `POST /me/requests/:id/cancel` | self; SUPER_ADMIN any | `{ comment? }` → `LeaveRequest`. Pending: cancelled. Approved and not started: cancelled with a `CREDIT_REVERSAL`. Started: SUPER_ADMIN only. 7.0.0: cancelling SOMEONE ELSE's request needs a `comment` (`422 LEAVE_CANCEL_COMMENT_REQUIRED` without one); the person is told it and it is audited. Your own needs none. In the app: Attendance → Team → Leave calendar → Cancel someone's approved leave. |
 | `GET /me/expected-hours?from=&to=` | self | `{ from, to, workingDays, holidays, leaveDays, expectedDays, dailyHours, expectedHours }`. 403 unless attendance or leave is on (toggle + plan). |
 | `GET /me/preview?typeId=&start=&end=&startHalf=&endHalf=` | self | Read-only mirror of apply: `{ ok, problems: [{ code, message }], days, excluded: [{ date, reason: WEEKEND|HOLIDAY, label }], balanceBefore, balanceAfter, allowNegative, overlap, documentRequired, requiresApproval, approver }`. Writes nothing. |
 | `GET /inbox?scope=mine\|all&status=PENDING\|APPROVED\|REJECTED\|CANCELLED\|ALL&page=&pageSize=` | approvers (`all`: SUPER_ADMIN) | `{ total, page, pageSize, items: LeaveRequest[] }` |
@@ -3352,6 +3365,23 @@ the same fields, and the source's match field applies when only `identifier` is 
 `apply_leave` (`leaveType`, `startDate`, `endDate`, `startHalf?`, `endHalf?`, `reason?`),
 `get_leave_balance` and `list_my_leave` (`status?`) — always as the signed-in person, no "who"
 parameter. `apply_leave` is refused for a type that needs a document; apply in the web app then.
+`apply_leave` is a write: off by default and only callable with the workspace's `allowWrites` latch
+on. 7.0.0: `who_is_off` (`date?` or `from?`/`to?`, default this Monday–Sunday, at most 93 days) —
+approved leave only, scoped like the Team view (a manager's direct reports, an admin everyone,
+anyone else only themselves); names, type codes, dates and halves, never a reason or note.
+
+#### Ask AI (7.0.0)
+
+The Ask AI chat has three leave reads, under the same scope rules: `who_is_off` (this week or a
+date), `my_leave_balance` and `my_leave_requests`. They are reads (the chat cannot apply for leave)
+and never return a reason, decision note or document — not even the asker's own.
+
+#### Weekly digest (7.0.0)
+
+With Attendance & Leave on, the Monday digest (`digest.weekly`) carries `{{expectedHoursHtml}}`:
+the week's expected hours after holidays and approved leave, beside the hours logged. With it off
+the variable is empty and the email is unchanged. A template an admin had edited keeps their text;
+add `{{expectedHoursHtml}}` in the Email Templates editor to show the line.
 
 ### Outbound webhooks
 
@@ -3469,6 +3499,10 @@ hidden from the list is not callable by a client that guessed its name.
 | `punch_in` | — | yes | **off** |
 | `get_my_attendance` | — | no | on |
 | `list_holidays` | — | no | on |
+| `apply_leave` | — | yes | **off** |
+| `get_leave_balance` | — | no | on |
+| `list_my_leave` | — | no | on |
+| `who_is_off` | — | no | on |
 
 - A dash under *Permission* means the tool's scope is the caller themselves (their own timesheets,
   their own direct reports), so there is nothing a permission would have protected.
