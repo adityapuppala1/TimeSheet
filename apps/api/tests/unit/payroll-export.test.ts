@@ -111,3 +111,40 @@ describe("the monthly report", () => {
     expect(csv.startsWith("﻿")).toBe(true);
   });
 });
+
+describe("the sandwich rule in payroll", () => {
+  const sandwichLeave = (id: string, s: string, e: string, days: number) =>
+    world.leaveRequest.push({ id, userId: "emp", leaveTypeId: "type-SW", startDate: d(s), endDate: d(e), startHalf: "FULL", endHalf: "FULL", status: "APPROVED", days, leaveYear: 2026 });
+
+  it("has no sandwich column while no type has the rule on", async () => {
+    const r = await svc.buildPayrollReport("2026-11", { now: NOW });
+    expect(r.sandwichRule).toBeUndefined();
+    expect(r.rows[0].sandwichDays).toBeUndefined();
+    expect(svc.payrollCsv(r)).not.toContain("Sandwich days");
+  });
+
+  it("counts what was debited: the stored days inside the month, enclosed days of a straddling request", async () => {
+    addType(world, { code: "SW", isPaid: true, sandwichRule: true });
+    sandwichLeave("s1", "2026-11-13", "2026-11-16", 4); // Fri–Mon: 2 working + Sat, Sun debited
+    sandwichLeave("s2", "2026-11-27", "2026-12-01", 5); // Fri–Tue: Nov holds Fri, Sat, Sun, Mon
+    const r = await svc.buildPayrollReport("2026-11", { now: NOW });
+    expect(r.sandwichRule).toBe(true);
+    expect(r.rows[0].leave.SW).toBe(8);
+    expect(r.rows[0].sandwichDays).toBe(4);
+    expect(r.rows[0].paidLeave).toBe(14);
+    const csv = svc.payrollCsv(r);
+    expect(csv).toContain("Sandwich days");
+    // December gets the one remaining working day and no sandwich day.
+    const dec = await svc.buildPayrollReport("2026-12", { now: new Date("2027-01-05T10:00:00Z") });
+    expect(dec.rows[0].leave.SW).toBe(1);
+    expect(dec.rows[0].sandwichDays).toBe(0);
+  });
+
+  it("a request stored without sandwich days (rule switched on later) is not inflated", async () => {
+    addType(world, { code: "SW", isPaid: true, sandwichRule: true });
+    sandwichLeave("s1", "2026-11-13", "2026-11-16", 2);
+    const r = await svc.buildPayrollReport("2026-11", { now: NOW });
+    expect(r.rows[0].leave.SW).toBe(2);
+    expect(r.rows[0].sandwichDays).toBe(0);
+  });
+});

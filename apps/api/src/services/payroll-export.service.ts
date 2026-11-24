@@ -11,6 +11,11 @@
  *   compOffTaken  leave days of the comp-off type (GlobalAttendanceSettings.compOffLeaveTypeCode)
  *   compOffEarned approved comp-off credit for days worked in the month
  *   loggedHours   timesheet hours (not rejected, not deleted)
+ *   sandwichDays  7.0.0: weekends / holidays DEBITED by a type's sandwich rule. The leave columns match
+ *                 what was debited: a request inside the month counts its stored LeaveRequest.days; one
+ *                 that straddles months counts its in-month working days plus its in-month enclosed
+ *                 days (never more than the stored count says were debited). The column appears only
+ *                 while some leave type has the rule on.
  *
  * LEAVE YEAR CLOSED: a month whose leave year has ended, or been settled by the year-end rollover,
  * is FLAGGED (`leaveYearClosed: true`, and a column in the CSV). Late changes to a closed year are
@@ -27,7 +32,7 @@ import { getAttendanceSettings } from "./attendance-settings.service.js";
 import { resolveDayStatus, todayKeyFor } from "./attendance-day-status.js";
 import { loadHolidays } from "./attendance-team.service.js";
 import { attendanceOrLeaveOn } from "./leave-capacity.service.js";
-import { addDaysKey, dayPortions, leaveYearBounds, leaveYearOf } from "./leave-calc.js";
+import { addDaysKey, dayPortions, leaveYearBounds, leaveYearOf, sandwichedDays } from "./leave-calc.js";
 import { overtimeHoursForPeriod } from "./attendance-overtime.service.js";
 import { getPlanningSettings } from "./planning.service.js";
 import { COUNTED_PEOPLE } from "./people-visibility.service.js";
@@ -54,6 +59,8 @@ export interface PayrollRow {
   loggedHours: number;
   /** 7.0.0: only while overtime is on (approved hours, or computed when approval is off). */
   overtimeHours?: number;
+  /** 7.0.0: only while some leave type has the sandwich rule on (weekends / holidays debited as leave). */
+  sandwichDays?: number;
 }
 
 export interface PayrollReport {
@@ -65,6 +72,8 @@ export interface PayrollReport {
   leaveTypes: Array<{ code: string; name: string; isPaid: boolean }>;
   /** 7.0.0: present only while overtime is on. Weeks count in the month their Monday falls in. */
   overtime?: { basis: "APPROVED" | "COMPUTED" };
+  /** 7.0.0: true while some leave type has the sandwich rule on; adds the sandwich-days column. */
+  sandwichRule?: boolean;
   rows: PayrollRow[];
 }
 
@@ -102,12 +111,12 @@ export async function buildPayrollReport(month: string, opts: { now?: Date; empl
     ids.length && settings.leaveEnabled
       ? prisma.leaveRequest.findMany({
           where: { userId: { in: ids }, status: "APPROVED", startDate: { lte: toDate }, endDate: { gte: fromDate } },
-          select: { userId: true, startDate: true, endDate: true, startHalf: true, endHalf: true, leaveType: { select: { code: true, isPaid: true } } }
+          select: { userId: true, startDate: true, endDate: true, startHalf: true, endHalf: true, days: true, leaveType: { select: { code: true, isPaid: true } } }
         })
       : [],
     ids.length ? prisma.timesheet.findMany({ where: { userId: { in: ids }, workDate: { gte: fromDate, lte: toDate }, status: { not: "REJECTED" }, deletedAt: null }, select: { userId: true, totalHours: true } }) : [],
     ids.length ? prisma.compOffRequest.findMany({ where: { userId: { in: ids }, status: "APPROVED", workDate: { gte: fromDate, lte: toDate } }, select: { userId: true, days: true } }) : [],
-    prisma.leaveType.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }], select: { code: true, name: true, isPaid: true } }),
+    prisma.leaveType.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }], select: { code: true, name: true, isPaid: true, sandwichRule: true } }),
     prisma.leaveBalanceLedger.findFirst({ where: { leaveYear, idempotencyKey: { startsWith: "EXPIRY:" } }, select: { id: true } })
   ]);
 
@@ -118,11 +127,12 @@ export async function buildPayrollReport(month: string, opts: { now?: Date; empl
   const earned = new Map<string, number>();
   for (const c of compOffs) earned.set(c.userId, (earned.get(c.userId) ?? 0) + Number(c.days));
   const compOffCode = settings.compOffLeaveTypeCode ?? "CO";
+  const sandwichRule = types.some((t) => Boolean(t.sandwichRule));
 
   const rows: PayrollRow[] = people.map((p) => {
     const isHoliday = (d: string) => Boolean(holidayOf(p.holidayCalendarId, d, p.id));
     const isWorking = (d: string) => planning.workingDays.includes(weekday(d)) && !isHoliday(d);
-    const totals = leaveTotals(leaves.filter((l) => l.userId === p.id), from, to, isWorking);
+    const totals = leaveTotals(leaves.filter((l) => l.userId === p.id), from, to, isWorking, { workingDays: planning.workingDays, isHoliday });
     const days = dayCounts({ from, to, workingDays: planning.workingDays, isHoliday, isWorking, fullLeave: totals.fullLeave, punched: (d) => punched.has(`${p.id}|${d}`), now, timeZone: p.timezone, countAbsent: Boolean(settings.attendanceEnabled) });
     return {
       userId: p.id,
@@ -136,35 +146,58 @@ export async function buildPayrollReport(month: string, opts: { now?: Date; empl
       compOffTaken: totals.byType[compOffCode] ?? 0,
       compOffEarned: r2(earned.get(p.id) ?? 0),
       loggedHours: r2(hours.get(p.id) ?? 0),
-      ...(overtime ? { overtimeHours: overtime.hours.get(p.id) ?? 0 } : {})
+      ...(overtime ? { overtimeHours: overtime.hours.get(p.id) ?? 0 } : {}),
+      ...(sandwichRule ? { sandwichDays: totals.sandwich } : {})
     };
   });
 
   const yearEnded = leaveYearBounds(leaveYear, startMonth).to < today;
-  return { month, from, to, leaveYear, leaveYearClosed: yearEnded || Boolean(settled), leaveTypes: types, ...(overtime ? { overtime: { basis: overtime.basis } } : {}), rows };
+  const leaveTypes = types.map((t) => ({ code: t.code, name: t.name, isPaid: t.isPaid }));
+  return { month, from, to, leaveYear, leaveYearClosed: yearEnded || Boolean(settled), leaveTypes, ...(overtime ? { overtime: { basis: overtime.basis } } : {}), ...(sandwichRule ? { sandwichRule: true } : {}), rows };
 }
 
-type LeaveRow = { startDate: Date; endDate: Date; startHalf: "FULL" | "FIRST_HALF" | "SECOND_HALF"; endHalf: "FULL" | "FIRST_HALF" | "SECOND_HALF"; leaveType: { code: string; isPaid: boolean } };
+type LeaveRow = { startDate: Date; endDate: Date; startHalf: "FULL" | "FIRST_HALF" | "SECOND_HALF"; endHalf: "FULL" | "FIRST_HALF" | "SECOND_HALF"; days?: unknown; leaveType: { code: string; isPaid: boolean } };
 
-/** One person's approved leave inside [from, to], working days only: by type, paid / unpaid, and the full days. */
-function leaveTotals(leaves: readonly LeaveRow[], from: string, to: string, isWorking: (d: string) => boolean) {
+/**
+ * Weekends / holidays a request DEBITED by the sandwich rule that fall in [from, to]. The stored
+ * day count is the truth: whatever it holds above the span's working days was sandwiched (so a type
+ * whose rule was switched off later still pays what it debited). Inside the month that surplus is
+ * the answer; a straddling request counts its in-month enclosed days, capped by the surplus.
+ */
+function sandwichInRange(l: LeaveRow, from: string, to: string, isWorking: (d: string) => boolean, rules: { workingDays: readonly number[]; isHoliday: (d: string) => boolean }): number {
+  const span = { startDate: toKey(l.startDate), endDate: toKey(l.endDate), startHalf: l.startHalf, endHalf: l.endHalf };
+  const working = [...dayPortions(span)].filter(([d]) => isWorking(d)).reduce((sum, [, half]) => sum + (half === "FULL" ? 1 : 0.5), 0);
+  const stored = Number(l.days);
+  // An enclosed day is a whole day, and only a day the rule could have enclosed counts.
+  const enclosed = sandwichedDays(span, { ...rules, sandwich: true });
+  const surplus = Number.isFinite(stored) ? Math.min(Math.floor(r2(stored - working)), enclosed.length) : 0;
+  if (surplus <= 0) return 0;
+  if (span.startDate >= from && span.endDate <= to) return surplus;
+  return Math.min(surplus, enclosed.filter((d) => d >= from && d <= to).length);
+}
+
+/** One person's approved leave inside [from, to]: by type (working days plus debited sandwich days), paid / unpaid, and the full days. */
+function leaveTotals(leaves: readonly LeaveRow[], from: string, to: string, isWorking: (d: string) => boolean, rules: { workingDays: readonly number[]; isHoliday: (d: string) => boolean }) {
   const byType: Record<string, number> = {};
   const fullLeave = new Set<string>();
   let paid = 0;
   let unpaid = 0;
+  let sandwich = 0;
   const counted = (d: string) => d >= from && d <= to && isWorking(d);
   for (const l of leaves) {
     const portions = [...dayPortions({ startDate: toKey(l.startDate), endDate: toKey(l.endDate), startHalf: l.startHalf, endHalf: l.endHalf })].filter(([d]) => counted(d));
     for (const [d, half] of portions) {
       if (half === "FULL") fullLeave.add(d);
     }
-    const days = portions.reduce((sum, [, half]) => sum + (half === "FULL" ? 1 : 0.5), 0);
+    const enclosed = sandwichInRange(l, from, to, isWorking, rules);
+    sandwich += enclosed;
+    const days = portions.reduce((sum, [, half]) => sum + (half === "FULL" ? 1 : 0.5), 0) + enclosed;
     if (days === 0) continue;
     byType[l.leaveType.code] = r2((byType[l.leaveType.code] ?? 0) + days);
     if (l.leaveType.isPaid) paid += days;
     else unpaid += days;
   }
-  return { byType, fullLeave, paid, unpaid };
+  return { byType, fullLeave, paid, unpaid, sandwich: r2(sandwich) };
 }
 
 /** Working days, holidays on scheduled days, present and absent (resolveDayStatus) for one person. */
@@ -219,6 +252,7 @@ export function payrollCsv(report: PayrollReport): string {
     "Comp-off earned",
     "Logged hours",
     ...(report.overtime ? [report.overtime.basis === "APPROVED" ? "Overtime hours (approved)" : "Overtime hours"] : []),
+    ...(report.sandwichRule ? ["Sandwich days (weekends/holidays debited, included in leave)"] : []),
     "Leave year closed"
   ];
   const lines = [head.map(csvCell).join(",")];
@@ -242,6 +276,7 @@ export function payrollCsv(report: PayrollReport): string {
         r.compOffEarned,
         r.loggedHours,
         ...(report.overtime ? [r.overtimeHours ?? 0] : []),
+        ...(report.sandwichRule ? [r.sandwichDays ?? 0] : []),
         report.leaveYearClosed ? "yes" : "no"
       ]
         .map(csvCell)
