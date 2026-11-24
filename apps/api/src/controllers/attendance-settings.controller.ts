@@ -30,6 +30,7 @@ import {
 } from "../services/attendance-settings.service.js";
 import { shiftAssignmentBody, shiftBody } from "../services/attendance-shift.service.js";
 import { scopeColumns } from "../utils/scope-columns.js";
+import { assertKnownScopeSites, removeSiteFromScopes } from "../services/policy-scope-sites.service.js";
 import { publicSite, siteBody } from "../services/attendance-site.service.js";
 
 export const attendanceSettingsRouter = Router();
@@ -117,6 +118,7 @@ attendanceSettingsRouter.get("/calendars", async (_req, res) => {
 attendanceSettingsRouter.post("/calendars", validate(z.object({ body: calendarBody })), async (req, res) => {
   await assertAttendanceEntitled();
   const body = calendarBody.parse(req.body);
+  await assertKnownScopeSites(body.scopeSiteIds);
   try {
     const created = await prisma.$transaction(async (tx) => {
       const existing = await tx.holidayCalendar.count();
@@ -139,6 +141,7 @@ attendanceSettingsRouter.put(
     await assertAttendanceEntitled();
     const id = String(req.params.id);
     const body = calendarBody.partial().parse(req.body);
+    await assertKnownScopeSites(body.scopeSiteIds);
     try {
       const updated = await prisma.$transaction(async (tx) => {
         if (body.isDefault === true) {
@@ -379,7 +382,12 @@ attendanceSettingsRouter.delete("/sites/:id", validate(z.object({ params: idPara
   if (settings.requireSite !== "OFF" && (await prisma.attendanceSite.count({ where: { enabled: true, id: { not: id } } })) === 0) {
     throw new AppError(409, "This is the last work site and a site is required. Turn the site rule off first.", { code: "SITE_RULE_NEEDS_SITE" });
   }
-  const result = await prisma.attendanceSite.deleteMany({ where: { id } });
+  // 7.0.0: the site's id leaves every leave type / calendar scope in the same transaction.
+  const result = await prisma.$transaction(async (tx) => {
+    const deleted = await tx.attendanceSite.deleteMany({ where: { id } });
+    if (deleted.count > 0) await removeSiteFromScopes(id, tx);
+    return deleted;
+  });
   if (result.count === 0) throw new AppError(404, "Site not found");
   await audit(req.user!.id, "attendance.site_deleted", "AttendanceSite", id);
   res.status(204).end();

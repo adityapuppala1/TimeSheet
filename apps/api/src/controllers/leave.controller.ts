@@ -15,6 +15,7 @@
  */
 import { Router } from "express";
 import { scopeColumns } from "../utils/scope-columns.js";
+import { assertKnownScopeSites } from "../services/policy-scope-sites.service.js";
 import { z } from "zod";
 import { prisma } from "../config/prisma.js";
 import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
@@ -363,6 +364,7 @@ function isUniqueViolation(error: unknown): boolean {
 admin.post("/types", validate(z.object({ body: leaveTypeBody })), async (req, res) => {
   await assertLeaveEntitled();
   const body = leaveTypeBody.parse(req.body);
+  await assertKnownScopeSites(body.scopeSiteIds);
   try {
     const created = await prisma.leaveType.create({ data: scopeColumns(body) });
     await audit(req.user!.id, "leave.type_created", "LeaveType", created.id, body);
@@ -380,6 +382,7 @@ admin.put("/types/:id", validate(z.object({ body: leaveTypeBody.partial() })), a
   const id = String(req.params.id);
   const existing = await prisma.leaveType.findUnique({ where: { id }, select: { id: true } });
   if (!existing) throw new AppError(404, "Leave type not found");
+  await assertKnownScopeSites(body.scopeSiteIds);
   try {
     const updated = await prisma.leaveType.update({ where: { id }, data: scopeColumns(body) });
     await audit(req.user!.id, "leave.type_updated", "LeaveType", id, body);

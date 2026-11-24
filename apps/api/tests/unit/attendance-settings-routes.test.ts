@@ -169,6 +169,12 @@ describe("/api/attendance/admin permissions and entitlement", () => {
     expect(JSON.stringify(call[4])).not.toMatch(/51\.5|0\.12/);
   });
 
+  it("7.0.0: a calendar scoped to a site that does not exist is refused with 422", async () => {
+    const res = await request(app()).post("/a/calendars").send({ name: "Ghost", scopeSiteIds: ["no-such-site"] });
+    expect(res.status).toBe(422);
+    expect(JSON.stringify(res.body)).toContain("no-such-site");
+  });
+
   it("saves and audits when entitled", async () => {
     await request(app()).put("/a/settings").send({ attendanceEnabled: true, punchInReminderHour: 10 }).expect(200);
     expect(upsert).toHaveBeenCalledTimes(1);
