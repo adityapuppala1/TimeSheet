@@ -30,7 +30,7 @@ import { requireTenantContext } from "../config/tenant-context.js";
 import { serverTimezone } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
 import { getAttendanceSettings } from "./attendance-settings.service.js";
-import { todayKeyFor } from "./attendance-day-status.js";
+import { currentWorkDay } from "./attendance-shift.service.js";
 import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
 
 /** Raw payloads above this are stored as a truncated preview — a device that posts megabytes must
@@ -419,7 +419,8 @@ export async function ingestPunch(input: IngestInput): Promise<IngestResult> {
   const person = resolved.person;
 
   // 6. The person's own calendar day.
-  const workDate = new Date(todayKeyFor(punchInAt, person.timezone, serverTimezone) + "T00:00:00Z");
+  // 7.0.0: a night shift's work date is the day it STARTED; no shift = the local day, as before.
+  const workDate = new Date((await currentWorkDay(person.id, punchInAt, person.timezone, serverTimezone)).dateKey + "T00:00:00Z");
   const ctx: SettleContext = {
     input,
     personId: person.id,

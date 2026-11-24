@@ -174,6 +174,7 @@ export function settingsSections(leaveEntitled: boolean): NavSection[] {
     { id: "punch-in", label: "Punch-in", group: "Attendance" },
     { id: "reminders", label: "Reminders", group: "Attendance" },
     { id: "holidays", label: "Working days & holidays", group: "Attendance" },
+    { id: "shifts", label: "Shifts", group: "Attendance" },
     { id: "reasons", label: "Missed-day reasons", group: "Attendance" }
   ];
   const leave: NavSection[] = [

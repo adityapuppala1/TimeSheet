@@ -382,10 +382,12 @@ model User {
   leaveRequests               LeaveRequest[]
   leaveLedger                 LeaveBalanceLedger[]
 
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  deletedAt         DateTime?
-  calendarFeedToken CalendarFeedToken?
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+  deletedAt            DateTime?
+  calendarFeedToken    CalendarFeedToken?
+  shiftAssignments     AttendanceShiftAssignment[] @relation("ShiftAssignee")
+  teamShiftAssignments AttendanceShiftAssignment[] @relation("ShiftTeam")
 
   @@index([roleId, status])
   @@index([managerId])
@@ -6707,4 +6709,38 @@ model LeaveRequest {
   @@index([status, startDate, endDate])
   @@index([approverId, status])
   @@index([leaveTypeId])
+}
+
+/// 7.0.0 shifts. A named working window. endMinute <= startMinute means it crosses midnight, and
+/// the work date of a night shift is the day it STARTS (attendance-day-status.ts#workDateKeyFor).
+model AttendanceShift {
+  id           String                      @id @default(cuid())
+  name         String                      @unique @db.VarChar(80)
+  startMinute  Int
+  endMinute    Int
+  breakMinutes Int                         @default(0)
+  /// 0 = Sunday … 6 = Saturday, like GlobalPlanningSettings.workingDays.
+  workingDays  Json
+  createdAt    DateTime                    @default(now())
+  updatedAt    DateTime                    @updatedAt
+  assignments  AttendanceShiftAssignment[]
+}
+
+/// Who works a shift from when. Exactly one of userId (a person) or managerId (everyone who reports
+/// to that manager). A person's own assignment beats their team's; the latest effectiveFrom wins.
+model AttendanceShiftAssignment {
+  id            String          @id @default(cuid())
+  shiftId       String
+  shift         AttendanceShift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  userId        String?
+  user          User?           @relation("ShiftAssignee", fields: [userId], references: [id], onDelete: Cascade)
+  managerId     String?
+  manager       User?           @relation("ShiftTeam", fields: [managerId], references: [id], onDelete: Cascade)
+  effectiveFrom DateTime        @db.Date
+  effectiveTo   DateTime?       @db.Date
+  createdAt     DateTime        @default(now())
+
+  @@index([userId, effectiveFrom])
+  @@index([managerId, effectiveFrom])
+  @@index([shiftId])
 }

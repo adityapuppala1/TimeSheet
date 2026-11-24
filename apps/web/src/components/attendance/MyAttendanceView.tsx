@@ -11,6 +11,7 @@
  */
 import { runInBackground } from "../../lib/run-in-background";
 import { useQuery } from "@tanstack/react-query";
+import { MyShiftLine } from "./Shifts";
 import { CalendarCheck, CalendarDays, ChevronLeft, ChevronRight, Clock, Plane, Star } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
@@ -42,12 +43,13 @@ function TodayCard({ today, lateness }: Readonly<{ today: MyToday; lateness: { e
     status,
     punchInAt: today.record?.punchInAt,
     latenessEnabled: lateness?.enabled,
-    expectedStartMinute: lateness?.expectedStartMinute
+    expectedStartMinute: today.shift?.startMinute ?? lateness?.expectedStartMinute
   });
   const date = new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
   const canPunch = !today.record && today.isWorkingDay && today.punchInMode && today.punchInMode !== "OFF" && status !== "LEAVE";
   return (
     <SectionCard title="Today" description={date} action={<AttendanceStatusBadge statusKey={meta.key} />} headingId="att-today">
+      <MyShiftLine shift={today.shift} />
       {today.record ? (
         <PunchedInPanel record={today.record} />
       ) : (

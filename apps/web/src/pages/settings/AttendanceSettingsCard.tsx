@@ -61,6 +61,7 @@ import { AttendanceConfirmDelete } from "./AttendanceConfirmDelete";
 import { OptionalHolidayCapField } from "./OptionalHolidayCapField";
 import { AttendanceSourcesSection } from "./AttendanceSourcesSection";
 import { CompOffSettingsSection } from "../../components/attendance/CompOff";
+import { ShiftsSettingsSection } from "../../components/attendance/Shifts";
 import { BalanceAdjustments, LEAVE_SETTINGS_KEY, LEAVE_TYPES_KEY, LeaveSettingsFields, LeaveTypesSection } from "./LeaveSettingsSections";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
@@ -322,6 +323,7 @@ export function AttendanceSettingsCard({ readOnly }: { readOnly: boolean }) {
           )}
 
           {section === "holidays" && <HolidayCalendarsEditor readOnly={readOnly} query={calendars} />}
+          {section === "shifts" && <ShiftsSettingsSection readOnly={readOnly} />}
 
           {section === "reasons" && (
             <div className="grid gap-4">

@@ -25,6 +25,18 @@ const consume = vi.fn();
 const auditFn = vi.fn().mockResolvedValue(undefined);
 const attemptFindUnique = vi.fn();
 
+// 7.0.0: no shifts assigned in these fixtures, so every work date is the plain local day.
+vi.mock("../../src/services/attendance-shift.service.js", async (orig) => {
+  const real = await orig<typeof import("../../src/services/attendance-shift.service.js")>();
+  const ds = await import("../../src/services/attendance-day-status.js");
+  return {
+    ...real,
+    shiftsForUsers: async () => new Map(),
+    shiftForUser: async () => null,
+    currentWorkDay: async (_u: string, now: Date, tz: string | null | undefined, fb: string | null | undefined) => ({ dateKey: ds.workDateKeyFor(now, tz, fb, null), shift: null })
+  };
+});
+
 vi.mock("../../src/middleware/auth.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/middleware/auth.js")>("../../src/middleware/auth.js");
   return {

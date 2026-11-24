@@ -22,12 +22,13 @@ import { requireTenantContext } from "../config/tenant-context.js";
 import { serverTimezone } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
 import { getAttendanceSettings } from "./attendance-settings.service.js";
-import { resolveDayStatus, todayKeyFor, type AttendanceDayStatus } from "./attendance-day-status.js";
+import { resolveDayStatus, type AttendanceDayStatus } from "./attendance-day-status.js";
 import { consumeVerification, getFaceSettings, isFaceFeatureAllowedForOrg } from "./face.service.js";
 import { getPlanningSettings } from "./planning.service.js";
 import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
 import { audit } from "./audit.service.js";
 import { ingestPunch } from "./attendance-ingest.service.js";
+import { currentWorkDay, publicShift } from "./attendance-shift.service.js";
 import { loadApprovedLeave, type LeaveLookup, type LeaveOnDay } from "./leave-query.service.js";
 
 /** Shown when the admin left locationConsentText empty. Plain about what is kept and for how long. */
@@ -140,6 +141,8 @@ export interface MyTodayResponse {
   /** Only when the admin turned lateness on: the confirmation may say how late (informational). */
   latenessEnabled?: boolean;
   expectedStartMinute?: number;
+  /** 7.0.0: the person's shift for this work date; null = the workspace day. */
+  shift?: ReturnType<typeof publicShift>;
   record?: ReturnType<typeof publicRecord>;
   steps?: PunchStep[];
 }
@@ -156,7 +159,7 @@ async function loadUser(userId: string) {
 export async function getMyToday(userId: string, now: Date = new Date()): Promise<MyTodayResponse> {
   if (!(await isAttendanceOn())) return { enabled: false };
   const [settings, planning, user] = await Promise.all([getAttendanceSettings(), getPlanningSettings(), loadUser(userId)]);
-  const dateKey = todayKeyFor(now, user.timezone, serverTimezone);
+  const { dateKey, shift } = await currentWorkDay(userId, now, user.timezone, serverTimezone);
   const [holiday, leave, record, faceRequired] = await Promise.all([
     findHoliday(user.holidayCalendarId, dateKey, userId),
     findLeaveForDay(userId, dateKey),
@@ -174,7 +177,8 @@ export async function getMyToday(userId: string, now: Date = new Date()): Promis
     punchedIn: Boolean(record),
     now,
     timeZone: user.timezone,
-    fallbackZone: serverTimezone
+    fallbackZone: serverTimezone,
+    shift
   });
   const steps: PunchStep[] = [];
   if (settings.locationMode !== "OFF") steps.push("LOCATION");
@@ -191,7 +195,9 @@ export async function getMyToday(userId: string, now: Date = new Date()): Promis
     status: day.status,
     isWorkingDay: day.isWorkingDay,
     holidayName: day.holidayName,
-    ...(settings.latenessEnabled ? { latenessEnabled: true, expectedStartMinute: settings.expectedStartMinute } : {}),
+    // A shift's start replaces the workspace start for lateness.
+    ...(settings.latenessEnabled ? { latenessEnabled: true, expectedStartMinute: shift ? shift.startMinute : settings.expectedStartMinute } : {}),
+    shift: publicShift(shift),
     record: publicRecord(record),
     steps
   };
@@ -260,7 +266,7 @@ export async function punchIn(input: PunchInInput): Promise<{ created: boolean; 
     throw new AppError(403, "Punching in from the web is not enabled for this workspace.");
   }
   const user = await loadUser(input.userId);
-  const dateKey = todayKeyFor(now, user.timezone, serverTimezone);
+  const { dateKey } = await currentWorkDay(input.userId, now, user.timezone, serverTimezone);
   const workDate = new Date(`${dateKey}T00:00:00Z`);
   const include = { sourceRef: { select: { name: true } } } as const;
 
@@ -333,7 +339,7 @@ export async function punchOut(input: PunchOutInput): Promise<{ updated: boolean
     throw new AppError(403, "Punching from the web is not enabled for this workspace.");
   }
   const user = await loadUser(input.userId);
-  const dateKey = todayKeyFor(now, user.timezone, serverTimezone);
+  const { dateKey } = await currentWorkDay(input.userId, now, user.timezone, serverTimezone);
   const workDate = new Date(`${dateKey}T00:00:00Z`);
   const include = { sourceRef: { select: { name: true } } } as const;
   const existing = await prisma.attendanceRecord.findUnique({ where: { userId_workDate: { userId: input.userId, workDate } }, include });

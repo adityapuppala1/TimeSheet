@@ -30,6 +30,7 @@ import { AppError } from "../middleware/error.js";
 import { COUNTED_PEOPLE } from "./people-visibility.service.js";
 import { getPlanningSettings } from "./planning.service.js";
 import { resolveDayStatus, type AttendanceDayStatus } from "./attendance-day-status.js";
+import { shiftsForUsers, type ResolvedShift } from "./attendance-shift.service.js";
 import { findLeaveInRange } from "./attendance-punch.service.js";
 import { halfLabel } from "./leave-calc.js";
 import { getAttendanceSettings } from "./attendance-settings.service.js";
@@ -182,12 +183,17 @@ export function countLate(
   localMinuteOf: (instant: Date, zone: string | null) => number,
   rows: ReadonlyArray<Pick<TeamTodayRow, "status" | "punch" | "user">>,
   zoneOf: ReadonlyMap<string, string | null>,
-  expectedStartMinute: number
+  expectedStartMinute: number | ((userId: string) => number)
 ): number {
+  const startOf = typeof expectedStartMinute === "number" ? () => expectedStartMinute : expectedStartMinute;
   let n = 0;
   for (const r of rows) {
     if (r.status !== "PRESENT" || !r.punch) continue;
-    if (localMinuteOf(new Date(r.punch.punchInAt), zoneOf.get(r.user.id) ?? null) > expectedStartMinute) n += 1;
+    // A night shift's start is in the evening; a punch after midnight is minutes past 1440 of its start day.
+    let minute = localMinuteOf(new Date(r.punch.punchInAt), zoneOf.get(r.user.id) ?? null);
+    const start = startOf(r.user.id);
+    if (start >= 720 && minute < start - 720) minute += 1440;
+    if (minute > start) n += 1;
   }
   return n;
 }
@@ -200,7 +206,7 @@ export async function getTeamDay(actor: { id: string; role: string }, query: Tea
 
   const people = await prisma.user.findMany({
     where,
-    select: { id: true, name: true, email: true, avatarUrl: true, timezone: true, holidayCalendarId: true, role: { select: { name: true } } },
+    select: { id: true, name: true, email: true, avatarUrl: true, timezone: true, holidayCalendarId: true, managerId: true, role: { select: { name: true } } },
     orderBy: { name: "asc" },
     take: 5000
   });
@@ -227,6 +233,8 @@ export async function getTeamDay(actor: { id: string; role: string }, query: Tea
       ])
     : [null, null, null, [], [], [], []];
 
+  // 7.0.0: each person's shift on this work date (missing = the workspace day).
+  const shiftOf = ids.length ? await shiftsForUsers(people, query.date) : new Map<string, ResolvedShift>();
   const recordBy = new Map(records.map((r) => [r.userId, r]));
   const reasonBy = new Map(reasons.map((r) => [r.userId, r]));
   // The reminder names its own date in the body (daily-reminder.worker.ts), which is what ties a
@@ -250,7 +258,8 @@ export async function getTeamDay(actor: { id: string; role: string }, query: Tea
       punchedIn: Boolean(record),
       now,
       timeZone: p.timezone,
-      fallbackZone: serverTimezone
+      fallbackZone: serverTimezone,
+      shift: shiftOf.get(p.id) ?? null
     });
     const sheet = sheetsBy.get(p.id);
     const reason = reasonBy.get(p.id);
@@ -288,7 +297,8 @@ export async function getTeamDay(actor: { id: string; role: string }, query: Tea
   let late: number | null = null;
   if (settings?.latenessEnabled) {
     const { localMinuteOf } = await import("./attendance-analytics.service.js");
-    late = countLate(localMinuteOf, lateRows, zoneOf, settings.expectedStartMinute ?? 600);
+    const workspaceStart = settings.expectedStartMinute ?? 600;
+    late = countLate(localMinuteOf, lateRows, zoneOf, (userId) => shiftOf.get(userId)?.startMinute ?? workspaceStart);
   }
 
   const filtered = all.filter(

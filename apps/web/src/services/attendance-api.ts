@@ -157,6 +157,8 @@ export interface MyToday {
   /** Present only when the admin switched lateness on. */
   latenessEnabled?: boolean;
   expectedStartMinute?: number;
+  /** 7.0.0: the person's shift for this work date; null = the workspace day. */
+  shift?: { id: string; name: string; startMinute: number; endMinute: number; breakMinutes: number; workingDays: number[]; crossesMidnight: boolean; expectedMinutes: number } | null;
   record?: AttendancePunchRecord | null;
   steps?: PunchStep[];
 }

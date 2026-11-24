@@ -28,6 +28,7 @@ import {
   toDateOnly,
   type AttendanceSettingsInput
 } from "../services/attendance-settings.service.js";
+import { shiftAssignmentBody, shiftBody } from "../services/attendance-shift.service.js";
 
 export const attendanceSettingsRouter = Router();
 attendanceSettingsRouter.use(requireAuth, requireSuperAdmin);
@@ -303,5 +304,102 @@ attendanceSettingsRouter.delete("/missed-reasons/:id", validate(z.object({ param
   const result = await prisma.missedReasonOption.deleteMany({ where: { id } });
   if (result.count === 0) throw new AppError(404, "Reason not found");
   await audit(req.user!.id, "attendance.reason_deleted", "MissedReasonOption", id);
+  res.status(204).end();
+});
+
+/* ------------------------------------------------------------------ *
+ * Shifts / rosters (7.0.0)
+ *
+ * With no shift assigned, everyone keeps the workspace day — so an empty list is the old
+ * behaviour. Reads are open to the super admin like the rest of this router; writes need the plan.
+ * ------------------------------------------------------------------ */
+
+attendanceSettingsRouter.get("/shifts", async (_req, res) => {
+  const [shifts, assignments] = await Promise.all([
+    prisma.attendanceShift.findMany({ orderBy: { name: "asc" } }),
+    prisma.attendanceShiftAssignment.findMany({
+      orderBy: [{ effectiveFrom: "desc" }],
+      take: 1000,
+      include: { user: { select: { id: true, name: true } }, manager: { select: { id: true, name: true } } }
+    })
+  ]);
+  res.json({
+    shifts,
+    assignments: assignments.map((a) => ({
+      id: a.id,
+      shiftId: a.shiftId,
+      user: a.user,
+      team: a.manager ? { managerId: a.manager.id, managerName: a.manager.name } : null,
+      effectiveFrom: a.effectiveFrom.toISOString().slice(0, 10),
+      effectiveTo: a.effectiveTo ? a.effectiveTo.toISOString().slice(0, 10) : null
+    }))
+  });
+});
+
+attendanceSettingsRouter.post("/shifts", validate(z.object({ body: shiftBody })), async (req, res) => {
+  await assertAttendanceEntitled();
+  const body = shiftBody.parse(req.body);
+  try {
+    const created = await prisma.attendanceShift.create({ data: body });
+    await audit(req.user!.id, "attendance.shift_created", "AttendanceShift", created.id, body);
+    res.status(201).json(created);
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new AppError(409, "A shift with that name already exists.");
+    throw error;
+  }
+});
+
+attendanceSettingsRouter.put("/shifts/:id", validate(z.object({ params: idParams, body: shiftBody })), async (req, res) => {
+  await assertAttendanceEntitled();
+  const id = String(req.params.id);
+  const body = shiftBody.parse(req.body);
+  try {
+    const updated = await prisma.attendanceShift.update({ where: { id }, data: body });
+    await audit(req.user!.id, "attendance.shift_updated", "AttendanceShift", id, body);
+    res.json(updated);
+  } catch (error) {
+    if (isNotFound(error)) throw new AppError(404, "Shift not found");
+    if (isUniqueViolation(error)) throw new AppError(409, "A shift with that name already exists.");
+    throw error;
+  }
+});
+
+attendanceSettingsRouter.delete("/shifts/:id", validate(z.object({ params: idParams })), async (req, res) => {
+  await assertAttendanceEntitled();
+  const id = String(req.params.id);
+  const result = await prisma.attendanceShift.deleteMany({ where: { id } });
+  if (result.count === 0) throw new AppError(404, "Shift not found");
+  await audit(req.user!.id, "attendance.shift_deleted", "AttendanceShift", id);
+  res.status(204).end();
+});
+
+attendanceSettingsRouter.post("/shift-assignments", validate(z.object({ body: shiftAssignmentBody })), async (req, res) => {
+  await assertAttendanceEntitled();
+  const body = shiftAssignmentBody.parse(req.body);
+  const [shift, person] = await Promise.all([
+    prisma.attendanceShift.findUnique({ where: { id: body.shiftId }, select: { id: true } }),
+    prisma.user.findFirst({ where: { id: body.userId ?? body.managerId, ...COUNTED_PEOPLE }, select: { id: true } })
+  ]);
+  if (!shift) throw new AppError(404, "Shift not found");
+  if (!person) throw new AppError(404, body.userId ? "Person not found" : "Manager not found");
+  const created = await prisma.attendanceShiftAssignment.create({
+    data: {
+      shiftId: body.shiftId,
+      userId: body.userId ?? null,
+      managerId: body.managerId ?? null,
+      effectiveFrom: new Date(`${body.effectiveFrom}T00:00:00Z`),
+      effectiveTo: body.effectiveTo ? new Date(`${body.effectiveTo}T00:00:00Z`) : null
+    }
+  });
+  await audit(req.user!.id, "attendance.shift_assigned", "AttendanceShiftAssignment", created.id, body);
+  res.status(201).json(created);
+});
+
+attendanceSettingsRouter.delete("/shift-assignments/:id", validate(z.object({ params: idParams })), async (req, res) => {
+  await assertAttendanceEntitled();
+  const id = String(req.params.id);
+  const result = await prisma.attendanceShiftAssignment.deleteMany({ where: { id } });
+  if (result.count === 0) throw new AppError(404, "Assignment not found");
+  await audit(req.user!.id, "attendance.shift_unassigned", "AttendanceShiftAssignment", id);
   res.status(204).end();
 });
