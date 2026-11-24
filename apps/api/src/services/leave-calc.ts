@@ -279,6 +279,11 @@ export interface ExpectedHoursInput extends DayRules {
   /** Leave taken on `dateKey` as a fraction (0, 0.5 or 1). */
   leaveFraction: (dateKey: string) => number;
   weeklyCapacityHours: number;
+  /**
+   * 7.0.0: the person's shift on `dateKey`, when one is assigned. A shifted day uses the shift's
+   * working days and expected minutes instead of the workspace week. Omitted = the workspace rule.
+   */
+  shiftOn?: (dateKey: string) => { workingDays: readonly number[]; expectedMinutes: number } | null;
 }
 
 export interface ExpectedHours {
@@ -296,28 +301,38 @@ export interface ExpectedHours {
  * weekend costs nothing (it is not counted twice).
  */
 export function expectedHours(input: ExpectedHoursInput): ExpectedHours {
+  const perWeek = input.workingDays.length;
+  const workspaceDaily = perWeek > 0 ? input.weeklyCapacityHours / perWeek : 0;
   let workingDays = 0;
   let holidays = 0;
   let leaveDays = 0;
+  let hours = 0;
+  let anyShift = false;
+  let shiftDaily: number | null = null;
   for (let d = input.from; d <= input.to; d = addDaysKey(d, 1)) {
-    if (!input.workingDays.includes(weekdayOf(d))) continue;
+    const shift = input.shiftOn?.(d) ?? null;
+    if (shift) anyShift = true;
+    if (!(shift ? shift.workingDays : input.workingDays).includes(weekdayOf(d))) continue;
+    const daily = shift ? Math.max(0, shift.expectedMinutes) / 60 : workspaceDaily;
+    if (shift) shiftDaily = daily;
     workingDays += 1;
     if (input.isHoliday(d)) {
       holidays += 1;
       continue;
     }
-    leaveDays += Math.min(1, Math.max(0, input.leaveFraction(d)));
+    const leave = Math.min(1, Math.max(0, input.leaveFraction(d)));
+    leaveDays += leave;
+    hours += daily * (1 - leave);
   }
-  const perWeek = input.workingDays.length;
-  const dailyHours = perWeek > 0 ? round2(input.weeklyCapacityHours / perWeek) : 0;
   const expectedDays = round2(workingDays - holidays - leaveDays);
   return {
     workingDays,
     holidays,
     leaveDays: round2(leaveDays),
     expectedDays,
-    dailyHours,
-    expectedHours: round2(expectedDays * (perWeek > 0 ? input.weeklyCapacityHours / perWeek : 0))
+    dailyHours: round2(shiftDaily ?? workspaceDaily),
+    // No shift in range: the old single multiplication, so rounding is byte-identical to before.
+    expectedHours: round2(anyShift ? hours : expectedDays * workspaceDaily)
   };
 }
 

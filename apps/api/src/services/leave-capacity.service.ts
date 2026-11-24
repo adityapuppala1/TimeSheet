@@ -24,6 +24,7 @@ import { getPlanningSettings } from "./planning.service.js";
 import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
 import { addDaysKey, expectedHours, type ExpectedHours } from "./leave-calc.js";
 import { leaveFractionOf, loadApprovedLeave } from "./leave-query.service.js";
+import { shiftsForUsersInRange } from "./attendance-shift.service.js";
 
 export interface AbsencePerson {
   id: string;
@@ -107,17 +108,18 @@ export function mergedTimeOffHours(
   return r2(total);
 }
 
-/** Expected hours per person over [from, to]. Three queries however many people. */
+/** Expected hours per person over [from, to]. Four queries however many people (the shift lookup is one). */
 export async function expectedHoursFor(userIds: readonly string[], from: string, to: string): Promise<Map<string, ExpectedHours>> {
   const out = new Map<string, ExpectedHours>();
   if (userIds.length === 0 || to < from) return out;
   const [planning, people] = await Promise.all([
     getPlanningSettings(),
-    prisma.user.findMany({ where: { id: { in: [...userIds] } }, select: { id: true, holidayCalendarId: true, weeklyCapacityHours: true } })
+    prisma.user.findMany({ where: { id: { in: [...userIds] } }, select: { id: true, managerId: true, holidayCalendarId: true, weeklyCapacityHours: true } })
   ]);
-  const [holidayOf, leaveOf] = await Promise.all([
+  const [holidayOf, leaveOf, shiftsOf] = await Promise.all([
     loadHolidays(people.map((p) => p.holidayCalendarId), from, to),
-    loadApprovedLeave(people.map((p) => p.id), from, to)
+    loadApprovedLeave(people.map((p) => p.id), from, to),
+    shiftsForUsersInRange(people, from, to)
   ]);
   for (const p of people) {
     out.set(
@@ -128,7 +130,9 @@ export async function expectedHoursFor(userIds: readonly string[], from: string,
         workingDays: planning.workingDays,
         isHoliday: (d) => Boolean(holidayOf(p.holidayCalendarId, d, p.id)),
         leaveFraction: (d) => leaveFractionOf(leaveOf, p.id, d),
-        weeklyCapacityHours: p.weeklyCapacityHours != null ? Number(p.weeklyCapacityHours) : planning.defaultWeeklyCapacityHours
+        weeklyCapacityHours: p.weeklyCapacityHours != null ? Number(p.weeklyCapacityHours) : planning.defaultWeeklyCapacityHours,
+        // 7.0.0: a person on a shift is expected the shift's minutes on the shift's working days.
+        shiftOn: shiftsOf.get(p.id)
       })
     );
   }

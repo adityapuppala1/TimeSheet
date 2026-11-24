@@ -87,6 +87,45 @@ export async function shiftsForUsers(people: ReadonlyArray<{ id: string; manager
   return out;
 }
 
+/**
+ * Shifts of many people over [from, to], in one query: per person a lookup by work date. A day with
+ * no covering assignment returns null (the workspace day). Same precedence as shiftsForUsers.
+ */
+export async function shiftsForUsersInRange(
+  people: ReadonlyArray<{ id: string; managerId: string | null }>,
+  from: string,
+  to: string
+): Promise<Map<string, (dateKey: string) => ResolvedShift | null>> {
+  const out = new Map<string, (dateKey: string) => ResolvedShift | null>();
+  if (people.length === 0 || to < from) return out;
+  const userIds = people.map((p) => p.id);
+  const managerIds = [...new Set(people.map((p) => p.managerId).filter((m): m is string => Boolean(m)))];
+  const rows = await prisma.attendanceShiftAssignment.findMany({
+    where: {
+      effectiveFrom: { lte: new Date(`${to}T00:00:00Z`) },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gte: new Date(`${from}T00:00:00Z`) } }],
+      AND: [{ OR: [{ userId: { in: userIds } }, ...(managerIds.length ? [{ managerId: { in: managerIds } }] : [])] }]
+    },
+    include: { shift: true }
+  });
+  if (rows.length === 0) return out;
+  for (const p of people) {
+    const mine = rows.filter((r) => r.userId === p.id || (r.userId === null && r.managerId !== null && r.managerId === p.managerId));
+    if (mine.length === 0) continue;
+    const cache = new Map<string, ResolvedShift | null>();
+    out.set(p.id, (key) => {
+      if (cache.has(key)) return cache.get(key) ?? null;
+      const day = new Date(`${key}T00:00:00Z`).getTime();
+      const covering = mine.filter((r) => r.effectiveFrom.getTime() <= day && (!r.effectiveTo || r.effectiveTo.getTime() >= day));
+      const win = pickAssignment(covering, p.id);
+      const s = win ? toWindow(win.shift) : null;
+      cache.set(key, s);
+      return s;
+    });
+  }
+  return out;
+}
+
 export async function shiftForUser(userId: string, dateKeyValue: string): Promise<ResolvedShift | null> {
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, managerId: true } });
   if (!user) return null;

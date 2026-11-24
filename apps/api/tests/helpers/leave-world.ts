@@ -271,6 +271,7 @@ export function fakePrisma(world: LeaveWorld) {
     approvalDelegation: model(world, "approvalDelegation"),
     calendarFeedToken: model(world, "calendarFeedToken"),
     holidayOptIn: { findMany: async () => [] },
+    attendanceShiftAssignment: { findMany: async () => [] },
     globalAttendanceSettings: {
       upsert: async (args: { update?: Row; create?: Row }) => Object.assign(world.settings, args.update ?? {}),
       findUnique: async () => world.settings
