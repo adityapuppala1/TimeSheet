@@ -3152,7 +3152,10 @@ integrations). The loser is kept in the admin delivery log, never dropped.
   `leaveTypes`, `leaveYear` and `leaveYearClosed` — true once that leave year has ended or been
   settled by the year-end rollover; treat that month as final. `format=csv` returns the same as a
   CSV (UTF-8 BOM, CRLF, a column per leave type, a formula-looking cell prefixed with `'`). Never a
-  reason, note or location.
+  reason, note or location. While overtime is on (7.0.0) each row also has `overtimeHours` and the report
+  `overtime: { basis: "APPROVED" | "COMPUTED" }` (approved claim hours when claims need approval, else the
+  computed hours; a week counts in the month its Monday falls in), and the CSV gains an `Overtime hours`
+  column before `Leave year closed`. With overtime off both are absent.
 
 ### Signed attendance webhook (devices, HRMS)
 
@@ -3427,6 +3430,53 @@ location. Web punch-in under `BLOCK` outside every site (or without a location) 
 on `/me/today`, `siteLabel` on `/me/history`, Team Activity's `location`); coordinates are never returned there.
 `GET /api/attendance/analytics/org` gains `bySite: [{ label, people, suppressed, punches }]`, k-anonymous like
 `bySource` (punches with no label group as `"No site label"`).
+
+#### Overtime (7.0.0)
+
+Off until `overtimeEnabled` is on (and attendance is on). Settings on `PUT /api/attendance/admin/settings`:
+`overtimeEnabled` (false), `overtimeDailyThresholdHours` (0, 0-24), `overtimeWeeklyThresholdHours` (0, 0-168),
+`overtimeRequireApproval` (false). `GET /api/attendance/me/today` gains `overtime: { enabled: true,
+requireApproval }` (absent while off).
+
+Expected hours per day are the person's shift on that work date, else the workspace day (0 on a weekend, holiday or
+full-day leave; half on a half day); worked hours are timesheet hours on the work date (not rejected or deleted). A
+day's overtime is `max(0, worked − expected − dailyThreshold)`; a week's (ISO, Monday `weekStart`) is the larger of
+the days' sum and `max(0, Σworked − Σexpected − weeklyThreshold)`, never both. Any signed-in person, under
+`/api/attendance`:
+
+- `GET /overtime/me?from=&to=` (at most 26 weeks) — `{ requireApproval, thresholds, totalHours, weeks: [{ weekStart,
+  workedHours, expectedHours, dailyOvertime, weeklyOvertime, overtimeHours, days, claim }] }`.
+- With `overtimeRequireApproval` on (otherwise `403`): `POST /overtime/claims` — `{ weekStart }` (a Monday, the week
+  over, at most 60 days back: 422 `OVERTIME_OUT_OF_RANGE`; 422 `OVERTIME_NONE` with nothing to claim; 409
+  `OVERTIME_DUPLICATE` while one is pending or approved). Hours are computed by the server. `GET /overtime/claims/me`;
+  `POST /overtime/claims/:id/cancel` (pending only); `GET /overtime/claims/inbox` — `{ total, items }`, the leave
+  decision rule including delegates (`onBehalfOf`); `POST /overtime/claims/:id/decision` — `{ decision, note? }`
+  (note required to reject), `403` for anyone who may not decide including an unknown id, `409
+  OVERTIME_ALREADY_DECIDED` for the loser of a race. Claims carry no reason text.
+
+Analytics (`/api/attendance/analytics/me|team|org`) gain `overtime` while it is on: `{ audience: "me", basis,
+hours }`, or for team/org `{ basis, people, suppressed, totalHours, averagePerPerson, peopleWithOvertime }` with the
+figures null below `minGroupSize`. There is no per-person overtime list.
+
+#### Leave policies per employment type or site (7.0.0)
+
+- `PATCH /api/users/:id` accepts `employmentType` (`FULL_TIME | PART_TIME | CONTRACT | INTERN | null`) and `siteId`
+  (an `AttendanceSite` id or null; 422 for an unknown site).
+- Leave types (`POST|PUT /api/leave/admin/types`) and holiday calendars (`POST|PUT
+  /api/attendance/admin/calendars`) accept `scopeEmploymentTypes` and `scopeSiteIds` (arrays; empty or null =
+  everyone on that axis). Types return both as arrays.
+- A person in scope only when every restricted axis contains their value. `GET /api/leave/types` and balances list
+  only the caller's in-scope types; apply and preview of an out-of-scope type are `422 LEAVE_TYPE_OUT_OF_SCOPE`; the
+  accrual run skips out-of-scope people.
+- Holiday calendar precedence everywhere holidays are read: the person's own `holidayCalendarId`, then a scoped
+  calendar matching them (a site match first), then the default.
+
+#### Sandwich rule (7.0.0)
+
+Leave types accept `sandwichRule` (false). When on, weekends and holidays fully enclosed between counted leave days
+of the same request count as full days (edges never; a half day at an edge still encloses). The count is computed at
+apply time and stored in `days`, so the debit, a reversal and settlement use it. `GET /api/leave/me/preview` gains
+`sandwiched` (the counted dates) and leaves them out of `excluded`.
 
 #### Comp-off, approval cover, calendar feed and payroll (7.0.0)
 

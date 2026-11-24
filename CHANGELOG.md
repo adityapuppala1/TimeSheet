@@ -61,6 +61,17 @@ as days anyone owed a timesheet on. With the module off, every screen and API re
   every punch that carries a location (web, API, webhook, CSV) is labelled "At <site>" or "Outside work sites";
   Team Activity shows that label in place of "Location shared". `requireSite` defaults to OFF and only acts on the
   web punch-in.
+- **Overtime ships OFF (one more additive tenant migration: four `GlobalAttendanceSettings` columns and an empty
+  `OvertimeClaim` table).** With it off nothing changes: the payroll export (CSV and public API) and analytics keep
+  their exact shape. Once on, payroll gains `overtimeHours` and an `Overtime hours` CSV column before `Leave year
+  closed`, so a CSV importer that reads columns by position should be checked. `GET /api/attendance/me/today` gains
+  `overtime` (absent while off).
+- **Leave policies per employment type or site (one more additive tenant migration: `User.employmentType`,
+  `User.siteId`, and two nullable JSON scope columns on `LeaveType` and `HolidayCalendar`).** Every existing type and
+  calendar is unscoped, so nothing moves until an admin sets a scope. Holiday calendar precedence is now: a person's
+  own calendar, then a scoped calendar matching them, then the default.
+- **Sandwich rule (one more additive tenant migration: `LeaveType.sandwichRule`, default false).** Requests made
+  before an admin switches it on keep their stored days.
 - **Two new webhook events, `compoff.requested` and `compoff.approved`.** Existing subscriptions are not opted in.
 - **The access log redacts calendar feed tokens** (`/api/calendar/feed/[redacted]`). A log shipper that parsed the
   raw path of that route will see the placeholder.
@@ -76,6 +87,16 @@ as days anyone owed a timesheet on. With the module off, every screen and API re
   "Use my current location") and a radius. Punches say "At Head office" or "Outside work sites"; nobody sees a
   coordinate. An optional rule for the web punch-in: label only, allow and flag for review, or block. The
   organisation breakdown gains a Location label grouping.
+- **Overtime (off by default).** Timesheet hours above each person's expected day (their shift, else the workspace
+  day) and week, with a daily and a weekly threshold; a week's overtime is the larger of the two, never both. People
+  see it on My attendance; teams and the organisation see totals only, hidden below the smallest group size. With
+  approval on, people claim a finished week and their approver (or delegate) decides it in the same inbox and badge
+  as corrections and comp-off. The payroll export gains an overtime column.
+- **Leave policies per employment type or work site.** Set a person's employment type and work site on People. Leave
+  types and holiday calendars can be limited to some employment types and/or sites: people see, apply for and accrue
+  only the types meant for them, and get their site's holiday calendar unless they have one of their own.
+- **Sandwich rule (off by default, per leave type).** Weekends and holidays fully inside one leave request count as
+  leave: Friday to Monday costs 4 days. The Apply screen says how many enclosed days it counted.
 - **Expected hours follow shifts.** A person on a 4×10 shift is expected 10 hours on their four days, in the digest,
   the leave preview and the capacity board.
 

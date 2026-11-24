@@ -472,6 +472,73 @@ export const HELP_ARTICLES: HelpArticle[] = [
     keywords: ["work site", "geofence", "office location", "location label", "site", "outside work sites", "radius"]
   },
   {
+    id: "attendance-overtime",
+    category: "Timesheets",
+    title: "See and claim your overtime",
+    roles: ["EMPLOYEE", "TEAM_LEAD", "MANAGER", "ADMIN", "SUPER_ADMIN"],
+    where: "Attendance → My attendance → Overtime",
+    when: "When your workspace counts overtime and you want to see it, or claim a week when claims need approval.",
+    steps: [
+      "Log your hours in your timesheet as usual: overtime is worked out from them.",
+      "Open Attendance → My attendance. The Overtime card lists the last eight weeks: hours logged, hours expected, and the overtime.",
+      "If your workspace asks for approval, press Claim beside a finished week. Your manager (or their active delegate) decides it from the Team view, and it counts in the Attendance badge.",
+      "A claim can be cancelled while it is still waiting."
+    ],
+    notes:
+      "Expected hours are your shift's on its working days, else the workspace day; nothing is expected on a weekend, a holiday or full-day leave, and half on a half day. A night shift counts on the day it starts. A day's overtime is what you logged above the expected day (beyond the daily threshold); a week's is the larger of its days' total and its excess over the expected week (beyond the weekly threshold), never both. Team and organisation views show only totals for groups at or above the smallest group size, never a ranking of people.",
+    keywords: ["overtime", "OT", "extra hours", "claim overtime", "hours above", "payroll overtime"]
+  },
+  {
+    id: "attendance-overtime-setup",
+    category: "Timesheets",
+    title: "Turn on overtime",
+    roles: ["SUPER_ADMIN"],
+    where: "Workspace Settings → Attendance & Leave → Overtime",
+    when: "When payroll or managers need hours above the expected day and week.",
+    steps: [
+      "Open Workspace Settings → Attendance & Leave and choose Overtime.",
+      "Switch on Count overtime and set the daily and weekly thresholds (0 counts any excess).",
+      "Optionally switch on Overtime needs approval: people then claim each finished week and their approver decides.",
+      "Save. The payroll export gains an overtime column: approved hours when approval is on, otherwise the computed hours. A week counts in the month its Monday falls in."
+    ],
+    notes:
+      "Off by default and needs Attendance on. With it off, the payroll export and analytics are exactly as before.",
+    keywords: ["overtime settings", "overtime threshold", "overtime approval", "payroll overtime"]
+  },
+  {
+    id: "leave-policy-scopes",
+    category: "Timesheets",
+    title: "Limit leave types and holiday calendars by employment type or site",
+    roles: ["SUPER_ADMIN"],
+    where: "Workspace Settings → Attendance & Leave → Leave types / Working days & holidays; People → Edit",
+    when: "When contractors, interns or a particular office get different leave or public holidays.",
+    steps: [
+      "On People, edit each person and set their Employment type and, if you use work sites, their Work site.",
+      "Under Leave types, edit a type and tick who it applies to: employment types and/or work sites. Nothing ticked means everyone.",
+      "Under Working days & holidays, tick the sites or employment types a calendar is for, and press Save scope.",
+      "People now see, apply for and accrue only the leave types in their scope, and get their site's calendar unless they are assigned one of their own."
+    ],
+    notes:
+      "Calendar order: a person's own calendar, then a scoped calendar that matches them (a site match first), then the default. Someone whose employment type is not set is outside a type-scoped policy. Existing balances are kept; an out-of-scope type simply stops accruing and is refused on apply.",
+    keywords: ["employment type", "contractor leave", "intern leave", "part time", "location", "site holidays", "leave policy", "scope", "eligibility"]
+  },
+  {
+    id: "leave-sandwich-rule",
+    category: "Timesheets",
+    title: "Count weekends and holidays inside a leave (sandwich rule)",
+    roles: ["SUPER_ADMIN"],
+    where: "Workspace Settings → Attendance & Leave → Leave types → Edit",
+    when: "When your leave policy counts the weekend or holiday sandwiched between leave days.",
+    steps: [
+      "Open Leave types, edit the type and switch on Sandwich rule. Save.",
+      "From then on a request of that type counts every weekend and holiday fully between its leave days: Friday to Monday costs 4 days, not 2.",
+      "The Apply screen says how many enclosed days it counted."
+    ],
+    notes:
+      "Off by default. Days at the start or end of a request are never counted (Saturday to Monday costs 1). A half day at either end still encloses the gap. Requests made before you switched it on keep their days; cancelling one gives back exactly what it took.",
+    keywords: ["sandwich", "sandwich leave", "weekend in leave", "holiday in leave", "intervening holidays"]
+  },
+  {
     id: "approval-cover",
     category: "Timesheets",
     title: "Let someone cover your leave approvals",
