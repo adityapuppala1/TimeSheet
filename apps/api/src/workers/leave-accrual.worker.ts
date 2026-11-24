@@ -35,6 +35,7 @@ import { settleLateMovement } from "../services/leave-settlement.service.js";
 import { COUNTED_PEOPLE } from "../services/people-visibility.service.js";
 import { runOncePerTick } from "../services/job-claim.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import { sweepOrphanLeaveUploads } from "../services/leave-upload-cleanup.service.js";
 
 let started = false;
 let running = false;
@@ -194,6 +195,9 @@ export function startLeaveAccrualWorker(): void {
     runOncePerTick("leave-accrual", "day", () =>
       runForEveryOrg("leave-accrual", async () => {
         const r = await runLeaveAccrual();
+        // Leave documents stored for a request that was never created (7.0.0). Leave-gated like the run.
+        const swept = (await isLeaveOn()) ? await sweepOrphanLeaveUploads() : 0;
+        if (swept > 0) console.info(`[leave-accrual] ${requireTenantContext().orgSlug}: removed ${swept} orphaned leave upload(s).`);
         if (r.accrued + r.rolledOver > 0) {
           console.info(`[leave-accrual] ${requireTenantContext().orgSlug}: ${r.accrued} accrual and ${r.rolledOver} rollover row(s).`);
         }

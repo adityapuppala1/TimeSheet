@@ -43,6 +43,15 @@ vi.mock("../../src/services/attendance-ingest.service.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/services/attendance-ingest.service.js")>("../../src/services/attendance-ingest.service.js");
   return { ...actual, assertIngestAllowed: async () => undefined };
 });
+const deletedUploads: string[] = [];
+vi.mock("../../src/services/attachment-storage.service.js", () => ({
+  processUpload: async (file: { originalname: string }) => ({
+    url: `/uploads/org-1/${file.originalname}`, fileName: file.originalname, mimeType: "application/pdf", sizeBytes: 4, storageKey: `org-1/x__leave-emp__${file.originalname}`
+  })
+}));
+vi.mock("../../src/services/leave-upload-cleanup.service.js", () => ({
+  deleteStoredLeaveUpload: async (key: string) => { deletedUploads.push(key); }
+}));
 vi.mock("../../src/utils/encryption.js", () => ({ decryptSecret: (s: string) => s, encryptSecret: (s: string) => s }));
 
 const { leaveRouter } = await import("../../src/controllers/leave.controller.js");
@@ -99,6 +108,22 @@ describe("/api/leave gates", () => {
     const res = await request(app()).post("/leave/me/requests").send(future);
     expect(res.status).toBe(403);
     expect(res.body.message).toMatch(/plan/);
+  });
+});
+
+describe("/api/leave document cleanup", () => {
+  it("deletes the stored document when apply fails, and keeps it when apply succeeds", async () => {
+    deletedUploads.length = 0;
+    const ok = await request(app()).post("/leave/me/requests")
+      .field("leaveTypeCode", "PL").field("startDate", "2027-01-04").field("endDate", "2027-01-06")
+      .attach("document", Buffer.from("%PDF"), "note.pdf");
+    expect(ok.status).toBe(201);
+    expect(deletedUploads).toEqual([]);
+    const clash = await request(app()).post("/leave/me/requests")
+      .field("leaveTypeCode", "PL").field("startDate", "2027-01-05").field("endDate", "2027-01-05")
+      .attach("document", Buffer.from("%PDF"), "again.pdf");
+    expect(clash.status).toBe(409);
+    expect(deletedUploads).toEqual(["org-1/x__leave-emp__again.pdf"]);
   });
 });
 

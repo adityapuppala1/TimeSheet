@@ -22,6 +22,7 @@ import { preserveTenantContext, upload } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { processUpload } from "../services/attachment-storage.service.js";
+import { deleteStoredLeaveUpload } from "../services/leave-upload-cleanup.service.js";
 import { getAttendanceEntitlements, getAttendanceSettings, isoDate } from "../services/attendance-settings.service.js";
 import { spanDays } from "../services/attendance-team.service.js";
 import { attendanceOrLeaveOn, expectedHoursFor } from "../services/leave-capacity.service.js";
@@ -121,13 +122,20 @@ leaveRouter.post("/me/requests", requireAuth, preserveTenantContext(upload.singl
   const attachment = file
     ? await processUpload(file, { userName: req.user!.name ?? req.user!.email, entityType: "leave", entityId: req.user!.id })
     : null;
-  const result = await applyLeave({
-    userId: req.user!.id,
-    ...body,
-    attachment: attachment ? { url: attachment.url, fileName: attachment.fileName, mimeType: attachment.mimeType, sizeBytes: attachment.sizeBytes } : null,
-    source: "WEB",
-    actorId: req.user!.id
-  });
+  let result: Awaited<ReturnType<typeof applyLeave>>;
+  try {
+    result = await applyLeave({
+      userId: req.user!.id,
+      ...body,
+      attachment: attachment ? { url: attachment.url, fileName: attachment.fileName, mimeType: attachment.mimeType, sizeBytes: attachment.sizeBytes } : null,
+      source: "WEB",
+      actorId: req.user!.id
+    });
+  } catch (error) {
+    // The document was stored before apply validated the request; nothing points at it now.
+    if (attachment) await deleteStoredLeaveUpload(attachment.storageKey);
+    throw error;
+  }
   res.status(201).json(result);
 });
 
