@@ -327,6 +327,8 @@ export interface TeamDayRow {
 export interface TeamDayResponse {
   date: string;
   summary: Record<TeamDayStatus, number>;
+  /** Late over everyone in scope (server-side); null when lateness is off. */
+  late?: number | null;
   total: number;
   page: number;
   pageSize: number;

@@ -38,9 +38,10 @@ vi.mock("../../src/middleware/auth.js", async () => {
   };
 });
 
+let settingsRow: Record<string, unknown> = { attendanceEnabled: true };
 vi.mock("../../src/config/prisma.js", () => ({
   prisma: {
-    globalAttendanceSettings: { upsert: async () => ({ attendanceEnabled: true }), findUnique: async () => ({ attendanceEnabled: true }) },
+    globalAttendanceSettings: { upsert: async () => ({ ...settingsRow }), findUnique: async () => ({ ...settingsRow }) },
     user: {
       findMany: async ({ where }: { where: Record<string, unknown> }) => {
         count("user.findMany");
@@ -128,6 +129,26 @@ beforeEach(() => {
     { action: "timesheet.updated", entity: "Timesheet", createdAt: new Date("2026-11-23T10:00:00Z") }
   ];
   for (const k of Object.keys(calls)) delete calls[k];
+  settingsRow = { attendanceEnabled: true };
+});
+
+describe("GET /team/today late count", () => {
+  it("counts Late over everyone in scope, not just the first page", async () => {
+    settingsRow = { attendanceEnabled: true, latenessEnabled: true, expectedStartMinute: 540 };
+    actor = { ...actor, id: "boss", role: "SUPER_ADMIN" };
+    people = Array.from({ length: 150 }, (_, i) => person(`p${i}`, "mgr"));
+    // 10:00 UTC, an hour after the 09:00 start, for all 150.
+    records = people.map((p) => ({ ...records[0], userId: p.id, punchInAt: new Date("2026-11-23T10:00:00Z") }));
+    const res = await request(app()).get("/att/team/today?date=2026-11-23&pageSize=100");
+    expect(res.status).toBe(200);
+    expect(res.body.rows.length).toBeLessThanOrEqual(100);
+    expect(res.body.late).toBe(150);
+  });
+
+  it("is null when lateness is off", async () => {
+    const res = await request(app()).get("/att/team/today?date=2026-11-23");
+    expect(res.body.late).toBeNull();
+  });
 });
 
 describe("GET /team/today scoping", () => {

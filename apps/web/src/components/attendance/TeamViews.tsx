@@ -118,8 +118,10 @@ export function WhosInBoard({ leaveOn, lateness }: Readonly<{ leaveOn: boolean; 
       if (r.status in c) c[r.status] += 1;
       if (rowKey(r, lateness) === "LATE") c.LATE += 1;
     }
+    // The page holds at most PAGE_SIZE people; Late is counted by the server over everyone in scope.
+    if (typeof team.data?.late === "number") c.LATE = team.data.late;
     return c;
-  }, [rows, lateness]);
+  }, [rows, lateness, team.data]);
 
   const tiles: Tile[] = [
     { key: "PRESENT", filter: "PRESENT", count: counts.PRESENT },

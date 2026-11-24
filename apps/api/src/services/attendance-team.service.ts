@@ -32,6 +32,8 @@ import { getPlanningSettings } from "./planning.service.js";
 import { resolveDayStatus, type AttendanceDayStatus } from "./attendance-day-status.js";
 import { findLeaveInRange } from "./attendance-punch.service.js";
 import { halfLabel } from "./leave-calc.js";
+import { getAttendanceSettings } from "./attendance-settings.service.js";
+import { localMinuteOf } from "./attendance-analytics.service.js";
 
 const UNRESTRICTED_ROLES = new Set(["SUPER_ADMIN", "ADMIN"]);
 const MANAGING_ROLES = new Set(["MANAGER", "TEAM_LEAD"]);
@@ -160,6 +162,20 @@ function emptySummary(): StatusSummary {
   return { PRESENT: 0, PENDING: 0, ABSENT: 0, HOLIDAY: 0, WEEKEND: 0, LEAVE: 0 };
 }
 
+/** PRESENT rows whose punch-in is after the expected start, in the person's own zone. Pure. */
+export function countLate(
+  rows: ReadonlyArray<Pick<TeamTodayRow, "status" | "punch" | "user">>,
+  zoneOf: ReadonlyMap<string, string | null>,
+  expectedStartMinute: number
+): number {
+  let n = 0;
+  for (const r of rows) {
+    if (r.status !== "PRESENT" || !r.punch) continue;
+    if (localMinuteOf(new Date(r.punch.punchInAt), zoneOf.get(r.user.id) ?? null) > expectedStartMinute) n += 1;
+  }
+  return n;
+}
+
 export async function getTeamDay(actor: { id: string; role: string }, query: TeamTodayQuery, now: Date = new Date()) {
   const scope = assertTeamScope(actor.role);
   const where = peopleWhere(scope, actor.id, query.managerId);
@@ -247,6 +263,14 @@ export async function getTeamDay(actor: { id: string; role: string }, query: Tea
   // chips are how someone picks a filter, so they must not shrink to the one they picked.
   const summary = emptySummary();
   for (const row of all) summary[row.status] += 1;
+  // Late is counted here over EVERYONE in scope (not just the page the client holds), in each
+  // person's own zone, and only when an admin switched lateness on. Like the board it respects the
+  // source filter (not the status one), so the tile equals what clicking it shows.
+  const settings = ids.length ? await getAttendanceSettings() : null;
+  const zoneOf = new Map(people.map((p) => [p.id, p.timezone]));
+  const late = settings?.latenessEnabled
+    ? countLate(query.source ? all.filter((row) => row.punch?.source === query.source) : all, zoneOf, settings.expectedStartMinute ?? 600)
+    : null;
 
   const filtered = all.filter(
     (row) => (!query.status || row.status === query.status) && (!query.source || row.punch?.source === query.source)
@@ -255,6 +279,7 @@ export async function getTeamDay(actor: { id: string; role: string }, query: Tea
   return {
     date: query.date,
     summary,
+    late,
     total: filtered.length,
     page: query.page,
     pageSize: query.pageSize,
