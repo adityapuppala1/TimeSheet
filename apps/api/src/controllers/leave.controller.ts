@@ -134,7 +134,8 @@ leaveRouter.post("/me/requests", requireAuth, preserveTenantContext(upload.singl
 /** The requester cancels their own (a SUPER_ADMIN may cancel anyone's, including started leave). */
 leaveRouter.post("/me/requests/:id/cancel", requireAuth, async (req, res) => {
   await assertLeaveOn();
-  res.json(await cancelLeave({ actor: actorOf(req), requestId: String(req.params.id) }));
+  const comment = typeof req.body?.comment === "string" ? req.body.comment : null;
+  res.json(await cancelLeave({ actor: actorOf(req), requestId: String(req.params.id), comment }));
 });
 
 /** Gated like its siblings: holidays and leave are Attendance & Leave data (either part on + plan). */

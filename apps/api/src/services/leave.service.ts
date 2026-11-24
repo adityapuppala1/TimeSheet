@@ -1083,6 +1083,8 @@ export interface CancelInput {
   requestId: string;
   /** An HRMS cancelling its own leave may cancel leave that has started. */
   external?: boolean;
+  /** Required when an administrator cancels someone else's leave; told to the person and audited. */
+  comment?: string | null;
   now?: Date;
 }
 
@@ -1093,8 +1095,13 @@ export async function cancelLeave(input: CancelInput): Promise<PublicLeaveReques
     include: { leaveType: true, user: { select: { id: true, name: true, email: true, employeeCode: true, timezone: true, avatarUrl: true } } }
   });
   const own = request && input.actor && request.userId === input.actor.id;
-  const superAdmin = input.actor?.role === "SUPER_ADMIN";
+  const superAdmin = input.actor?.role === "SUPER_ADMIN" || input.actor?.role === "ADMIN";
   if (!request || (!input.external && !own && !superAdmin)) throw new AppError(404, "Leave request not found");
+  const byAdmin = !own && !input.external;
+  const comment = input.comment?.trim() ?? "";
+  if (byAdmin && request.status !== "CANCELLED" && comment.length === 0) {
+    throw new AppError(422, "Add a comment saying why you are cancelling this leave; the person is told.", { code: "LEAVE_CANCEL_COMMENT_REQUIRED" });
+  }
   if (request.status === "CANCELLED") return publicRequest({ ...request });
   if (request.status === "REJECTED") throw new AppError(409, "A rejected request cannot be cancelled.", { code: "LEAVE_NOT_CANCELLABLE" });
 
@@ -1138,10 +1145,27 @@ export async function cancelLeave(input: CancelInput): Promise<PublicLeaveReques
   await audit(input.actor?.id, "leave.cancelled", "LeaveRequest", request.id, {
     wasApproved,
     reversedDays: wasApproved ? num(request.days) : 0,
-    byAdmin: !own && !input.external
+    byAdmin,
+    ...(byAdmin ? { comment: comment.slice(0, 500) } : {})
   });
   emitDomainEvent("leave.cancelled", webhookPayload(updated, request.user));
+  if (byAdmin) await notifyCancelledByAdmin(request, comment.slice(0, 500));
   return publicRequest(updated);
+}
+
+async function notifyCancelledByAdmin(
+  request: { id: string; userId: string; startDate: Date; endDate: Date; days: unknown; leaveType: { name: string } },
+  comment: string
+): Promise<void> {
+  const dates = toKey(request.startDate) === toKey(request.endDate) ? toKey(request.startDate) : `${toKey(request.startDate)} to ${toKey(request.endDate)}`;
+  await dispatchNotification({
+    userId: request.userId,
+    category: "leave.decided",
+    title: `Your ${request.leaveType.name} was cancelled by an administrator`,
+    body: `${dates} · ${comment}`,
+    link: "/app/attendance?tab=leave",
+    metadata: { leaveRequestId: request.id }
+  });
 }
 
 /* ------------------------------------------------------------------ *

@@ -387,7 +387,24 @@ describe("cancel", () => {
     const { request } = await apply({ startDate: "2026-11-23", endDate: "2026-11-24" });
     await svc.decideLeave({ actor: actor("mgr"), requestId: request.id, decision: "APPROVE", now: NOW });
     await expect(svc.cancelLeave({ actor: actor("emp"), requestId: request.id, now: NOW })).rejects.toMatchObject({ code: "LEAVE_NOT_CANCELLABLE" });
-    expect((await svc.cancelLeave({ actor: actor("super"), requestId: request.id, now: NOW })).status).toBe("CANCELLED");
+    expect((await svc.cancelLeave({ actor: actor("super"), requestId: request.id, comment: "Booked in error", now: NOW })).status).toBe("CANCELLED");
+  });
+
+  it("an ADMIN cancels someone's approved, started leave with a comment: reversed once, audited, person notified", async () => {
+    const { request } = await apply({ startDate: "2026-11-23", endDate: "2026-11-24" });
+    await svc.decideLeave({ actor: actor("mgr"), requestId: request.id, decision: "APPROVE", now: NOW });
+    notifications.length = 0;
+    expect((await svc.cancelLeave({ actor: actor("admin"), requestId: request.id, comment: "Came in after all", now: NOW })).status).toBe("CANCELLED");
+    await svc.cancelLeave({ actor: actor("admin"), requestId: request.id, comment: "again", now: NOW });
+    expect(world.leaveBalanceLedger.filter((l) => l.kind === "CREDIT_REVERSAL")).toHaveLength(1);
+    expect(balanceOf(world, "emp", "type-PL", 2026)).toBe(12);
+    expect(audits.find((a) => a.action === "leave.cancelled")?.meta).toMatchObject({ byAdmin: true, comment: "Came in after all" });
+    expect(notifications).toEqual([{ userId: "emp", category: "leave.decided" }]);
+  });
+
+  it("an admin cancelling someone else's leave must give a comment", async () => {
+    const { request } = await apply();
+    await expect(svc.cancelLeave({ actor: actor("admin"), requestId: request.id, comment: "  ", now: NOW })).rejects.toMatchObject({ code: "LEAVE_CANCEL_COMMENT_REQUIRED" });
   });
 
   it("someone else's request is a 404 (it is not theirs to know about)", async () => {
