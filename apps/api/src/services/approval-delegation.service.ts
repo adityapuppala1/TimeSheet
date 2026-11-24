@@ -175,7 +175,11 @@ export async function createDelegation(actor: { id: string; role: string }, body
   }
   const created = await prisma.$transaction(async (tx) => {
     // Serialise delegation writes so two opposite delegations cannot both pass the cycle check.
-    await tx.$queryRaw`SELECT id FROM \`User\` WHERE id = ${delegatorId} FOR UPDATE`;
+    // BOTH people's rows: locking only the delegator let A->B (locks A) and B->A (locks B) run side
+    // by side, each reading no edge back. Always in id order, so the two cannot deadlock either.
+    for (const id of [delegatorId, body.delegateId].sort((a, b) => (a < b ? -1 : 1))) {
+      await tx.$queryRaw`SELECT id FROM \`User\` WHERE id = ${id} FOR UPDATE`;
+    }
     const existing = await tx.approvalDelegation.findMany({
       where: { revokedAt: null, endDate: { gte: dayStart(body.startDate) }, startDate: { lte: dayStart(body.endDate) } },
       select: { delegatorId: true, delegateId: true, startDate: true, endDate: true },

@@ -162,3 +162,19 @@ describe("the delegate sees and decides", () => {
     expect(done).toMatchObject({ status: "APPROVED", onBehalfOfId: "mgr" });
   });
 });
+
+describe("the cycle check's lock", () => {
+  it("locks BOTH people's rows, in id order, so A->B and B->A cannot pass the check together", async () => {
+    const locked: unknown[][] = [];
+    client.$queryRaw = async (_strings: TemplateStringsArray, ...values: unknown[]) => {
+      locked.push(values);
+      return [];
+    };
+    // "mgr" > "cover" alphabetically: the lower id is locked first whoever delegates to whom.
+    await del.createDelegation(actor("mgr"), { delegateId: "cover", startDate: key(0), endDate: key(3) }, NOW);
+    expect(locked.flat()).toEqual(["cover", "mgr"]);
+    locked.length = 0;
+    await del.createDelegation(actor("cover2"), { delegateId: "cover", startDate: key(0), endDate: key(3) }, NOW);
+    expect(locked.flat()).toEqual(["cover", "cover2"]);
+  });
+});
