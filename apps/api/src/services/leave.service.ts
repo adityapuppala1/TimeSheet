@@ -1310,8 +1310,8 @@ export async function listInbox(
     pageSize,
     items: rows.map((r) => {
       const item = publicRequest(r);
-      // The reason and document are for whoever DECIDES this request, and nobody else.
-      const visible = mayDecide(r) ? item : { ...item, reason: null, attachment: null };
+      // The reason, the decider's note and the document are for whoever DECIDES this request, and nobody else.
+      const visible = mayDecide(r) ? item : { ...item, reason: null, decisionNote: null, attachment: null };
       return { ...visible, balanceAfter: after.get(r.id) ?? null };
     })
   };

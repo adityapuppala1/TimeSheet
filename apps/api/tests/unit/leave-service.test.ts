@@ -446,6 +446,14 @@ describe("inbox", () => {
     expect(row.attachment).toBeNull();
   });
 
+  it("an ADMIN's scope=all hides the decision note of a request a manager decided", async () => {
+    const request = await apply({ reason: "private" });
+    await svc.decideLeave({ actor: actor("mgr"), requestId: request.id, decision: "REJECT", note: "medical, see HR", now: NOW });
+    const row = (await svc.listInbox(actor("admin"), { scope: "all", status: "ALL" })).items[0];
+    expect(row.reason).toBeNull();
+    expect(row.decisionNote).toBeNull();
+  });
+
   it("the inbox agrees with decisionRight: everything listed can be decided", async () => {
     await apply();
     await apply({ userId: "orphan", actorId: "orphan" });
