@@ -3201,6 +3201,15 @@ its plan lacks it. Dates are `YYYY-MM-DD`.
 - `GET /api/attendance/team/:userId/timeline?from=&to=` — one person's events (login, punch,
   timesheet create/update, reason, reminder emails). Same visibility rule; at most 31 days.
 - `GET /api/attendance/me/history?from=&to=` — the caller's own days; at most 93 days.
+- `GET /api/attendance/day-grid?from=&to=` (7.0.0) — every visible person's day over at most 93 days,
+  for the Home dashboard's logging grid and timeline and the Reports summary. People scope is the
+  dashboard's (`users:manage` → everyone; anyone else → themselves and their direct reports). Each
+  day is `{status, holidayName?, leaveTypeCode?, leaveTypeName?, halfDay?}` with `status` one of
+  WEEKEND, HOLIDAY, LEAVE, PRESENT, ABSENT, PENDING; each person also carries a `summary` (working
+  days, holidays, leave days by type, present and absent days, logged hours). No leave reason, note or
+  coordinate is ever returned. With Attendance and Leave both off (or not in the plan) the answer is
+  `{"enabled": false}` rather than a 403; with Leave on and Attendance off a working day is never
+  PRESENT or ABSENT.
 - `GET /api/attendance/analytics/me|team|org?from=&to=` — aggregates. `team` is scoped like the team
   screen; `org` is for admins and super admins. `from` and `to` are optional together (default: the
   last 30 days ending today); at most 180 days. Groups under the minimum size are suppressed
