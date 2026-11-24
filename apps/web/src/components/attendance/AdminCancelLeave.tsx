@@ -51,7 +51,7 @@ export function AdminCancelLeave() {
   return (
     <SectionCard
       title="Cancel someone's approved leave"
-      description="Super admins only. A comment is now required: it is sent to the person and kept in the audit log."
+      description="Administrators only. A comment is now required: it is sent to the person and kept in the audit log."
     >
       {approved.isLoading && <Skeleton className="h-20 w-full" />}
       {approved.isError && <CardError message="Approved leave could not be loaded." onRetry={() => runInBackground(approved.refetch())} />}
