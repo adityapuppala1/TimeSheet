@@ -382,9 +382,10 @@ model User {
   leaveRequests               LeaveRequest[]
   leaveLedger                 LeaveBalanceLedger[]
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  deletedAt         DateTime?
+  calendarFeedToken CalendarFeedToken?
 
   @@index([roleId, status])
   @@index([managerId])
@@ -6575,6 +6576,22 @@ model LeaveBalanceLedger {
 
   @@index([userId, leaveTypeId, leaveYear])
   @@index([refRequestId])
+}
+
+/// 7.0.0 private calendar feed: one revocable token per person. Only the SHA-256 of the token is
+/// stored; the token itself is shown once (in the feed URL) and travels in the URL path, because
+/// calendar apps cannot send an auth header. Rotating replaces the hash; revoking deletes the row.
+model CalendarFeedToken {
+  id         String    @id @default(uuid())
+  userId     String    @unique
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique @db.VarChar(64)
+  /// The first characters of the token, so the Profile card can show which URL is live.
+  hint       String    @db.VarChar(8)
+  lastUsedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 /// 7.0.0 approval delegation: while [startDate, endDate] covers today, `delegateId` may see and

@@ -69,6 +69,8 @@ import { changeRouter } from "./controllers/change.controller.js";
 import { attendanceSettingsRouter } from "./controllers/attendance-settings.controller.js";
 import { attendanceRouter } from "./controllers/attendance.controller.js";
 import { leaveRouter } from "./controllers/leave.controller.js";
+import { calendarFeedRouter } from "./controllers/calendar-feed.controller.js";
+import { redactFeedTokens } from "./services/calendar-feed.service.js";
 import { attendanceSourcesRouter } from "./controllers/attendance-sources.controller.js";
 import { attendanceWebhookRouter } from "./controllers/attendance-webhook.controller.js";
 import { WEBHOOK_BODY_LIMIT } from "./services/attendance-webhook.service.js";
@@ -412,6 +414,8 @@ for (const dir of documentReadDirs()) {
 // console capture mirrors HTTP access lines into the rotating files too — access logs are the
 // first thing anyone asks for when diagnosing a production incident. stdout is unchanged: the
 // patched console still calls the original first.
+// 7.0.0: a calendar feed URL carries its only credential in the path; the access log never sees it.
+morgan.token("url", (req) => redactFeedTokens((req as { originalUrl?: string; url?: string }).originalUrl ?? (req as { url?: string }).url ?? ""));
 app.use(morgan("tiny", { stream: { write: (message) => console.info(message.trimEnd()) } }));
 
 /**
@@ -604,6 +608,7 @@ app.use("/api/attendance/punch-in", rateLimit({ windowMs: 60_000, limit: 120, st
 app.use("/api/attendance", attendanceRouter);
 // V17 Phase B leave: employee, approver and super-admin routes, all behind the leave gate.
 app.use("/api/leave", leaveRouter);
+app.use("/api/calendar", calendarFeedRouter);
 // The inbox is a personal surface: no permission, no entitlement, every route scoped to the
 // caller's own rows. It sits beside /notifications rather than inside it because the bell is a
 // glance and the inbox is a queue with triage state — see controllers/inbox.controller.ts.

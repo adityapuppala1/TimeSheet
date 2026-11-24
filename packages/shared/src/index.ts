@@ -1907,3 +1907,33 @@ export type SalesLeadStatus = (typeof SALES_LEAD_STATUSES)[number];
 
 /** A code back into words, tolerating a value stored before an option was renamed. */
 export const salesLabel = (map: Record<string, string>, code: string | null | undefined): string => (code ? (map[code] ?? code) : "—");
+
+/* ------------------------------------------------------------------ *
+ * iCalendar (RFC 5545) — shared by the web's holiday download and the API's private calendar
+ * feed (7.0.0), so both escape and fold identically.
+ * ------------------------------------------------------------------ */
+
+/** TEXT value escaping: backslash, semicolon, comma, newline. */
+export const icsEscape = (s: string): string => s.replaceAll("\\", "\\\\").replaceAll(";", "\\;").replaceAll(",", "\\,").replaceAll(/\r?\n/g, "\\n");
+
+/** RFC 5545 line folding: no line longer than 75 octets, continuation lines start with a space. */
+export function foldIcsLine(line: string): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(line).length <= 75) return line;
+  const parts: string[] = [];
+  let current = "";
+  let bytes = 0;
+  for (const ch of line) {
+    const size = encoder.encode(ch).length;
+    const limit = parts.length === 0 ? 75 : 74;
+    if (bytes + size > limit) {
+      parts.push(current);
+      current = "";
+      bytes = 0;
+    }
+    current += ch;
+    bytes += size;
+  }
+  parts.push(current);
+  return parts.join("\r\n ");
+}

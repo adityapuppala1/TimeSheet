@@ -8,6 +8,7 @@
  * `/change-password`, `/avatar` routes.
  */
 import { LeaveProfileSummary } from "../components/attendance/LeaveProfileSummary";
+import { CalendarFeedCard } from "../components/CalendarFeedCard";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { getCountries, getCountryCallingCode, parsePhoneNumberFromString, type CountryCode } from "libphonenumber-js/min";
@@ -531,6 +532,8 @@ export function Profile() {
         </Card>
 
         <AppearanceCard />
+
+        <CalendarFeedCard />
 
         <Card>
           <CardHeader>

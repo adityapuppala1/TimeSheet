@@ -3,6 +3,7 @@
  * busy-day detection, the overlap line on an approval card, and the .ics file for holidays. Kept out
  * of the components so each rule is unit-tested without a DOM (tests/unit/leave-ui.test.ts).
  */
+import { foldIcsLine, icsEscape } from "@timesheet/shared";
 import type { LeaveHalf, LeavePreview, LeaveRequestRow, LeaveStatus, TeamLeaveItem } from "../services/leave-api";
 
 const DAY_MS = 86_400_000;
@@ -206,29 +207,9 @@ export function groupByMonth<T extends { date: string }>(items: readonly T[]): A
   return [...map.entries()].map(([month, list]) => ({ month, items: list }));
 }
 
-const icsEscape = (s: string) => s.replaceAll("\\", "\\\\").replaceAll(";", "\\;").replaceAll(",", "\\,").replaceAll(/\r?\n/g, "\\n");
-
-/** RFC 5545 line folding: no line longer than 75 octets, continuation lines start with a space. */
-export function foldIcsLine(line: string): string {
-  const encoder = new TextEncoder();
-  if (encoder.encode(line).length <= 75) return line;
-  const parts: string[] = [];
-  let current = "";
-  let bytes = 0;
-  for (const ch of line) {
-    const size = encoder.encode(ch).length;
-    const limit = parts.length === 0 ? 75 : 74;
-    if (bytes + size > limit) {
-      parts.push(current);
-      current = "";
-      bytes = 0;
-    }
-    current += ch;
-    bytes += size;
-  }
-  parts.push(current);
-  return parts.join("\r\n ");
-}
+// 7.0.0: the RFC 5545 helpers live in @timesheet/shared, so the API's private calendar feed
+// (services/calendar-feed.service.ts) writes exactly the same escaping and folding as this download.
+export { foldIcsLine };
 
 const compact = (key: string) => key.replaceAll("-", "");
 

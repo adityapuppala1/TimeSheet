@@ -225,6 +225,12 @@ function model(world: LeaveWorld, table: keyof LeaveWorld & string) {
       uniqueCheck(rows(), r, UNIQUE[table] ?? []);
       return r;
     },
+    deleteMany: async (args: { where?: Row } = {}) => {
+      const keep = rows().filter((x) => !matchWhere(x, args.where, world));
+      const count = rows().length - keep.length;
+      rows().splice(0, rows().length, ...keep);
+      return { count };
+    },
     updateMany: async (args: { where: Row; data: Row }) => {
       const hit = rows().filter((x) => matchWhere(x, args.where, world));
       for (const r of hit) Object.assign(r, args.data, { updatedAt: new Date() });
