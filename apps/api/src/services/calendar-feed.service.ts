@@ -42,10 +42,8 @@ export function parseFeedFile(file: string): { token: string; kind: "mine" | "te
   return { token: m[1], kind: m[2] ? "team" : "mine" };
 }
 
-/** Pure: the access-log line with any feed token replaced. */
-export function redactFeedTokens(url: string): string {
-  return url.replaceAll(/(\/calendar\/feed\/)[a-f0-9]{8,}/gi, "$1[redacted]");
-}
+/** Pure: the access-log line with any feed token replaced (one copy, in utils/log-redact.ts). */
+export { redactFeedTokens } from "../utils/log-redact.js";
 
 /* ------------------------------ token management ------------------------------ */
 

@@ -15,6 +15,7 @@
 import { Prisma } from "@prisma/client";
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
+import { redactUrlForLog } from "../utils/log-redact.js";
 
 export class AppError extends Error {
   /** Optional machine-readable code for clients that must BRANCH on the error kind rather than
@@ -103,7 +104,8 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   // to lose one).
   const deliberateLockout = error instanceof AppError && error.code === "MAINTENANCE";
   if (statusCode >= 500 && !deliberateLockout) {
-    console.error(`[error] ${req.method} ${req.originalUrl}`, error);
+    // Redacted: a feed token in the path or a query value (an OIDC code) must not reach the log.
+    console.error(`[error] ${req.method} ${redactUrlForLog(req.originalUrl)}`, error);
   }
   return res.status(statusCode).json({
     message: error.message || "Unexpected server error",

@@ -21,6 +21,7 @@ import type { NextFunction, Request, Response } from "express";
 import { dbTimingStore } from "../config/db-timing.js";
 import { env } from "../config/env.js";
 import { tenantContext } from "../config/tenant-context.js";
+import { redactFeedTokens } from "../utils/log-redact.js";
 import {
   currentHostSnapshot,
   enqueueApiRequestSample,
@@ -52,7 +53,8 @@ function redactIdSegments(pathname: string): string {
 }
 
 export function routePattern(req: Request): string {
-  const pathname = (req.originalUrl.split("?")[0] || "/").slice(0, 200);
+  // Feed tokens redacted: the fallback below keeps "<token>.ics" (not a bare hex segment) verbatim.
+  const pathname = redactFeedTokens(req.originalUrl.split("?")[0] || "/").slice(0, 200);
   const raw = (req as Request & { route?: { path?: unknown } }).route?.path;
   const routePath = typeof raw === "string" ? raw : Array.isArray(raw) && typeof raw[0] === "string" ? raw[0] : null;
 
