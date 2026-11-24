@@ -41,11 +41,22 @@ as days anyone owed a timesheet on. With the module off, every screen and API re
   `/api/leave/status` gains `compOffEnabled`.
 - **`GET /api/leave/inbox?scope=all` is now open to ADMIN** as well as SUPER_ADMIN (an admin could already cancel
   anyone's leave through the API). Reasons and documents are still stripped from every row the caller may not decide.
+- **Shifts (one more additive tenant migration: `AttendanceShift` and `AttendanceShiftAssignment`, both empty).**
+  No new entitlement: shifts sit under `attendanceEnabled` (Team). With no shift assigned nothing changes. Once a
+  person is on a night shift, punches from every source (web, API, webhook, CSV) are filed on the shift's START date,
+  so an integration that matched records on the calendar date of the punch should expect the previous day's key for
+  after-midnight punches. `GET /api/attendance/me/today` gains `shift` (null without one).
 - **Two new webhook events, `compoff.requested` and `compoff.approved`.** Existing subscriptions are not opted in.
 - **The access log redacts calendar feed tokens** (`/api/calendar/feed/[redacted]`). A log shipper that parsed the
   raw path of that route will see the placeholder.
 
 ### ✨ Features: Attendance, leave and holiday calendars
+
+- **Shifts and rosters.** Workspace Settings → Attendance & Leave → Shifts: define shifts (start, end, break,
+  working days; a shift may run past midnight) and assign one to a person or to a manager's whole team from a date.
+  The person's own assignment beats the team's. The shift replaces the workspace working days and start time for that
+  person: lateness is judged on the shift start, and a day only counts as missed once the shift has ended. A night
+  shift counts on the day it starts. People see "Your shift" on My attendance. Off until a shift is assigned.
 
 - **A plan-tier module.** Starter has none. Team gets attendance, holidays and missed-day reasons. Enterprise adds leave
   management, integrations and AI insights. A platform administrator can override each of the four entitlements

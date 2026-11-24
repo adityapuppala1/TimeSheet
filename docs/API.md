@@ -3370,6 +3370,23 @@ need the plan's attendance integrations.
 The signed attendance webhook (above) accepts leave items too: add `"kind": "leave"` to an item with
 the same fields, and the source's match field applies when only `identifier` is sent.
 
+#### Shifts (7.0.0)
+
+Super admin, under `/api/attendance/admin` (writes need the `attendanceEnabled` plan):
+
+- `GET /shifts` — `{ shifts, assignments }`.
+- `POST /shifts`, `PUT /shifts/:id` — `{ name, startMinute, endMinute, breakMinutes, workingDays }`; minutes are
+  0-1439 from local midnight, `endMinute <= startMinute` means the shift crosses midnight, equal is a 422.
+  `409` on a duplicate name. `DELETE /shifts/:id` removes it and its assignments.
+- `POST /shift-assignments` — `{ shiftId, userId | managerId, effectiveFrom, effectiveTo? }` (exactly one of
+  `userId` or `managerId`; `managerId` means everyone reporting to that manager). `DELETE /shift-assignments/:id`.
+
+Resolution: the person's own assignment covering the date, else their manager's team assignment; newest
+`effectiveFrom` wins; none = the workspace day. A night shift's work date is the day it starts (the split is the
+middle of the off-shift gap), for every ingest source. `GET /api/attendance/me/today` returns `shift`
+(`{ id, name, startMinute, endMinute, breakMinutes, workingDays, crossesMidnight, expectedMinutes }` or null) and,
+with lateness on, `expectedStartMinute` is the shift start.
+
 #### Comp-off, approval cover, calendar feed and payroll (7.0.0)
 
 All are off until switched on and need leave on (`leaveEnabled` and the `leaveManagementEnabled`

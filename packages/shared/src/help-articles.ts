@@ -421,6 +421,23 @@ export const HELP_ARTICLES: HelpArticle[] = [
     keywords: ["comp-off", "comp off", "compensatory off", "weekend work", "holiday work", "time in lieu", "toil", "CO"]
   },
   {
+    id: "attendance-shifts",
+    category: "Timesheets",
+    title: "Set up shifts and rosters",
+    roles: ["SUPER_ADMIN"],
+    where: "Workspace Settings → Attendance & Leave → Shifts",
+    when: "When some people do not work the workspace day, for example a night shift or a Sunday-to-Thursday week.",
+    steps: [
+      "Open Workspace Settings → Attendance & Leave and choose Shifts.",
+      "Add a shift: a name, when it starts and ends, the break in minutes and its working days. A shift that ends before it starts runs past midnight.",
+      "Under Who works which shift, pick the shift, then a person or a manager (their whole team), and the date it starts from. Press Assign.",
+      "From that date the person's punch-in, lateness and the point a day counts as missed follow the shift. They see Your shift on My attendance."
+    ],
+    notes:
+      "A night shift counts on the day it starts: punching in at 02:00 on a 22:00-06:00 shift belongs to the previous evening's shift, and the day is only marked missed after the shift has ended. A person's own assignment beats their team's; the newest start date wins. People without a shift keep the workspace day.",
+    keywords: ["shift", "roster", "night shift", "rota", "working hours", "schedule", "lateness"]
+  },
+  {
     id: "approval-cover",
     category: "Timesheets",
     title: "Let someone cover your leave approvals",
