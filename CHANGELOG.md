@@ -10,35 +10,49 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
-### 🕘 Attendance, holidays and missed-day reasons (Phase A; off for every workspace until an admin opts in)
+## 6.5.0 — Attendance, leave and holiday calendars: off until you switch them on — 2026-11-24
 
-- **A plan-tier module.** Attendance is on Team and above; integrations and AI insights are Enterprise. A platform
-  administrator can override each of the four entitlements (`attendanceEnabled`, `leaveManagementEnabled`,
-  `attendanceIntegrationsEnabled`, `attendanceAiInsightsEnabled`) per workspace. The server refuses calls without
-  it and the UI shows the upgrade note.
-- **Punch in.** A dialog (a bottom sheet on a phone) after sign-in, in Off, Optional (dismissible, then a banner) or
-  Mandatory (locks the app to Profile and sign-out) mode, with optional location (consent first) and face
-  verification. One day-status rule serves everywhere: weekend, holiday, then punched in from any source, else absent.
-- **Punches from anywhere.** One ingest service behind the web prompt, a public API (`attendance:read` /
-  `attendance:write` key grants), a signed webhook for devices and HRMS, MCP tools, and CSV import, with
-  source priorities and a delivery log. Settings → Attendance & Leave → Sources & integrations.
-- **Holiday calendars** with a default and per-person assignment.
-- **Reminder and missed-day reason.** A punch-in reminder through the existing email pipeline (its own template and
-  category; the 17:00 reminder is unchanged), and a mandatory, editable reason the first time someone logs time for a
-  past working day that has none, on web, API and MCP.
-- **Attendance page.** My attendance, Team (today status, source, location, face result, reminders, and a person
-  timeline sheet) and Organisation, with rule-based insights and plan-gated AI suggestions built only from aggregates.
-- **Punch-in reminder reaches every role.** The 11:00 reminder now goes to every active person (employees, team
-  leads, managers, admins and super admins), not only the 17:00 timesheet reminder's employees and team leads. Which
-  roles get the email is the *Punch-in reminder* row in Workspace Settings → Email channels, every role on by
-  default. The 17:00 reminder and next-morning escalation are unchanged.
-- **Hardening.** Admins and super admins are never locked behind the Mandatory punch-in overlay (they get the
-  dialog and banner), so they can always reach Settings. The missed-day reason rule cannot be left with no enabled
-  reason. The webhook signature now covers the event id: `HMAC(secret, "<timestamp>.<event id>.<raw body>")`.
-  AI insights are cached per day/week and computed over the last 30 days, with a per-user rate limit. The delivery
-  log no longer shows a sender's coordinates, and team AI suggestions never send per-person figures.
-- **Settings polish.** Row deletes use the app's confirm dialog; empty lists use the standard empty state.
-- Leave management and approvals are Phase B and not in this release.
+A new module, **off for every workspace until an admin opts in**. It adds a tenant migration, which `update.sh` applies, and a control-plane migration for the four new plan entitlements.
+
+### ✨ Features: Attendance, leave and holiday calendars
+
+- **A plan-tier module.** Starter has none. Team gets attendance, holidays and missed-day reasons. Enterprise adds leave
+  management, integrations and AI insights. A platform administrator can override each of the four entitlements
+  (`attendanceEnabled`, `leaveManagementEnabled`, `attendanceIntegrationsEnabled`, `attendanceAiInsightsEnabled`) per
+  workspace. The server refuses calls without the entitlement and the UI shows the upgrade note.
+- **Punch in after login.** A dialog (a bottom sheet on a phone) in Off, Optional (dismissible, then a banner) or
+  Mandatory (locks the app to Profile and sign-out) mode. Location (consent first) and face verification are optional
+  and off by default; no map or coordinates are shown anywhere. Admins and super admins are never locked behind the
+  Mandatory overlay, so they can always reach Settings.
+- **Attendance from any source.** The web prompt, a public API, a signed webhook, MCP tools, CSV import and
+  HRMS/biometric feeds all go through one ingest service. Every record keeps its source, source priorities settle
+  conflicts, and there is a delivery log. Settings → Attendance & Leave → Sources & integrations. The webhook signature
+  covers the event id: `HMAC(secret, "<timestamp>.<event id>.<raw body>")`.
+- **Leave management (Enterprise).** Leave types such as PL, CL and SL with accrual, carry-forward, half days and
+  document rules, over a balance ledger. Requests go to the manager, with an admin fallback and a super-admin override;
+  a manager can bulk approve. An HRMS can send leave in, either trusted (recorded as approved) or re-approved here.
+  Leave is gated by its own entitlement and a locked leave year.
+- **Holiday calendars** with a default and per-person assignment. Expected hours are adjusted for holidays and approved leave.
+- **Reminder.** An 11:00 punch-in reminder email through the existing pipeline, to every active person, with its own
+  template and category. Which roles receive it is the *Punch-in reminder* row in Workspace Settings → Email channels.
+  The 17:00 reminder and next-morning escalation are unchanged.
+- **Missed-day reason.** A mandatory, editable reason (a dropdown plus Other) the first time someone logs time for a
+  past working day with no entries, on web, API and MCP. The rule cannot be left with no enabled reason.
+- **Attendance pages.** My attendance, a manager's team activity view (today's status, source, face result, reminders
+  and a person timeline), and Organisation, plus a leave calendar and approvals inbox. Analytics for Me, Team and
+  Organisation come with rule-based insights and plan-gated AI suggestions that are k-anonymous: built only from
+  aggregates, cached per day or week over the last 30 days, with a per-user rate limit and never a per-person figure.
+- **Public API and webhooks.** New key grants `attendance:read`, `attendance:write`, `leave:read` and `leave:write`
+  (`READ`/`WRITE` never imply them), and leave events on the signed webhook. See `docs/API.md`.
+- **Help.** New articles for punching in, missed-day reasons, my attendance, team activity, organisation insights,
+  applying for and approving leave, and setting the module up. Ask AI answers from the same articles.
+
+### 🐛 Fixes
+
+- **Email channels save.** `PATCH /settings/notifications` now accepts a partial `emailRoleMutes` map, so saving one
+  role's toggle no longer fails validation; omitting the map still leaves the stored one untouched.
+- **Timesheet at 320px.** The Draft my week actions wrap, so `/app/timesheet` no longer overflows horizontally on the
+  narrowest phones.
 
 ## 6.4.0 — the Agents Office: watch your AI teammates work, and replay their last 24 hours — 2026-11-23
 
