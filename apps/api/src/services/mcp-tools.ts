@@ -48,6 +48,7 @@ import { htmlToText } from "../utils/sanitize.js";
 import { assertIngestAllowed, ingestPunch } from "./attendance-ingest.service.js";
 import { isPunchInFaceRequired, publicRecord } from "./attendance-punch.service.js";
 import { getAttendanceSettings } from "./attendance-settings.service.js";
+import { locationlessSiteVerdict, OUTSIDE_SITES } from "./attendance-site.service.js";
 import { applyLeave, assertLeaveOn, getBalances, listMyRequests, withoutPrivateText } from "./leave.service.js";
 import { weekOf, whoIsOff } from "./leave-who-is-off.service.js";
 
@@ -694,7 +695,8 @@ const TOOLS: readonly McpToolRegistration[] = [
       "records the punch for THEM only (there is no parameter for anyone else) on their own local " +
       "calendar day, and is idempotent — punching in twice returns the first punch. Refused when " +
       "the workspace requires a face check or location for punch-in, because an assistant cannot " +
-      "provide either; tell the user to punch in from the web app instead.",
+      "provide either, and when the workspace only accepts punches at a work site; tell the user to " +
+      "punch in from the web app instead.",
     inputSchema: {},
     permission: null,
     mutating: true,
@@ -709,9 +711,22 @@ const TOOLS: readonly McpToolRegistration[] = [
       if (settings.locationMode === "REQUIRED" || (await isPunchInFaceRequired(settings.punchInFaceRequired))) {
         throw new AppError(403, "This workspace requires a face check or location to punch in. Punch in from the TimeSphere web app.");
       }
+      // An assistant cannot supply a location, so the work-site rule treats this like a web punch-in
+      // without one: refused under BLOCK, recorded flagged under ALLOW_FLAGGED.
+      const site = await locationlessSiteVerdict(settings.requireSite);
+      if (site === "BLOCK") {
+        throw new AppError(403, "This workspace requires you to punch in at a work site. Punch in from the TimeSphere web app.", { code: "OUTSIDE_WORK_SITES" });
+      }
       const me = await prisma.user.findUnique({ where: { id: ctx.user.id }, select: { id: true, timezone: true } });
       if (!me) throw new AppError(404, "User not found");
-      const result = await ingestPunch({ kind: "MCP", person: me, userId: me.id, punchInAt: new Date(), gateChecked: true });
+      const result = await ingestPunch({
+        kind: "MCP",
+        person: me,
+        userId: me.id,
+        punchInAt: new Date(),
+        gateChecked: true,
+        ...(site === "FLAG" ? { evidence: { siteLabel: OUTSIDE_SITES, siteFlagged: true } } : {})
+      });
       const record = result.recordId
         ? await prisma.attendanceRecord.findUnique({ where: { id: result.recordId }, include: { sourceRef: { select: { name: true } } } })
         : null;

@@ -468,7 +468,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Punches now show At <site> or Outside work sites, and the organisation breakdown can be grouped by Location label."
     ],
     notes:
-      "Nobody, including managers, sees a coordinate: only the site label. A punch is matched to the nearest site whose circle contains it. Punches without a location, or with no sites defined, keep their usual label. Pausing a site stops new punches matching it; labels already recorded stay.",
+      "Nobody, including managers, sees a coordinate: only the site label. A punch is matched to the nearest site whose circle contains it. Punches without a location, or with no sites defined, keep their usual label. Pausing a site stops new punches matching it; labels already recorded stay. The rule also covers punching in through an AI assistant (MCP), which cannot share a location: Block refuses it and Allow and flag records it flagged. Badge devices, the kiosk, the attendance API, webhooks and CSV imports are trusted integrations and are not held to the rule.",
     keywords: ["work site", "geofence", "office location", "location label", "site", "outside work sites", "radius"]
   },
   {

@@ -3426,7 +3426,11 @@ Super admin, under `/api/attendance/admin` (writes need the `attendanceEnabled` 
 Every punch with a location, from any source, stores `siteLabel`: `"At <name>"` for the nearest site whose radius
 contains it (haversine distance; the boundary counts), `"Outside work sites"`, or null when there are no sites or no
 location. Web punch-in under `BLOCK` outside every site (or without a location) is `422 OUTSIDE_WORK_SITES`; under
-`ALLOW_FLAGGED` it is recorded with `siteFlagged: true`. The label is what person-facing reads return (`record.siteLabel`
+`ALLOW_FLAGGED` it is recorded with `siteFlagged: true`. The MCP `punch_in` tool cannot carry a location, so it is treated
+the same way: `403 OUTSIDE_WORK_SITES` under `BLOCK` and `siteFlagged: true` under `ALLOW_FLAGGED`, once a site is
+enabled. Trusted integrations (devices, the public attendance API, webhooks, CSV import, the kiosk) are exempt from
+the rule by design: an admin configured them, and they speak for a place rather than for a person choosing where to
+punch from. Their punches are still labelled from any location they carry. The label is what person-facing reads return (`record.siteLabel`
 on `/me/today`, `siteLabel` on `/me/history`, Team Activity's `location`); coordinates are never returned there.
 `GET /api/attendance/analytics/org` gains `bySite: [{ label, people, suppressed, punches }]`, k-anonymous like
 `bySource` (punches with no label group as `"No site label"`).

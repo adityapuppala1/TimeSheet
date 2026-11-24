@@ -10,7 +10,7 @@
  * whose radius contains the point wins. The device's reported accuracy is NOT added to the radius —
  * a phone that says "±2 km" must not count as being at every site in town.
  *
- * THE RULE (GlobalAttendanceSettings.requireSite, web punch only — a device on the wall is at its
+ * THE RULE (GlobalAttendanceSettings.requireSite, web and MCP self punch only — a device on the wall is at its
  * site by definition): OFF just labels; BLOCK refuses a web punch-in outside every site (or with no
  * location); ALLOW_FLAGGED records it and marks it (siteFlagged) for review.
  */
@@ -18,6 +18,19 @@ import { z } from "zod";
 import { prisma } from "../config/prisma.js";
 
 export const OUTSIDE_SITES = "Outside work sites";
+
+/**
+ * The site rule for a SELF punch that cannot carry a location (the MCP punch_in tool: an assistant
+ * has no position to give). Treated exactly as a web punch-in with no location: refused under BLOCK
+ * and flagged under ALLOW_FLAGGED, once any site is enabled. Trusted integrations (device, public
+ * API, webhook, CSV import, kiosk) are exempt by design: they are admin-configured and speak for a
+ * place, not for a person choosing where to punch from.
+ */
+export async function locationlessSiteVerdict(rule: "OFF" | "BLOCK" | "ALLOW_FLAGGED" | null | undefined): Promise<"OK" | "BLOCK" | "FLAG"> {
+  if (!rule || rule === "OFF") return "OK";
+  if ((await enabledSites()).length === 0) return "OK";
+  return rule === "BLOCK" ? "BLOCK" : "FLAG";
+}
 
 export interface SiteCircle {
   name: string;
