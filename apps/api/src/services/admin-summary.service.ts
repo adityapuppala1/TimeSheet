@@ -37,6 +37,7 @@ import { countApprovalSlaBreaches } from "./approval-sla-breaches.service.js";
 import { isChangeManagementOn } from "./change.service.js";
 import { COUNTED_PEOPLE } from "./people-visibility.service.js";
 import { workingDaysBetween } from "./plan-schedule.service.js";
+import { defaultHolidayWorkingDays } from "./workforce-holidays.service.js";
 import { getPlanningSettings } from "./planning.service.js";
 import { awaitingReviewWhere, loadApprovalAuthority } from "./timesheet-approval-scope.service.js";
 import { CLOSED_TICKET_STATUSES, LOGGED_TIMESHEET_STATUSES, percentOf } from "./workspace-metrics.js";
@@ -100,8 +101,13 @@ async function workforceSnapshot(days: DateRange, prevDays: DateRange, now: Date
   const yesterday = new Date(today.getTime() - DAY_MS);
   // The period's working days SO FAR — the average must not divide by days that have not happened.
   const periodEnd = days.lte > today ? today : days.lte;
-  const periodWorkingDays = periodEnd < days.gte ? 0 : workingDaysBetween(days.gte, periodEnd, workingDays);
-  const ytdWorkingDays = yesterday < yearStart ? 0 : workingDaysBetween(yearStart, yesterday, workingDays);
+  // 7.0.0: with Attendance & Leave on, the workspace's holidays are not working days (0 when off).
+  const [periodHolidays, ytdHolidays] = await Promise.all([
+    periodEnd < days.gte ? 0 : defaultHolidayWorkingDays(days.gte, periodEnd, workingDays),
+    yesterday < yearStart ? 0 : defaultHolidayWorkingDays(yearStart, yesterday, workingDays)
+  ]);
+  const periodWorkingDays = periodEnd < days.gte ? 0 : Math.max(0, workingDaysBetween(days.gte, periodEnd, workingDays) - periodHolidays);
+  const ytdWorkingDays = yesterday < yearStart ? 0 : Math.max(0, workingDaysBetween(yearStart, yesterday, workingDays) - ytdHolidays);
 
   const [population, logged, loggedPrev, periodPersonDays, ytdPersonDays] = await Promise.all([
     prisma.user.count({ where: WORKFORCE_WHERE }),

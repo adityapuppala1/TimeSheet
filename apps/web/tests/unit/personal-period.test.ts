@@ -153,3 +153,12 @@ describe("the by-state card's sentence", () => {
     expect(periodNote(8, 0, { APPROVED: 8, SUBMITTED: 0, DRAFT: 5, REJECTED: 0 }, "this week")).toMatch(/^Every logged hour this week is approved/);
   });
 });
+
+describe("7.0.0 leave and holidays", () => {
+  it("a holiday and a half-day of leave are not days owed; without dayOff nothing changes", () => {
+    const base = { rows: [], from: "2026-09-28", to: "2026-10-01", userId: ME, today: TODAY };
+    expect(summarisePersonalPeriod(base).workingDaysToDate).toBe(4);
+    const off = (k: string) => (k === "2026-09-29" ? 1 : k === "2026-09-30" ? 0.5 : 0);
+    expect(summarisePersonalPeriod({ ...base, dayOff: off }).workingDaysToDate).toBe(2.5);
+  });
+});

@@ -116,3 +116,11 @@ export function clampGridRange(from: string, to: string, maxDays = 93): { from: 
   const earliest = end - (maxDays - 1) * 86_400_000;
   return { from: start < earliest ? new Date(earliest).toISOString().slice(0, 10) : from, to };
 }
+
+/** 7.0.0: how much of a day is off for the dashboard's targets — 1 for a holiday or full-day leave,
+ *  0.5 for half-day leave, 0 otherwise. Pure. */
+export function dayOffWeight(day: DayGridDay | undefined): number {
+  if (day?.status === "HOLIDAY") return 1;
+  if (day?.status === "LEAVE") return day.halfDay ? 0.5 : 1;
+  return 0;
+}

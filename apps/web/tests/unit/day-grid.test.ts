@@ -183,3 +183,14 @@ describe("Reports: Attendance & leave", () => {
     expect(csv.split("\r\n")[1]).toBe("'=Asha,20,1,1.5,1.5,17,1,140");
   });
 });
+
+describe("dayOffWeight", () => {
+  it("holiday and full leave are a whole day off, half-day leave half, anything else none", async () => {
+    const { dayOffWeight } = await import("../../src/lib/day-grid");
+    expect(dayOffWeight({ status: "HOLIDAY" })).toBe(1);
+    expect(dayOffWeight({ status: "LEAVE" })).toBe(1);
+    expect(dayOffWeight({ status: "LEAVE", halfDay: "FIRST_HALF" })).toBe(0.5);
+    expect(dayOffWeight({ status: "ABSENT" })).toBe(0);
+    expect(dayOffWeight(undefined)).toBe(0);
+  });
+});

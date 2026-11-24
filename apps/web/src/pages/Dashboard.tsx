@@ -82,7 +82,7 @@ import type { CalendarDayAnnotations } from "../components/ui/calendar-primitive
 import { useAuthStore } from "../store/auth";
 import { useCardLayout } from "../lib/use-media-query";
 import { useWorkingDays } from "../lib/use-planning";
-import { clampGridRange, dayStatusLookup, laneLabel, type DayStatusLookup } from "../lib/day-grid";
+import { clampGridRange, dayOffWeight, dayStatusLookup, laneLabel, type DayStatusLookup } from "../lib/day-grid";
 import { STATUS_META } from "../lib/attendance-status";
 import { attendanceApi } from "../services/attendance-api";
 
@@ -376,9 +376,11 @@ export function Dashboard() {
         userId: user?.id,
         // The workspace's own working week, so the target to date and "days logged / N" agree with
         // the server's utilisation in a six-day (or Sunday–Thursday) workspace.
-        workingDays
+        workingDays,
+        // 7.0.0: holidays and leave are not days owed (only when the module answers enabled).
+        dayOff: dayStatus && user?.id ? (key: string) => dayOffWeight(dayStatus.get(user.id, key)) : undefined
       }),
-    [allForCalendar, previous.data, range.from, range.to, user?.id, workingDays]
+    [allForCalendar, previous.data, range.from, range.to, user?.id, workingDays, dayStatus]
   );
   /** The team view's figures: the timeline's own rows (already role-scoped and range-bounded), with
    *  no owner filter. Never merged with the unscoped `recent` page, which for a manager would add
