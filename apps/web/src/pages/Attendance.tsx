@@ -17,6 +17,7 @@ import { PageHeader } from "../components/PageHeader";
 import { MyAnalyticsSection, TeamInsightsView } from "../components/attendance/AttendanceAnalytics";
 import { AdminCancelLeave } from "../components/attendance/AdminCancelLeave";
 import { CompOffInbox } from "../components/attendance/CompOff";
+import { ApprovalDelegations } from "../components/attendance/ApprovalDelegations";
 import { ApprovalsInbox } from "../components/attendance/ApprovalsInbox";
 import { ApplyLeave, HolidayCalendarView, LeaveNav, MyLeaveRequests } from "../components/attendance/LeaveScreens";
 import { MyAttendanceView } from "../components/attendance/MyAttendanceView";
@@ -133,12 +134,14 @@ function TeamPanel({ leaveOn }: Readonly<{ leaveOn: boolean }>) {
             <div className="grid min-w-0 content-start gap-4">
               <ApprovalsInbox />
               <CompOffInbox />
+              <ApprovalDelegations />
             </div>
           )}
         </div>
       )}
       {tab === "approvals" && leaveOn && <ApprovalsInbox />}
       {tab === "approvals" && leaveOn && <CompOffInbox />}
+      {tab === "approvals" && leaveOn && <ApprovalDelegations />}
       {tab === "calendar" && leaveOn && <TeamLeaveCalendar />}
       {tab === "calendar" && leaveOn && admin && <AdminCancelLeave />}
       {tab === "insights" && <TeamInsightsView />}

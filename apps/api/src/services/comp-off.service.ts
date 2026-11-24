@@ -37,6 +37,7 @@ import { getPlanningSettings } from "./planning.service.js";
 import { NOT_DEACTIVATED } from "./people-visibility.service.js";
 import { settleLateMovement } from "./leave-settlement.service.js";
 import { addDaysKey, leaveYearOf } from "./leave-calc.js";
+import { delegatesOf } from "./approval-delegation.service.js";
 import { assertLeaveOn, isLeaveOn, MAX_BACKDATE_DAYS, resolveDecisionRight, type Fallback } from "./leave.service.js";
 
 const toKey = (d: Date) => d.toISOString().slice(0, 10);
@@ -185,7 +186,7 @@ async function lockPerson(tx: Prisma.TransactionClient, userId: string): Promise
 async function approverRecipients(request: { userId: string; approverId: string | null }, fallback: Fallback) {
   if (request.approverId) {
     const manager = await prisma.user.findFirst({ where: { id: request.approverId, status: "ACTIVE", deletedAt: null }, select: { id: true } });
-    if (manager) return [manager];
+    if (manager) return [manager, ...(await delegatesOf(manager.id)).filter((d) => d.id !== request.userId && d.id !== manager.id)];
   }
   const roles = fallback === "SUPER_ADMINS" ? ["SUPER_ADMIN"] : ["SUPER_ADMIN", "ADMIN"];
   return prisma.user.findMany({

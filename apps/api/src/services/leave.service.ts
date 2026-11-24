@@ -48,6 +48,7 @@ import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
 import { NOT_DEACTIVATED } from "./people-visibility.service.js";
 import { carryChange, isYearSettled, settleLateMovement, settlementFacts } from "./leave-settlement.service.js";
 import { runInBackground } from "../utils/run-in-background.js";
+import { delegatesOf, delegatorsFor } from "./approval-delegation.service.js";
 import {
   accrualDueThrough,
   addDaysKey,
@@ -219,9 +220,15 @@ export async function resolveDecisionRight(
   request: { userId: string; approverId: string | null },
   approverActive: boolean,
   fallback: Fallback,
-  _now: Date = new Date()
+  now: Date = new Date()
 ): Promise<{ right: DecisionRight; onBehalfOfId: string | null } | null> {
   const right = decisionRight(actor, request, approverActive, fallback);
+  if (right === "APPROVER") return { right, onBehalfOfId: null };
+  // A delegate decides the captured approver's requests (never their own) — even a super admin's
+  // OVERRIDE is better recorded as "on behalf of" when a delegation covers it.
+  if (actor.id !== request.userId && request.approverId && approverActive && (await delegatorsFor(actor.id, now)).has(request.approverId)) {
+    return { right: "APPROVER", onBehalfOfId: request.approverId };
+  }
   return right ? { right, onBehalfOfId: null } : null;
 }
 
@@ -884,7 +891,8 @@ function datesLabel(r: { startDate: Date; endDate: Date; startHalf: LeaveHalf; e
 async function approverRecipients(request: { userId: string; approverId: string | null }, fallback: Fallback) {
   if (request.approverId) {
     const manager = await prisma.user.findFirst({ where: { id: request.approverId, status: "ACTIVE", deletedAt: null }, select: { id: true, name: true } });
-    if (manager) return [manager];
+    // 7.0.0: whoever is covering for the approver right now is told too (never the requester).
+    if (manager) return [manager, ...(await delegatesOf(manager.id)).filter((d) => d.id !== request.userId && d.id !== manager.id)];
   }
   const roles = fallback === "SUPER_ADMINS" ? ["SUPER_ADMIN"] : ["SUPER_ADMIN", "ADMIN"];
   return prisma.user.findMany({
@@ -992,8 +1000,9 @@ async function decideOne(input: DecideInput, notify: "await" | "background"): Pr
   });
   // Unknown id and someone else's request: one answer, so ids cannot be probed.
   if (!request) throw new AppError(403, OUT_OF_SCOPE);
-  const right = decisionRight(input.actor, request, await isActiveAccount(request.approverId), fallback);
-  if (!right) throw new AppError(403, OUT_OF_SCOPE);
+  const resolved = await resolveDecisionRight(input.actor, request, await isActiveAccount(request.approverId), fallback, now);
+  if (!resolved) throw new AppError(403, OUT_OF_SCOPE);
+  const right = resolved.right;
   if (request.status !== "PENDING") {
     throw new AppError(409, `This request is already ${request.status.toLowerCase()}.`, { code: "LEAVE_ALREADY_DECIDED" });
   }
@@ -1054,7 +1063,8 @@ async function decideOne(input: DecideInput, notify: "await" | "background"): Pr
     days,
     leaveType: type.code,
     overriddenBySuperAdmin: overridden,
-    ...(overridden ? { designatedApproverId: request.approverId } : {})
+    ...(overridden ? { designatedApproverId: request.approverId } : {}),
+    ...(resolved.onBehalfOfId ? { onBehalfOf: resolved.onBehalfOfId } : {})
   });
   emitDomainEvent(approve ? "leave.approved" : "leave.rejected", webhookPayload(decided, request.user));
   const told = notifyRequester(decided, approve ? "approved" : "rejected", input.actor.name ?? "your approver");
@@ -1215,6 +1225,9 @@ export async function inboxWhere(
     return {};
   }
   const clauses: Prisma.LeaveRequestWhereInput[] = [{ approverId: actor.id }];
+  // 7.0.0: the requests of every (active) approver this actor is covering for right now.
+  const covering = [...(await delegatorsFor(actor.id))];
+  if (covering.length) clauses.push({ approverId: { in: covering } });
   if (inApproverPool(actor.role, fallback)) {
     // Approvers of pending requests who have since been deactivated: their queue falls to the pool.
     const captured = await prisma.leaveRequest.findMany({
@@ -1275,7 +1288,12 @@ async function decisionRightsFor(actor: { id: string; role: string }, rows: Read
   const approverIds = [...new Set(rows.map((r) => r.approverId).filter((x): x is string => Boolean(x)))];
   const active = approverIds.length ? await prisma.user.findMany({ where: { id: { in: approverIds }, ...NOT_DEACTIVATED }, select: { id: true } }) : [];
   const activeIds = new Set(active.map((u) => u.id));
-  return (r: RequestRow) => decisionRight(actor, r, Boolean(r.approverId && activeIds.has(r.approverId)), fallback) !== null;
+  const covering = await delegatorsFor(actor.id);
+  return (r: RequestRow) => {
+    const approverActive = Boolean(r.approverId && activeIds.has(r.approverId));
+    if (decisionRight(actor, r, approverActive, fallback) !== null) return true;
+    return r.userId !== actor.id && approverActive && Boolean(r.approverId && covering.has(r.approverId));
+  };
 }
 
 /**

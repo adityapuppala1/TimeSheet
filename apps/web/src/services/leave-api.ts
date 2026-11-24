@@ -168,6 +168,24 @@ export interface CompOffEligibility {
   thresholds: { halfDayHours: number; fullDayHours: number };
 }
 
+export interface DelegationRow {
+  id: string;
+  delegator: { id: string; name: string };
+  delegate: { id: string; name: string };
+  startDate: string;
+  endDate: string;
+  revoked: boolean;
+  active: boolean;
+  createdAt: string;
+}
+
+export const delegationApi = {
+  list: async (scope: "mine" | "all" = "mine") => (await api.get<{ items: DelegationRow[] }>("/leave/delegations", { params: { scope } })).data.items,
+  candidates: async (q?: string) => (await api.get<{ items: Array<{ id: string; name: string }> }>("/leave/delegations/candidates", { params: q ? { q } : {} })).data.items,
+  create: async (payload: { delegateId: string; delegatorId?: string; startDate: string; endDate: string }) => (await api.post<DelegationRow>("/leave/delegations", payload)).data,
+  revoke: async (id: string) => (await api.post<DelegationRow>(`/leave/delegations/${id}/revoke`)).data
+};
+
 export interface CompOffSettings {
   compOffEnabled: boolean;
   compOffHalfDayHours: number;

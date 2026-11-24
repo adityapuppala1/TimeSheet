@@ -52,6 +52,7 @@ import {
   publicLeaveType
 } from "../services/leave.service.js";
 import { runLeaveAccrual } from "../workers/leave-accrual.worker.js";
+import { createDelegation, delegateCandidates, delegationBody, listDelegations, revokeDelegation } from "../services/approval-delegation.service.js";
 import {
   cancelCompOff,
   compOffDecisionBody,
@@ -404,4 +405,28 @@ admin.post("/accrual/run", async (req, res) => {
   const result = { ...(await runLeaveAccrual()), compOffExpired: await expireCompOffCredits() };
   await audit(req.user!.id, "leave.accrual_run", "LeaveBalanceLedger", undefined, result);
   res.json(result);
+});
+
+/* ----------------------------- approval delegation (7.0.0) ----------------------------- */
+
+leaveRouter.get("/delegations", requireAuth, async (req, res) => {
+  await assertLeaveOn();
+  const scope = req.query.scope === "all" ? "all" : "mine";
+  res.json({ items: await listDelegations(actorOf(req), scope) });
+});
+
+leaveRouter.get("/delegations/candidates", requireAuth, async (req, res) => {
+  await assertLeaveOn();
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : undefined;
+  res.json({ items: await delegateCandidates(req.user!.id, q || undefined) });
+});
+
+leaveRouter.post("/delegations", requireAuth, validate(z.object({ body: delegationBody })), async (req, res) => {
+  await assertLeaveOn();
+  res.status(201).json(await createDelegation(actorOf(req), delegationBody.parse(req.body)));
+});
+
+leaveRouter.post("/delegations/:id/revoke", requireAuth, async (req, res) => {
+  await assertLeaveOn();
+  res.json(await revokeDelegation(actorOf(req), String(req.params.id)));
 });
