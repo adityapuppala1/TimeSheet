@@ -27,6 +27,7 @@ import {
   spanDays
 } from "../services/attendance-team.service.js";
 import { AppError } from "../middleware/error.js";
+import { getDayGrid, parseGridRange } from "../services/attendance-day-grid.service.js";
 import {
   defaultRange,
   getInsights,
@@ -126,6 +127,16 @@ function rangeQuery(query: unknown, maxDays: number) {
   if (spanDays(from, to) > maxDays) throw new AppError(422, `Ask for at most ${maxDays} days at a time.`);
   return { from, to };
 }
+
+/**
+ * GET /attendance/day-grid?from&to — every visible person's day status over a window, for the Home
+ * dashboard's logging grid and timeline and the Reports page's attendance & leave summary. Never
+ * 403s for "module off": it answers `{ enabled: false }` so the dashboard can always ask.
+ */
+attendanceRouter.get("/day-grid", requireAuth, async (req, res) => {
+  const range = parseGridRange(req.query as Record<string, unknown>);
+  res.json(await getDayGrid({ id: req.user!.id, permissions: req.user!.permissions }, range));
+});
 
 attendanceRouter.get("/team/today", requireAuth, async (req, res) => {
   await assertAttendanceOn();
