@@ -15,7 +15,8 @@
  * by an offsetting EXPIRY row. Two rows per movement, both keyed on the source row:
  *   - `SETTLE-CLOSE:<sourceKey>` (EXPIRY, year Y)   — Y back to zero;
  *   - `SETTLE:<sourceKey>`       (ADJUSTMENT, year Y+1) — the change in carry (omitted when zero).
- * The keys are UNIQUE in the database, so a retry posts nothing twice.
+ * The keys are UNIQUE in the database, so a retry posts nothing twice. When Y+1 is ALSO settled the
+ * change is re-settled there in turn (keys suffixed `@<year>`), cascading until an open year.
  *
  * NOT SETTLED YET (no EXPIRY/CARRY key for Y, e.g. the closing balance was zero, or the worker has
  * not run yet this year): nothing to do — the next rollover run settles Y with the movement in it.
@@ -124,5 +125,15 @@ export async function settleLateMovement(
       }
     });
   }
-  return { change, written: change === 0 ? 1 : 2 };
+  let written = change === 0 ? 1 : 2;
+  // CASCADE: the change just landed in year+1. If year+1 is itself already settled, that row is a
+  // late movement THERE too, so re-settle it the same way (and so on, year by year). Without this a
+  // movement two or more years back leaves its change stranded as a residual in a closed year.
+  // The key names the year, so each level is idempotent on its own and the first level's keys are
+  // unchanged.
+  if (change !== 0) {
+    const next = await settleLateMovement(db, { ...args, year: year + 1, sourceKey: `${sourceKey}@${year + 1}` });
+    written += next.written;
+  }
+  return { change, written };
 }

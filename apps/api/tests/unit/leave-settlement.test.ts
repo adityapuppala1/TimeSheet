@@ -173,3 +173,25 @@ describe("the rollover itself", () => {
     expect(world.leaveBalanceLedger).toHaveLength(healed);
   });
 });
+
+describe("a late movement two years back", () => {
+  it("cascades forward through every settled year, leaving no residual", async () => {
+    const { settleLateMovement } = await import("../../src/services/leave-settlement.service.js");
+    const type = { id: "type-BIG", code: "BIG", carryForwardMax: 100 };
+    addType(world, { code: "BIG", annualQuota: 0, carryForwardMax: 100 });
+    // 2025 closed into 2026, and 2026 closed into 2027: 10 days carried all the way.
+    credit(world, "emp", "type-BIG", 2025, 10, "ACCRUAL");
+    credit(world, "emp", "type-BIG", 2025, -10, "EXPIRY", "EXPIRY:emp:type-BIG:2025");
+    credit(world, "emp", "type-BIG", 2026, 10, "CARRY_FORWARD", "CARRY:emp:type-BIG:2026");
+    credit(world, "emp", "type-BIG", 2026, -10, "EXPIRY", "EXPIRY:emp:type-BIG:2026");
+    credit(world, "emp", "type-BIG", 2027, 10, "CARRY_FORWARD", "CARRY:emp:type-BIG:2027");
+    // A 2025 movement recorded in 2027 (an HRMS correction): +2.
+    credit(world, "emp", "type-BIG", 2025, 2, "ADJUSTMENT", "LATE:1");
+    await settleLateMovement(client as never, { userId: "emp", type, year: 2025, sourceKey: "LATE:1" });
+    expect(balanceOf(world, "emp", "type-BIG", 2025)).toBe(0);
+    expect(balanceOf(world, "emp", "type-BIG", 2026)).toBe(0);
+    expect(balanceOf(world, "emp", "type-BIG", 2027)).toBe(12);
+    // Idempotent: a retry posts nothing twice.
+    await expect(settleLateMovement(client as never, { userId: "emp", type, year: 2025, sourceKey: "LATE:1" })).resolves.toMatchObject({ written: 0 });
+  });
+});
