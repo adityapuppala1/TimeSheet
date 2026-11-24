@@ -48,6 +48,7 @@ import { assertIngestAllowed, ingestPunch } from "./attendance-ingest.service.js
 import { isPunchInFaceRequired, publicRecord } from "./attendance-punch.service.js";
 import { getAttendanceSettings } from "./attendance-settings.service.js";
 import { applyLeave, assertLeaveOn, getBalances, listMyRequests, withoutPrivateText } from "./leave.service.js";
+import { weekOf, whoIsOff } from "./leave-who-is-off.service.js";
 
 /** The subset of GlobalMcpSettings the enablement rules read. Structural rather than the Prisma
  *  row type so tests can build one without a database. */
@@ -851,6 +852,33 @@ const TOOLS: readonly McpToolRegistration[] = [
           expiringAtYearEnd: x.expiringAtYearEnd
         }))
       };
+    }
+  },
+
+  {
+    name: "who_is_off",
+    title: "Who is off",
+    description:
+      "Call this when the acting user asks who is on leave — 'who is off this week', 'is anyone out " +
+      "on Friday'. Returns APPROVED leave only, scoped like the Team view: a manager sees their " +
+      "direct reports, an admin everyone, anyone else only themselves. Names, leave type codes and " +
+      "dates only — never a reason or note. Defaults to the current week (Monday to Sunday).",
+    inputSchema: {
+      date: ISO_DATE.optional().describe("One day, yyyy-mm-dd"),
+      from: ISO_DATE.optional().describe("Range start, yyyy-mm-dd"),
+      to: ISO_DATE.optional().describe("Range end, yyyy-mm-dd (at most 93 days after from)")
+    },
+    permission: null,
+    mutating: false,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx, args) => {
+      await assertLeaveOn();
+      let range = args.date ? { from: args.date, to: args.date } : args.from && args.to ? { from: args.from, to: args.to } : weekOf(new Date().toISOString().slice(0, 10));
+      if (range.from > range.to) throw new AppError(422, "from must be on or before to.");
+      if ((Date.parse(range.to) - Date.parse(range.from)) / 86_400_000 > 93) range = { from: range.from, to: new Date(Date.parse(range.from) + 93 * 86_400_000).toISOString().slice(0, 10) };
+      const result = await whoIsOff({ id: ctx.user.id, role: ctx.user.role, name: ctx.user.name }, range.from, range.to);
+      return result.enabled ? { from: result.from, to: result.to, scope: result.scope, people: result.people } : { enabled: false };
     }
   },
 

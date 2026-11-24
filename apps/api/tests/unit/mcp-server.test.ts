@@ -264,6 +264,7 @@ describe("permissions", () => {
       "list_my_timesheets",
       "list_projects",
       "punch_in",
+      "who_is_off",
       "whoami"
     ]);
   });

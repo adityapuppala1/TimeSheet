@@ -4793,6 +4793,8 @@ export async function askWorkspaceChat(input: {
       "- change counts, risk spread, in flight -> change_metrics; specific changes -> list_changes",
       "- who someone is, who reports to whom -> find_people; projects, modules, SUBMODULES -> list_projects",
       "- OKRs, targets, how goals are tracking -> goals_overview",
+      "- who is off / on leave this week or on a date -> who_is_off; my leave balance -> my_leave_balance;",
+      "  my leave requests / is my leave approved -> my_leave_requests. Never state a leave reason.",
       "- HOW TO USE THE APP — 'how do I', 'where is', raise/approve/configure/set up anything ->",
       "  help_articles. It returns the exact steps and a link to the manual; answer with those steps",
       "  rather than inventing a path, and include the /app/help link it gives you.",
