@@ -36,6 +36,7 @@ import { COUNTED_PEOPLE } from "../services/people-visibility.service.js";
 import { runOncePerTick } from "../services/job-claim.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
 import { sweepOrphanLeaveUploads } from "../services/leave-upload-cleanup.service.js";
+import { expireCompOffCredits } from "../services/comp-off.service.js";
 
 let started = false;
 let running = false;
@@ -195,6 +196,9 @@ export function startLeaveAccrualWorker(): void {
     runOncePerTick("leave-accrual", "day", () =>
       runForEveryOrg("leave-accrual", async () => {
         const r = await runLeaveAccrual();
+        // 7.0.0: comp-off credits past their expiry (keyed, so a re-run expires nothing twice).
+        const compOffExpired = await expireCompOffCredits();
+        if (compOffExpired > 0) console.info(`[leave-accrual] ${requireTenantContext().orgSlug}: expired ${compOffExpired} comp-off credit(s).`);
         // Leave documents stored for a request that was never created (7.0.0). Leave-gated like the run.
         const swept = (await isLeaveOn()) ? await sweepOrphanLeaveUploads() : 0;
         if (swept > 0) console.info(`[leave-accrual] ${requireTenantContext().orgSlug}: removed ${swept} orphaned leave upload(s).`);

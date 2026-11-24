@@ -34,7 +34,9 @@ const EVENT_LABEL: Record<OutboundWebhookEvent, string> = {
   "leave.requested": "Leave requested",
   "leave.approved": "Leave approved",
   "leave.rejected": "Leave rejected",
-  "leave.cancelled": "Leave cancelled"
+  "leave.cancelled": "Leave cancelled",
+  "compoff.requested": "Comp-off requested",
+  "compoff.approved": "Comp-off approved"
 };
 
 function CopyableSecret({ value }: { value: string }) {

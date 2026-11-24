@@ -138,6 +138,56 @@ export type LeaveTypeInput = Omit<LeaveTypeRow, "id" | "sortOrder"> & { sortOrde
 
 export const LEAVE_STATUS_KEY = ["leave", "status"] as const;
 
+/* ---- 7.0.0 comp-off ---- */
+export interface CompOffRow {
+  id: string;
+  user?: { id: string; name: string; email: string; avatarUrl: string | null };
+  workDate: string;
+  dayKind: "WEEKEND" | "HOLIDAY";
+  hoursLogged: number;
+  days: number;
+  reason: string | null;
+  status: LeaveStatus;
+  decidedAt: string | null;
+  decisionNote: string | null;
+  onBehalfOfId?: string | null;
+  onBehalfOf?: string | null;
+  expiresOn: string | null;
+  expiredAt: string | null;
+  createdAt: string;
+}
+
+export interface CompOffEligibility {
+  workDate: string;
+  eligible: boolean;
+  dayKind: "WEEKEND" | "HOLIDAY" | null;
+  holidayName: string | null;
+  hoursLogged: number;
+  days: 0 | 0.5 | 1;
+  problem: string | null;
+  thresholds: { halfDayHours: number; fullDayHours: number };
+}
+
+export interface CompOffSettings {
+  compOffEnabled: boolean;
+  compOffHalfDayHours: number;
+  compOffFullDayHours: number;
+  compOffLeaveTypeCode: string;
+  compOffExpiryDays: number | null;
+}
+
+export const compOffApi = {
+  eligibility: async (date: string) => (await api.get<CompOffEligibility>("/leave/me/comp-off/eligibility", { params: { date } })).data,
+  mine: async () => (await api.get<{ items: CompOffRow[] }>("/leave/me/comp-off")).data.items,
+  request: async (workDate: string, reason?: string) => (await api.post<CompOffRow>("/leave/me/comp-off", reason ? { workDate, reason } : { workDate })).data,
+  cancel: async (id: string) => (await api.post<CompOffRow>(`/leave/me/comp-off/${id}/cancel`)).data,
+  inbox: async () => (await api.get<{ total: number; items: CompOffRow[] }>("/leave/comp-off/inbox")).data,
+  decide: async (id: string, decision: "APPROVE" | "REJECT", note?: string) =>
+    (await api.post<CompOffRow>(`/leave/comp-off/inbox/${id}/decision`, note ? { decision, note } : { decision })).data,
+  settings: async () => (await api.get<{ settings: CompOffSettings; entitled: boolean }>("/leave/admin/comp-off")).data,
+  updateSettings: async (payload: Partial<CompOffSettings>) => (await api.put<CompOffSettings>("/leave/admin/comp-off", payload)).data
+};
+
 /** Mirrors the API's cap on one bulk decision (leave.service.ts#BULK_DECISION_MAX). */
 export const BULK_DECISION_MAX = 50;
 
@@ -154,7 +204,7 @@ export function applyPayload(fields: Omit<ApplyPayload, "reason">, reason: strin
 }
 
 export const leaveApi = {
-  status: async () => (await api.get<{ enabled: boolean; leaveYearStartMonth: number }>("/leave/status")).data,
+  status: async () => (await api.get<{ enabled: boolean; leaveYearStartMonth: number; compOffEnabled?: boolean }>("/leave/status")).data,
   types: async () => (await api.get<{ items: LeaveTypeRow[] }>("/leave/types")).data.items,
   balances: async (year?: number) => (await api.get<LeaveBalances>("/leave/me/balances", { params: year ? { year } : {} })).data,
   requests: async (status?: LeaveStatus) => (await api.get<{ items: LeaveRequestRow[] }>("/leave/me/requests", { params: status ? { status } : {} })).data.items,
@@ -177,7 +227,7 @@ export const leaveApi = {
     (await api.get<{ total: number; items: LeaveRequestRow[] }>("/leave/inbox", { params: { scope: "all", status: "APPROVED", pageSize: 200 } })).data,
   expectedHours: async (from: string, to: string) => (await api.get<ExpectedHours>("/leave/me/expected-hours", { params: { from, to } })).data,
   inbox: async (status: LeaveStatus | "ALL" = "PENDING") =>
-    (await api.get<{ total: number; items: LeaveRequestRow[] }>("/leave/inbox", { params: { status, pageSize: 100 } })).data,
+    (await api.get<{ total: number; items: LeaveRequestRow[]; compOffPending?: number }>("/leave/inbox", { params: { status, pageSize: 100 } })).data,
   decide: async (id: string, decision: "APPROVE" | "REJECT", note?: string) =>
     (await api.post<LeaveRequestRow>(`/leave/inbox/${id}/decision`, { decision, note })).data,
   // validateStatus lets the 207 body through whatever the per-item outcome was.

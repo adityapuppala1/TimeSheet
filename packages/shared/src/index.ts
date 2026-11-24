@@ -572,7 +572,9 @@ export const outboundWebhookEvents = [
   "leave.requested",
   "leave.approved",
   "leave.rejected",
-  "leave.cancelled"
+  "leave.cancelled",
+  "compoff.requested",
+  "compoff.approved"
 ] as const;
 export type OutboundWebhookEvent = (typeof outboundWebhookEvents)[number];
 export const apiKeyScopes = ["READ", "WRITE"] as const;

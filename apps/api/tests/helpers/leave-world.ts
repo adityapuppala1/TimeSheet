@@ -21,6 +21,11 @@ export interface LeaveWorld {
   holiday: Row[];
   settings: Row;
   notifications: Row[];
+  /** 7.0.0 */
+  compOffRequest: Row[];
+  timesheet: Row[];
+  approvalDelegation: Row[];
+  calendarFeedToken: Row[];
 }
 
 let seq = 0;
@@ -40,9 +45,18 @@ export function emptyWorld(): LeaveWorld {
       leaveEnabled: true,
       leaveYearStartMonth: 1,
       trustExternalApprovals: false,
-      leaveApprovalFallback: "ADMINS"
+      leaveApprovalFallback: "ADMINS",
+      compOffEnabled: true,
+      compOffHalfDayHours: 4,
+      compOffFullDayHours: 8,
+      compOffLeaveTypeCode: "CO",
+      compOffExpiryDays: null
     },
-    notifications: []
+    notifications: [],
+    compOffRequest: [],
+    timesheet: [],
+    approvalDelegation: [],
+    calendarFeedToken: []
   };
 }
 
@@ -61,6 +75,8 @@ function matchValue(value: unknown, cond: unknown, row: Row, key: string, world:
       return Boolean(u) && matchWhere(u!, c, world);
     }
     for (const [op, arg] of Object.entries(c)) {
+      // SQL: NULL compares false with every range operator.
+      if ((op === "lte" || op === "gte" || op === "lt" || op === "gt") && (value === null || value === undefined)) return false;
       if (op === "in" && !(arg as unknown[]).map(cmp).includes(cmp(value))) return false;
       if (op === "notIn" && (arg as unknown[]).map(cmp).includes(cmp(value))) return false;
       if (op === "not") {
@@ -104,7 +120,7 @@ function uniqueCheck(table: Row[], row: Row, keys: string[]) {
   }
 }
 
-const UNIQUE: Record<string, string[]> = { leaveBalanceLedger: ["idempotencyKey"], leaveRequest: ["dedupeKey"], leaveType: ["code"] };
+const UNIQUE: Record<string, string[]> = { leaveBalanceLedger: ["idempotencyKey"], leaveRequest: ["dedupeKey"], leaveType: ["code"], calendarFeedToken: ["tokenHash"] };
 
 function project(row: Row | undefined, select: unknown): Row | undefined {
   if (!row || !isPlainObject(select)) return row;
@@ -118,7 +134,9 @@ function withIncludes(world: LeaveWorld, table: string, row: Row | undefined, in
   if (!row) return null;
   const related = (key: string): Row | undefined => {
     if (key === "leaveType" && (table === "leaveRequest" || table === "leaveBalanceLedger")) return world.leaveType.find((t) => t.id === row.leaveTypeId);
-    if (key === "user" && table === "leaveRequest") return world.users.find((u) => u.id === row.userId);
+    if (key === "user" && (table === "leaveRequest" || table === "compOffRequest" || table === "calendarFeedToken")) return world.users.find((u) => u.id === row.userId);
+    if (key === "delegate" && table === "approvalDelegation") return world.users.find((u) => u.id === row.delegateId);
+    if (key === "delegator" && table === "approvalDelegation") return world.users.find((u) => u.id === row.delegatorId);
     return undefined;
   };
   if (select) {
@@ -242,6 +260,11 @@ export function fakePrisma(world: LeaveWorld) {
     leaveBalanceLedger: model(world, "leaveBalanceLedger"),
     holidayCalendar: model(world, "holidayCalendar"),
     holiday: model(world, "holiday"),
+    compOffRequest: model(world, "compOffRequest"),
+    timesheet: model(world, "timesheet"),
+    approvalDelegation: model(world, "approvalDelegation"),
+    calendarFeedToken: model(world, "calendarFeedToken"),
+    holidayOptIn: { findMany: async () => [] },
     globalAttendanceSettings: {
       upsert: async (args: { update?: Row; create?: Row }) => Object.assign(world.settings, args.update ?? {}),
       findUnique: async () => world.settings
@@ -250,13 +273,14 @@ export function fakePrisma(world: LeaveWorld) {
     // Serialised + rolled back on throw: the database's guarantees, in miniature.
     $transaction: (fn: (tx: unknown) => Promise<unknown>) => {
       const run = lock.then(async () => {
-        const snapshot = structuredClone({ r: world.leaveRequest, l: world.leaveBalanceLedger, t: world.leaveType });
+        const snapshot = structuredClone({ r: world.leaveRequest, l: world.leaveBalanceLedger, t: world.leaveType, c: world.compOffRequest });
         try {
           return await fn(client);
         } catch (error) {
           world.leaveRequest.splice(0, world.leaveRequest.length, ...snapshot.r);
           world.leaveBalanceLedger.splice(0, world.leaveBalanceLedger.length, ...snapshot.l);
           world.leaveType.splice(0, world.leaveType.length, ...snapshot.t);
+          world.compOffRequest.splice(0, world.compOffRequest.length, ...snapshot.c);
           throw error;
         }
       });

@@ -27,7 +27,10 @@ export const WEBHOOK_EVENTS = [
   "leave.requested",
   "leave.approved",
   "leave.rejected",
-  "leave.cancelled"
+  "leave.cancelled",
+  // 7.0.0 comp-off: credit requested for working a weekend/holiday, and approved (the ledger credit).
+  "compoff.requested",
+  "compoff.approved"
 ] as const;
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];

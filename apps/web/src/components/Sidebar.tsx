@@ -263,7 +263,8 @@ function usePendingApprovals(enabled: boolean): number {
   });
   // The cache entry is shared, so a row that did not ask must not read it either.
   if (!enabled) return 0;
-  return q.data?.total ?? 0;
+  // 7.0.0: comp-off requests waiting on me count too (the field is absent while comp-off is off).
+  return (q.data?.total ?? 0) + (q.data?.compOffPending ?? 0);
 }
 
 function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavigate?: () => void; slim?: boolean }) {

@@ -16,6 +16,7 @@ import { NavLink, useLocation } from "react-router";
 import { PageHeader } from "../components/PageHeader";
 import { MyAnalyticsSection, TeamInsightsView } from "../components/attendance/AttendanceAnalytics";
 import { AdminCancelLeave } from "../components/attendance/AdminCancelLeave";
+import { CompOffInbox } from "../components/attendance/CompOff";
 import { ApprovalsInbox } from "../components/attendance/ApprovalsInbox";
 import { ApplyLeave, HolidayCalendarView, LeaveNav, MyLeaveRequests } from "../components/attendance/LeaveScreens";
 import { MyAttendanceView } from "../components/attendance/MyAttendanceView";
@@ -128,10 +129,16 @@ function TeamPanel({ leaveOn }: Readonly<{ leaveOn: boolean }>) {
       {tab === "board" && (
         <div className={cn("grid min-w-0 gap-4", leaveOn && "lg:grid-cols-[minmax(0,1fr)_320px]")}>
           <WhosInBoard leaveOn={leaveOn} lateness={lateness} />
-          {leaveOn && wide && <ApprovalsInbox />}
+          {leaveOn && wide && (
+            <div className="grid min-w-0 content-start gap-4">
+              <ApprovalsInbox />
+              <CompOffInbox />
+            </div>
+          )}
         </div>
       )}
       {tab === "approvals" && leaveOn && <ApprovalsInbox />}
+      {tab === "approvals" && leaveOn && <CompOffInbox />}
       {tab === "calendar" && leaveOn && <TeamLeaveCalendar />}
       {tab === "calendar" && leaveOn && admin && <AdminCancelLeave />}
       {tab === "insights" && <TeamInsightsView />}

@@ -209,6 +209,22 @@ export function decisionRight(
   return null;
 }
 
+/**
+ * decisionRight plus everything that needs I/O (today: approval delegation). The ONE async entry
+ * point every decision path (leave, comp-off) uses. `onBehalfOfId` is set when the actor decides
+ * as someone's delegate.
+ */
+export async function resolveDecisionRight(
+  actor: { id: string; role: string },
+  request: { userId: string; approverId: string | null },
+  approverActive: boolean,
+  fallback: Fallback,
+  _now: Date = new Date()
+): Promise<{ right: DecisionRight; onBehalfOfId: string | null } | null> {
+  const right = decisionRight(actor, request, approverActive, fallback);
+  return right ? { right, onBehalfOfId: null } : null;
+}
+
 const OUT_OF_SCOPE = "You can only decide leave requests that are waiting on you.";
 
 /* ------------------------------------------------------------------ *

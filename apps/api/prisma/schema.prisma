@@ -364,7 +364,7 @@ model User {
   /// The id an external attendance source (biometric terminal, HRMS) knows this person by.
   /// Unique when set so an inbound punch matched on it resolves to exactly one person; nullable
   /// because most workspaces never connect such a source.
-  employeeCode                String?              @unique @db.VarChar(64)
+  employeeCode                String?                      @unique @db.VarChar(64)
   /// Which holiday calendar decides this person's days off. NULL = the workspace default calendar
   /// (HolidayCalendar.isDefault), so a fresh workspace needs no per-person assignment at all.
   /// SetNull on delete: removing a calendar drops people back to the default, never orphans them.
@@ -372,12 +372,13 @@ model User {
   /// When this person first accepted the workspace's location-consent wording for punch-in (V17 A2).
   /// NULL = never asked yet; the punch-in dialog shows the consent text before the first location read.
   attendanceLocationConsentAt DateTime?
-  holidayCalendar             HolidayCalendar?     @relation(fields: [holidayCalendarId], references: [id], onDelete: SetNull)
+  holidayCalendar             HolidayCalendar?             @relation(fields: [holidayCalendarId], references: [id], onDelete: SetNull)
   attendanceRecords           AttendanceRecord[]
   missedDayReasons            MissedDayReason[]
   attendanceInsightDismissals AttendanceInsightDismissal[]
   holidayOptIns               HolidayOptIn[]
   /// V17 Phase B leave. Cascade with the person (personal data), like attendance.
+  compOffRequests             CompOffRequest[]
   leaveRequests               LeaveRequest[]
   leaveLedger                 LeaveBalanceLedger[]
 
@@ -6219,6 +6220,18 @@ model GlobalAttendanceSettings {
   /// Who decides for someone with no (active) manager.
   leaveApprovalFallback  LeaveApprovalFallback @default(ADMINS)
 
+  /// --- Comp-off (7.0.0) ----------------------------------------------------------------------
+  /// Working a weekend or holiday (per resolveDayStatus) earns a request for compensatory leave.
+  /// OFF by default; also needs leave itself on (leaveEnabled AND the leaveManagementEnabled plan).
+  compOffEnabled       Boolean @default(false)
+  /// Logged hours on the day that earn half a day / a full day of credit.
+  compOffHalfDayHours  Decimal @default(4) @db.Decimal(4, 2)
+  compOffFullDayHours  Decimal @default(8) @db.Decimal(4, 2)
+  /// The LeaveType credited on approval, by code. "CO" is seeded DISABLED by the migration.
+  compOffLeaveTypeCode String  @default("CO") @db.VarChar(20)
+  /// Days after approval an unused credit expires (the nightly accrual run). NULL = never.
+  compOffExpiryDays    Int?
+
   updatedById String?
   updatedAt   DateTime @updatedAt
 }
@@ -6226,11 +6239,11 @@ model GlobalAttendanceSettings {
 /// A named set of days off ("India 2027", "US East"). People are assigned one via
 /// User.holidayCalendarId; anyone unassigned follows the calendar flagged isDefault.
 model HolidayCalendar {
-  id          String  @id @default(uuid())
-  name        String  @unique @db.VarChar(120)
-  description String? @db.VarChar(500)
+  id                 String  @id @default(uuid())
+  name               String  @unique @db.VarChar(120)
+  description        String? @db.VarChar(500)
   /// At most one should be true; enforced in the service (MariaDB has no partial unique index).
-  isDefault   Boolean @default(false)
+  isDefault          Boolean @default(false)
   /// 7.0.0: how many of this calendar's optional holidays one person may opt into per calendar
   /// year. NULL = no limit set; 0 = optional holidays cannot be taken.
   maxOptionalPerYear Int?
@@ -6562,6 +6575,46 @@ model LeaveBalanceLedger {
 
   @@index([userId, leaveTypeId, leaveYear])
   @@index([refRequestId])
+}
+
+/// 7.0.0 comp-off: a request for leave credit for working on a weekend or holiday. Decided by the
+/// same rule as leave (decisionRight); approval credits the configured type through the ledger with
+/// idempotency key `COMPOFF:<id>`, and the accrual run expires it (`COMPOFF-EXPIRY:<id>`).
+model CompOffRequest {
+  id                     String             @id @default(uuid())
+  userId                 String
+  user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The weekend / holiday that was worked.
+  workDate               DateTime           @db.Date
+  /// WEEKEND or HOLIDAY, as resolveDayStatus judged it when the request was made.
+  dayKind                String             @db.VarChar(16)
+  /// Timesheet hours logged on workDate when the request was made (server-computed).
+  hoursLogged            Decimal            @db.Decimal(5, 2)
+  /// 0.5 or 1, from the configured thresholds. Never taken from the client.
+  days                   Decimal            @db.Decimal(4, 2)
+  reason                 String?            @db.Text
+  status                 LeaveRequestStatus @default(PENDING)
+  /// Plain ids (see LeaveRequest.approverId).
+  approverId             String?            @db.VarChar(64)
+  decidedById            String?            @db.VarChar(64)
+  /// Set when a delegate decided on the approver's behalf.
+  onBehalfOfId           String?            @db.VarChar(64)
+  decidedAt              DateTime?
+  decisionNote           String?            @db.Text
+  overriddenBySuperAdmin Boolean            @default(false)
+  /// Filled on approval.
+  leaveTypeId            String?            @db.VarChar(64)
+  leaveYear              Int?
+  expiresOn              DateTime?          @db.Date
+  expiredAt              DateTime?
+  cancelledAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, workDate])
+  @@index([approverId, status])
+  @@index([status, expiresOn])
 }
 
 model LeaveRequest {

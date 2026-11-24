@@ -52,6 +52,21 @@ import {
   publicLeaveType
 } from "../services/leave.service.js";
 import { runLeaveAccrual } from "../workers/leave-accrual.worker.js";
+import {
+  cancelCompOff,
+  compOffDecisionBody,
+  compOffEligibility,
+  compOffRequestBody,
+  compOffSettingsBody,
+  assertCompOffOn,
+  decideCompOff,
+  expireCompOffCredits,
+  isCompOffOn,
+  listCompOffInbox,
+  listMyCompOff,
+  publicCompOffSettings,
+  requestCompOff
+} from "../services/comp-off.service.js";
 
 export const leaveRouter = Router();
 
@@ -74,8 +89,8 @@ const actorOf = (req: { user?: { id: string; role: string; name?: string | null 
 /* ----------------------------- status (never 403) ----------------------------- */
 
 leaveRouter.get("/status", requireAuth, async (_req, res) => {
-  const [enabled, settings] = await Promise.all([isLeaveOn(), getAttendanceSettings()]);
-  res.json({ enabled, leaveYearStartMonth: settings.leaveYearStartMonth });
+  const [enabled, settings, compOff] = await Promise.all([isLeaveOn(), getAttendanceSettings(), isCompOffOn()]);
+  res.json({ enabled, leaveYearStartMonth: settings.leaveYearStartMonth, compOffEnabled: compOff });
 });
 
 /* ----------------------------- employee ----------------------------- */
@@ -157,6 +172,36 @@ leaveRouter.get("/me/expected-hours", requireAuth, async (req, res) => {
   res.json({ from, to, ...result });
 });
 
+/* ----------------------------- comp-off (7.0.0) ----------------------------- */
+
+leaveRouter.get("/me/comp-off/eligibility", requireAuth, async (req, res) => {
+  await assertCompOffOn();
+  const { date } = z.object({ date: isoDate }).passthrough().parse(req.query);
+  res.json(await compOffEligibility(req.user!.id, date));
+});
+
+leaveRouter.get("/me/comp-off", requireAuth, async (req, res) => {
+  res.json({ items: await listMyCompOff(req.user!.id) });
+});
+
+leaveRouter.post("/me/comp-off", requireAuth, validate(z.object({ body: compOffRequestBody })), async (req, res) => {
+  const body = compOffRequestBody.parse(req.body);
+  res.status(201).json(await requestCompOff({ userId: req.user!.id, workDate: body.workDate, reason: body.reason ?? null }));
+});
+
+leaveRouter.post("/me/comp-off/:id/cancel", requireAuth, async (req, res) => {
+  res.json(await cancelCompOff(req.user!.id, String(req.params.id)));
+});
+
+leaveRouter.get("/comp-off/inbox", requireAuth, async (req, res) => {
+  res.json(await listCompOffInbox(actorOf(req)));
+});
+
+leaveRouter.post("/comp-off/inbox/:id/decision", requireAuth, validate(z.object({ body: compOffDecisionBody })), async (req, res) => {
+  const body = compOffDecisionBody.parse(req.body);
+  res.json(await decideCompOff({ actor: actorOf(req), requestId: String(req.params.id), decision: body.decision, note: body.note ?? null }));
+});
+
 /* ----------------------------- approver ----------------------------- */
 
 leaveRouter.get("/inbox", requireAuth, async (req, res) => {
@@ -170,14 +215,16 @@ leaveRouter.get("/inbox", requireAuth, async (req, res) => {
     })
     .passthrough()
     .parse(req.query);
-  res.json(
-    await listInbox(actorOf(req), {
-      scope: q.scope,
-      status: q.status,
-      page: q.page ? Number(q.page) : undefined,
-      pageSize: q.pageSize ? Number(q.pageSize) : undefined
-    })
-  );
+  const inbox = await listInbox(actorOf(req), {
+    scope: q.scope,
+    status: q.status,
+    page: q.page ? Number(q.page) : undefined,
+    pageSize: q.pageSize ? Number(q.pageSize) : undefined
+  });
+  // 7.0.0: comp-off requests waiting on me, for the nav badge (only when comp-off is on).
+  const pendingView = (q.status ?? "PENDING") === "PENDING" && (q.scope ?? "mine") === "mine";
+  const compOffPending = pendingView && (await isCompOffOn()) ? (await listCompOffInbox(actorOf(req))).total : undefined;
+  res.json(compOffPending === undefined ? inbox : { ...inbox, compOffPending });
 });
 
 leaveRouter.post("/inbox/bulk-decision", requireAuth, validate(z.object({ body: bulkDecisionBody })), async (req, res) => {
@@ -274,6 +321,32 @@ async function leaveYearLocked(): Promise<boolean> {
   return Boolean(ledger || request);
 }
 
+admin.get("/comp-off", async (_req, res) => {
+  const [settings, entitlements] = await Promise.all([getAttendanceSettings(), getAttendanceEntitlements()]);
+  res.json({ settings: publicCompOffSettings(settings), entitled: entitlements.leaveManagementEnabled });
+});
+
+admin.put("/comp-off", validate(z.object({ body: compOffSettingsBody })), async (req, res) => {
+  await assertLeaveEntitled();
+  const body = compOffSettingsBody.parse(req.body);
+  const current = publicCompOffSettings(await getAttendanceSettings());
+  const next = { ...current, ...body };
+  if (next.compOffHalfDayHours > next.compOffFullDayHours) throw new AppError(422, "The half-day threshold can't be more than the full-day one.");
+  if (next.compOffEnabled) {
+    const type = await prisma.leaveType.findUnique({ where: { code: next.compOffLeaveTypeCode }, select: { enabled: true } });
+    if (!type?.enabled) {
+      throw new AppError(409, `Enable the ${next.compOffLeaveTypeCode} leave type first: comp-off credits it, and people spend it by applying for that type.`, { code: "COMPOFF_TYPE_DISABLED" });
+    }
+  }
+  const updated = await prisma.globalAttendanceSettings.upsert({
+    where: { id: "global" },
+    update: { ...body, updatedById: req.user!.id },
+    create: { id: "global", ...body, updatedById: req.user!.id }
+  });
+  await audit(req.user!.id, "leave.compoff_settings_updated", "GlobalAttendanceSettings", "global", body);
+  res.json(publicCompOffSettings(updated));
+});
+
 admin.get("/types", async (_req, res) => {
   res.json({ items: await listLeaveTypes(true) });
 });
@@ -328,7 +401,7 @@ admin.get("/balances/:userId", async (req, res) => {
 /** Posts what is due now (idempotent — the same keys the nightly run uses). Sends nothing. */
 admin.post("/accrual/run", async (req, res) => {
   await assertLeaveOn();
-  const result = await runLeaveAccrual();
+  const result = { ...(await runLeaveAccrual()), compOffExpired: await expireCompOffCredits() };
   await audit(req.user!.id, "leave.accrual_run", "LeaveBalanceLedger", undefined, result);
   res.json(result);
 });

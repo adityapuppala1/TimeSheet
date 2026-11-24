@@ -29,6 +29,7 @@ import { EmptyState } from "../ui/empty-state";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../ui/sheet";
 import { Skeleton } from "../ui/skeleton";
 import { AttendanceStatusBadge } from "./AttendanceStatusBadge";
+import { CompOffDayAction, MyCompOffCard } from "./CompOff";
 import { CardError, SectionCard, todayKey } from "./attendance-ui";
 import { leaveColour, useLeaveBalances, useLeaveEnabled, useMyHolidays } from "./use-leave";
 
@@ -273,6 +274,7 @@ function DaySheet({ data, onClose, today }: Readonly<{ data: CellData | null; on
                   <Link to="/app/timesheet">Log time</Link>
                 </Button>
               )}
+              <CompOffDayAction date={day.date} isWorkingDay={day.isWorkingDay} />
             </div>
           </>
         )}
@@ -438,6 +440,11 @@ export function MyAttendanceView() {
         {leaveOn && (
           <div className="order-3 min-w-0">
             <BalancesCard />
+          </div>
+        )}
+        {leaveOn && (
+          <div className="order-3 min-w-0">
+            <MyCompOffCard />
           </div>
         )}
         <div className="order-6 min-w-0">
