@@ -47,6 +47,7 @@ import {
   Workflow
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { TEAM_VIEW_ROLES } from "../lib/attendance-team";
 import { useState } from "react";
 import { Link, NavLink, useLocation } from "react-router";
 import { permissions, type Permission } from "@timesheet/shared";
@@ -242,8 +243,31 @@ function useLeaveOn(): boolean {
   return Boolean(status.data?.enabled);
 }
 
+/**
+ * 7.0.0 — leave requests waiting on this approver, for the Attendance nav badge. Shares the
+ * approvals inbox's cache entry (["leave","inbox","PENDING"]), so opening the inbox costs nothing
+ * extra, and polls gently (every 2 minutes, only while the tab is visible). Only roles that can open
+ * the Team view ask; leave off means no request at all.
+ */
+function usePendingApprovals(enabled: boolean): number {
+  const role = useAuthStore((s) => s.user?.role ?? "");
+  const leaveOn = useLeaveOn();
+  const q = useQuery({
+    queryKey: ["leave", "inbox", "PENDING"],
+    queryFn: () => leaveApi.inbox("PENDING"),
+    enabled: enabled && leaveOn && TEAM_VIEW_ROLES.has(role),
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+    refetchIntervalInBackground: false,
+    retry: false
+  });
+  return q.data?.total ?? 0;
+}
+
 function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavigate?: () => void; slim?: boolean }) {
   const user = useAuthStore((s) => s.user);
+  const pending = usePendingApprovals(Boolean(item.attendance));
+  const badgeText = pending > 99 ? "99+" : String(pending);
   // One route, two audiences: /app/team is "My team" to an approver and "Org chart" to everybody
   // else, because that is what each of them actually gets when they open it.
   const label =
@@ -258,7 +282,7 @@ function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavig
       onClick={onNavigate}
       className={({ isActive }) =>
         cn(
-          "group flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground",
+          "group relative flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground",
           slim && "justify-center px-0",
           isActive && "bg-primary/10 text-primary hover:bg-primary/15"
         )
@@ -272,6 +296,18 @@ function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavig
           {/* The label leaves the layout in slim mode rather than being clipped — a truncated
               "Wor…" next to an icon reads as broken, an icon with a tooltip reads as designed. */}
           {!slim && label}
+          {pending > 0 && (
+            <span
+              className={cn(
+                "rounded-full bg-primary px-1.5 text-[10px] font-bold leading-4 text-primary-foreground tabular-nums",
+                slim ? "absolute right-1 top-1" : "ml-auto"
+              )}
+              aria-label={`${pending} leave ${pending === 1 ? "request" : "requests"} waiting for you`}
+              data-testid="nav-pending-approvals"
+            >
+              {badgeText}
+            </span>
+          )}
         </>
       )}
     </NavLink>
