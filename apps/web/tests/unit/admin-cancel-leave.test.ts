@@ -13,3 +13,11 @@ describe("cancellableByAdmin", () => {
     expect(out.map((r) => r.id)).toEqual(["a", "b"]);
   });
 });
+
+describe("approverLine", () => {
+  it("names the manager, or the admin pool", async () => {
+    const { approverLine } = await import("../../src/components/attendance/LeaveProfileSummary");
+    expect(approverLine({ name: "Mira" })).toBe("Mira");
+    expect(approverLine(null)).toBe("Workspace admins (no manager set)");
+  });
+});

@@ -51,6 +51,7 @@ import { localDateKey } from "../lib/local-date";
 import { dayTotalFor } from "../lib/day-total";
 import { useAuthStore } from "../store/auth";
 import { attendanceApi } from "../services/attendance-api";
+import { dayOffPrompt } from "../lib/day-grid";
 import { MissedDayReasonFields } from "../components/MissedDayReasonFields";
 import { missedReasonProblem, readMissedDayRefusal, type MissedReasonOption } from "../lib/missed-day-reason";
 
@@ -369,6 +370,21 @@ export function Timesheet() {
    * which covers anything the check could not know in time. Keyed under ["timesheets"] so a save
    * refreshes it — the second entry on that day no longer needs one.
    */
+  // 7.0.0: leave or a holiday on the picked day ("You're on leave today (PL)"). The day-grid
+  // endpoint answers { enabled: false } with Attendance & Leave off, so nothing shows then.
+  const dayStatus = useQuery({
+    queryKey: ["attendance", "day-grid", "self", workDate],
+    queryFn: () => attendanceApi.dayGrid(workDate, workDate),
+    enabled: Boolean(currentUser?.id && workDate),
+    staleTime: 5 * 60_000
+  });
+  const offPrompt = useMemo(() => {
+    const grid = dayStatus.data;
+    if (!grid?.enabled) return null;
+    const mine = grid.people.find((p) => p.userId === currentUser?.id);
+    return dayOffPrompt(mine?.days[workDate], workDate === todayKey());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayStatus.data, currentUser?.id, workDate]);
   const workDateIsPast = Boolean(workDate) && workDate < todayKey();
   const missedCheck = useQuery({
     queryKey: ["timesheets", "missed-day", currentUser?.id, workDate],
@@ -777,6 +793,11 @@ export function Timesheet() {
                     <Sparkles className="h-4 w-4 text-primary" />
                     This entry: <span className="text-primary">{total.toFixed(2)}h</span>
                   </div>
+                  {offPrompt && dayTotal === 0 && (
+                    <p className="text-xs font-medium text-foreground" data-testid="timesheet-day-off">
+                      {offPrompt}. You can still log time if you worked.
+                    </p>
+                  )}
                   <p className="text-xs text-muted-foreground">
                     Already logged on <span className="font-semibold text-foreground">{workDate}</span>:{" "}
                     <span className="font-semibold">{dayTotal.toFixed(2)}h</span> · projected total:{" "}

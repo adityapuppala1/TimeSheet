@@ -32,8 +32,11 @@ import { Skeleton } from "./ui/skeleton";
 import type { TeamRosterPerson } from "../services/api";
 import { addLocalDays, isoToLocalDate, localDateKey } from "../lib/local-day";
 import { cn } from "../lib/utils";
-import { dayNote, gridCellState, isAbsentMarker, isDayOff, tallyPerson, type DayStatusLookup, type GridCellState } from "../lib/day-grid";
+import { dayLink, dayNote, gridCellState, isAbsentMarker, isDayOff, tallyPerson, type DayStatusLookup, type GridCellState } from "../lib/day-grid";
 import type { DayGridDay } from "../services/attendance-api";
+import { Link } from "react-router";
+import { TEAM_VIEW_ROLES } from "../lib/attendance-team";
+import { useAuthStore } from "../store/auth";
 
 export interface FillRow {
   id: string;
@@ -219,7 +222,7 @@ function stateOf(col: DayCol, rows: FillRow[] | undefined, day?: DayGridDay): Ce
 }
 
 /** Entry detail for one cell — the hover card's body, shared by card and dialog. */
-function CellDetail({ person, col, rows, state, note }: { person: PersonRow; col: DayCol; rows: FillRow[]; state: CellState; note?: string }) {
+function CellDetail({ person, col, rows, state, note, link }: { person: PersonRow; col: DayCol; rows: FillRow[]; state: CellState; note?: string; link?: { to: string; label: string } | null }) {
   const total = hoursOf(rows);
   const sorted = [...rows].sort((a, b) => a.startTime.localeCompare(b.startTime));
   return (
@@ -237,6 +240,11 @@ function CellDetail({ person, col, rows, state, note }: { person: PersonRow; col
         <p className="text-xs font-medium" data-testid="fill-cell-note">
           {note}
         </p>
+      )}
+      {link && (
+        <Link to={link.to} className="focus-ring text-xs font-medium text-primary underline-offset-2 hover:underline" data-testid="fill-cell-link">
+          {link.label} →
+        </Link>
       )}
       {sorted.length > 0 ? (
         <>
@@ -281,6 +289,9 @@ function FillCell({ person, col, rows, size, lookup }: { person: PersonRow; col:
   const state = stateOf(col, rows, day);
   const absent = isAbsentMarker(state, day, lookup);
   const note = dayNote(day, absent, rows.length > 0);
+  const viewerId = useAuthStore((st) => st.user?.id ?? "");
+  const viewerRole = useAuthStore((st) => st.user?.role ?? "");
+  const link = dayLink(day, person.id, { id: viewerId, canSeeTeam: TEAM_VIEW_ROLES.has(viewerRole) });
   const show = () => {
     if (timer.current) clearTimeout(timer.current);
     setOpen(true);
@@ -324,7 +335,7 @@ function FillCell({ person, col, rows, size, lookup }: { person: PersonRow; col:
         </button>
       </PopoverAnchor>
       <PopoverContent className="w-80" side="top" onMouseEnter={show} onMouseLeave={hide} onOpenAutoFocus={(e) => e.preventDefault()}>
-        <CellDetail person={person} col={col} rows={rows} state={state} note={note} />
+        <CellDetail person={person} col={col} rows={rows} state={state} note={note} link={link} />
       </PopoverContent>
     </Popover>
   );

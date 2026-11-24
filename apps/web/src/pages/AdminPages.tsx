@@ -78,6 +78,7 @@ import { AttendanceLeaveSummary } from "../components/AttendanceLeaveSummary";
 import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
 import { TimesheetAnalyticsPanel } from "../components/TimesheetAnalyticsPanel";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
+import { LeaveProfileSummary } from "../components/attendance/LeaveProfileSummary";
 import {
   EMPTY_FILTERS,
   TablePager,
@@ -1284,6 +1285,7 @@ function UserEditDialog({
                 </div>
               )}
             </div>
+            {user && <LeaveProfileSummary userId={user.id} manager={user.manager} />}
             <DialogFooter>
               <Button variant="outline" onClick={onClose}>Cancel</Button>
               <Button

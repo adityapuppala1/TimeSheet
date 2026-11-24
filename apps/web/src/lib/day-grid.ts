@@ -124,3 +124,33 @@ export function dayOffWeight(day: DayGridDay | undefined): number {
   if (day?.status === "LEAVE") return day.halfDay ? 0.5 : 1;
   return 0;
 }
+
+/**
+ * 7.0.0 — where a leave or holiday cell links. Pure; the viewer's visibility decides:
+ *   - a holiday → the Holidays screen;
+ *   - your own leave → your leave requests;
+ *   - someone else's leave → the team leave calendar (name, type and dates only, never a reason),
+ *     and only for a viewer who can open the Team view; otherwise no link.
+ */
+export function dayLink(
+  day: Pick<DayGridDay, "status" | "halfDay"> | undefined,
+  personId: string,
+  viewer: { id: string; canSeeTeam: boolean }
+): { to: string; label: string } | null {
+  if (!day) return null;
+  if (day.status === "HOLIDAY") return { to: "/app/attendance/leave/holidays", label: "Open the holiday calendar" };
+  if (day.status !== "LEAVE" && !day.halfDay) return null;
+  if (personId === viewer.id) return { to: "/app/attendance/leave/requests", label: "Open your leave request" };
+  return viewer.canSeeTeam ? { to: "/app/attendance/team", label: "Open the team leave calendar" } : null;
+}
+
+/**
+ * 7.0.0 — the timesheet entry screen's line for a day off with nothing logged, in place of the
+ * empty-day prompt: "You're on leave today (PL)" or "Holiday: Diwali". Null on any other day. Pure.
+ */
+export function dayOffPrompt(day: Pick<DayGridDay, "status" | "holidayName" | "leaveTypeCode"> | undefined, isToday: boolean): string | null {
+  if (!day) return null;
+  if (day.status === "HOLIDAY") return `Holiday: ${day.holidayName ?? "public holiday"}`;
+  if (day.status === "LEAVE") return `You're on leave ${isToday ? "today" : "on this day"}${day.leaveTypeCode ? ` (${day.leaveTypeCode})` : ""}`;
+  return null;
+}

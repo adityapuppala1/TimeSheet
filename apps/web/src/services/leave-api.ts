@@ -205,6 +205,8 @@ export const leaveAdminApi = {
   types: async () => (await api.get<{ items: LeaveTypeRow[] }>(`${ADMIN}/types`)).data.items,
   createType: async (payload: LeaveTypeInput & { code: string }) => (await api.post<LeaveTypeRow>(`${ADMIN}/types`, payload)).data,
   updateType: async (id: string, payload: Partial<LeaveTypeInput>) => (await api.put<LeaveTypeRow>(`${ADMIN}/types/${id}`, payload)).data,
+  /** Super admin only: one person's balances (GET /leave/admin/balances/:userId). */
+  balancesFor: async (userId: string) => (await api.get<LeaveBalances>(`${ADMIN}/balances/${userId}`)).data,
   adjust: async (payload: { userId: string; leaveTypeId: string; delta: number; reason: string; leaveYear?: number }) =>
     (await api.post(`${ADMIN}/adjustments`, payload)).data
 };
