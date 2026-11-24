@@ -284,9 +284,12 @@ export async function getTeamDay(actor: { id: string; role: string }, query: Tea
   // source filter (not the status one), so the tile equals what clicking it shows.
   const settings = ids.length ? await getAttendanceSettings() : null;
   const zoneOf = new Map(people.map((p) => [p.id, p.timezone]));
-  const late = settings?.latenessEnabled
-    ? countLate((await import("./attendance-analytics.service.js")).localMinuteOf, query.source ? all.filter((row) => row.punch?.source === query.source) : all, zoneOf, settings.expectedStartMinute ?? 600)
-    : null;
+  const lateRows = query.source ? all.filter((row) => row.punch?.source === query.source) : all;
+  let late: number | null = null;
+  if (settings?.latenessEnabled) {
+    const { localMinuteOf } = await import("./attendance-analytics.service.js");
+    late = countLate(localMinuteOf, lateRows, zoneOf, settings.expectedStartMinute ?? 600);
+  }
 
   const filtered = all.filter(
     (row) => (!query.status || row.status === query.status) && (!query.source || row.punch?.source === query.source)
