@@ -3146,7 +3146,7 @@ integrations). The loser is kept in the admin delivery log, never dropped.
 - `GET /attendance/payroll?month=YYYY-MM&employee=&format=csv` *(attendance:read, 7.0.0)* — the
   monthly payroll report, one row per counted person: `workingDays` (scheduled days minus the
   person's holidays), `holidays`, `present`, `absent` (a working day that is over with no punch and
-  no leave; only counted while attendance is on), `leave` (days by type code, working days only,
+  no leave; a day with half a day of leave and no punch counts 0.5; only counted while attendance is on), `leave` (days by type code, working days only,
   halves as 0.5), `paidLeave`, `unpaidLeave` (LOP: types with `isPaid: false`), `compOffTaken`,
   `compOffEarned`, `loggedHours` (timesheets not rejected or deleted). The response also carries
   `leaveTypes`, `leaveYear` and `leaveYearClosed`. Each row has its own `leaveYearClosed`: true once that leave

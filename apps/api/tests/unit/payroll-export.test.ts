@@ -84,8 +84,9 @@ describe("the monthly report", () => {
       compOffEarned: 0.5,
       loggedHours: 14
     });
-    // 20 working days − 1 present − 6 full leave days (the half LOP day is still owed, and unpunched) = 13 absent.
-    expect(r.rows[0].absent).toBe(13);
+    // 20 working days − 1 present − 6 full leave days = 13 unpunched days, but one of them (Nov 6) is a
+    // half day of LOP: only the other, owed half is absent. 12 + 0.5 = 12.5.
+    expect(r.rows[0].absent).toBe(12.5);
   });
 
   it("flags a month whose leave year has ended or been settled", async () => {

@@ -139,7 +139,7 @@ export async function buildPayrollReport(month: string, opts: { now?: Date; empl
     const isHoliday = (d: string) => Boolean(holidayOf(p.holidayCalendarId, d, p.id));
     const isWorking = (d: string) => planning.workingDays.includes(weekday(d)) && !isHoliday(d);
     const totals = leaveTotals(leaves.filter((l) => l.userId === p.id), from, to, isWorking, { workingDays: planning.workingDays, isHoliday });
-    const days = dayCounts({ from, to, workingDays: planning.workingDays, isHoliday, isWorking, fullLeave: totals.fullLeave, punched: (d) => punched.has(`${p.id}|${d}`), now, timeZone: p.timezone, countAbsent: Boolean(settings.attendanceEnabled) });
+    const days = dayCounts({ from, to, workingDays: planning.workingDays, isHoliday, isWorking, fullLeave: totals.fullLeave, halfLeave: totals.halfLeave, punched: (d) => punched.has(`${p.id}|${d}`), now, timeZone: p.timezone, countAbsent: Boolean(settings.attendanceEnabled) });
     return {
       userId: p.id,
       name: p.name,
@@ -186,6 +186,7 @@ function sandwichInRange(l: LeaveRow, from: string, to: string, isWorking: (d: s
 function leaveTotals(leaves: readonly LeaveRow[], from: string, to: string, isWorking: (d: string) => boolean, rules: { workingDays: readonly number[]; isHoliday: (d: string) => boolean }) {
   const byType: Record<string, number> = {};
   const fullLeave = new Set<string>();
+  const halves = new Map<string, number>();
   let paid = 0;
   let unpaid = 0;
   let sandwich = 0;
@@ -194,6 +195,7 @@ function leaveTotals(leaves: readonly LeaveRow[], from: string, to: string, isWo
     const portions = [...dayPortions({ startDate: toKey(l.startDate), endDate: toKey(l.endDate), startHalf: l.startHalf, endHalf: l.endHalf })].filter(([d]) => counted(d));
     for (const [d, half] of portions) {
       if (half === "FULL") fullLeave.add(d);
+      else halves.set(d, (halves.get(d) ?? 0) + 1);
     }
     const enclosed = sandwichInRange(l, from, to, isWorking, rules);
     sandwich += enclosed;
@@ -203,7 +205,13 @@ function leaveTotals(leaves: readonly LeaveRow[], from: string, to: string, isWo
     if (l.leaveType.isPaid) paid += days;
     else unpaid += days;
   }
-  return { byType, fullLeave, paid, unpaid, sandwich: r2(sandwich) };
+  // Both halves of one day taken (two half-day requests) is a whole day off.
+  const halfLeave = new Set<string>();
+  for (const [d, n] of halves) {
+    if (n >= 2) fullLeave.add(d);
+    else if (!fullLeave.has(d)) halfLeave.add(d);
+  }
+  return { byType, fullLeave, halfLeave, paid, unpaid, sandwich: r2(sandwich) };
 }
 
 /** Working days, holidays on scheduled days, present and absent (resolveDayStatus) for one person. */
@@ -214,6 +222,8 @@ function dayCounts(a: {
   isHoliday: (d: string) => boolean;
   isWorking: (d: string) => boolean;
   fullLeave: ReadonlySet<string>;
+  /** Days with HALF a day of approved leave: unpunched, only the owed half is absent. */
+  halfLeave: ReadonlySet<string>;
   punched: (d: string) => boolean;
   now: Date;
   timeZone: string | null;
@@ -235,7 +245,7 @@ function dayCounts(a: {
       fallbackZone: serverTimezone
     }).status;
     if (status === "PRESENT") out.present += 1;
-    else if (status === "ABSENT" && a.countAbsent) out.absent += 1;
+    else if (status === "ABSENT" && a.countAbsent) out.absent += a.halfLeave.has(d) ? 0.5 : 1;
   }
   return out;
 }
