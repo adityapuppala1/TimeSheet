@@ -37,6 +37,17 @@ import {
   regularizationRequestBody,
   requestRegularization
 } from "../services/attendance-regularization.service.js";
+import {
+  cancelOvertimeClaim,
+  decideOvertimeClaim,
+  getMyOvertime,
+  listMyOvertimeClaims,
+  listOvertimeInbox,
+  MAX_OVERTIME_WEEKS,
+  overtimeClaimBody,
+  overtimeDecisionBody,
+  requestOvertimeClaim
+} from "../services/attendance-overtime.service.js";
 import { getDayGrid, parseGridRange } from "../services/attendance-day-grid.service.js";
 import {
   defaultRange,
@@ -77,6 +88,37 @@ attendanceRouter.get("/regularizations/inbox", requireAuth, async (req, res) => 
 attendanceRouter.post("/regularizations/:id/decision", requireAuth, validate(z.object({ body: regularizationDecisionBody })), async (req, res) => {
   const body = regularizationDecisionBody.parse(req.body);
   res.json(await decideRegularization({ actor: actorOf(req), requestId: regIdParam(req), decision: body.decision, note: body.note ?? null }));
+});
+
+/* ----------------------------- Overtime (7.0.0) ----------------------------- */
+
+attendanceRouter.get("/overtime/me", requireAuth, async (req, res) => {
+  const q = z.object({ from: isoDate, to: isoDate }).passthrough().parse(req.query);
+  if (q.to < q.from) throw new AppError(422, "`to` must be on or after `from`.");
+  if (spanDays(q.from, q.to) > MAX_OVERTIME_WEEKS * 7) throw new AppError(422, `Ask for at most ${MAX_OVERTIME_WEEKS} weeks at a time.`);
+  res.json(await getMyOvertime(req.user!.id, { from: q.from, to: q.to }));
+});
+
+attendanceRouter.get("/overtime/claims/me", requireAuth, async (req, res) => {
+  res.json({ items: await listMyOvertimeClaims(req.user!.id) });
+});
+
+attendanceRouter.post("/overtime/claims", requireAuth, validate(z.object({ body: overtimeClaimBody })), async (req, res) => {
+  const body = overtimeClaimBody.parse(req.body);
+  res.status(201).json(await requestOvertimeClaim({ userId: req.user!.id, weekStart: body.weekStart }));
+});
+
+attendanceRouter.post("/overtime/claims/:id/cancel", requireAuth, async (req, res) => {
+  res.json(await cancelOvertimeClaim(req.user!.id, regIdParam(req)));
+});
+
+attendanceRouter.get("/overtime/claims/inbox", requireAuth, async (req, res) => {
+  res.json(await listOvertimeInbox(actorOf(req)));
+});
+
+attendanceRouter.post("/overtime/claims/:id/decision", requireAuth, validate(z.object({ body: overtimeDecisionBody })), async (req, res) => {
+  const body = overtimeDecisionBody.parse(req.body);
+  res.json(await decideOvertimeClaim({ actor: actorOf(req), requestId: regIdParam(req), decision: body.decision, note: body.note ?? null }));
 });
 
 attendanceRouter.get("/me/today", requireAuth, async (req, res) => {

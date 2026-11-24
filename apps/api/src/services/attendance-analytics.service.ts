@@ -27,6 +27,7 @@
  * payload and fails on any of those. AI failure of any kind falls back to the rule-based list.
  */
 import type { AttendanceSourceKind, Prisma } from "@prisma/client";
+import { overtimeAnalytics } from "./attendance-overtime.service.js";
 import { prisma } from "../config/prisma.js";
 import { serverTimezone } from "../config/env.js";
 import { requireTenantContext } from "../config/tenant-context.js";
@@ -445,6 +446,12 @@ function workingDayCount(people: ReadonlyArray<PersonFacts>): number {
   return people[0]?.days.filter((d) => d.status !== "WEEKEND").length ?? 0;
 }
 
+/** 7.0.0: `{ overtime }` while overtime is on, else nothing — the response is unchanged when off. */
+async function overtimeOf(audience: AnalyticsAudience, ids: readonly string[], range: AnalyticsRange, minGroupSize: number) {
+  const overtime = await overtimeAnalytics(audience, ids, range, minGroupSize);
+  return overtime ? { overtime } : {};
+}
+
 export async function getMyAnalytics(userId: string, range: AnalyticsRange, now: Date = new Date()) {
   const user = await prisma.user.findUnique({ where: { id: userId }, select: PERSON_SELECT });
   if (!user) throw new AppError(404, "User not found");
@@ -457,6 +464,7 @@ export async function getMyAnalytics(userId: string, range: AnalyticsRange, now:
     lateness: { enabled: opts.latenessEnabled, expectedStartMinute: opts.expectedStartMinute },
     summary: summariseSelf(people[0], opts),
     upcomingHolidays: await upcomingHolidays([user.holidayCalendarId], today),
+    ...(await overtimeOf("me", [user.id], range, opts.minGroupSize)),
     leave: await loadLeaveAnalytics({ audience: "me", people: [user], minGroupSize: opts.minGroupSize, range, today, workingDays: planning.workingDays, now })
   };
 }
@@ -481,6 +489,7 @@ export async function getTeamAnalytics(actor: { id: string; role: string }, rang
     group: summariseGroup(people, opts),
     people: personRows(people, opts),
     upcomingHolidays: await upcomingHolidays(loaded.map((p) => p.holidayCalendarId), today),
+    ...(await overtimeOf("team", loaded.map((p) => p.id), range, opts.minGroupSize)),
     leave: await loadLeaveAnalytics({ audience: "team", people: loaded, minGroupSize: opts.minGroupSize, range, today, workingDays: planning.workingDays, now })
   };
 }
@@ -686,6 +695,7 @@ export async function getOrgAnalytics(actor: { id: string; role: string }, range
     integrations,
     holidays: { dates: holidayDates.size, personDays: holidayPersonDays },
     upcomingHolidays: await upcomingHolidays(loaded.map((p) => p.holidayCalendarId), today),
+    ...(await overtimeOf("org", loaded.map((p) => p.id), range, opts.minGroupSize)),
     leave: await loadLeaveAnalytics({ audience: "org", people: loaded, minGroupSize: opts.minGroupSize, range, today, workingDays: planning.workingDays, now })
   };
 }

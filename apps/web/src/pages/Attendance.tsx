@@ -17,6 +17,7 @@ import { PageHeader } from "../components/PageHeader";
 import { MyAnalyticsSection, TeamInsightsView } from "../components/attendance/AttendanceAnalytics";
 import { AdminCancelLeave } from "../components/attendance/AdminCancelLeave";
 import { CompOffInbox } from "../components/attendance/CompOff";
+import { OvertimeInbox, useOvertime } from "../components/attendance/Overtime";
 import { RegularizationInbox, useRegularization } from "../components/attendance/Regularization";
 import { ApprovalDelegations } from "../components/attendance/ApprovalDelegations";
 import { ApprovalsInbox } from "../components/attendance/ApprovalsInbox";
@@ -114,7 +115,8 @@ function TeamPanel({ leaveOn }: Readonly<{ leaveOn: boolean }>) {
   const lateness = today.data?.latenessEnabled ? { enabled: true, expectedStartMinute: today.data.expectedStartMinute ?? 570 } : null;
   // 7.0.0: attendance corrections are decided here too, and need attendance, not leave.
   const regOn = Boolean(useRegularization());
-  const rail = leaveOn || regOn;
+  const otClaims = Boolean(useOvertime()?.requireApproval);
+  const rail = leaveOn || regOn || otClaims;
 
   // The Approvals panel only exists as a tab on a phone; widening the window puts it back in the rail.
   useEffect(() => {
@@ -139,6 +141,7 @@ function TeamPanel({ leaveOn }: Readonly<{ leaveOn: boolean }>) {
               {leaveOn && <ApprovalsInbox />}
               {leaveOn && <CompOffInbox />}
               <RegularizationInbox />
+              <OvertimeInbox />
               {leaveOn && <ApprovalDelegations />}
             </div>
           )}
@@ -147,6 +150,7 @@ function TeamPanel({ leaveOn }: Readonly<{ leaveOn: boolean }>) {
       {tab === "approvals" && leaveOn && <ApprovalsInbox />}
       {tab === "approvals" && leaveOn && <CompOffInbox />}
       {tab === "approvals" && <RegularizationInbox />}
+      {tab === "approvals" && <OvertimeInbox />}
       {tab === "approvals" && leaveOn && <ApprovalDelegations />}
       {tab === "calendar" && leaveOn && <TeamLeaveCalendar />}
       {tab === "calendar" && leaveOn && admin && <AdminCancelLeave />}

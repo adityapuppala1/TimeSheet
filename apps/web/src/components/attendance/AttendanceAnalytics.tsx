@@ -35,7 +35,8 @@ import {
   type AnalyticsAudience,
   type AttendanceInsight,
   type GroupSummary,
-  type TeamAnalytics
+  type TeamAnalytics,
+  type OvertimeAnalytics
 } from "../../services/attendance-api";
 import { splitInsightDetail } from "../../lib/org-kpis";
 import { Badge } from "../ui/badge";
@@ -114,6 +115,32 @@ export function SuppressedNote({ people, min }: Readonly<{ people?: number; min:
       <EyeOff className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       {suppressedText(people, min)}
     </p>
+  );
+}
+
+/** 7.0.0 overtime: my hours, or a group total and average (never per person). Nothing while off. */
+export function OvertimeFigure({ data, min }: Readonly<{ data?: OvertimeAnalytics; min: number }>) {
+  if (!data) return null;
+  const basis = data.basis === "APPROVED" ? "Approved claims, by the week's Monday." : "Hours above the expected day and week, by the week's Monday.";
+  if (data.audience === "me") {
+    return (
+      <SectionCard title="Overtime" description={basis}>
+        <p className="text-2xl font-semibold tabular-nums">{data.hours}h</p>
+      </SectionCard>
+    );
+  }
+  return (
+    <SectionCard title="Overtime" description={basis}>
+      {data.suppressed ? (
+        <SuppressedNote people={data.people} min={min} />
+      ) : (
+        <dl className="grid grid-cols-3 gap-2 text-sm">
+          <div><dt className="text-xs text-muted-foreground">Total</dt><dd className="font-semibold tabular-nums">{data.totalHours}h</dd></div>
+          <div><dt className="text-xs text-muted-foreground">Per person</dt><dd className="font-semibold tabular-nums">{data.averagePerPerson}h</dd></div>
+          <div><dt className="text-xs text-muted-foreground">People with any</dt><dd className="font-semibold tabular-nums">{data.peopleWithOvertime} of {data.people}</dd></div>
+        </dl>
+      )}
+    </SectionCard>
   );
 }
 
@@ -269,6 +296,7 @@ export function MyAnalyticsSection() {
                 </SectionCard>
               </div>
             </div>
+            <OvertimeFigure data={q.data.overtime} min={3} />
             <InsightsList audience="me" from={range.from} to={range.to} />
           </>
         );
@@ -363,6 +391,7 @@ export function TeamInsightsView() {
       {q.data && q.data.people.length > 0 && (
         <>
           <GroupFigures group={q.data.group} min={q.data.minGroupSize} drifting={q.data.people.filter((p) => p.drifting).length} />
+          <OvertimeFigure data={q.data.overtime} min={q.data.minGroupSize} />
           <PeopleTable data={q.data} />
           <InsightsList audience="team" from={range.from} to={range.to} />
         </>

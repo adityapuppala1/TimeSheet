@@ -42,6 +42,11 @@ export interface AttendanceSettings {
   regularizationMonthlyCap: number;
   /** 7.0.0 work sites: what a web punch-in outside every site does. */
   requireSite: "OFF" | "BLOCK" | "ALLOW_FLAGGED";
+  /** 7.0.0 overtime: hours above the expected day and week. OFF by default. */
+  overtimeEnabled: boolean;
+  overtimeDailyThresholdHours: number;
+  overtimeWeeklyThresholdHours: number;
+  overtimeRequireApproval: boolean;
 }
 
 export interface AttendanceEntitlements {
@@ -171,6 +176,8 @@ export interface MyToday {
   steps?: PunchStep[];
   /** 7.0.0: corrections can be asked for, and how far back. Absent while they are off. */
   regularization?: { enabled: true; maxDaysBack: number };
+  /** 7.0.0: overtime is counted, and whether weeks are claimed. Absent while it is off. */
+  overtime?: { enabled: true; requireApproval: boolean };
 }
 
 export type RegularizationStatus = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
@@ -200,6 +207,46 @@ export const regularizationApi = {
   inbox: async () => (await api.get<{ total: number; items: RegularizationRow[] }>("/attendance/regularizations/inbox")).data,
   decide: async (id: string, decision: "APPROVE" | "REJECT", note?: string) =>
     (await api.post<RegularizationRow>(`/attendance/regularizations/${id}/decision`, note ? { decision, note } : { decision })).data
+};
+
+export interface OvertimeClaimRow {
+  id: string;
+  user?: { id: string; name: string; email: string; avatarUrl: string | null };
+  weekStart: string;
+  hours: number;
+  workedHours: number;
+  expectedHours: number;
+  status: RegularizationStatus;
+  decisionNote: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+  onBehalfOf?: string | null;
+}
+
+export interface OvertimeWeekRow {
+  weekStart: string;
+  workedHours: number;
+  expectedHours: number;
+  dailyOvertime: number;
+  weeklyOvertime: number;
+  overtimeHours: number;
+  claim: OvertimeClaimRow | null;
+}
+
+export interface MyOvertime {
+  requireApproval: boolean;
+  thresholds: { dailyThresholdHours: number; weeklyThresholdHours: number };
+  totalHours: number;
+  weeks: OvertimeWeekRow[];
+}
+
+export const overtimeApi = {
+  mine: async (from: string, to: string) => (await api.get<MyOvertime>("/attendance/overtime/me", { params: { from, to } })).data,
+  claim: async (weekStart: string) => (await api.post<OvertimeClaimRow>("/attendance/overtime/claims", { weekStart })).data,
+  cancel: async (id: string) => (await api.post<OvertimeClaimRow>(`/attendance/overtime/claims/${id}/cancel`)).data,
+  inbox: async () => (await api.get<{ total: number; items: OvertimeClaimRow[] }>("/attendance/overtime/claims/inbox")).data,
+  decide: async (id: string, decision: "APPROVE" | "REJECT", note?: string) =>
+    (await api.post<OvertimeClaimRow>(`/attendance/overtime/claims/${id}/decision`, note ? { decision, note } : { decision })).data
 };
 
 export interface PunchInPayload {
@@ -490,7 +537,13 @@ export interface Lateness {
   expectedStartMinute: number;
 }
 
+/** 7.0.0: present only while overtime is on. Group figures are suppressed below minGroupSize. */
+export type OvertimeAnalytics =
+  | { audience: "me"; basis: "APPROVED" | "COMPUTED"; hours: number }
+  | { audience: "team" | "org"; basis: "APPROVED" | "COMPUTED"; people: number; suppressed: boolean; totalHours: number | null; averagePerPerson: number | null; peopleWithOvertime: number | null };
+
 export interface MyAnalytics {
+  overtime?: OvertimeAnalytics;
   audience: "me";
   range: AnalyticsRangeOut;
   lateness: Lateness;
@@ -518,6 +571,7 @@ export interface AnalyticsPersonRow {
 }
 
 export interface TeamAnalytics {
+  overtime?: OvertimeAnalytics;
   audience: "team";
   range: AnalyticsRangeOut;
   minGroupSize: number;
@@ -538,6 +592,7 @@ export interface SourceHealth {
 }
 
 export interface OrgAnalytics {
+  overtime?: OvertimeAnalytics;
   audience: "org";
   range: AnalyticsRangeOut;
   minGroupSize: number;

@@ -361,3 +361,61 @@ export function excludedDays(span: LeaveSpan, rules: DayRules & { holidayName: (
   }
   return out;
 }
+
+/* ------------------------------------------------------------------ *
+ * Overtime (7.0.0)
+ * ------------------------------------------------------------------ */
+
+/** The Monday of the ISO week `dateKey` falls in. */
+export function weekStartOf(dateKey: string): string {
+  const wd = weekdayOf(dateKey);
+  return addDaysKey(dateKey, wd === 0 ? -6 : 1 - wd);
+}
+
+export interface OvertimeDayInput {
+  date: string;
+  /** Timesheet hours logged on the work date. */
+  worked: number;
+  /** Expected hours that day (shift, else the workspace day; 0 on a weekend, holiday or full leave). */
+  expected: number;
+}
+
+export interface OvertimeThresholds {
+  dailyThresholdHours: number;
+  weeklyThresholdHours: number;
+}
+
+export interface OvertimeWeek {
+  weekStart: string;
+  workedHours: number;
+  expectedHours: number;
+  /** Σ per day of max(0, worked − expected − daily threshold). */
+  dailyOvertime: number;
+  /** max(0, Σworked − Σexpected − weekly threshold). */
+  weeklyOvertime: number;
+  /** The larger of the two: the same hour is never paid twice. */
+  overtimeHours: number;
+  days: Array<OvertimeDayInput & { overtime: number }>;
+}
+
+/**
+ * One week's overtime. Daily and weekly are both measured against expected hours, each with its own
+ * grace threshold; the week's overtime is the LARGER of the daily sum and the weekly excess, never
+ * their sum. Pure.
+ */
+export function overtimeForWeek(weekStart: string, days: readonly OvertimeDayInput[], t: OvertimeThresholds): OvertimeWeek {
+  let worked = 0;
+  let expected = 0;
+  let daily = 0;
+  const out: OvertimeWeek["days"] = [];
+  for (const d of days) {
+    worked += d.worked;
+    expected += d.expected;
+    const ot = round2(Math.max(0, d.worked - d.expected - Math.max(0, t.dailyThresholdHours)));
+    daily += ot;
+    out.push({ ...d, overtime: ot });
+  }
+  const weekly = round2(Math.max(0, worked - expected - Math.max(0, t.weeklyThresholdHours)));
+  daily = round2(daily);
+  return { weekStart, workedHours: round2(worked), expectedHours: round2(expected), dailyOvertime: daily, weeklyOvertime: weekly, overtimeHours: Math.max(daily, weekly), days: out };
+}

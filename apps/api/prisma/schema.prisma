@@ -380,6 +380,7 @@ model User {
   /// V17 Phase B leave. Cascade with the person (personal data), like attendance.
   compOffRequests             CompOffRequest[]
   attendanceRegularizationRequests AttendanceRegularizationRequest[]
+  overtimeClaims              OvertimeClaim[]
   leaveRequests               LeaveRequest[]
   leaveLedger                 LeaveBalanceLedger[]
 
@@ -6260,6 +6261,18 @@ model GlobalAttendanceSettings {
   /// ALLOW_FLAGGED records it with siteFlagged. Needs location on and at least one site.
   requireSite AttendanceSiteRule @default(OFF)
 
+  /// --- Overtime (7.0.0) ----------------------------------------------------------------------
+  /// Timesheet hours above the expected day (the shift, else the workspace day) per day and per
+  /// week (attendance-overtime.service.ts). OFF by default; also needs attendance on.
+  overtimeEnabled              Boolean @default(false)
+  /// Hours over the expected day before a day's excess counts as overtime (0 = any excess).
+  overtimeDailyThresholdHours  Decimal @default(0) @db.Decimal(4, 2)
+  /// Hours over the expected week before the week's excess counts as overtime (0 = any excess).
+  overtimeWeeklyThresholdHours Decimal @default(0) @db.Decimal(5, 2)
+  /// When on, a week's overtime is claimed and decided like a correction; payroll then reports
+  /// approved hours only. Off, payroll reports the computed hours.
+  overtimeRequireApproval      Boolean @default(false)
+
   updatedById String?
   updatedAt   DateTime @updatedAt
 }
@@ -6697,6 +6710,34 @@ model AttendanceRegularizationRequest {
   @@index([userId, workDate])
   @@index([approverId, status])
   @@index([status])
+}
+
+/// 7.0.0 overtime claim: one per person per week (Monday `weekStart`), only while
+/// overtimeRequireApproval is on. `hours` is computed server-side when the claim is made. Decided by
+/// the leave rule (resolveDecisionRight); approval is a conditional PENDING → APPROVED update.
+model OvertimeClaim {
+  id                     String             @id @default(uuid())
+  userId                 String
+  user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  weekStart              DateTime           @db.Date
+  hours                  Decimal            @db.Decimal(6, 2)
+  workedHours            Decimal            @db.Decimal(6, 2)
+  expectedHours          Decimal            @db.Decimal(6, 2)
+  status                 LeaveRequestStatus @default(PENDING)
+  approverId             String?            @db.VarChar(64)
+  decidedById            String?            @db.VarChar(64)
+  onBehalfOfId           String?            @db.VarChar(64)
+  decidedAt              DateTime?
+  decisionNote           String?            @db.Text
+  overriddenBySuperAdmin Boolean            @default(false)
+  cancelledAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, weekStart])
+  @@index([approverId, status])
+  @@index([status, weekStart])
 }
 
 model CompOffRequest {

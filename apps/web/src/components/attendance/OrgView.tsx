@@ -28,7 +28,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { EmptyState } from "../ui/empty-state";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Skeleton } from "../ui/skeleton";
-import { InsightsList, RangeSelector, SuppressedNote, useRange, HistogramChart } from "./AttendanceAnalytics";
+import { InsightsList, OvertimeFigure, RangeSelector, SuppressedNote, useRange, HistogramChart } from "./AttendanceAnalytics";
 import { CardError, SectionCard, Segmented } from "./attendance-ui";
 
 const TOOLTIP_STYLE = {
@@ -381,6 +381,7 @@ export function OrgAnalyticsView() {
             {d.trend ? <TrendChart data={d.trend} /> : <SectionCard title="Attendance trend"><p className="text-xs text-muted-foreground">{suppressedLine(d.minGroupSize)}</p></SectionCard>}
             <GroupChart org={d} />
             <IntegrationHealth list={d.integrations} />
+            <OvertimeFigure data={d.overtime} min={d.minGroupSize} />
             <InsightsList audience="org" from={range.from} to={range.to} />
           </div>
 

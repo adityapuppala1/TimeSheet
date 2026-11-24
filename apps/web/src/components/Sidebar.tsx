@@ -8,6 +8,7 @@
  * WHO renders this: `layouts/AppLayout.tsx` (`Sidebar` + `MobileNav`), `components/Topbar.tsx`
  * (`MobileDrawerNav`, opened by the hamburger button).
  */
+import { useOvertimeInboxCount } from "./attendance/Overtime";
 import {
   BarChart3,
   BrainCircuit,
@@ -274,11 +275,13 @@ function usePendingApprovals(enabled: boolean): number {
     refetchIntervalInBackground: false,
     retry: false
   });
+  // 7.0.0: overtime claims waiting on me (only while claims need approval).
+  const overtime = useOvertimeInboxCount(enabled, TEAM_VIEW_ROLES.has(role));
   // The cache entry is shared, so a row that did not ask must not read it either.
   if (!enabled) return 0;
   const corrections = regOn ? (reg.data?.total ?? 0) : 0;
   // 7.0.0: comp-off requests waiting on me count too (the field is absent while comp-off is off).
-  return (leaveOn ? (q.data?.total ?? 0) + (q.data?.compOffPending ?? 0) : 0) + corrections;
+  return (leaveOn ? (q.data?.total ?? 0) + (q.data?.compOffPending ?? 0) : 0) + corrections + overtime;
 }
 
 function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavigate?: () => void; slim?: boolean }) {

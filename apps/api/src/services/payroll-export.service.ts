@@ -28,6 +28,7 @@ import { resolveDayStatus, todayKeyFor } from "./attendance-day-status.js";
 import { loadHolidays } from "./attendance-team.service.js";
 import { attendanceOrLeaveOn } from "./leave-capacity.service.js";
 import { addDaysKey, dayPortions, leaveYearBounds, leaveYearOf } from "./leave-calc.js";
+import { overtimeHoursForPeriod } from "./attendance-overtime.service.js";
 import { getPlanningSettings } from "./planning.service.js";
 import { COUNTED_PEOPLE } from "./people-visibility.service.js";
 import { CSV_EOL, UTF8_BOM, csvCell } from "../utils/csv.js";
@@ -51,6 +52,8 @@ export interface PayrollRow {
   compOffTaken: number;
   compOffEarned: number;
   loggedHours: number;
+  /** 7.0.0: only while overtime is on (approved hours, or computed when approval is off). */
+  overtimeHours?: number;
 }
 
 export interface PayrollReport {
@@ -60,6 +63,8 @@ export interface PayrollReport {
   leaveYear: number;
   leaveYearClosed: boolean;
   leaveTypes: Array<{ code: string; name: string; isPaid: boolean }>;
+  /** 7.0.0: present only while overtime is on. Weeks count in the month their Monday falls in. */
+  overtime?: { basis: "APPROVED" | "COMPUTED" };
   rows: PayrollRow[];
 }
 
@@ -106,6 +111,7 @@ export async function buildPayrollReport(month: string, opts: { now?: Date; empl
     prisma.leaveBalanceLedger.findFirst({ where: { leaveYear, idempotencyKey: { startsWith: "EXPIRY:" } }, select: { id: true } })
   ]);
 
+  const overtime = await overtimeHoursForPeriod(ids, from, to);
   const punched = new Set(records.map((r) => `${r.userId}|${toKey(r.workDate)}`));
   const hours = new Map<string, number>();
   for (const t of timesheets) hours.set(t.userId, (hours.get(t.userId) ?? 0) + Number(t.totalHours));
@@ -129,12 +135,13 @@ export async function buildPayrollReport(month: string, opts: { now?: Date; empl
       unpaidLeave: r2(totals.unpaid),
       compOffTaken: totals.byType[compOffCode] ?? 0,
       compOffEarned: r2(earned.get(p.id) ?? 0),
-      loggedHours: r2(hours.get(p.id) ?? 0)
+      loggedHours: r2(hours.get(p.id) ?? 0),
+      ...(overtime ? { overtimeHours: overtime.hours.get(p.id) ?? 0 } : {})
     };
   });
 
   const yearEnded = leaveYearBounds(leaveYear, startMonth).to < today;
-  return { month, from, to, leaveYear, leaveYearClosed: yearEnded || Boolean(settled), leaveTypes: types, rows };
+  return { month, from, to, leaveYear, leaveYearClosed: yearEnded || Boolean(settled), leaveTypes: types, ...(overtime ? { overtime: { basis: overtime.basis } } : {}), rows };
 }
 
 type LeaveRow = { startDate: Date; endDate: Date; startHalf: "FULL" | "FIRST_HALF" | "SECOND_HALF"; endHalf: "FULL" | "FIRST_HALF" | "SECOND_HALF"; leaveType: { code: string; isPaid: boolean } };
@@ -211,6 +218,7 @@ export function payrollCsv(report: PayrollReport): string {
     "Comp-off taken",
     "Comp-off earned",
     "Logged hours",
+    ...(report.overtime ? [report.overtime.basis === "APPROVED" ? "Overtime hours (approved)" : "Overtime hours"] : []),
     "Leave year closed"
   ];
   const lines = [head.map(csvCell).join(",")];
@@ -233,6 +241,7 @@ export function payrollCsv(report: PayrollReport): string {
         r.compOffTaken,
         r.compOffEarned,
         r.loggedHours,
+        ...(report.overtime ? [r.overtimeHours ?? 0] : []),
         report.leaveYearClosed ? "yes" : "no"
       ]
         .map(csvCell)

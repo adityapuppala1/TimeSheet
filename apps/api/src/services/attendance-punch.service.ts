@@ -149,6 +149,8 @@ export interface MyTodayResponse {
   shift?: ReturnType<typeof publicShift>;
   /** 7.0.0: corrections can be asked for (and how far back). Absent while they are off. */
   regularization?: { enabled: true; maxDaysBack: number };
+  /** 7.0.0: overtime is counted (and whether weeks are claimed). Absent while it is off. */
+  overtime?: { enabled: true; requireApproval: boolean };
   record?: ReturnType<typeof publicRecord>;
   steps?: PunchStep[];
 }
@@ -205,6 +207,7 @@ export async function getMyToday(userId: string, now: Date = new Date()): Promis
     ...(settings.latenessEnabled ? { latenessEnabled: true, expectedStartMinute: shift ? shift.startMinute : settings.expectedStartMinute } : {}),
     shift: publicShift(shift),
     ...(settings.regularizationEnabled ? { regularization: { enabled: true as const, maxDaysBack: settings.regularizationMaxDaysBack } } : {}),
+    ...(settings.overtimeEnabled ? { overtime: { enabled: true as const, requireApproval: Boolean(settings.overtimeRequireApproval) } } : {}),
     record: publicRecord(record),
     steps
   };

@@ -33,6 +33,7 @@ import { Skeleton } from "../ui/skeleton";
 import { AttendanceStatusBadge } from "./AttendanceStatusBadge";
 import { CompOffDayAction, MyCompOffCard } from "./CompOff";
 import { RegularizationDayAction } from "./Regularization";
+import { MyOvertimeCard } from "./Overtime";
 import { CardError, SectionCard, todayKey } from "./attendance-ui";
 import { leaveColour, useLeaveBalances, useLeaveEnabled, useMyHolidays } from "./use-leave";
 
@@ -451,6 +452,7 @@ export function MyAttendanceView() {
         {leaveOn && (
           <div className="order-3 min-w-0">
             <MyCompOffCard />
+            <MyOvertimeCard />
           </div>
         )}
         <div className="order-6 min-w-0">

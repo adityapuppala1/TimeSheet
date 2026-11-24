@@ -28,6 +28,8 @@ export interface LeaveWorld {
   calendarFeedToken: Row[];
   /** 7.0.0 regularisation */
   attendanceRegularizationRequest: Row[];
+  /** 7.0.0 overtime */
+  overtimeClaim: Row[];
 }
 
 let seq = 0;
@@ -59,7 +61,8 @@ export function emptyWorld(): LeaveWorld {
     timesheet: [],
     approvalDelegation: [],
     calendarFeedToken: [],
-    attendanceRegularizationRequest: []
+    attendanceRegularizationRequest: [],
+    overtimeClaim: []
   };
 }
 
@@ -136,7 +139,7 @@ function withIncludes(world: LeaveWorld, table: string, row: Row | undefined, in
   if (!row) return null;
   const related = (key: string): Row | undefined => {
     if (key === "leaveType" && (table === "leaveRequest" || table === "leaveBalanceLedger")) return world.leaveType.find((t) => t.id === row.leaveTypeId);
-    if (key === "user" && (table === "leaveRequest" || table === "compOffRequest" || table === "calendarFeedToken" || table === "attendanceRegularizationRequest")) return world.users.find((u) => u.id === row.userId);
+    if (key === "user" && (table === "leaveRequest" || table === "compOffRequest" || table === "calendarFeedToken" || table === "attendanceRegularizationRequest" || table === "overtimeClaim")) return world.users.find((u) => u.id === row.userId);
     if (key === "delegate" && table === "approvalDelegation") return world.users.find((u) => u.id === row.delegateId);
     if (key === "delegator" && table === "approvalDelegation") return world.users.find((u) => u.id === row.delegatorId);
     return undefined;
@@ -273,6 +276,7 @@ export function fakePrisma(world: LeaveWorld) {
     approvalDelegation: model(world, "approvalDelegation"),
     calendarFeedToken: model(world, "calendarFeedToken"),
     attendanceRegularizationRequest: model(world, "attendanceRegularizationRequest"),
+    overtimeClaim: model(world, "overtimeClaim"),
     holidayOptIn: { findMany: async () => [] },
     attendanceShiftAssignment: { findMany: async () => [] },
     globalAttendanceSettings: {
@@ -283,7 +287,7 @@ export function fakePrisma(world: LeaveWorld) {
     // Serialised + rolled back on throw: the database's guarantees, in miniature.
     $transaction: (fn: (tx: unknown) => Promise<unknown>) => {
       const run = lock.then(async () => {
-        const snapshot = structuredClone({ r: world.leaveRequest, l: world.leaveBalanceLedger, t: world.leaveType, c: world.compOffRequest, g: world.attendanceRegularizationRequest });
+        const snapshot = structuredClone({ r: world.leaveRequest, l: world.leaveBalanceLedger, t: world.leaveType, c: world.compOffRequest, g: world.attendanceRegularizationRequest, o: world.overtimeClaim });
         try {
           return await fn(client);
         } catch (error) {
@@ -292,6 +296,7 @@ export function fakePrisma(world: LeaveWorld) {
           world.leaveType.splice(0, world.leaveType.length, ...snapshot.t);
           world.compOffRequest.splice(0, world.compOffRequest.length, ...snapshot.c);
           world.attendanceRegularizationRequest.splice(0, world.attendanceRegularizationRequest.length, ...snapshot.g);
+          world.overtimeClaim.splice(0, world.overtimeClaim.length, ...snapshot.o);
           throw error;
         }
       });

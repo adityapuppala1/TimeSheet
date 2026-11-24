@@ -374,6 +374,30 @@ export function AttendanceSettingsCard({ readOnly }: { readOnly: boolean }) {
             </div>
           )}
 
+          {section === "overtime" && (
+            <StagedToggle
+              id="att-overtime"
+              label="Count overtime"
+              hint="Off by default. Timesheet hours above each person's expected day (their shift, else the workspace day) and week. Shown to the person, as a total for teams and the organisation (hidden below the smallest group size), and as a payroll export column."
+              checked={values.overtimeEnabled}
+              disabled={disabled}
+              changed={changed("overtimeEnabled")}
+              onChange={(v) => stage({ overtimeEnabled: v })}
+            >
+              <StagedNumber id="att-ot-daily" label="Daily threshold (hours over the expected day)" hint="0 counts any excess. A day's excess below this is not overtime." value={values.overtimeDailyThresholdHours} min={0} max={24} disabled={disabled} onChange={(v) => stage({ overtimeDailyThresholdHours: v })} />
+              <StagedNumber id="att-ot-weekly" label="Weekly threshold (hours over the expected week)" hint="A week's overtime is the larger of the daily total and the weekly excess, never both." value={values.overtimeWeeklyThresholdHours} min={0} max={168} disabled={disabled} onChange={(v) => stage({ overtimeWeeklyThresholdHours: v })} />
+              <StagedToggle
+                id="att-ot-approval"
+                label="Overtime needs approval"
+                hint="Off: payroll reports the computed hours. On: people claim each finished week and their approver decides; payroll reports approved hours only."
+                checked={values.overtimeRequireApproval}
+                disabled={disabled}
+                changed={changed("overtimeRequireApproval")}
+                onChange={(v) => stage({ overtimeRequireApproval: v })}
+              />
+            </StagedToggle>
+          )}
+
           {section === "leave-types" && <LeaveTypesSection readOnly={readOnly} />}
           {section === "leave-settings" && (
             <div className="grid min-w-0 gap-4">
@@ -544,7 +568,11 @@ function dirtySections(changes: Array<{ key: string }>, leaveChanges: unknown[])
     regularizationEnabled: "corrections",
     regularizationMaxDaysBack: "corrections",
     regularizationMonthlyCap: "corrections",
-    requireSite: "sites"
+    requireSite: "sites",
+    overtimeEnabled: "overtime",
+    overtimeDailyThresholdHours: "overtime",
+    overtimeWeeklyThresholdHours: "overtime",
+    overtimeRequireApproval: "overtime"
   };
   const out = new Set(changes.map((c) => map[c.key]).filter(Boolean));
   if (leaveChanges.length > 0) out.add("leave-settings");

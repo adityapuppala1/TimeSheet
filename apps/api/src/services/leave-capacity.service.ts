@@ -108,10 +108,11 @@ export function mergedTimeOffHours(
   return r2(total);
 }
 
-/** Expected hours per person over [from, to]. Four queries however many people (the shift lookup is one). */
-export async function expectedHoursFor(userIds: readonly string[], from: string, to: string): Promise<Map<string, ExpectedHours>> {
-  const out = new Map<string, ExpectedHours>();
-  if (userIds.length === 0 || to < from) return out;
+type ExpectationInput = Omit<Parameters<typeof expectedHours>[0], "from" | "to">;
+
+/** The per-person inputs expectedHours needs over [from, to]. Four queries however many people. */
+async function expectationInputs(userIds: readonly string[], from: string, to: string): Promise<Map<string, ExpectationInput>> {
+  const out = new Map<string, ExpectationInput>();
   const [planning, people] = await Promise.all([
     getPlanningSettings(),
     prisma.user.findMany({ where: { id: { in: [...userIds] } }, select: { id: true, managerId: true, holidayCalendarId: true, weeklyCapacityHours: true } })
@@ -122,19 +123,37 @@ export async function expectedHoursFor(userIds: readonly string[], from: string,
     shiftsForUsersInRange(people, from, to)
   ]);
   for (const p of people) {
-    out.set(
-      p.id,
-      expectedHours({
-        from,
-        to,
-        workingDays: planning.workingDays,
-        isHoliday: (d) => Boolean(holidayOf(p.holidayCalendarId, d, p.id)),
-        leaveFraction: (d) => leaveFractionOf(leaveOf, p.id, d),
-        weeklyCapacityHours: p.weeklyCapacityHours != null ? Number(p.weeklyCapacityHours) : planning.defaultWeeklyCapacityHours,
-        // 7.0.0: a person on a shift is expected the shift's minutes on the shift's working days.
-        shiftOn: shiftsOf.get(p.id)
-      })
-    );
+    out.set(p.id, {
+      workingDays: planning.workingDays,
+      isHoliday: (d) => Boolean(holidayOf(p.holidayCalendarId, d, p.id)),
+      leaveFraction: (d) => leaveFractionOf(leaveOf, p.id, d),
+      weeklyCapacityHours: p.weeklyCapacityHours != null ? Number(p.weeklyCapacityHours) : planning.defaultWeeklyCapacityHours,
+      // 7.0.0: a person on a shift is expected the shift's minutes on the shift's working days.
+      shiftOn: shiftsOf.get(p.id)
+    });
+  }
+  return out;
+}
+
+/** Expected hours per person over [from, to]. Four queries however many people (the shift lookup is one). */
+export async function expectedHoursFor(userIds: readonly string[], from: string, to: string): Promise<Map<string, ExpectedHours>> {
+  const out = new Map<string, ExpectedHours>();
+  if (userIds.length === 0 || to < from) return out;
+  for (const [id, input] of await expectationInputs(userIds, from, to)) out.set(id, expectedHours({ from, to, ...input }));
+  return out;
+}
+
+/**
+ * 7.0.0 overtime: expected hours per person PER DAY over [from, to] — the same rule as
+ * expectedHoursFor, one day at a time (a night shift's hours belong to its start date).
+ */
+export async function expectedHoursByDay(userIds: readonly string[], from: string, to: string): Promise<Map<string, Map<string, number>>> {
+  const out = new Map<string, Map<string, number>>();
+  if (userIds.length === 0 || to < from) return out;
+  for (const [id, input] of await expectationInputs(userIds, from, to)) {
+    const days = new Map<string, number>();
+    for (let d = from; d <= to; d = addDaysKey(d, 1)) days.set(d, expectedHours({ from: d, to: d, ...input }).expectedHours);
+    out.set(id, days);
   }
   return out;
 }

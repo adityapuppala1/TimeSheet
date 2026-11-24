@@ -83,7 +83,11 @@ export const FIELD_LABELS: Partial<Record<keyof AttendanceSettings, string>> = {
   regularizationEnabled: "Attendance corrections",
   regularizationMaxDaysBack: "Corrections: days back",
   regularizationMonthlyCap: "Corrections per month",
-  requireSite: "Work site rule"
+  requireSite: "Work site rule",
+  overtimeEnabled: "Overtime",
+  overtimeDailyThresholdHours: "Overtime: daily threshold",
+  overtimeWeeklyThresholdHours: "Overtime: weekly threshold",
+  overtimeRequireApproval: "Overtime approval"
 };
 
 const ENUM_WORDS: Partial<Record<keyof AttendanceSettings, Record<string, string>>> = { punchInMode: PUNCH_LABEL, locationMode: LOCATION_LABEL, requireSite: SITE_RULE_LABEL };
@@ -98,6 +102,7 @@ export function valueText(key: keyof AttendanceSettings, value: unknown): string
   if (key === "punchInReminderHour") return clock(Number(value) * 60);
   if (key === "expectedStartMinute") return clock(Number(value));
   if (key === "locationRetentionDays") return `${value} days`;
+  if (key === "overtimeDailyThresholdHours" || key === "overtimeWeeklyThresholdHours") return `${value}h`;
   if (key === "locationConsentText") return value ? "custom wording" : "built-in wording";
   if (key === "faceFailureRule") return value === "BLOCK" ? "block the punch" : "allow and flag";
   if (key === "aiInsightsFrequency") return String(value).toLowerCase();
@@ -184,7 +189,8 @@ export function settingsSections(leaveEntitled: boolean): NavSection[] {
     { id: "shifts", label: "Shifts", group: "Attendance" },
     { id: "reasons", label: "Missed-day reasons", group: "Attendance" },
     { id: "corrections", label: "Corrections", group: "Attendance" },
-    { id: "sites", label: "Work sites", group: "Attendance" }
+    { id: "sites", label: "Work sites", group: "Attendance" },
+    { id: "overtime", label: "Overtime", group: "Attendance" }
   ];
   const leave: NavSection[] = [
     { id: "leave-types", label: "Leave types", group: "Leave" },
