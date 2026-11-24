@@ -45,7 +45,7 @@ vi.mock("../../src/config/prisma.js", () => ({
         return people.filter((p) => !where.id || where.id.in.includes(p.id));
       }
     },
-    holidayCalendar: { findFirst: async () => ({ id: "cal-1" }) },
+    holidayCalendar: { findMany: async () => [], findFirst: async () => ({ id: "cal-1" }) },
     holiday: {
       findMany: async () => {
         count("holiday.findMany");

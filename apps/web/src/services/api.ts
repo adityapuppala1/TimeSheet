@@ -1396,6 +1396,9 @@ export interface UserRow {
   /// Admin-set per-user opt-in for face (identity) verification. Only consulted while the
   /// workspace-level switch is on AND its enforcement mode is SELECTED.
   faceVerificationRequired: boolean;
+  /** 7.0.0 leave policies: scopes leave types and holiday calendars. */
+  employmentType?: "FULL_TIME" | "PART_TIME" | "CONTRACT" | "INTERN" | null;
+  siteId?: string | null;
   managerId: string | null;
   manager?: { id: string; name: string; email: string } | null;
   role: { name: string };

@@ -30,7 +30,7 @@ vi.mock("../../src/config/prisma.js", () => {
     }
   };
   const client = {
-    holidayCalendar: { findFirst: async () => ({ id: "cal" }) },
+    holidayCalendar: { findMany: async () => [], findFirst: async () => ({ id: "cal" }) },
     holiday: {
       findMany: async () => holidays,
       findFirst: async ({ where }: { where: { id?: string; date?: Date } }) => {

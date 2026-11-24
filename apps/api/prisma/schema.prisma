@@ -369,6 +369,13 @@ model User {
   /// (HolidayCalendar.isDefault), so a fresh workspace needs no per-person assignment at all.
   /// SetNull on delete: removing a calendar drops people back to the default, never orphans them.
   holidayCalendarId           String?
+  /// 7.0.0 leave policies: what kind of employment this is (leave types and holiday calendars may be
+  /// scoped to some kinds). NULL = not set; a scoped policy then does not apply to them.
+  employmentType              EmploymentType?
+  /// 7.0.0: the person's home work site. A holiday calendar scoped to the site applies to them when
+  /// they have no calendar of their own; leave types may be scoped to sites. SetNull on delete.
+  siteId                      String?
+  site                        AttendanceSite?              @relation(fields: [siteId], references: [id], onDelete: SetNull)
   /// When this person first accepted the workspace's location-consent wording for punch-in (V17 A2).
   /// NULL = never asked yet; the punch-in dialog shows the consent text before the first location read.
   attendanceLocationConsentAt DateTime?
@@ -394,6 +401,14 @@ model User {
   @@index([roleId, status])
   @@index([managerId])
   @@index([holidayCalendarId])
+  @@index([siteId])
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERN
 }
 
 model Session {
@@ -6288,6 +6303,10 @@ model HolidayCalendar {
   /// 7.0.0: how many of this calendar's optional holidays one person may opt into per calendar
   /// year. NULL = no limit set; 0 = optional holidays cannot be taken.
   maxOptionalPerYear Int?
+  /// 7.0.0 scope (JSON arrays; NULL or [] = no restriction on that axis). A scoped calendar applies
+  /// to people WITHOUT their own calendar who match it: explicit calendar > scoped > default.
+  scopeEmploymentTypes Json?
+  scopeSiteIds         Json?
 
   holidays Holiday[]
   users    User[]
@@ -6463,6 +6482,8 @@ model AttendanceSite {
   longitude Decimal @db.Decimal(9, 6)
   radiusM   Int
   enabled   Boolean @default(true)
+  /// 7.0.0: people whose home site this is (User.siteId).
+  users     User[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -6598,6 +6619,10 @@ model LeaveType {
   allowNegative             Boolean      @default(false)
   enabled                   Boolean      @default(false)
   sortOrder                 Int          @default(0)
+  /// 7.0.0 scope (JSON arrays; NULL or [] = everyone on that axis). Out of scope, a person neither
+  /// sees, applies for nor accrues the type (leave-calc.ts#inPolicyScope).
+  scopeEmploymentTypes      Json?
+  scopeSiteIds              Json?
 
   ledger   LeaveBalanceLedger[]
   requests LeaveRequest[]

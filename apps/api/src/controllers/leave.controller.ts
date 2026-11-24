@@ -14,6 +14,7 @@
  * field in the body is refused by the strict schema.
  */
 import { Router } from "express";
+import { scopeColumns } from "../utils/scope-columns.js";
 import { z } from "zod";
 import { prisma } from "../config/prisma.js";
 import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
@@ -72,6 +73,7 @@ import {
 
 export const leaveRouter = Router();
 
+
 const STATUS = z.enum(["PENDING", "APPROVED", "REJECTED", "CANCELLED"]);
 const yearQuery = z.object({ year: z.string().regex(/^\d{4}$/).optional() }).passthrough();
 
@@ -97,9 +99,10 @@ leaveRouter.get("/status", requireAuth, async (_req, res) => {
 
 /* ----------------------------- employee ----------------------------- */
 
-leaveRouter.get("/types", requireAuth, async (_req, res) => {
+leaveRouter.get("/types", requireAuth, async (req, res) => {
   await assertLeaveOn();
-  res.json({ items: await listLeaveTypes(false) });
+  // 7.0.0: only the types in the caller's scope (employment type / site).
+  res.json({ items: await listLeaveTypes(false, req.user!.id) });
 });
 
 leaveRouter.get("/me/balances", requireAuth, async (req, res) => {
@@ -361,7 +364,7 @@ admin.post("/types", validate(z.object({ body: leaveTypeBody })), async (req, re
   await assertLeaveEntitled();
   const body = leaveTypeBody.parse(req.body);
   try {
-    const created = await prisma.leaveType.create({ data: body });
+    const created = await prisma.leaveType.create({ data: scopeColumns(body) });
     await audit(req.user!.id, "leave.type_created", "LeaveType", created.id, body);
     res.status(201).json(publicLeaveType(created));
   } catch (error) {
@@ -378,7 +381,7 @@ admin.put("/types/:id", validate(z.object({ body: leaveTypeBody.partial() })), a
   const existing = await prisma.leaveType.findUnique({ where: { id }, select: { id: true } });
   if (!existing) throw new AppError(404, "Leave type not found");
   try {
-    const updated = await prisma.leaveType.update({ where: { id }, data: body });
+    const updated = await prisma.leaveType.update({ where: { id }, data: scopeColumns(body) });
     await audit(req.user!.id, "leave.type_updated", "LeaveType", id, body);
     res.json(publicLeaveType(updated));
   } catch (error) {

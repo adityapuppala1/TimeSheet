@@ -13,7 +13,8 @@
  * Leave types and approvals are placeholders until phase B. Sources & integrations (A3) live in
  * AttendanceSourcesSection.
  */
-import { useMemo, useState } from "react";
+import { ScopePicker } from "../../components/attendance/ScopePicker";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarDays, Lock, MessageSquareWarning, Pencil, Plus } from "lucide-react";
 import { CardError } from "../../components/attendance/attendance-ui";
@@ -715,7 +716,7 @@ function HolidayCalendarsEditor({ readOnly, query }: { readOnly: boolean; query:
   return (
     <div className="grid min-w-0 gap-4">
       <p className="text-xs text-muted-foreground">
-        Weekends come from the working days under Planning. Everyone follows the default calendar unless assigned another.
+        Weekends come from the working days under Planning. Each person follows their own calendar if assigned one, else a calendar scoped to their work site or employment type, else the default.
       </p>
       {list.length === 0 && (
         <EmptyState compact icon={CalendarDays} title="No holiday calendars yet" description="The first calendar you add becomes the default for everyone." />
@@ -746,6 +747,7 @@ function HolidayCalendarsEditor({ readOnly, query }: { readOnly: boolean; query:
             </div>
           </div>
           <OptionalHolidayCapField calendarId={calendar.id} value={calendar.maxOptionalPerYear} readOnly={readOnly} onSaved={refresh} />
+          {!calendar.isDefault && <CalendarScopeField calendar={calendar} readOnly={readOnly} onSaved={refresh} />}
           <HolidayList calendarId={calendar.id} holidays={calendar.holidays} readOnly={readOnly} onChanged={refresh} />
         </div>
       ))}
@@ -766,6 +768,32 @@ function HolidayCalendarsEditor({ readOnly, query }: { readOnly: boolean; query:
             Add calendar
           </Button>
         </form>
+      )}
+    </div>
+  );
+}
+
+/** 7.0.0: limit a calendar to some sites / employment types; it then applies to matching people with no calendar of their own. */
+function CalendarScopeField({ calendar, readOnly, onSaved }: { calendar: HolidayCalendarRow; readOnly: boolean; onSaved: () => void }) {
+  const saved = { scopeEmploymentTypes: calendar.scopeEmploymentTypes ?? [], scopeSiteIds: calendar.scopeSiteIds ?? [] };
+  const [value, setValue] = useState(saved);
+  useEffect(() => setValue({ scopeEmploymentTypes: calendar.scopeEmploymentTypes ?? [], scopeSiteIds: calendar.scopeSiteIds ?? [] }), [calendar.scopeEmploymentTypes, calendar.scopeSiteIds]);
+  const save = useMutation({
+    mutationFn: () => attendanceAdminApi.calendars.update(calendar.id, value),
+    onSuccess: () => {
+      toast.success("Calendar scope saved");
+      onSaved();
+    },
+    onError: (err: any) => toast.error("Could not save", { description: serverMessage(err, "Try again.") })
+  });
+  const dirty = JSON.stringify(value) !== JSON.stringify(saved);
+  return (
+    <div className="grid min-w-0 gap-2">
+      <ScopePicker id={`cal-scope-${calendar.id}`} what="calendar" value={value} onChange={setValue} disabled={readOnly} />
+      {dirty && !readOnly && (
+        <Button size="sm" className="min-h-[44px] justify-self-start sm:min-h-8" disabled={save.isPending} onClick={() => save.mutate()}>
+          Save scope
+        </Button>
       )}
     </div>
   );

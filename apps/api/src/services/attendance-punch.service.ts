@@ -16,6 +16,7 @@
  * row and never consumes a face verification or rewrites evidence. The P2002 catch covers the race
  * where two requests both saw "no record yet".
  */
+import { effectiveCalendarId } from "./attendance-team.service.js";
 import type { AttendanceRecord, AttendanceSourceKind } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
@@ -77,12 +78,10 @@ export async function findLeaveInRange(userIds: readonly string[], from: string,
   return loadApprovedLeave(userIds, from, to);
 }
 
-/** The person's holiday on `dateKey`: their own calendar, else the workspace default. */
+/** The person's holiday on `dateKey` (calendar precedence: attendance-team.service.ts#effectiveCalendarId). */
 export async function findHoliday(holidayCalendarId: string | null, dateKey: string, userId?: string): Promise<{ name: string } | null> {
-  const calendarId =
-    holidayCalendarId ??
-    (await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true } }))?.id ??
-    null;
+  // 7.0.0: own calendar, then a scoped one matching the person, then the default.
+  const calendarId = await effectiveCalendarId(holidayCalendarId, userId);
   if (!calendarId) return null;
   const holiday = await prisma.holiday.findFirst({
     where: { calendarId, date: new Date(`${dateKey}T00:00:00Z`) },
@@ -395,12 +394,12 @@ export async function punchOut(input: PunchOutInput): Promise<{ updated: boolean
   return { updated: true, record: publicRecord(record)! };
 }
 
-/** The person's holiday list (own calendar, else the default) over [from, to], for the Holidays screen. */
+/** The person's holiday list (calendar precedence: effectiveCalendarId) over [from, to], for the Holidays screen. */
 export async function getMyHolidays(userId: string, from: string, to: string) {
   const user = await loadUser(userId);
-  const calendar = user.holidayCalendarId
-    ? await prisma.holidayCalendar.findUnique({ where: { id: user.holidayCalendarId }, select: { id: true, name: true } })
-    : await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true, name: true } });
+  // 7.0.0: own calendar, then a scoped one matching the person, then the default.
+  const calendarId = await effectiveCalendarId(user.holidayCalendarId, userId);
+  const calendar = calendarId ? await prisma.holidayCalendar.findUnique({ where: { id: calendarId }, select: { id: true, name: true } }) : null;
   if (!calendar) return { calendar: null, from, to, holidays: [], maxOptionalPerYear: null, optionalTakenByYear: {} };
   const rows = await prisma.holiday.findMany({
     where: { calendarId: calendar.id, date: { gte: new Date(`${from}T00:00:00Z`), lte: new Date(`${to}T00:00:00Z`) } },

@@ -109,6 +109,7 @@ const fake: Row = {
   },
   holiday: { findMany: async ({ where }: Row) => db.holidays.filter((h) => matches(h, { date: where.date, ...(where.calendarId ? { calendarId: where.calendarId } : {}) })) },
   holidayCalendar: {
+    findMany: async () => [],
     findFirst: async () => db.calendars.find((c) => c.isDefault) ?? null,
     findUnique: async ({ where }: Row) => db.calendars.find((c) => c.id === where.id) ?? null
   },

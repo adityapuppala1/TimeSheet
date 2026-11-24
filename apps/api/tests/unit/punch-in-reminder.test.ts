@@ -79,7 +79,7 @@ vi.mock("../../src/config/prisma.js", () => {
             }))
         )
       },
-      holidayCalendar: { findFirst: counted(() => ({ id: "cal" })) },
+      holidayCalendar: { findMany: async () => [], findFirst: counted(() => ({ id: "cal" })) },
       holiday: {
         findMany: counted(({ where }: any) =>
           h.holidays

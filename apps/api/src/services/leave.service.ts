@@ -55,6 +55,9 @@ import {
   countLeaveDays,
   excludedDays,
   findClash,
+  EMPLOYMENT_TYPES,
+  inPolicyScope,
+  scopeList,
   leaveYearBounds,
   halfLabel,
   leaveYearOf,
@@ -111,7 +114,10 @@ export const leaveTypeBody = z
     requiresDocumentAfterDays: z.number().int().min(0).max(366).nullable(),
     allowNegative: z.boolean(),
     enabled: z.boolean(),
-    sortOrder: z.number().int().min(0).max(10000)
+    sortOrder: z.number().int().min(0).max(10000),
+    // 7.0.0 policy scope: empty / null = everyone on that axis.
+    scopeEmploymentTypes: z.array(z.enum(EMPLOYMENT_TYPES)).max(4).nullable().optional(),
+    scopeSiteIds: z.array(z.string().min(1).max(64)).max(200).nullable().optional()
   })
   .strict();
 
@@ -261,7 +267,9 @@ export function publicLeaveType(t: LeaveType) {
     requiresDocumentAfterDays: t.requiresDocumentAfterDays,
     allowNegative: t.allowNegative,
     enabled: t.enabled,
-    sortOrder: t.sortOrder
+    sortOrder: t.sortOrder,
+    scopeEmploymentTypes: scopeList(t.scopeEmploymentTypes),
+    scopeSiteIds: scopeList(t.scopeSiteIds)
   };
 }
 
@@ -333,13 +341,24 @@ const REQUEST_INCLUDE = {
  * Types
  * ------------------------------------------------------------------ */
 
-export async function listLeaveTypes(includeDisabled: boolean) {
+/** The person facts a policy scope is judged on. */
+const SCOPE_SELECT = { employmentType: true, siteId: true } as const;
+
+/**
+ * Leave types. With `forUserId`, only the enabled types in that person's scope (7.0.0): a person
+ * never sees a type they cannot apply for or accrue.
+ */
+export async function listLeaveTypes(includeDisabled: boolean, forUserId?: string) {
   const rows = await prisma.leaveType.findMany({
     where: includeDisabled ? {} : { enabled: true },
     orderBy: [{ sortOrder: "asc" }, { name: "asc" }]
   });
-  return rows.map(publicLeaveType);
+  if (!forUserId) return rows.map(publicLeaveType);
+  const person = await prisma.user.findUnique({ where: { id: forUserId }, select: SCOPE_SELECT });
+  return rows.filter((t) => inPolicyScope(t, person ?? {})).map(publicLeaveType);
 }
+
+const OUT_OF_SCOPE_TYPE = "That leave type does not apply to you.";
 
 /* ------------------------------------------------------------------ *
  * Ledger helpers
@@ -424,12 +443,14 @@ export interface BalanceRow {
 
 export async function getBalances(userId: string, opts: { year?: number; now?: Date } = {}) {
   const now = opts.now ?? new Date();
-  const [settings, user, types] = await Promise.all([
+  const [settings, user, allTypes] = await Promise.all([
     getAttendanceSettings(),
-    prisma.user.findUnique({ where: { id: userId }, select: { timezone: true, createdAt: true } }),
+    prisma.user.findUnique({ where: { id: userId }, select: { timezone: true, createdAt: true, ...SCOPE_SELECT } }),
     prisma.leaveType.findMany({ where: { enabled: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] })
   ]);
   if (!user) throw new AppError(404, "User not found");
+  // 7.0.0: only the types in this person's scope have a balance.
+  const types = allTypes.filter((t) => inPolicyScope(t, user));
   const startMonth = settings.leaveYearStartMonth ?? 1;
   const today = todayKeyFor(now, user.timezone, serverTimezone);
   const leaveYear = opts.year ?? leaveYearOf(today, startMonth);
@@ -572,9 +593,10 @@ export async function applyLeave(input: ApplyInput): Promise<ApplyResult> {
 
   const person = await prisma.user.findFirst({
     where: { id: input.userId, status: "ACTIVE", deletedAt: null },
-    select: { id: true, name: true, email: true, employeeCode: true, timezone: true, holidayCalendarId: true, managerId: true, createdAt: true }
+    select: { id: true, name: true, email: true, employeeCode: true, timezone: true, holidayCalendarId: true, managerId: true, createdAt: true, ...SCOPE_SELECT }
   });
   if (!person) throw new AppError(404, "User not found");
+  if (!inPolicyScope(type, person)) throw new AppError(422, OUT_OF_SCOPE_TYPE, { code: "LEAVE_TYPE_OUT_OF_SCOPE" });
 
   const settings = await getAttendanceSettings();
   const startMonth = settings.leaveYearStartMonth ?? 1;
@@ -808,9 +830,10 @@ export async function previewLeave(userId: string, q: z.infer<typeof previewQuer
 
   const person = await prisma.user.findFirst({
     where: { id: userId, status: "ACTIVE", deletedAt: null },
-    select: { id: true, timezone: true, holidayCalendarId: true, managerId: true, createdAt: true }
+    select: { id: true, timezone: true, holidayCalendarId: true, managerId: true, createdAt: true, ...SCOPE_SELECT }
   });
   if (!person) throw new AppError(404, "User not found");
+  if (!inPolicyScope(type, person)) throw new AppError(422, OUT_OF_SCOPE_TYPE, { code: "LEAVE_TYPE_OUT_OF_SCOPE" });
   const settings = await getAttendanceSettings();
   const startMonth = settings.leaveYearStartMonth ?? 1;
   const today = todayKeyFor(now, person.timezone, serverTimezone);

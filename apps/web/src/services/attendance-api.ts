@@ -79,6 +79,9 @@ export interface HolidayCalendarRow {
   isDefault: boolean;
   /** 7.0.0: optional holidays one person may take per calendar year; null = no limit. */
   maxOptionalPerYear?: number | null;
+  /** 7.0.0 scope: who the calendar applies to when they have none of their own. Empty = not scoped. */
+  scopeEmploymentTypes?: string[] | null;
+  scopeSiteIds?: string[] | null;
   holidays: HolidayRow[];
   _count: { users: number };
 }
@@ -105,7 +108,10 @@ export const attendanceAdminApi = {
     list: async () => (await api.get<HolidayCalendarRow[]>(`${BASE}/calendars`)).data,
     create: async (payload: { name: string; description?: string | null; isDefault?: boolean; maxOptionalPerYear?: number | null }) =>
       (await api.post<HolidayCalendarRow>(`${BASE}/calendars`, payload)).data,
-    update: async (id: string, payload: { name?: string; description?: string | null; isDefault?: boolean; maxOptionalPerYear?: number | null }) =>
+    update: async (
+      id: string,
+      payload: { name?: string; description?: string | null; isDefault?: boolean; maxOptionalPerYear?: number | null; scopeEmploymentTypes?: string[]; scopeSiteIds?: string[] }
+    ) =>
       (await api.put<HolidayCalendarRow>(`${BASE}/calendars/${id}`, payload)).data,
     remove: async (id: string) => {
       await api.delete(`${BASE}/calendars/${id}`);

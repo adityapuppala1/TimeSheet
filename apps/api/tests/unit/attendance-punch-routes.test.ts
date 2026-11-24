@@ -67,7 +67,7 @@ vi.mock("../../src/config/prisma.js", () => ({
     globalAttendanceSettings: { upsert: async () => settings, findUnique: async () => settings },
     attendanceSite: { findMany: async () => sites },
     user: { findUnique: async () => user },
-    holidayCalendar: { findFirst: async () => null },
+    holidayCalendar: { findMany: async () => [], findFirst: async () => null },
     holiday: { findFirst: async () => null },
     attendanceRecord: { findUnique: (...a: unknown[]) => recordFindUnique(...a) },
     faceVerificationAttempt: { findUnique: (...a: unknown[]) => attemptFindUnique(...a) },

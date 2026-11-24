@@ -24,6 +24,9 @@ export interface LeaveTypeRow {
   allowNegative: boolean;
   enabled: boolean;
   sortOrder: number;
+  /** 7.0.0 policy scope: empty = everyone on that axis. */
+  scopeEmploymentTypes?: string[];
+  scopeSiteIds?: string[];
 }
 
 export interface LeaveBalance {

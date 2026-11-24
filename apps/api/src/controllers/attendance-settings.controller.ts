@@ -29,6 +29,7 @@ import {
   type AttendanceSettingsInput
 } from "../services/attendance-settings.service.js";
 import { shiftAssignmentBody, shiftBody } from "../services/attendance-shift.service.js";
+import { scopeColumns } from "../utils/scope-columns.js";
 import { publicSite, siteBody } from "../services/attendance-site.service.js";
 
 export const attendanceSettingsRouter = Router();
@@ -121,7 +122,7 @@ attendanceSettingsRouter.post("/calendars", validate(z.object({ body: calendarBo
       const existing = await tx.holidayCalendar.count();
       const isDefault = existing === 0 ? true : Boolean(body.isDefault);
       if (isDefault) await tx.holidayCalendar.updateMany({ where: { isDefault: true }, data: { isDefault: false } });
-      return tx.holidayCalendar.create({ data: { name: body.name, description: body.description ?? null, isDefault, maxOptionalPerYear: body.maxOptionalPerYear ?? null } });
+      return tx.holidayCalendar.create({ data: scopeColumns({ name: body.name, description: body.description ?? null, isDefault, maxOptionalPerYear: body.maxOptionalPerYear ?? null, scopeEmploymentTypes: body.scopeEmploymentTypes, scopeSiteIds: body.scopeSiteIds }) });
     });
     await audit(req.user!.id, "attendance.calendar_created", "HolidayCalendar", created.id, body);
     res.status(201).json(created);
@@ -143,7 +144,7 @@ attendanceSettingsRouter.put(
         if (body.isDefault === true) {
           await tx.holidayCalendar.updateMany({ where: { isDefault: true, NOT: { id } }, data: { isDefault: false } });
         }
-        return tx.holidayCalendar.update({ where: { id }, data: body });
+        return tx.holidayCalendar.update({ where: { id }, data: scopeColumns(body) });
       });
       await audit(req.user!.id, "attendance.calendar_updated", "HolidayCalendar", id, body);
       res.json(updated);

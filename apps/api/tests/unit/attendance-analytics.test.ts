@@ -43,7 +43,7 @@ vi.mock("../../src/config/prisma.js", () => ({
         people.filter((p) => (typeof where.managerId === "string" ? p.managerId === where.managerId : true)),
       findUnique: async ({ where }: { where: { id: string } }) => people.find((p) => p.id === where.id) ?? null
     },
-    holidayCalendar: { findFirst: async () => null },
+    holidayCalendar: { findMany: async () => [], findFirst: async () => null },
     holiday: { findMany: async () => [] },
     attendanceRecord: {
       findMany: async ({ where }: { where: { userId: { in: string[] } } }) => records.filter((r) => where.userId.in.includes(r.userId as string))

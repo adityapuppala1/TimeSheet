@@ -5,6 +5,8 @@
  * the rest of the tab (the tab's sticky bar saves them); types and adjustments are actions with their
  * own confirmation, because each is one deliberate change rather than a setting.
  */
+import { ScopePicker } from "../../components/attendance/ScopePicker";
+import { scopeSummary } from "../../lib/employment-type";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plane, Plus, Scale } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -48,6 +50,9 @@ interface TypeForm {
   requiresDocumentAfterDays: number | null;
   allowNegative: boolean;
   enabled: boolean;
+  /** 7.0.0: empty = everyone on that axis. */
+  scopeEmploymentTypes: string[];
+  scopeSiteIds: string[];
 }
 
 const BLANK: TypeForm = {
@@ -62,7 +67,9 @@ const BLANK: TypeForm = {
   requiresApproval: true,
   requiresDocumentAfterDays: null,
   allowNegative: false,
-  enabled: true
+  enabled: true,
+  scopeEmploymentTypes: [],
+  scopeSiteIds: []
 };
 
 function formFrom(t: LeaveTypeRow): TypeForm {
@@ -78,7 +85,9 @@ function formFrom(t: LeaveTypeRow): TypeForm {
     requiresApproval: t.requiresApproval,
     requiresDocumentAfterDays: t.requiresDocumentAfterDays,
     allowNegative: t.allowNegative,
-    enabled: t.enabled
+    enabled: t.enabled,
+    scopeEmploymentTypes: t.scopeEmploymentTypes ?? [],
+    scopeSiteIds: t.scopeSiteIds ?? []
   };
 }
 
@@ -134,6 +143,7 @@ export function LeaveTypesSection({ readOnly }: Readonly<{ readOnly: boolean }>)
                 {!t.isPaid && <Badge variant="muted">Unpaid</Badge>}
               </p>
               <p className="text-xs text-muted-foreground">{quotaText(t)}</p>
+              {(t.scopeEmploymentTypes?.length || t.scopeSiteIds?.length) ? <p className="text-xs text-muted-foreground">Only for: {scopeSummary(t.scopeEmploymentTypes, t.scopeSiteIds)}</p> : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <span className="w-7 text-right text-xs font-semibold text-muted-foreground" aria-hidden="true">
@@ -203,6 +213,7 @@ function TypeDialog({
                 { value: "YEARLY_UPFRONT", label: "All at once" }
               ]}
             />
+            <ScopePicker id="lt-scope" what="leave type" value={{ scopeEmploymentTypes: f.scopeEmploymentTypes, scopeSiteIds: f.scopeSiteIds }} onChange={(v) => set(v)} />
             <StagedSelect id="lt-colour" label="Colour" value={f.colour} disabled={false} onChange={(v) => set({ colour: v })} options={COLOURS.map((c) => [c, c[0].toUpperCase() + c.slice(1)] as [string, string])} />
             <div className="grid gap-2">
               <FlagRow id="lt-half" label="Allow half days" checked={f.allowHalfDay} onChange={(v) => set({ allowHalfDay: v })} />

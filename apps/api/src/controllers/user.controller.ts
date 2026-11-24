@@ -798,7 +798,10 @@ const patchSchema = z.object({
     managerId: z.string().uuid().nullable().optional(),
     designation: z.string().max(120).nullable().optional(),
     faceVerificationRequired: z.boolean().optional(),
-    githubUsername: z.string().max(120).nullable().optional()
+    githubUsername: z.string().max(120).nullable().optional(),
+    // 7.0.0 leave policies: scope leave types and holiday calendars by these. Null clears.
+    employmentType: z.enum(["FULL_TIME", "PART_TIME", "CONTRACT", "INTERN"]).nullable().optional(),
+    siteId: z.string().min(1).max(64).nullable().optional()
   })
 });
 
@@ -853,6 +856,8 @@ function assertRoleSetShape(actor: { role: string }, body: { role?: string; role
 type PatchData = {
   name?: string;
   email?: string;
+  employmentType?: "FULL_TIME" | "PART_TIME" | "CONTRACT" | "INTERN" | null;
+  siteId?: string | null;
   status?: "ACTIVE" | "INACTIVE" | "PENDING_VERIFICATION";
   roleId?: string;
   managerId?: string | null;
@@ -870,6 +875,7 @@ function plainPatchFields(body: Record<string, unknown>): PatchData {
   if ("designation" in body) data.designation = (body.designation as string | null) ?? null;
   if ("faceVerificationRequired" in body) data.faceVerificationRequired = Boolean(body.faceVerificationRequired);
   if ("githubUsername" in body) data.githubUsername = (body.githubUsername as string | null) ?? null;
+  if ("employmentType" in body) data.employmentType = (body.employmentType as PatchData["employmentType"]) ?? null;
   return data;
 }
 
@@ -898,6 +904,13 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
   if (req.body.role) {
     const role = await prisma.role.findUniqueOrThrow({ where: { name: req.body.role } });
     data.roleId = role.id;
+  }
+  if ("siteId" in req.body) {
+    // A site that does not exist is a 422, not an FK error (the edit dialog lists the real ones).
+    if (req.body.siteId && !(await prisma.attendanceSite.findUnique({ where: { id: req.body.siteId }, select: { id: true } }))) {
+      throw new AppError(422, "That work site does not exist.");
+    }
+    data.siteId = req.body.siteId ?? null;
   }
   if ("managerId" in req.body) {
     // Only a CHANGE is checked: the edit dialog sends the current manager back on every save, and

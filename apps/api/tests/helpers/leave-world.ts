@@ -318,6 +318,8 @@ export function addUser(world: LeaveWorld, u: Partial<Row> & { id: string; role?
     isAgent: false,
     timezone: "UTC",
     holidayCalendarId: null,
+    employmentType: null,
+    siteId: null,
     managerId: null,
     employeeCode: null,
     scimExternalId: null,

@@ -112,7 +112,10 @@ export const calendarBody = z
     description: z.string().trim().max(500).nullable().optional(),
     isDefault: z.boolean().optional(),
     /** 7.0.0: optional holidays one person may take per calendar year; null = no limit. */
-    maxOptionalPerYear: z.number().int().min(0).max(366).nullable().optional()
+    maxOptionalPerYear: z.number().int().min(0).max(366).nullable().optional(),
+    /** 7.0.0 scope: a calendar for people of these employment types / at these sites (empty = none). */
+    scopeEmploymentTypes: z.array(z.enum(["FULL_TIME", "PART_TIME", "CONTRACT", "INTERN"])).max(4).nullable().optional(),
+    scopeSiteIds: z.array(z.string().min(1).max(64)).max(200).nullable().optional()
   })
   .strict();
 

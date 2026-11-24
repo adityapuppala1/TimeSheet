@@ -30,7 +30,7 @@ import { requireTenantContext } from "../config/tenant-context.js";
 import { getAttendanceSettings } from "../services/attendance-settings.service.js";
 import { todayKeyFor } from "../services/attendance-day-status.js";
 import { isLeaveOn } from "../services/leave.service.js";
-import { accrualDueThrough, leaveYearBounds, leaveYearOf, rolloverDeltas } from "../services/leave-calc.js";
+import { accrualDueThrough, inPolicyScope, leaveYearBounds, leaveYearOf, rolloverDeltas, type ScopedPerson } from "../services/leave-calc.js";
 import { settleLateMovement } from "../services/leave-settlement.service.js";
 import { COUNTED_PEOPLE } from "../services/people-visibility.service.js";
 import { runOncePerTick } from "../services/job-claim.service.js";
@@ -58,7 +58,7 @@ export async function runLeaveAccrual(now: Date = new Date()): Promise<AccrualRu
 
   const [types, people] = await Promise.all([
     prisma.leaveType.findMany({ where: { enabled: true } }),
-    prisma.user.findMany({ where: { ...COUNTED_PEOPLE, status: "ACTIVE" }, select: { id: true, createdAt: true }, take: 50_000 })
+    prisma.user.findMany({ where: { ...COUNTED_PEOPLE, status: "ACTIVE" }, select: { id: true, createdAt: true, employmentType: true, siteId: true }, take: 50_000 })
   ]);
   if (types.length === 0 || people.length === 0) return { accrued: 0, rolledOver: 0 };
 
@@ -85,7 +85,7 @@ export async function runLeaveAccrual(now: Date = new Date()): Promise<AccrualRu
  * by accrual. Keyed, so a slot already posted is skipped.
  */
 async function closingAccrualRows(
-  people: ReadonlyArray<{ id: string; createdAt: Date }>,
+  people: ReadonlyArray<AccrualPerson>,
   types: readonly TypeRow[],
   year: number,
   startMonth: number,
@@ -125,13 +125,18 @@ async function reconcileSettled(where: Prisma.LeaveBalanceLedgerWhereInput, type
   return written;
 }
 
-type TypeRow = { id: string; code: string; annualQuota: unknown; accrual: "YEARLY_UPFRONT" | "MONTHLY_PRORATA"; carryForwardMax: unknown };
+type TypeRow = { id: string; code: string; annualQuota: unknown; accrual: "YEARLY_UPFRONT" | "MONTHLY_PRORATA"; carryForwardMax: unknown; scopeEmploymentTypes?: unknown; scopeSiteIds?: unknown };
+type AccrualPerson = { id: string; createdAt: Date } & ScopedPerson;
 
-/** Every slot due this leave year for every person and type — keyed, so posted ones are skipped. */
-function accrualRows(people: ReadonlyArray<{ id: string; createdAt: Date }>, types: readonly TypeRow[], year: number, startMonth: number, today: string) {
+/**
+ * Every slot due this leave year for every person and type — keyed, so posted ones are skipped.
+ * 7.0.0: a type scoped to employment types / sites accrues only for people in its scope.
+ */
+function accrualRows(people: ReadonlyArray<AccrualPerson>, types: readonly TypeRow[], year: number, startMonth: number, today: string) {
   const rows: Prisma.LeaveBalanceLedgerCreateManyInput[] = [];
   for (const p of people) {
     for (const t of types) {
+      if (!inPolicyScope(t, p)) continue;
       for (const slot of accrualDueThrough({ annualQuota: Number(t.annualQuota), accrual: t.accrual }, year, startMonth, today, toKey(p.createdAt))) {
         rows.push({
           userId: p.id,

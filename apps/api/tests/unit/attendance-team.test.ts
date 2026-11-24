@@ -65,7 +65,7 @@ vi.mock("../../src/config/prisma.js", () => ({
       },
       findUnique: async () => ({ timezone: "UTC", holidayCalendarId: null })
     },
-    holidayCalendar: { findFirst: async () => { count("holidayCalendar.findFirst"); return null; } },
+    holidayCalendar: { findMany: async () => [], findFirst: async () => { count("holidayCalendar.findFirst"); return null; } },
     holiday: { findMany: async () => { count("holiday.findMany"); return []; } },
     attendanceRecord: {
       findMany: async ({ where }: { where: { userId: unknown } }) => {

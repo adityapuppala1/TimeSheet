@@ -23,6 +23,7 @@
  * reasons, reminder notifications) for every person at once, then joins in memory. The query count
  * is the same for 3 people and 3,000 (tests/unit/attendance-team.test.ts counts the calls).
  */
+import { hasScope, pickScopedCalendar } from "./leave-calc.js";
 import type { AttendanceSourceKind, Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { serverTimezone } from "../config/env.js";
@@ -116,17 +117,61 @@ function addDays(dateKey: string, days: number): string {
 }
 
 /**
- * Holidays for a set of calendars over a date range, keyed `calendarId|dateKey`. Two queries at most.
+ * 7.0.0 scoped calendars: for people WITHOUT their own calendar, the scoped calendar that matches
+ * their employment type / site (leave-calc.ts#pickScopedCalendar). Null when no calendar is scoped —
+ * the common case, one query and nothing else.
+ */
+async function scopedCalendarsByUser(): Promise<Map<string, string> | null> {
+  const calendars = (await prisma.holidayCalendar.findMany({ select: { id: true, name: true, scopeEmploymentTypes: true, scopeSiteIds: true } })).filter(hasScope);
+  if (calendars.length === 0) return null;
+  const people = await prisma.user.findMany({
+    where: { holidayCalendarId: null, OR: [{ siteId: { not: null } }, { employmentType: { not: null } }] },
+    select: { id: true, siteId: true, employmentType: true }
+  });
+  const out = new Map<string, string>();
+  for (const p of people) {
+    const c = pickScopedCalendar(calendars, p);
+    if (c) out.set(p.id, c.id);
+  }
+  return out;
+}
+
+/**
+ * The calendar that decides one person's days off. PRECEDENCE (7.0.0): their own calendar
+ * (User.holidayCalendarId), then a scoped calendar matching their site / employment type, then the
+ * workspace default. Null when there is no calendar at all.
+ */
+export async function effectiveCalendarId(holidayCalendarId: string | null, userId?: string | null): Promise<string | null> {
+  if (holidayCalendarId) return holidayCalendarId;
+  if (userId) {
+    const scoped = await scopedCalendarsByUser();
+    const id = scoped?.get(userId);
+    if (id) return id;
+  }
+  return (await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true } }))?.id ?? null;
+}
+
+/**
+ * Holidays for a set of calendars over a date range, keyed `calendarId|dateKey`.
  *
  * 7.0.0 OPTIONAL HOLIDAYS: an optional holiday is a holiday only for a person who opted into it
  * (HolidayOptIn). Pass that person's id as the third argument; without it — or without an opt-in —
  * an optional holiday is a working day. Mandatory holidays are unchanged.
+ *
+ * 7.0.0 CALENDAR PRECEDENCE: a null calendar id means "no calendar of their own"; with the person's
+ * id, a scoped calendar matching them wins over the default (effectiveCalendarId's rule).
  */
 export async function loadHolidays(calendarIds: Array<string | null>, from: string, to: string) {
-  const defaultId = calendarIds.some((id) => !id)
-    ? ((await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true } }))?.id ?? null)
-    : null;
-  const ids = [...new Set(calendarIds.map((id) => id ?? defaultId).filter((id): id is string => Boolean(id)))];
+  const unassigned = calendarIds.some((id) => !id);
+  const [defaultId, scoped] = unassigned
+    ? await Promise.all([
+        prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true } }).then((c) => c?.id ?? null),
+        scopedCalendarsByUser()
+      ])
+    : [null, null];
+  const ids = [
+    ...new Set([...calendarIds.map((id) => id ?? defaultId), ...(scoped ? scoped.values() : [])].filter((id): id is string => Boolean(id)))
+  ];
   const rows = ids.length
     ? await prisma.holiday.findMany({
         where: { calendarId: { in: ids }, date: { gte: dayStart(from), lte: dayStart(to) } },
@@ -140,7 +185,8 @@ export async function loadHolidays(calendarIds: Array<string | null>, from: stri
   const optedIn = new Set(optIns.map((o) => `${o.userId}|${o.holidayId}`));
   const map = new Map(rows.map((h) => [`${h.calendarId}|${h.date.toISOString().slice(0, 10)}`, h]));
   return (calendarId: string | null, dateKey: string, userId?: string) => {
-    const h = map.get(`${calendarId ?? defaultId}|${dateKey}`);
+    const cal = calendarId ?? (userId ? scoped?.get(userId) : undefined) ?? defaultId;
+    const h = map.get(`${cal}|${dateKey}`);
     if (!h) return null;
     if (h.isOptional && !(userId && optedIn.has(`${userId}|${h.id}`))) return null;
     return { name: h.name };

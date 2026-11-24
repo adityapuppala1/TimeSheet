@@ -24,6 +24,7 @@
  * already picked from the Host header. A tool cannot name a workspace, so it cannot name someone
  * else's.
  */
+import { effectiveCalendarId } from "./attendance-team.service.js";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { permissions, type TicketStatus } from "@timesheet/shared";
@@ -767,8 +768,7 @@ const TOOLS: readonly McpToolRegistration[] = [
       await assertIngestAllowed("MCP");
       const { from, to } = mcpRange(args.from, args.to, 366);
       const me = await prisma.user.findUnique({ where: { id: ctx.user.id }, select: { holidayCalendarId: true } });
-      const calendarId =
-        me?.holidayCalendarId ?? (await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true } }))?.id ?? null;
+      const calendarId = await effectiveCalendarId(me?.holidayCalendarId ?? null, ctx.user.id);
       if (!calendarId) return { calendar: null, holidays: [] };
       const calendar = await prisma.holidayCalendar.findUnique({ where: { id: calendarId }, select: { name: true } });
       const holidays = await prisma.holiday.findMany({

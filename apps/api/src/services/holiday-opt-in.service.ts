@@ -12,6 +12,7 @@
  *   - The calendar's maxOptionalPerYear caps opt-ins per calendar year; NULL means no cap, 0 means
  *     none may be taken. Checked under a row lock on the person so two quick taps cannot exceed it.
  */
+import { effectiveCalendarId } from "./attendance-team.service.js";
 import { prisma } from "../config/prisma.js";
 import { serverTimezone } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
@@ -28,8 +29,7 @@ async function assertOn(): Promise<void> {
 async function loadEligible(userId: string, holidayId: string, now: Date) {
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, timezone: true, holidayCalendarId: true } });
   if (!user) throw new AppError(404, "User not found");
-  const calendarId =
-    user.holidayCalendarId ?? (await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true } }))?.id ?? null;
+  const calendarId = await effectiveCalendarId(user.holidayCalendarId, user.id);
   if (!calendarId) throw new AppError(404, "Holiday not found");
   const holiday = await prisma.holiday.findFirst({
     where: { id: holidayId, calendarId },

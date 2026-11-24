@@ -151,7 +151,7 @@ function fakeClient(): PrismaClient {
       upsert: vi.fn(async () => ({ id: "global", ...state.settings })),
       findUnique: vi.fn(async () => ({ id: "global", ...state.settings }))
     },
-    holidayCalendar: { findFirst: vi.fn(async () => ({ id: "cal-1" })) },
+    holidayCalendar: { findMany: async () => [], findFirst: vi.fn(async () => ({ id: "cal-1" })) },
     holiday: {
       findFirst: vi.fn(async ({ where }: any) => (state.holidays.includes(where.date.toISOString().slice(0, 10)) ? { name: "Founders day" } : null))
     },

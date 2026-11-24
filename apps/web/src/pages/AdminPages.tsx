@@ -79,6 +79,8 @@ import type { CalendarDayAnnotations } from "../components/ui/calendar-primitive
 import { TimesheetAnalyticsPanel } from "../components/TimesheetAnalyticsPanel";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
 import { LeaveProfileSummary } from "../components/attendance/LeaveProfileSummary";
+import { sitesApi } from "../components/attendance/WorkSites";
+import { EMPLOYMENT_TYPE_OPTIONS } from "../lib/employment-type";
 import {
   EMPTY_FILTERS,
   TablePager,
@@ -1146,8 +1148,13 @@ function UserEditDialog({
     managerId: "none",
     designation: "",
     githubUsername: "",
-    faceVerificationRequired: false
+    faceVerificationRequired: false,
+    employmentType: "none",
+    siteId: "none"
   });
+  // 7.0.0 leave policies: the home work site picker (sites are a super-admin list; without it the
+  // field is neither shown nor sent, so an ADMIN's save never clears a site).
+  const sites = useQuery({ queryKey: ["attendance", "admin", "sites"], queryFn: sitesApi.list, enabled: Boolean(user) && viewerIsSuperAdmin, retry: false });
   // Extra roles ALSO granted, beyond form.role (the active one) — never includes form.role
   // itself. Super-admin-only; an ADMIN never sees or sends this.
   const [extraRoles, setExtraRoles] = useState<string[]>([]);
@@ -1165,7 +1172,9 @@ function UserEditDialog({
         managerId: user.managerId ?? "none",
         designation: user.designation ?? "",
         githubUsername: user.githubUsername ?? "",
-        faceVerificationRequired: user.faceVerificationRequired ?? false
+        faceVerificationRequired: user.faceVerificationRequired ?? false,
+        employmentType: user.employmentType ?? "none",
+        siteId: user.siteId ?? "none"
       });
       setExtraRoles(user.heldRoles.filter((r) => r !== user.role.name));
     }
@@ -1250,6 +1259,32 @@ function UserEditDialog({
                   />
                 </div>
               </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="ue-employment">Employment type</Label>
+                  <Select value={form.employmentType} onValueChange={(value) => setForm({ ...form, employmentType: value })}>
+                    <SelectTrigger id="ue-employment"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not set</SelectItem>
+                      {EMPLOYMENT_TYPE_OPTIONS.map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">Leave types and holiday calendars can be limited to some employment types.</p>
+                </div>
+                {sites.data && (
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="ue-site">Work site</Label>
+                    <Select value={form.siteId} onValueChange={(value) => setForm({ ...form, siteId: value })}>
+                      <SelectTrigger id="ue-site"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">No site</SelectItem>
+                        {sites.data.map((site) => <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">Picks the site&rsquo;s holiday calendar when they have none of their own.</p>
+                  </div>
+                )}
+              </div>
               <div className="grid gap-1.5">
                 <Label>Reports to</Label>
                 <Select value={form.managerId} onValueChange={(value) => setForm({ ...form, managerId: value })}>
@@ -1307,7 +1342,9 @@ function UserEditDialog({
                     managerId: form.managerId === "none" ? null : form.managerId,
                     designation: form.designation.trim() || null,
                     githubUsername: form.githubUsername.trim() || null,
-                    faceVerificationRequired: form.faceVerificationRequired
+                    faceVerificationRequired: form.faceVerificationRequired,
+                    employmentType: form.employmentType === "none" ? null : form.employmentType,
+                    ...(sites.data ? { siteId: form.siteId === "none" ? null : form.siteId } : {})
                   })
                 }
                 disabled={!form.name.trim() || !form.email.trim()}

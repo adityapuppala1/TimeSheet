@@ -419,3 +419,55 @@ export function overtimeForWeek(weekStart: string, days: readonly OvertimeDayInp
   daily = round2(daily);
   return { weekStart, workedHours: round2(worked), expectedHours: round2(expected), dailyOvertime: daily, weeklyOvertime: weekly, overtimeHours: Math.max(daily, weekly), days: out };
 }
+
+/* ------------------------------------------------------------------ *
+ * Policy scopes (7.0.0): leave types and holiday calendars per employment type or site
+ * ------------------------------------------------------------------ */
+
+export const EMPLOYMENT_TYPES = ["FULL_TIME", "PART_TIME", "CONTRACT", "INTERN"] as const;
+export type EmploymentTypeCode = (typeof EMPLOYMENT_TYPES)[number];
+
+export interface PolicyScope {
+  /** JSON arrays as stored; NULL or [] = no restriction on that axis. */
+  scopeEmploymentTypes?: unknown;
+  scopeSiteIds?: unknown;
+}
+
+export interface ScopedPerson {
+  employmentType?: string | null;
+  siteId?: string | null;
+}
+
+/** A stored scope column as a clean string list (anything else is "no restriction"). */
+export function scopeList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && v.length > 0) : [];
+}
+
+export function hasScope(scope: PolicyScope): boolean {
+  return scopeList(scope.scopeEmploymentTypes).length > 0 || scopeList(scope.scopeSiteIds).length > 0;
+}
+
+/**
+ * Does a scoped policy apply to this person? Every restricted axis must contain the person's value; a
+ * person with no value on a restricted axis is OUT of scope (a contractor-only type is not given to
+ * someone whose type was never set). An unscoped policy applies to everyone.
+ */
+export function inPolicyScope(scope: PolicyScope, person: ScopedPerson): boolean {
+  const types = scopeList(scope.scopeEmploymentTypes);
+  const sites = scopeList(scope.scopeSiteIds);
+  if (types.length && !(person.employmentType && types.includes(person.employmentType))) return false;
+  if (sites.length && !(person.siteId && sites.includes(person.siteId))) return false;
+  return true;
+}
+
+/**
+ * The calendar for someone with no calendar of their own: a SCOPED calendar that matches them, else
+ * the default. Among several matches a site-scoped one wins (a location's public holidays are the
+ * point), then the one restricted on more axes, then by name — deterministic. Pure.
+ */
+export function pickScopedCalendar<T extends PolicyScope & { id: string; name?: string }>(calendars: readonly T[], person: ScopedPerson): T | null {
+  const matches = calendars.filter((c) => hasScope(c) && inPolicyScope(c, person));
+  const rank = (c: T) => (scopeList(c.scopeSiteIds).length ? 2 : 0) + (scopeList(c.scopeEmploymentTypes).length ? 1 : 0);
+  matches.sort((a, b) => rank(b) - rank(a) || String(a.name ?? a.id).localeCompare(String(b.name ?? b.id)));
+  return matches[0] ?? null;
+}
