@@ -169,7 +169,39 @@ export interface PunchInPayload {
 
 export const MY_TODAY_QUERY_KEY = ["attendance", "me", "today"] as const;
 
+/** 7.0.0: one person's day on the dashboard grid / Reports summary (GET /attendance/day-grid). */
+export interface DayGridDay {
+  status: "WEEKEND" | "HOLIDAY" | "LEAVE" | "PRESENT" | "ABSENT" | "PENDING";
+  holidayName?: string;
+  leaveTypeCode?: string;
+  leaveTypeName?: string;
+  halfDay?: "FIRST_HALF" | "SECOND_HALF";
+}
+
+export interface DayGridSummary {
+  workingDays: number;
+  holidays: number;
+  leaveDays: Record<string, number>;
+  presentDays: number;
+  absentDays: number;
+  loggedHours: number;
+}
+
+export type DayGridResponse =
+  | { enabled: false }
+  | {
+      enabled: true;
+      attendanceEnabled: boolean;
+      leaveEnabled: boolean;
+      from: string;
+      to: string;
+      leaveTypes: Array<{ code: string; name: string }>;
+      people: Array<{ userId: string; name: string; days: Record<string, DayGridDay>; summary: DayGridSummary }>;
+    };
+
 export const attendanceApi = {
+  /** 7.0.0: never 403s for "module off" — answers { enabled: false }. */
+  dayGrid: async (from: string, to: string) => (await api.get<DayGridResponse>("/attendance/day-grid", { params: { from, to } })).data,
   myToday: async () => (await api.get<MyToday>("/attendance/me/today")).data,
   /** V17 A4: does logging the first entry on `date` need a "why was this day missed?" reason? */
   missedDayCheck: async (date: string) =>

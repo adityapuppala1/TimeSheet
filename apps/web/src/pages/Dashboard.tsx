@@ -82,6 +82,9 @@ import type { CalendarDayAnnotations } from "../components/ui/calendar-primitive
 import { useAuthStore } from "../store/auth";
 import { useCardLayout } from "../lib/use-media-query";
 import { useWorkingDays } from "../lib/use-planning";
+import { clampGridRange, dayStatusLookup, laneLabel, type DayStatusLookup } from "../lib/day-grid";
+import { STATUS_META } from "../lib/attendance-status";
+import { attendanceApi } from "../services/attendance-api";
 
 function startOfWeek(date: Date) {
   const d = new Date(date);
@@ -301,6 +304,20 @@ export function Dashboard() {
     staleTime: 5 * 60_000,
     retry: false
   });
+  /**
+   * 7.0.0: leave, holidays and attendance per person per day for the same window and the same
+   * people. Answers { enabled: false } with the module off, and then nothing on the page changes.
+   */
+  const gridRange = clampGridRange(range.from, range.to);
+  const dayGrid = useQuery({
+    queryKey: ["attendance", "day-grid", gridRange.from, gridRange.to],
+    queryFn: () => attendanceApi.dayGrid(gridRange.from, gridRange.to),
+    staleTime: 60_000,
+    retry: false,
+    placeholderData: (prev) => prev
+  });
+  const dayStatus = useMemo(() => dayStatusLookup(dayGrid.data), [dayGrid.data]);
+  const gridPeople = dayGrid.data?.enabled ? dayGrid.data.people : undefined;
   /** The same role-scoped set for the comparison window — the team view's "vs last week". */
   const previousTeam = useQuery({
     queryKey: ["timesheets", "timeline", comparison?.from, comparison?.to],
@@ -586,6 +603,8 @@ export function Dashboard() {
         rangeTo={range.to}
         periodLabel={periodLabel}
         loading={timelineEntries.isLoading}
+        dayStatus={dayStatus}
+        statusPeople={gridPeople}
         rangeControl={
           <DateRangePicker id="timeline-dialog-range" value={range} onChange={setRange} allowAllTime={false} className="w-60" dayAnnotations={dayAnnotations} />
         }
@@ -601,6 +620,7 @@ export function Dashboard() {
         todayKey={derived.todayKey}
         workingDays={workingDays}
         loading={timelineEntries.isLoading}
+        dayStatus={dayStatus}
         rangeControl={
           <DateRangePicker id="fill-dialog-range" value={range} onChange={setRange} allowAllTime={false} className="w-60" dayAnnotations={dayAnnotations} />
         }
@@ -1210,7 +1230,13 @@ interface DayLane {
   name: string;
   hours: number;
   entries: TimesheetRowLite[];
+  /** 7.0.0: "On leave · PL", "Holiday · Diwali", "Not punched in" — only with the module on. */
+  note?: string | null;
+  noteStatus?: "LEAVE" | "HOLIDAY" | "ABSENT";
 }
+
+/** Empty lanes added for people off on the day; past this many the card would be a list of absences. */
+const MAX_OFF_LANES = 40;
 
 /** One user's clock row. Shared verbatim by the card and the expanded dialog so the two views
  *  can never disagree about what a block means. */
@@ -1247,6 +1273,7 @@ function TimelineLane({
           {lane.name}
         </p>
         <p className="text-[11px] tabular-nums text-muted-foreground">{lane.hours.toFixed(2)}h</p>
+        {lane.note && lane.noteStatus && <LaneNote text={lane.note} status={lane.noteStatus} />}
       </div>
       <div className={`relative rounded-lg border border-border bg-muted/20 ${dense ? "h-10" : "h-12"}`}>
         {hourTicks.map((m) => (
@@ -1282,6 +1309,17 @@ function TimelineLane({
   );
 }
 
+/** The lane's day-status chip: colour + icon + words, from the shared status module. */
+function LaneNote({ text, status }: { text: string; status: "LEAVE" | "HOLIDAY" | "ABSENT" }) {
+  const meta = STATUS_META[status];
+  return (
+    <span className={cn("status-chip mt-0.5 inline-flex max-w-full items-center gap-1 rounded px-1 text-[10px] font-semibold", meta.className)} data-testid="timeline-lane-note">
+      <meta.icon className="h-2.5 w-2.5 shrink-0" aria-hidden />
+      <span className="truncate">{text}</span>
+    </span>
+  );
+}
+
 function DayTimeline({
   entriesByDate,
   todayKey,
@@ -1289,10 +1327,16 @@ function DayTimeline({
   rangeTo,
   periodLabel,
   loading,
-  rangeControl
+  rangeControl,
+  dayStatus,
+  statusPeople
 }: {
   /** The page's calendar filter, rendered again inside the expanded dialog (same state). */
   rangeControl?: React.ReactNode;
+  /** 7.0.0: per-person day status; undefined with the module off. */
+  dayStatus?: DayStatusLookup;
+  /** The people the status covers, so someone on leave gets a (labelled, empty) lane. */
+  statusPeople?: Array<{ userId: string; name: string }>;
   entriesByDate: Map<string, TimesheetRowLite[]>;
   todayKey: string;
   /** The page's selected window. The timeline lives INSIDE it: its stepper and calendar cannot
@@ -1373,6 +1417,29 @@ function DayTimeline({
     }
     lane.hours += Number(entry.totalHours ?? 0);
     lane.entries.push(entry);
+  }
+  if (dayStatus) {
+    const noteFor = (id: string) => {
+      const day = dayStatus.get(id, selectedKey);
+      const note = laneLabel(day, dayStatus.attendanceEnabled);
+      if (!note || !day) return null;
+      const status: "LEAVE" | "HOLIDAY" | "ABSENT" = day.status === "HOLIDAY" ? "HOLIDAY" : day.status === "ABSENT" && !day.halfDay ? "ABSENT" : "LEAVE";
+      return { note, status };
+    };
+    for (const lane of laneMap.values()) {
+      const n = noteFor(lane.key);
+      if (n) Object.assign(lane, { note: n.note, noteStatus: n.status });
+    }
+    // People off for the whole day get a lane of their own, so "nobody logged" reads as "on leave".
+    let added = 0;
+    for (const person of statusPeople ?? []) {
+      if (laneMap.has(person.userId) || added >= MAX_OFF_LANES) continue;
+      const day = dayStatus.get(person.userId, selectedKey);
+      if (day?.status !== "LEAVE" && day?.status !== "HOLIDAY") continue;
+      const n = noteFor(person.userId);
+      laneMap.set(person.userId, { key: person.userId, name: person.name, hours: 0, entries: [], note: n?.note, noteStatus: n?.status });
+      added += 1;
+    }
   }
   const lanes = [...laneMap.values()].sort((a, b) => a.name.localeCompare(b.name));
   // Hue is assigned from the day's name-sorted order and looked up by lane key, so the dialog's

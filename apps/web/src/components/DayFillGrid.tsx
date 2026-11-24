@@ -18,7 +18,7 @@
  */
 import { PLANNED_HOURS_PER_WORKING_DAY } from "@timesheet/shared";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { CalendarCheck2, ChevronDown, ChevronRight, Maximize2, Minus, Search } from "lucide-react";
+import { CalendarCheck2, ChevronDown, ChevronRight, Maximize2, Minus, Plane, Search, Star } from "lucide-react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
@@ -32,6 +32,8 @@ import { Skeleton } from "./ui/skeleton";
 import type { TeamRosterPerson } from "../services/api";
 import { addLocalDays, isoToLocalDate, localDateKey } from "../lib/local-day";
 import { cn } from "../lib/utils";
+import { dayNote, gridCellState, isAbsentMarker, isDayOff, tallyPerson, type DayStatusLookup, type GridCellState } from "../lib/day-grid";
+import type { DayGridDay } from "../services/attendance-api";
 
 export interface FillRow {
   id: string;
@@ -46,7 +48,7 @@ export interface FillRow {
   userId?: string;
 }
 
-type CellState = "filled" | "missing" | "off" | "upcoming";
+type CellState = GridCellState;
 
 interface DayCol {
   key: string;
@@ -68,6 +70,8 @@ interface PersonRow {
   /** Working days already past with nothing logged. */
   gapDays: number;
   hours: number;
+  /** Planned hours: 8h per owed working day; leave and holidays take days out (7.0.0). */
+  plannedHours: number;
   managerId: string | null;
   managerName: string | null;
 }
@@ -80,14 +84,19 @@ const CELL_TONE: Record<CellState, string> = {
   filled: "border-emerald-500/40 bg-emerald-500/15 text-emerald-800 hover:bg-emerald-500/25 dark:text-emerald-200",
   missing: "border-red-500/35 bg-red-500/10 text-red-700 hover:bg-red-500/20 dark:text-red-300",
   off: "border-dashed border-border bg-muted/30 text-muted-foreground/60 hover:bg-muted/50",
-  upcoming: "border-dashed border-border bg-transparent text-muted-foreground/50 hover:bg-muted/30"
+  upcoming: "border-dashed border-border bg-transparent text-muted-foreground/50 hover:bg-muted/30",
+  // 7.0.0: attendance status tokens (lib/attendance-status.ts), never red; icon + code carry it too.
+  leave: "status-cell status-leave hover:brightness-95",
+  holiday: "status-cell status-holiday hover:brightness-95"
 };
 
 const STATE_WORDS: Record<CellState, string> = {
   filled: "Filled",
   missing: "Not filled",
   off: "Day off",
-  upcoming: "Not yet"
+  upcoming: "Not yet",
+  leave: "On leave",
+  holiday: "Holiday"
 };
 
 /** The 8h/day plan, shared with the Monday digest email so the card and the email agree. */
@@ -95,8 +104,7 @@ const PLANNED_HOURS_PER_DAY = PLANNED_HOURS_PER_WORKING_DAY;
 
 /** Hours logged as a share of planned hours (working days so far × 8h). Can pass 100% — overtime
  *  or weekend work is shown, not capped. "—" when no working day has elapsed yet. */
-function percentText(hours: number, expectedDays: number): string {
-  const planned = expectedDays * PLANNED_HOURS_PER_DAY;
+function percentText(hours: number, planned: number): string {
   return planned > 0 ? `${Math.round((hours / planned) * 100)}%` : "—";
 }
 
@@ -126,28 +134,23 @@ function makeCols(rangeFrom: string, rangeTo: string, todayKey: string, working:
 /** Fills a person's totals from their days. A filled day off still counts toward filledDays, so the
  *  ratio can read 6/5 for someone who worked a Saturday — honest, and it never hides their work. The
  *  denominator is working days that have already happened. */
-function tallyDays(p: PersonRow, cols: DayCol[]): void {
-  for (const c of cols) {
-    const entries = p.byDay.get(c.key);
-    const filled = Boolean(entries?.length);
-    if (filled) {
-      p.filledDays += 1;
-      p.hours += hoursOf(entries ?? []);
-    }
-    if (c.expected && !c.upcoming) {
-      p.expectedDays += 1;
-      if (!filled) p.gapDays += 1;
-    }
-  }
+function tallyDays(p: PersonRow, cols: DayCol[], lookup?: DayStatusLookup): void {
+  for (const c of cols) p.hours += hoursOf(p.byDay.get(c.key) ?? []);
+  // Leave and holiday days are not owed, so they are neither gaps nor plan (lib/day-grid.ts).
+  const t = tallyPerson(cols, (key) => p.byDay.get(key)?.length ?? 0, (key) => lookup?.get(p.id, key), PLANNED_HOURS_PER_DAY);
+  p.filledDays = t.filledDays;
+  p.expectedDays = t.expectedDays;
+  p.gapDays = t.gapDays;
+  p.plannedHours = t.plannedHours;
 }
 
 /** Everyone on the roster plus anyone who only appears in the rows, with their days tallied. */
-function buildPeople(roster: TeamRosterPerson[] | undefined, rows: FillRow[], cols: DayCol[]): PersonRow[] {
+function buildPeople(roster: TeamRosterPerson[] | undefined, rows: FillRow[], cols: DayCol[], lookup?: DayStatusLookup): PersonRow[] {
   const byUser = new Map<string, PersonRow>();
   const ensure = (id: string, name: string, managerId: string | null, managerName: string | null) => {
     let p = byUser.get(id);
     if (!p) {
-      p = { id, name, byDay: new Map(), filledDays: 0, expectedDays: 0, gapDays: 0, hours: 0, managerId, managerName };
+      p = { id, name, byDay: new Map(), filledDays: 0, expectedDays: 0, gapDays: 0, hours: 0, plannedHours: 0, managerId, managerName };
       byUser.set(id, p);
     }
     return p;
@@ -162,7 +165,7 @@ function buildPeople(roster: TeamRosterPerson[] | undefined, rows: FillRow[], co
     list.push(row);
     p.byDay.set(key, list);
   }
-  for (const p of byUser.values()) tallyDays(p, cols);
+  for (const p of byUser.values()) tallyDays(p, cols, lookup);
   return [...byUser.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -170,14 +173,18 @@ const STATE_BADGE: Record<CellState, "success" | "destructive" | "muted"> = {
   filled: "success",
   missing: "destructive",
   off: "muted",
-  upcoming: "muted"
+  upcoming: "muted",
+  leave: "muted",
+  holiday: "muted"
 };
 
 const STATE_EMPTY_TEXT: Record<CellState, string> = {
   filled: "",
   missing: "Nothing was logged on this working day.",
   off: "Not a working day — nothing expected.",
-  upcoming: "This day has not happened yet."
+  upcoming: "This day has not happened yet.",
+  leave: "",
+  holiday: ""
 };
 
 /** "2 entries, 5.00 hours" for the cell's accessible name; empty when nothing was logged. */
@@ -188,9 +195,18 @@ function entriesNote(rows: FillRow[]): string {
 }
 
 /** What sits inside a cell: the entry count, a minus for a missed working day, nothing otherwise. */
-function cellContent(state: CellState, rows: FillRow[]): React.ReactNode {
+function cellContent(state: CellState, rows: FillRow[], day?: DayGridDay): React.ReactNode {
   if (state === "filled") return rows.length;
   if (state === "missing") return <Minus className="h-3.5 w-3.5" aria-hidden />;
+  if (state === "leave") {
+    return (
+      <span className="flex items-center gap-0.5 text-[10px] font-bold leading-none">
+        <Plane className="h-3 w-3 shrink-0" aria-hidden />
+        {day?.leaveTypeCode?.slice(0, 3)}
+      </span>
+    );
+  }
+  if (state === "holiday") return <Star className="h-3.5 w-3.5" aria-hidden />;
   return null;
 }
 
@@ -198,14 +214,12 @@ function hoursOf(rows: FillRow[]): number {
   return rows.reduce((sum, r) => sum + Number(r.totalHours ?? 0), 0);
 }
 
-function stateOf(col: DayCol, rows: FillRow[] | undefined): CellState {
-  if (rows && rows.length > 0) return "filled";
-  if (col.upcoming) return "upcoming";
-  return col.expected ? "missing" : "off";
+function stateOf(col: DayCol, rows: FillRow[] | undefined, day?: DayGridDay): CellState {
+  return gridCellState(col, rows?.length ?? 0, day);
 }
 
 /** Entry detail for one cell — the hover card's body, shared by card and dialog. */
-function CellDetail({ person, col, rows, state }: { person: PersonRow; col: DayCol; rows: FillRow[]; state: CellState }) {
+function CellDetail({ person, col, rows, state, note }: { person: PersonRow; col: DayCol; rows: FillRow[]; state: CellState; note?: string }) {
   const total = hoursOf(rows);
   const sorted = [...rows].sort((a, b) => a.startTime.localeCompare(b.startTime));
   return (
@@ -219,6 +233,11 @@ function CellDetail({ person, col, rows, state }: { person: PersonRow; col: DayC
           {STATE_WORDS[state]}
         </Badge>
       </div>
+      {note && (
+        <p className="text-xs font-medium" data-testid="fill-cell-note">
+          {note}
+        </p>
+      )}
       {sorted.length > 0 ? (
         <>
           <ul className="grid max-h-56 gap-1.5 overflow-y-auto pr-0.5">
@@ -242,7 +261,7 @@ function CellDetail({ person, col, rows, state }: { person: PersonRow; col: DayC
           </div>
         </>
       ) : (
-        <p className="text-xs text-muted-foreground">{STATE_EMPTY_TEXT[state]}</p>
+        STATE_EMPTY_TEXT[state] && <p className="text-xs text-muted-foreground">{STATE_EMPTY_TEXT[state]}</p>
       )}
     </div>
   );
@@ -252,13 +271,16 @@ function CellDetail({ person, col, rows, state }: { person: PersonRow; col: DayC
  * One cell. Open on hover (with a short close delay so the pointer can travel onto the card), on
  * keyboard focus, and on tap — a hover-only card would be unreachable on touch and by keyboard.
  */
-function FillCell({ person, col, rows, size }: { person: PersonRow; col: DayCol; rows: FillRow[]; size: "sm" | "lg" }) {
+function FillCell({ person, col, rows, size, lookup }: { person: PersonRow; col: DayCol; rows: FillRow[]; size: "sm" | "lg"; lookup?: DayStatusLookup }) {
   const [open, setOpen] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
   }, []);
-  const state = stateOf(col, rows);
+  const day = lookup?.get(person.id, col.key);
+  const state = stateOf(col, rows, day);
+  const absent = isAbsentMarker(state, day, lookup);
+  const note = dayNote(day, absent, rows.length > 0);
   const show = () => {
     if (timer.current) clearTimeout(timer.current);
     setOpen(true);
@@ -267,7 +289,7 @@ function FillCell({ person, col, rows, size }: { person: PersonRow; col: DayCol;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setOpen(false), 120);
   };
-  const label = `${person.name}, ${col.longLabel}: ${STATE_WORDS[state]}${entriesNote(rows)}`;
+  const label = `${person.name}, ${col.longLabel}: ${STATE_WORDS[state]}${entriesNote(rows)}${note ? `. ${note}` : ""}`;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverAnchor asChild>
@@ -288,11 +310,21 @@ function FillCell({ person, col, rows, size }: { person: PersonRow; col: DayCol;
             CELL_TONE[state]
           )}
         >
-          {cellContent(state, rows)}
+          {cellContent(state, rows, day)}
+          {day?.halfDay && state !== "leave" && (
+            <span className="status-chip status-leave absolute -right-1 -top-1 rounded px-0.5 text-[9px] font-bold leading-tight" aria-hidden>
+              ½
+            </span>
+          )}
+          {absent && (
+            <span className="status-chip status-absent absolute -right-1 -top-1 rounded px-0.5 text-[9px] font-bold leading-tight" aria-hidden>
+              A
+            </span>
+          )}
         </button>
       </PopoverAnchor>
       <PopoverContent className="w-80" side="top" onMouseEnter={show} onMouseLeave={hide} onOpenAutoFocus={(e) => e.preventDefault()}>
-        <CellDetail person={person} col={col} rows={rows} state={state} />
+        <CellDetail person={person} col={col} rows={rows} state={state} note={note} />
       </PopoverContent>
     </Popover>
   );
@@ -315,29 +347,42 @@ interface GroupStat {
   filledDays: number;
   expectedDays: number;
   hours: number;
+  plannedHours: number;
   gapPeople: number;
   /** How many of the team logged something on each day — the roll-up row's cells. */
   perDay: Map<string, number>;
+  /** 7.0.0: how many were on full-day leave / holiday each day (out of that day's denominator). */
+  perDayOff: Map<string, number>;
+  /** 7.0.0: of those, how many were on leave (the "· 1 on leave" note). */
+  perDayLeave: Map<string, number>;
 }
 
 type GridItem = { kind: "group"; group: GroupStat } | { kind: "person"; person: PersonRow };
 
-function buildGroups(people: PersonRow[], cols: DayCol[]): GroupStat[] {
+function buildGroups(people: PersonRow[], cols: DayCol[], lookup?: DayStatusLookup): GroupStat[] {
   const map = new Map<string, GroupStat>();
   for (const p of people) {
     const key = managerKeyOf(p);
     let g = map.get(key);
     if (!g) {
-      g = { key, name: p.managerName ?? "No manager", people: [], filledDays: 0, expectedDays: 0, hours: 0, gapPeople: 0, perDay: new Map() };
+      g = { key, name: p.managerName ?? "No manager", people: [], filledDays: 0, expectedDays: 0, hours: 0, plannedHours: 0, gapPeople: 0, perDay: new Map(), perDayOff: new Map(), perDayLeave: new Map() };
       map.set(key, g);
     }
     g.people.push(p);
     g.filledDays += p.filledDays;
     g.expectedDays += p.expectedDays;
     g.hours += p.hours;
+    g.plannedHours += p.plannedHours;
     if (p.gapDays > 0) g.gapPeople += 1;
     for (const c of cols) {
-      if (p.byDay.get(c.key)?.length) g.perDay.set(c.key, (g.perDay.get(c.key) ?? 0) + 1);
+      const filled = Boolean(p.byDay.get(c.key)?.length);
+      if (filled) g.perDay.set(c.key, (g.perDay.get(c.key) ?? 0) + 1);
+      const day = lookup?.get(p.id, c.key);
+      // Someone who logged on their day off still counts as "logged", never as "off".
+      if (!filled && isDayOff(day)) {
+        g.perDayOff.set(c.key, (g.perDayOff.get(c.key) ?? 0) + 1);
+        if (day?.status === "LEAVE") g.perDayLeave.set(c.key, (g.perDayLeave.get(c.key) ?? 0) + 1);
+      }
     }
   }
   return [...map.values()];
@@ -386,15 +431,28 @@ function buildItems(groups: GroupStat[], grouped: boolean, limit: number, isColl
 }
 
 function flatGroup(people: PersonRow[]): GroupStat {
-  return { key: "all", name: "", people, filledDays: 0, expectedDays: 0, hours: 0, gapPeople: 0, perDay: new Map() };
+  return { key: "all", name: "", people, filledDays: 0, expectedDays: 0, hours: 0, plannedHours: 0, gapPeople: 0, perDay: new Map(), perDayOff: new Map(), perDayLeave: new Map() };
 }
 
 /* ----------------------------------- grid rows ----------------------------------- */
 
-function TotalsCell({ filledDays, expectedDays, hours, strong }: { filledDays: number; expectedDays: number; hours: number; strong?: boolean }) {
-  const planned = expectedDays * PLANNED_HOURS_PER_DAY;
+function TotalsCell({
+  filledDays,
+  expectedDays,
+  hours,
+  plannedHours,
+  strong
+}: {
+  filledDays: number;
+  expectedDays: number;
+  hours: number;
+  plannedHours: number;
+  strong?: boolean;
+}) {
+  const planned = plannedHours;
   const done = expectedDays > 0 && filledDays >= expectedDays;
-  const title = `${hours.toFixed(1)}h logged of ${planned.toFixed(0)}h planned (${PLANNED_HOURS_PER_DAY}h × ${expectedDays} working days so far)`;
+  const lessHalfDays = planned !== expectedDays * PLANNED_HOURS_PER_DAY ? ", less half-day leave" : "";
+  const title = `${hours.toFixed(1)}h logged of ${planned.toFixed(0)}h planned (${PLANNED_HOURS_PER_DAY}h × ${expectedDays} working days so far${lessHalfDays})`;
   return (
     <div role="cell" className={cn("text-right", strong && "text-[11px]")} title={title}>
       <span className={cn("text-xs font-semibold tabular-nums", done ? "text-emerald-700 dark:text-emerald-300" : "text-foreground")}>
@@ -405,7 +463,7 @@ function TotalsCell({ filledDays, expectedDays, hours, strong }: { filledDays: n
         {hours.toFixed(1)}
         {expectedDays > 0 && `/${planned}`}h
       </span>
-      <span className="ml-1.5 text-xs font-semibold tabular-nums text-primary">{percentText(hours, expectedDays)}</span>
+      <span className="ml-1.5 text-xs font-semibold tabular-nums text-primary">{percentText(hours, planned)}</span>
     </div>
   );
 }
@@ -454,20 +512,32 @@ function GroupRow({
       </div>
       {cols.map((c) => {
         const filled = group.perDay.get(c.key) ?? 0;
-        const due = c.expected && !c.upcoming;
+        // Leave and holidays leave the day's denominator: "2/3 · 1 on leave", never "2/4".
+        const off = group.perDayOff.get(c.key) ?? 0;
+        const onLeave = group.perDayLeave.get(c.key) ?? 0;
+        const owed = size - off;
+        const due = c.expected && !c.upcoming && owed > 0;
         const quiet = filled === 0 && !due;
+        const offNote = off > 0 ? (onLeave > 0 ? ` · ${onLeave} on leave` : "") + (off > onLeave ? ` · ${off - onLeave} on holiday` : "") : "";
         return (
           <div
             key={c.key}
             role="cell"
-            className={cn("text-center text-[10px] font-semibold tabular-nums", groupDayTone(filled, size, due))}
-            title={`${filled} of ${size} logged on ${c.longLabel}`}
+            className={cn("text-center text-[10px] font-semibold tabular-nums", groupDayTone(filled, owed, due))}
+            title={`${filled} of ${owed} logged on ${c.longLabel}${offNote}`}
           >
-            {quiet ? "·" : `${filled}/${size}`}
+            {quiet ? "·" : `${filled}/${owed}`}
+            {off > 0 && (
+              <span className="flex items-center justify-center gap-0.5 text-[9px] font-medium text-muted-foreground">
+                {onLeave > 0 ? <Plane className="h-2.5 w-2.5" aria-hidden /> : <Star className="h-2.5 w-2.5" aria-hidden />}
+                {off}
+                <span className="sr-only">{offNote}</span>
+              </span>
+            )}
           </div>
         );
       })}
-      <TotalsCell filledDays={group.filledDays} expectedDays={group.expectedDays} hours={group.hours} strong />
+      <TotalsCell filledDays={group.filledDays} expectedDays={group.expectedDays} hours={group.hours} plannedHours={group.plannedHours} strong />
     </div>
   );
 }
@@ -478,7 +548,8 @@ function PersonLine({
   template,
   size,
   indent,
-  index
+  index,
+  lookup
 }: {
   person: PersonRow;
   cols: DayCol[];
@@ -486,6 +557,7 @@ function PersonLine({
   size: "sm" | "lg";
   indent: boolean;
   index: number;
+  lookup?: DayStatusLookup;
 }) {
   return (
     <div role="row" className="grid items-center gap-x-1 motion-safe:animate-enter" style={{ ...template, animationDelay: `${Math.min(index, 12) * 0.03}s` }}>
@@ -497,10 +569,10 @@ function PersonLine({
       </div>
       {cols.map((c) => (
         <div key={c.key} role="cell" className="flex justify-center">
-          <FillCell person={person} col={c} rows={person.byDay.get(c.key) ?? []} size={size} />
+          <FillCell person={person} col={c} rows={person.byDay.get(c.key) ?? []} size={size} lookup={lookup} />
         </div>
       ))}
-      <TotalsCell filledDays={person.filledDays} expectedDays={person.expectedDays} hours={person.hours} />
+      <TotalsCell filledDays={person.filledDays} expectedDays={person.expectedDays} hours={person.hours} plannedHours={person.plannedHours} />
     </div>
   );
 }
@@ -511,7 +583,8 @@ function Grid({
   size,
   grouped,
   isCollapsed,
-  onToggle
+  onToggle,
+  lookup
 }: {
   items: GridItem[];
   cols: DayCol[];
@@ -519,6 +592,7 @@ function Grid({
   grouped: boolean;
   isCollapsed: (key: string) => boolean;
   onToggle: (key: string) => void;
+  lookup?: DayStatusLookup;
 }) {
   const cellW = size === "sm" ? "2.25rem" : "3rem";
   const template = { gridTemplateColumns: `minmax(7rem,10rem) repeat(${cols.length}, ${cellW}) 11.5rem` };
@@ -543,7 +617,7 @@ function Grid({
               <GroupRow key={`g-${item.group.key}`} group={item.group} cols={cols} template={template} collapsed={isCollapsed(item.group.key)} onToggle={onToggle} />
             );
           }
-          return <PersonLine key={item.person.id} person={item.person} cols={cols} template={template} size={size} indent={grouped} index={i} />;
+          return <PersonLine key={item.person.id} person={item.person} cols={cols} template={template} size={size} indent={grouped} index={i} lookup={lookup} />;
         })}
       </div>
     </div>
@@ -601,7 +675,7 @@ function TeamStrip({
   wrap
 }: {
   groups: GroupStat[];
-  overall: { people: number; gapPeople: number; hours: number; expectedDays: number };
+  overall: { people: number; gapPeople: number; hours: number; plannedHours: number };
   active: string | null;
   onPick: (key: string | null) => void;
   wrap?: boolean;
@@ -612,7 +686,7 @@ function TeamStrip({
         title="All teams"
         sub={`${overall.people} people`}
         gaps={overall.gapPeople}
-        pct={percentText(overall.hours, overall.expectedDays)}
+        pct={percentText(overall.hours, overall.plannedHours)}
         on={active === null}
         onClick={() => onPick(null)}
       />
@@ -622,7 +696,7 @@ function TeamStrip({
           title={g.name}
           sub={`${g.people.length} ${g.people.length === 1 ? "person" : "people"}`}
           gaps={g.gapPeople}
-          pct={percentText(g.hours, g.expectedDays)}
+          pct={percentText(g.hours, g.plannedHours)}
           on={active === g.key}
           onClick={() => onPick(active === g.key ? null : g.key)}
         />
@@ -631,7 +705,7 @@ function TeamStrip({
   );
 }
 
-function Legend({ grouped }: { grouped: boolean }) {
+function Legend({ grouped, lookup }: { grouped: boolean; lookup?: DayStatusLookup }) {
   const item = (tone: string, text: string, glyph?: string) => (
     <span className="inline-flex items-center gap-1.5">
       <span className={cn("inline-flex h-4 w-5 items-center justify-center rounded border text-[10px] font-semibold", tone)} aria-hidden>
@@ -646,7 +720,38 @@ function Legend({ grouped }: { grouped: boolean }) {
       {item(CELL_TONE.missing, "Not filled (working day)", "–")}
       {item(CELL_TONE.off, "Day off")}
       {item(CELL_TONE.upcoming, "Not yet")}
-      {grouped && <span>Team rows: how many of the team logged that day</span>}
+      {lookup && (
+        <>
+          <span className="inline-flex items-center gap-1.5">
+            <span className={cn("inline-flex h-4 w-6 items-center justify-center gap-0.5 rounded border text-[9px] font-bold", CELL_TONE.leave)} aria-hidden>
+              <Plane className="h-2.5 w-2.5" />
+            </span>
+            On leave — leave type code
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className={cn("inline-flex h-4 w-5 items-center justify-center rounded border", CELL_TONE.holiday)} aria-hidden>
+              <Star className="h-2.5 w-2.5" />
+            </span>
+            Holiday
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="status-chip status-leave rounded px-1 text-[10px] font-bold" aria-hidden>
+              ½
+            </span>
+            Half-day leave
+          </span>
+          {lookup.attendanceEnabled && (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="status-chip status-absent rounded px-1 text-[10px] font-bold" aria-hidden>
+                A
+              </span>
+              Absent — did not punch in
+            </span>
+          )}
+          <span>Leave and holidays are not gaps and are left out of Plan hours</span>
+        </>
+      )}
+      {grouped && <span>Team rows: how many of the team logged that day{lookup ? ", of those not off" : ""}</span>}
     </div>
   );
 }
@@ -672,8 +777,12 @@ export function DayFillGrid({
   workingDays,
   loading,
   rangeControl,
-  groupable = false
+  groupable = false,
+  dayStatus
 }: {
+  /** 7.0.0: leave / holiday / attendance per person per day. Undefined with the module off, and
+   *  then the grid is exactly what it was before. */
+  dayStatus?: DayStatusLookup;
   /** The page's calendar filter, rendered again inside the expanded dialog (same state). */
   rangeControl?: React.ReactNode;
   /** Show the by-manager teams, chips and filter. Only meaningful for someone who can see more than one team (users:manage). */
@@ -698,10 +807,10 @@ export function DayFillGrid({
 
   const working = useMemo(() => new Set(workingDays ?? DEFAULT_WORKING_DAYS), [workingDays]);
   const { cols, truncated } = useMemo(() => makeCols(rangeFrom, rangeTo, todayKey, working), [rangeFrom, rangeTo, todayKey, working]);
-  const people = useMemo(() => buildPeople(roster, rows, cols), [roster, rows, cols]);
+  const people = useMemo(() => buildPeople(roster, rows, cols, dayStatus), [roster, rows, cols, dayStatus]);
 
   // Teams from EVERYONE in scope (not the filtered view) so the chips stay put while you filter.
-  const allGroups = useMemo(() => buildGroups(people, cols), [people, cols]);
+  const allGroups = useMemo(() => buildGroups(people, cols, dayStatus), [people, cols, dayStatus]);
   const canGroup = groupable && allGroups.length > 1;
   const chipGroups = useMemo(() => orderGroups(allGroups, "missing"), [allGroups]);
   const activeFilter = canGroup ? managerFilter : null;
@@ -730,7 +839,7 @@ export function DayFillGrid({
   };
 
   const layout = (list: PersonRow[], limit: number) => {
-    const groups = canGroup ? orderGroups(buildGroups(list, cols), sort) : [flatGroup(list)];
+    const groups = canGroup ? orderGroups(buildGroups(list, cols, dayStatus), sort) : [flatGroup(list)];
     return buildItems(groups, canGroup, limit, isCollapsed);
   };
   const cardLayout = layout(cardPeople, cardLimit);
@@ -742,7 +851,7 @@ export function DayFillGrid({
     people: people.length,
     gapPeople: peopleWithGaps,
     hours: people.reduce((s, p) => s + p.hours, 0),
-    expectedDays: people.reduce((s, p) => s + p.expectedDays, 0)
+    plannedHours: people.reduce((s, p) => s + p.plannedHours, 0)
   };
 
   let gapsNote = "";
@@ -768,10 +877,10 @@ export function DayFillGrid({
       <>
         {canGroup && <TeamStrip groups={chipGroups} overall={overall} active={activeFilter} onPick={pickManager} />}
         <div className="max-h-72 overflow-y-auto pr-1" data-testid="day-fill-grid">
-          <Grid items={cardLayout.items} cols={cols} size="sm" grouped={canGroup} isCollapsed={isCollapsed} onToggle={toggleGroup} />
+          <Grid items={cardLayout.items} cols={cols} size="sm" grouped={canGroup} isCollapsed={isCollapsed} onToggle={toggleGroup} lookup={dayStatus} />
           {cardLayout.remaining > 0 && <ShowMore remaining={cardLayout.remaining} page={CARD_PAGE} onMore={() => setCardLimit((n) => n + CARD_PAGE)} />}
         </div>
-        <Legend grouped={canGroup} />
+        <Legend grouped={canGroup} lookup={dayStatus} />
       </>
     );
   }
@@ -788,7 +897,8 @@ export function DayFillGrid({
           </CardTitle>
           <CardDescription>
             One row per person, one cell per day — green if anything was logged, red if a working day passed with nothing. Follows the date
-            range at the top of the page. {!loading && <span className="font-medium text-foreground">{summary}</span>}
+            range at the top of the page.{dayStatus && " Leave and holidays are marked and are not counted as gaps."}{" "}
+            {!loading && <span className="font-medium text-foreground">{summary}</span>}
             {truncated && ` Showing the latest ${MAX_DAYS} days of the range.`}
           </CardDescription>
         </div>
@@ -872,7 +982,7 @@ export function DayFillGrid({
           <div className="max-h-[56vh] overflow-y-auto pr-1">
             {dialogPeople.length > 0 ? (
               <>
-                <Grid items={dialogLayout.items} cols={cols} size="lg" grouped={canGroup} isCollapsed={isCollapsed} onToggle={toggleGroup} />
+                <Grid items={dialogLayout.items} cols={cols} size="lg" grouped={canGroup} isCollapsed={isCollapsed} onToggle={toggleGroup} lookup={dayStatus} />
                 {dialogLayout.remaining > 0 && (
                   <ShowMore remaining={dialogLayout.remaining} page={DIALOG_PAGE} onMore={() => setDialogLimit((n) => n + DIALOG_PAGE)} />
                 )}
@@ -883,7 +993,7 @@ export function DayFillGrid({
               </div>
             )}
           </div>
-          <Legend grouped={canGroup} />
+          <Legend grouped={canGroup} lookup={dayStatus} />
         </DialogContent>
       </Dialog>
     </Card>
