@@ -3306,6 +3306,7 @@ or two approvers at once produce exactly one debit and one `409 LEAVE_ALREADY_DE
 |---|---|---|
 | `GET /status` | anyone | `{ enabled, leaveYearStartMonth }` |
 | `GET /types` | anyone | `{ items: LeaveType[] }` (enabled only) |
+| `GET /me/ledger?year=` | self | `{ leaveYear, items: [ledger row + label] }` — `label` is a readable name for the row ("Leave taken", "Comp-off credit", "Comp-off expired", "Adjustment", …) |
 | `GET /me/balances?year=` | self | `{ leaveYear, from, to, yearStartMonth, balances: [{ leaveType, balance, accrued, carriedForward, used, adjusted, expired, pending, available, projectedYearEnd, expiringAtYearEnd }] }` |
 | `GET /me/ledger?year=` | self | `{ leaveYear, items: [{ id, leaveType: { code, name }, delta, kind, reason, refRequestId, createdAt }] }` |
 | `GET /me/requests?status=&year=` | self | `{ items: LeaveRequest[] }` |
