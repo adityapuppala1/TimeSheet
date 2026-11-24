@@ -37,6 +37,8 @@ const FindWorkspace = lazy(() => import("./pages/FindWorkspace").then((m) => ({ 
 const SsoHandoff = lazy(() => import("./pages/SsoHandoff").then((m) => ({ default: m.SsoHandoff })));
 const Signup = lazy(() => import("./pages/Signup").then((m) => ({ default: m.Signup })));
 const ResetPassword = lazy(() => import("./pages/ResetPassword").then((m) => ({ default: m.ResetPassword })));
+const KioskDisplayPage = lazy(() => import("./components/attendance/Kiosk").then((m) => ({ default: m.KioskDisplayPage })));
+const KioskPunchPage = lazy(() => import("./components/attendance/Kiosk").then((m) => ({ default: m.KioskPunchPage })));
 const SharedAttestation = lazy(() => import("./pages/SharedAttestation").then((m) => ({ default: m.SharedAttestation })));
 const MaintenancePage = lazy(() => import("./pages/Maintenance").then((m) => ({ default: m.MaintenancePage })));
 const PlanLapsedPage = lazy(() => import("./pages/PlanLapsed").then((m) => ({ default: m.PlanLapsedPage })));
@@ -153,6 +155,8 @@ const router = createBrowserRouter([
   // with no account, so it must never hit AppLayout (which assumes an authenticated user) or
   // redirect to /login. See pages/SharedAttestation.tsx.
   { path: "/shared/attestation/:token", element: <PageShell><SharedAttestation /></PageShell> },
+  // 7.0.0 kiosk screen: PUBLIC, authenticated by its own device token (components/attendance/Kiosk.tsx).
+  { path: "/kiosk", element: <PageShell><KioskDisplayPage /></PageShell> },
   // Two more unauthenticated surfaces, same rule as the attestation viewer above: the people who
   // open these have no account, so they must never touch AppLayout or redirect to /login.
   { path: "/request/:token", element: <PageShell><PublicRequestFormPage /></PageShell> },
@@ -242,6 +246,7 @@ const router = createBrowserRouter([
       // V17 A5. Open to everyone: "My attendance" is your own days; the Team tab inside is shown to
       // managing roles and the API scopes every row (direct reports, or everyone for an admin).
       { path: "attendance", element: <PageShell><AttendancePage /></PageShell> },
+      { path: "attendance/kiosk-punch", element: <PageShell><KioskPunchPage /></PageShell> },
       { path: "attendance/team", element: <PageShell><AttendancePage /></PageShell> },
       { path: "attendance/org", element: <PageShell><AttendancePage /></PageShell> },
       // V17 UI v2: leave. One page, three sub-routes; the page itself explains when leave is off.

@@ -43,7 +43,8 @@ const SOURCE_LABELS: Record<AttendanceSourceKind, string> = {
   WEBHOOK: "Integration",
   MCP: "AI assistant",
   CSV: "Import",
-  REGULARIZATION: "Correction"
+  REGULARIZATION: "Correction",
+  KIOSK: "Kiosk"
 };
 
 export async function isAttendanceOn(): Promise<boolean> {
@@ -263,9 +264,9 @@ async function resolveSite(rule: "OFF" | "BLOCK" | "ALLOW_FLAGGED", location: Pu
  * Face. Reuses the /face/verify flow: the client verifies with context PUNCH_IN and presents the
  * single-use id, which consumeVerification checks for owner, context, outcome, age and reuse.
  */
-async function resolveFace(
+export async function resolveFace(
   settings: { punchInFaceRequired: boolean; faceFailureRule: "BLOCK" | "ALLOW_FLAGGED" },
-  input: PunchInInput
+  input: Pick<PunchInInput, "userId" | "verificationId">
 ): Promise<{ faceAttemptId: string | null; flagged: boolean }> {
   if (!(await isPunchInFaceRequired(settings.punchInFaceRequired))) return { faceAttemptId: null, flagged: false };
   try {

@@ -364,32 +364,32 @@ model User {
   /// The id an external attendance source (biometric terminal, HRMS) knows this person by.
   /// Unique when set so an inbound punch matched on it resolves to exactly one person; nullable
   /// because most workspaces never connect such a source.
-  employeeCode                String?                      @unique @db.VarChar(64)
+  employeeCode                     String?                           @unique @db.VarChar(64)
   /// Which holiday calendar decides this person's days off. NULL = the workspace default calendar
   /// (HolidayCalendar.isDefault), so a fresh workspace needs no per-person assignment at all.
   /// SetNull on delete: removing a calendar drops people back to the default, never orphans them.
-  holidayCalendarId           String?
+  holidayCalendarId                String?
   /// 7.0.0 leave policies: what kind of employment this is (leave types and holiday calendars may be
   /// scoped to some kinds). NULL = not set; a scoped policy then does not apply to them.
-  employmentType              EmploymentType?
+  employmentType                   EmploymentType?
   /// 7.0.0: the person's home work site. A holiday calendar scoped to the site applies to them when
   /// they have no calendar of their own; leave types may be scoped to sites. SetNull on delete.
-  siteId                      String?
-  site                        AttendanceSite?              @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  siteId                           String?
+  site                             AttendanceSite?                   @relation(fields: [siteId], references: [id], onDelete: SetNull)
   /// When this person first accepted the workspace's location-consent wording for punch-in (V17 A2).
   /// NULL = never asked yet; the punch-in dialog shows the consent text before the first location read.
-  attendanceLocationConsentAt DateTime?
-  holidayCalendar             HolidayCalendar?             @relation(fields: [holidayCalendarId], references: [id], onDelete: SetNull)
-  attendanceRecords           AttendanceRecord[]
-  missedDayReasons            MissedDayReason[]
-  attendanceInsightDismissals AttendanceInsightDismissal[]
-  holidayOptIns               HolidayOptIn[]
+  attendanceLocationConsentAt      DateTime?
+  holidayCalendar                  HolidayCalendar?                  @relation(fields: [holidayCalendarId], references: [id], onDelete: SetNull)
+  attendanceRecords                AttendanceRecord[]
+  missedDayReasons                 MissedDayReason[]
+  attendanceInsightDismissals      AttendanceInsightDismissal[]
+  holidayOptIns                    HolidayOptIn[]
   /// V17 Phase B leave. Cascade with the person (personal data), like attendance.
-  compOffRequests             CompOffRequest[]
+  compOffRequests                  CompOffRequest[]
   attendanceRegularizationRequests AttendanceRegularizationRequest[]
-  overtimeClaims              OvertimeClaim[]
-  leaveRequests               LeaveRequest[]
-  leaveLedger                 LeaveBalanceLedger[]
+  overtimeClaims                   OvertimeClaim[]
+  leaveRequests                    LeaveRequest[]
+  leaveLedger                      LeaveBalanceLedger[]
 
   createdAt            DateTime                    @default(now())
   updatedAt            DateTime                    @updatedAt
@@ -6177,6 +6177,8 @@ enum AttendanceSourceKind {
   /// 7.0.0: an approved regularisation (correction) request. Outranks every other source: it is a
   /// decision about the day, made after the fact. The replaced punch stays on the event history.
   REGULARIZATION
+  /// 7.0.0: a signed-in person scanned the rotating QR code on a kiosk device (attendance-kiosk.service.ts).
+  KIOSK
 }
 
 /// Which field on an inbound event identifies the person. employeeCode and externalId exist
@@ -6276,6 +6278,11 @@ model GlobalAttendanceSettings {
   /// ALLOW_FLAGGED records it with siteFlagged. Needs location on and at least one site.
   requireSite AttendanceSiteRule @default(OFF)
 
+  /// --- Kiosk / QR punch (7.0.0) ----------------------------------------------------------------
+  /// A kiosk device shows a rotating signed QR code; a signed-in person scans it to punch in
+  /// (attendance-kiosk.service.ts). OFF by default; also needs attendance on.
+  kioskEnabled Boolean @default(false)
+
   /// --- Overtime (7.0.0) ----------------------------------------------------------------------
   /// Timesheet hours above the expected day (the shift, else the workspace day) per day and per
   /// week (attendance-overtime.service.ts). OFF by default; also needs attendance on.
@@ -6295,14 +6302,14 @@ model GlobalAttendanceSettings {
 /// A named set of days off ("India 2027", "US East"). People are assigned one via
 /// User.holidayCalendarId; anyone unassigned follows the calendar flagged isDefault.
 model HolidayCalendar {
-  id                 String  @id @default(uuid())
-  name               String  @unique @db.VarChar(120)
-  description        String? @db.VarChar(500)
+  id                   String  @id @default(uuid())
+  name                 String  @unique @db.VarChar(120)
+  description          String? @db.VarChar(500)
   /// At most one should be true; enforced in the service (MariaDB has no partial unique index).
-  isDefault          Boolean @default(false)
+  isDefault            Boolean @default(false)
   /// 7.0.0: how many of this calendar's optional holidays one person may opt into per calendar
   /// year. NULL = no limit set; 0 = optional holidays cannot be taken.
-  maxOptionalPerYear Int?
+  maxOptionalPerYear   Int?
   /// 7.0.0 scope (JSON arrays; NULL or [] = no restriction on that axis). A scoped calendar applies
   /// to people WITHOUT their own calendar who match it: explicit calendar > scoped > default.
   scopeEmploymentTypes Json?
@@ -6476,17 +6483,53 @@ model AttendanceRecord {
 
 /// 7.0.0: a named work site — a circle on the map. A punch inside one is labelled "At <name>".
 model AttendanceSite {
-  id        String  @id @default(uuid())
-  name      String  @unique @db.VarChar(120)
-  latitude  Decimal @db.Decimal(9, 6)
-  longitude Decimal @db.Decimal(9, 6)
+  id        String            @id @default(uuid())
+  name      String            @unique @db.VarChar(120)
+  latitude  Decimal           @db.Decimal(9, 6)
+  longitude Decimal           @db.Decimal(9, 6)
   radiusM   Int
-  enabled   Boolean @default(true)
+  enabled   Boolean           @default(true)
   /// 7.0.0: people whose home site this is (User.siteId).
   users     User[]
+  /// 7.0.0: kiosk devices standing at this site (their punches carry its name).
+  kiosks    AttendanceKiosk[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+/// 7.0.0 kiosk device (attendance-kiosk.service.ts). The device token is shown ONCE; only its
+/// SHA-256 is kept. `keySalt` feeds the QR signing key and changes on rotate, so codes signed for the
+/// old token stop verifying at once. Revoked devices keep their row for the event history.
+model AttendanceKiosk {
+  id          String          @id @default(uuid())
+  name        String          @db.VarChar(120)
+  siteId      String?
+  site        AttendanceSite? @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  tokenHash   String          @unique @db.VarChar(64)
+  tokenHint   String          @db.VarChar(8)
+  keySalt     String          @db.VarChar(64)
+  revokedAt   DateTime?
+  lastSeenAt  DateTime?
+  createdById String?         @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([siteId])
+}
+
+/// 7.0.0: a QR nonce one person has used, so a scanned code cannot be replayed by that person.
+/// Rows older than a few minutes are useless (the code has expired) and are pruned on write.
+model AttendanceKioskNonce {
+  id        String   @id @default(uuid())
+  kioskId   String   @db.VarChar(64)
+  userId    String   @db.VarChar(64)
+  nonce     String   @db.VarChar(32)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, kioskId, nonce])
+  @@index([createdAt])
 }
 
 /// Admin-editable list behind the "why is this day empty?" prompt. Seeded by migration with nine

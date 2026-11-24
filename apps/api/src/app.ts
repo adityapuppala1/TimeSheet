@@ -68,6 +68,7 @@ import { automationFlowRouter } from "./controllers/automation-flow.controller.j
 import { changeRouter } from "./controllers/change.controller.js";
 import { attendanceSettingsRouter } from "./controllers/attendance-settings.controller.js";
 import { attendanceRouter } from "./controllers/attendance.controller.js";
+import { kioskAdminRouter, kioskRouter } from "./controllers/attendance-kiosk.controller.js";
 import { leaveRouter } from "./controllers/leave.controller.js";
 import { calendarFeedRouter } from "./controllers/calendar-feed.controller.js";
 import { redactFeedTokens } from "./services/calendar-feed.service.js";
@@ -599,12 +600,15 @@ app.use("/api/goals", goalRouter);
 app.use("/api/changes", changeRouter);
 // Before the settings router: its prefix is longer, and its own entitlement gate must not run for
 // /settings requests (it would lock the tab's read on a plan without integrations).
+app.use("/api/attendance/admin/kiosks", kioskAdminRouter);
 app.use("/api/attendance/admin/integrations", attendanceSourcesRouter);
 app.use("/api/attendance/admin", attendanceSettingsRouter);
 app.use("/api/integrations/attendance", attendanceWebhookRouter);
 // The punch is idempotent but writes evidence and may spend a face check. Per IP, so the budget has
 // to cover a whole office behind one NAT arriving at 9:00 — 120 a minute does, and still stops a loop.
 app.use("/api/attendance/punch-in", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true }));
+// 7.0.0 kiosk / QR punch: the device route is public (device token), rate-limited in the router.
+app.use("/api/attendance/kiosk", kioskRouter);
 app.use("/api/attendance", attendanceRouter);
 // V17 Phase B leave: employee, approver and super-admin routes, all behind the leave gate.
 app.use("/api/leave", leaveRouter);

@@ -42,6 +42,8 @@ export interface AttendanceSettings {
   regularizationMonthlyCap: number;
   /** 7.0.0 work sites: what a web punch-in outside every site does. */
   requireSite: "OFF" | "BLOCK" | "ALLOW_FLAGGED";
+  /** 7.0.0 kiosk / QR punch. OFF by default. */
+  kioskEnabled: boolean;
   /** 7.0.0 overtime: hours above the expected day and week. OFF by default. */
   overtimeEnabled: boolean;
   overtimeDailyThresholdHours: number;
@@ -150,7 +152,7 @@ export interface AttendancePunchRecord {
   workDate: string;
   punchInAt: string;
   punchOutAt: string | null;
-  source: "WEB" | "API" | "WEBHOOK" | "MCP" | "CSV";
+  source: "WEB" | "API" | "WEBHOOK" | "MCP" | "CSV" | "REGULARIZATION" | "KIOSK";
   /** The integration's own name when it has one ("Front door biometric"), else the kind. */
   sourceLabel: string;
   flagged: boolean;

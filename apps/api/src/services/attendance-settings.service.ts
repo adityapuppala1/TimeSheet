@@ -83,6 +83,8 @@ export const attendanceSettingsBody = z
     regularizationMonthlyCap: z.number().int().min(1).max(31),
     // 7.0.0 work sites (attendance-site.service.ts). OFF by default.
     requireSite: z.enum(["OFF", "BLOCK", "ALLOW_FLAGGED"]),
+    // 7.0.0 kiosk / QR punch (attendance-kiosk.service.ts). OFF by default.
+    kioskEnabled: z.boolean(),
     // 7.0.0 overtime (attendance-overtime.service.ts). OFF by default.
     overtimeEnabled: z.boolean(),
     overtimeDailyThresholdHours: z.number().min(0).max(24),

@@ -115,7 +115,8 @@ export async function assertIngestAllowed(kind: AttendanceSourceKind): Promise<v
     throw new AppError(403, "Attendance is not enabled for this workspace.");
   }
   // A correction is decided in the app by a manager, not an integration: it needs no integrations plan.
-  if (kind !== "WEB" && kind !== "REGULARIZATION" && !(await isPlanningCapabilityAllowed(orgId, "attendanceIntegrationsEnabled"))) {
+  // A kiosk punch is an in-app punch by a signed-in person: no integrations plan either.
+  if (kind !== "WEB" && kind !== "REGULARIZATION" && kind !== "KIOSK" && !(await isPlanningCapabilityAllowed(orgId, "attendanceIntegrationsEnabled"))) {
     throw new AppError(403, "Attendance integrations are not included in this plan. Upgrade to Enterprise to use them.");
   }
 }
@@ -187,6 +188,7 @@ export function rankOf(kind: AttendanceSourceKind, sourcePriority: number | null
     case "API":
       return (settings.apiPriority ?? 30) + own;
     case "WEB":
+    case "KIOSK":
       return (settings.webPriority ?? 20) + own;
     case "MCP":
       return (settings.mcpPriority ?? 20) + own;

@@ -64,6 +64,7 @@ import { AttendanceSourcesSection } from "./AttendanceSourcesSection";
 import { CompOffSettingsSection } from "../../components/attendance/CompOff";
 import { ShiftsSettingsSection } from "../../components/attendance/Shifts";
 import { WorkSitesSection } from "../../components/attendance/WorkSites";
+import { KioskDevicesSection } from "../../components/attendance/Kiosk";
 import { BalanceAdjustments, LEAVE_SETTINGS_KEY, LEAVE_TYPES_KEY, LeaveSettingsFields, LeaveTypesSection } from "./LeaveSettingsSections";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
@@ -375,6 +376,21 @@ export function AttendanceSettingsCard({ readOnly }: { readOnly: boolean }) {
             </div>
           )}
 
+          {section === "kiosk" && (
+            <div className="grid min-w-0 gap-4">
+              <StagedToggle
+                id="att-kiosk"
+                label="Let people punch in by scanning a kiosk's QR code"
+                hint="Off by default. A kiosk screen shows a code that changes every 30 seconds; people scan it with their own phone while signed in. A kiosk punch counts as being at the kiosk's site, and the face check applies as usual."
+                checked={values.kioskEnabled}
+                disabled={disabled}
+                changed={changed("kioskEnabled")}
+                onChange={(v) => stage({ kioskEnabled: v })}
+              />
+              <KioskDevicesSection readOnly={readOnly} />
+            </div>
+          )}
+
           {section === "overtime" && (
             <StagedToggle
               id="att-overtime"
@@ -570,6 +586,7 @@ function dirtySections(changes: Array<{ key: string }>, leaveChanges: unknown[])
     regularizationMaxDaysBack: "corrections",
     regularizationMonthlyCap: "corrections",
     requireSite: "sites",
+    kioskEnabled: "kiosk",
     overtimeEnabled: "overtime",
     overtimeDailyThresholdHours: "overtime",
     overtimeWeeklyThresholdHours: "overtime",
