@@ -122,6 +122,7 @@ import { formatHours, formatNumber } from "../lib/format";
 import { QueryError } from "../components/QueryState";
 import {
   activityTypeApi,
+  api,
   attestationApi,
   faceApi,
   fileUrl,
@@ -1150,8 +1151,14 @@ function UserEditDialog({
     githubUsername: "",
     faceVerificationRequired: false,
     employmentType: "none",
-    siteId: "none"
+    siteId: "none",
+    joinDate: ""
   });
+  // 7.0.0 celebrations: the join date, read on its own (the user list never carries it).
+  const celebrationFields = useQuery({ queryKey: ["users", user?.id, "celebrations"], queryFn: async () => (await api.get<{ joinDate: string | null }>(`/users/${user!.id}/celebrations`)).data, enabled: Boolean(user), retry: false });
+  useEffect(() => {
+    if (celebrationFields.data) setForm((f) => ({ ...f, joinDate: celebrationFields.data.joinDate ?? "" }));
+  }, [celebrationFields.data]);
   // 7.0.0 leave policies: the home work site picker (sites are a super-admin list; without it the
   // field is neither shown nor sent, so an ADMIN's save never clears a site).
   const sites = useQuery({ queryKey: ["attendance", "admin", "sites"], queryFn: sitesApi.list, enabled: Boolean(user) && viewerIsSuperAdmin, retry: false });
@@ -1174,7 +1181,8 @@ function UserEditDialog({
         githubUsername: user.githubUsername ?? "",
         faceVerificationRequired: user.faceVerificationRequired ?? false,
         employmentType: user.employmentType ?? "none",
-        siteId: user.siteId ?? "none"
+        siteId: user.siteId ?? "none",
+        joinDate: ""
       });
       setExtraRoles(user.heldRoles.filter((r) => r !== user.role.name));
     }
@@ -1285,6 +1293,13 @@ function UserEditDialog({
                   </div>
                 )}
               </div>
+              {celebrationFields.data && (
+                <div className="grid gap-1.5 sm:max-w-xs">
+                  <Label htmlFor="ue-join-date">Join date</Label>
+                  <Input id="ue-join-date" type="date" value={form.joinDate} onChange={(e) => setForm({ ...form, joinDate: e.target.value })} />
+                  <p className="text-xs text-muted-foreground">Used for work anniversaries when celebrations are on.</p>
+                </div>
+              )}
               <div className="grid gap-1.5">
                 <Label>Reports to</Label>
                 <Select value={form.managerId} onValueChange={(value) => setForm({ ...form, managerId: value })}>
@@ -1344,7 +1359,8 @@ function UserEditDialog({
                     githubUsername: form.githubUsername.trim() || null,
                     faceVerificationRequired: form.faceVerificationRequired,
                     employmentType: form.employmentType === "none" ? null : form.employmentType,
-                    ...(sites.data ? { siteId: form.siteId === "none" ? null : form.siteId } : {})
+                    ...(sites.data ? { siteId: form.siteId === "none" ? null : form.siteId } : {}),
+                    ...(celebrationFields.data ? { joinDate: form.joinDate || null } : {})
                   })
                 }
                 disabled={!form.name.trim() || !form.email.trim()}

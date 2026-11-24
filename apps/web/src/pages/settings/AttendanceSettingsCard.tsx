@@ -391,6 +391,18 @@ export function AttendanceSettingsCard({ readOnly }: { readOnly: boolean }) {
             </div>
           )}
 
+          {section === "celebrations" && (
+            <StagedToggle
+              id="att-celebrations"
+              label="Show birthdays and work anniversaries this week"
+              hint="Off by default. A small strip on the Dashboard and the Team leave calendar, for the people each person can already see in the team view. Day and month only, never a year or an age; people can opt out on their Profile. Admins set join dates in User management."
+              checked={values.celebrationsEnabled}
+              disabled={disabled}
+              changed={changed("celebrationsEnabled")}
+              onChange={(v) => stage({ celebrationsEnabled: v })}
+            />
+          )}
+
           {section === "overtime" && (
             <StagedToggle
               id="att-overtime"
@@ -587,6 +599,7 @@ function dirtySections(changes: Array<{ key: string }>, leaveChanges: unknown[])
     regularizationMonthlyCap: "corrections",
     requireSite: "sites",
     kioskEnabled: "kiosk",
+    celebrationsEnabled: "celebrations",
     overtimeEnabled: "overtime",
     overtimeDailyThresholdHours: "overtime",
     overtimeWeeklyThresholdHours: "overtime",

@@ -44,6 +44,8 @@ export interface AttendanceSettings {
   requireSite: "OFF" | "BLOCK" | "ALLOW_FLAGGED";
   /** 7.0.0 kiosk / QR punch. OFF by default. */
   kioskEnabled: boolean;
+  /** 7.0.0 birthday / work-anniversary strip. OFF by default. */
+  celebrationsEnabled: boolean;
   /** 7.0.0 overtime: hours above the expected day and week. OFF by default. */
   overtimeEnabled: boolean;
   overtimeDailyThresholdHours: number;

@@ -32,6 +32,7 @@ import { Skeleton } from "../ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { AttendanceStatusBadge } from "./AttendanceStatusBadge";
 import { CardError, PersonAvatar, Segmented, SectionCard, todayKey } from "./attendance-ui";
+import { CelebrationsStrip } from "./Celebrations";
 
 const ALL = "ALL";
 const PAGE_SIZE = 100;
@@ -430,6 +431,8 @@ export function TeamLeaveCalendar() {
   const compact = days.length > 10;
 
   return (
+    <>
+    <CelebrationsStrip />
     <SectionCard
       title="Leave calendar"
       description="Who is off, by day. Pending requests are dashed. Busy days are hatched."
@@ -511,6 +514,7 @@ export function TeamLeaveCalendar() {
         <li className="flex items-center gap-1.5"><span className="busy-hatch inline-block h-5 w-8 rounded border border-border" aria-hidden="true" />Busy day, a quarter or more of the team off</li>
       </ul>
     </SectionCard>
+    </>
   );
 }
 

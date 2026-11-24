@@ -379,6 +379,15 @@ model User {
   /// When this person first accepted the workspace's location-consent wording for punch-in (V17 A2).
   /// NULL = never asked yet; the punch-in dialog shows the consent text before the first location read.
   attendanceLocationConsentAt      DateTime?
+  /// --- Celebrations (7.0.0) ------------------------------------------------------------------
+  /// Birthday, set by the person on their Profile. The YEAR is private: the API returns it only to
+  /// the person and to super admins (the tenant client omits this column by default — see
+  /// config/prisma.ts); the strip shows day and month only, never an age.
+  dateOfBirth                      DateTime?                         @db.Date
+  /// First working day, set by an admin. Drives work anniversaries (years shown only when >= 1).
+  joinDate                         DateTime?                         @db.Date
+  /// Leave me out of the birthday / anniversary strip.
+  celebrationsOptOut               Boolean                           @default(false)
   holidayCalendar                  HolidayCalendar?                  @relation(fields: [holidayCalendarId], references: [id], onDelete: SetNull)
   attendanceRecords                AttendanceRecord[]
   missedDayReasons                 MissedDayReason[]
@@ -6282,6 +6291,10 @@ model GlobalAttendanceSettings {
   /// A kiosk device shows a rotating signed QR code; a signed-in person scans it to punch in
   /// (attendance-kiosk.service.ts). OFF by default; also needs attendance on.
   kioskEnabled Boolean @default(false)
+
+  /// --- Celebrations (7.0.0) ------------------------------------------------------------------
+  /// The "this week" birthday and work-anniversary strip (celebrations.service.ts). OFF by default.
+  celebrationsEnabled Boolean @default(false)
 
   /// --- Overtime (7.0.0) ----------------------------------------------------------------------
   /// Timesheet hours above the expected day (the shift, else the workspace day) per day and per

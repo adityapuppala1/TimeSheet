@@ -17,6 +17,7 @@
  * segment gaps so state is never encoded by color alone.
  * WHO renders this: `App.tsx`'s `/app` (index) route.
  */
+import { CelebrationsStrip } from "../components/attendance/Celebrations";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "../components/PageHeader";
 import { Enter } from "../components/ui/enter";
@@ -529,6 +530,9 @@ export function Dashboard() {
           </>
         }
       />
+
+      {/* 7.0.0: renders nothing unless celebrations are on and someone in view has a day this week. */}
+      <CelebrationsStrip />
 
       <FocusLane
         hours={personalFailed ? null : derived.loggedHours}

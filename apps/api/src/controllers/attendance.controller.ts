@@ -11,6 +11,7 @@
  */
 import { optInHoliday, optOutHoliday } from "../services/holiday-opt-in.service.js";
 import { Router } from "express";
+import { getMyCelebrationProfile, listCelebrations, myCelebrationsBody, updateMyCelebrationProfile } from "../services/celebrations.service.js";
 import { z } from "zod";
 import { aiRateLimit } from "../middleware/ai-rate-limit.js";
 import { requireAuth } from "../middleware/auth.js";
@@ -67,6 +68,19 @@ const actorOf = (req: { user?: { id: string; role: string } }) => ({ id: req.use
 const regIdParam = (req: { params: Record<string, unknown> }) => z.string().min(1).max(64).parse(String(req.params.id));
 
 /* ----------------------------- Regularisation (7.0.0) ----------------------------- */
+
+// 7.0.0 birthday / work-anniversary strip (celebrations.service.ts). Reads answer { enabled:false } while off.
+attendanceRouter.get("/celebrations", requireAuth, async (req, res) => {
+  res.json(await listCelebrations({ id: req.user!.id, role: req.user!.role }));
+});
+
+attendanceRouter.get("/celebrations/me", requireAuth, async (req, res) => {
+  res.json(await getMyCelebrationProfile(req.user!.id));
+});
+
+attendanceRouter.put("/celebrations/me", requireAuth, validate(z.object({ body: myCelebrationsBody })), async (req, res) => {
+  res.json(await updateMyCelebrationProfile(req.user!.id, myCelebrationsBody.parse(req.body)));
+});
 
 attendanceRouter.get("/regularizations/me", requireAuth, async (req, res) => {
   res.json({ items: await listMyRegularizations(req.user!.id) });

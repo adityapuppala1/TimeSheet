@@ -9,6 +9,7 @@
  */
 import { LeaveProfileSummary } from "../components/attendance/LeaveProfileSummary";
 import { CalendarFeedCard } from "../components/CalendarFeedCard";
+import { CelebrationsProfileCard } from "../components/attendance/Celebrations";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { getCountries, getCountryCallingCode, parsePhoneNumberFromString, type CountryCode } from "libphonenumber-js/min";
@@ -534,6 +535,8 @@ export function Profile() {
         <AppearanceCard />
 
         <CalendarFeedCard />
+
+        <CelebrationsProfileCard />
 
         <Card>
           <CardHeader>

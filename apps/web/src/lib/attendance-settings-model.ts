@@ -85,6 +85,7 @@ export const FIELD_LABELS: Partial<Record<keyof AttendanceSettings, string>> = {
   regularizationMonthlyCap: "Corrections per month",
   requireSite: "Work site rule",
   kioskEnabled: "Kiosk punch-in",
+  celebrationsEnabled: "Birthdays and anniversaries",
   overtimeEnabled: "Overtime",
   overtimeDailyThresholdHours: "Overtime: daily threshold",
   overtimeWeeklyThresholdHours: "Overtime: weekly threshold",
@@ -192,6 +193,7 @@ export function settingsSections(leaveEntitled: boolean): NavSection[] {
     { id: "corrections", label: "Corrections", group: "Attendance" },
     { id: "sites", label: "Work sites", group: "Attendance" },
     { id: "kiosk", label: "Kiosk / QR punch", group: "Attendance" },
+    { id: "celebrations", label: "Birthdays & anniversaries", group: "Attendance" },
     { id: "overtime", label: "Overtime", group: "Attendance" }
   ];
   const leave: NavSection[] = [

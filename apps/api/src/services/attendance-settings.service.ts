@@ -85,6 +85,8 @@ export const attendanceSettingsBody = z
     requireSite: z.enum(["OFF", "BLOCK", "ALLOW_FLAGGED"]),
     // 7.0.0 kiosk / QR punch (attendance-kiosk.service.ts). OFF by default.
     kioskEnabled: z.boolean(),
+    // 7.0.0 birthday / work-anniversary strip (celebrations.service.ts). OFF by default.
+    celebrationsEnabled: z.boolean(),
     // 7.0.0 overtime (attendance-overtime.service.ts). OFF by default.
     overtimeEnabled: z.boolean(),
     overtimeDailyThresholdHours: z.number().min(0).max(24),
