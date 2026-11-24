@@ -14,7 +14,7 @@
  * WHO DECIDES: exactly the leave rule (leave.service.ts#resolveDecisionRight — the manager, the
  * admin pool, a super admin override, and an active delegate on the approver's behalf).
  *
- * THE CREDIT is a ledger row (ADJUSTMENT, +days) in the leave year of the worked day, keyed
+ * THE CREDIT is a ledger row (ADJUSTMENT, +days) in the leave year of the approval date, keyed
  * `COMPOFF:<requestId>` (UNIQUE), written in the same transaction as the PENDING → APPROVED
  * conditional update. Two racing approvals: one claims the row, the other gets 409; even without that
  * guard the second insert would fail on the key and roll back. EXPIRY (optional) is
@@ -35,7 +35,7 @@ import { emitDomainEvent } from "./domain-events.js";
 import { dispatchNotification } from "./notify.service.js";
 import { getPlanningSettings } from "./planning.service.js";
 import { NOT_DEACTIVATED } from "./people-visibility.service.js";
-import { settleLateMovement } from "./leave-settlement.service.js";
+import { isYearSettled, settleLateMovement } from "./leave-settlement.service.js";
 import { addDaysKey, leaveYearOf } from "./leave-calc.js";
 import { delegatesOf } from "./approval-delegation.service.js";
 import { assertLeaveOn, isLeaveOn, MAX_BACKDATE_DAYS, resolveDecisionRight, type Fallback } from "./leave.service.js";
@@ -312,9 +312,12 @@ export async function decideCompOff(input: { actor: { id: string; role: string; 
   const approve = input.decision === "APPROVE";
   const days = Number(request.days);
   const workDate = toKey(request.workDate);
-  const leaveYear = leaveYearOf(workDate, settings.leaveYearStartMonth ?? 1);
   const type = approve ? await compOffType(settings.compOffLeaveTypeCode ?? "CO") : null;
   const today = todayKeyFor(now, null, serverTimezone);
+  // The credit is granted TODAY, so it lands in the leave year of the approval date. Posting it to
+  // the worked day's year would drop it into a year the rollover may already have closed, where
+  // settleLateMovement would expire it or cap it to carryForwardMax.
+  const leaveYear = leaveYearOf(today, settings.leaveYearStartMonth ?? 1);
   const expiresOn = approve && settings.compOffExpiryDays ? addDaysKey(today, Number(settings.compOffExpiryDays)) : null;
   const person = await prisma.user.findUnique({ where: { id: request.userId }, select: { id: true, name: true, email: true, employeeCode: true } });
 
@@ -414,7 +417,11 @@ export async function expireCompOffCredits(now: Date = new Date()): Promise<numb
     if (!r.leaveTypeId || r.leaveYear == null) continue;
     await prisma.$transaction(async (tx) => {
       await lockPerson(tx, r.userId);
-      const sums = await tx.leaveBalanceLedger.groupBy({ by: ["leaveTypeId"], where: { userId: r.userId, leaveTypeId: r.leaveTypeId!, leaveYear: r.leaveYear! }, _sum: { delta: true } });
+      // The rollover may have carried the credit forward since it was granted: act on the year it
+      // now sits in (the first year from its own that is not closed yet).
+      let year = r.leaveYear!;
+      while (await isYearSettled(tx, r.userId, r.leaveTypeId!, year)) year += 1;
+      const sums = await tx.leaveBalanceLedger.groupBy({ by: ["leaveTypeId"], where: { userId: r.userId, leaveTypeId: r.leaveTypeId!, leaveYear: year }, _sum: { delta: true } });
       const balance = Number(sums[0]?._sum.delta ?? 0);
       const take = r2(Math.min(Number(r.days), Math.max(0, balance)));
       if (take > 0) {
@@ -424,7 +431,7 @@ export async function expireCompOffCredits(now: Date = new Date()): Promise<numb
             data: {
               userId: r.userId,
               leaveTypeId: r.leaveTypeId!,
-              leaveYear: r.leaveYear!,
+              leaveYear: year,
               delta: -take,
               kind: "ADJUSTMENT",
               reason: `Comp-off for ${toKey(r.workDate)} expired`,

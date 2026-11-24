@@ -8,7 +8,7 @@
  * (keyed, never below zero), and that turning it off changes nothing.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { addType, addUser, balanceOf, emptyWorld, fakePrisma, type LeaveWorld } from "../helpers/leave-world.js";
+import { addType, addUser, balanceOf, credit, emptyWorld, fakePrisma, type LeaveWorld } from "../helpers/leave-world.js";
 
 let world: LeaveWorld = emptyWorld();
 const entitlements: Record<string, boolean> = { leaveManagementEnabled: true };
@@ -141,7 +141,7 @@ describe("request and decide", () => {
     expect(notifications).toEqual([expect.objectContaining({ userId: "mgr", category: "leave.requested" })]);
   });
 
-  it("the manager approves: the CO type is credited once, keyed, in the worked day's leave year", async () => {
+  it("the manager approves: the CO type is credited once, keyed, in the approval date's leave year", async () => {
     const r = await svc.requestCompOff({ userId: "emp", workDate: SAT, now: NOW });
     const done = await svc.decideCompOff({ actor: actor("mgr"), requestId: r.id, decision: "APPROVE", now: NOW });
     expect(done.status).toBe("APPROVED");
@@ -237,5 +237,40 @@ describe("expiry", () => {
     await svc.decideCompOff({ actor: actor("mgr"), requestId: r.id, decision: "APPROVE", now: NOW });
     expect(await svc.expireCompOffCredits(new Date("2030-01-01T12:00:00Z"))).toBe(0);
     expect(balanceOf(world, "emp", "type-CO", 2026)).toBe(1);
+  });
+});
+
+describe("a credit across the leave-year rollover", () => {
+  // 2026-12-27 is a Sunday. 2026 is closed (EXPIRY row) before the approval on 2027-01-10.
+  const LATE = "2026-12-27";
+  const settle2026 = () => credit(world, "emp", "type-CO", 2026, 0, "EXPIRY", "EXPIRY:emp:type-CO:2026");
+
+  it("work in December approved after the rollover credits the approval date's year and expires there", async () => {
+    world.settings.compOffExpiryDays = 30;
+    log("emp", LATE, 8);
+    const r = await svc.requestCompOff({ userId: "emp", workDate: LATE, now: new Date("2026-12-28T10:00:00Z") });
+    settle2026();
+    const approvedAt = new Date("2027-01-10T10:00:00Z");
+    const done = await svc.decideCompOff({ actor: actor("mgr"), requestId: r.id, decision: "APPROVE", now: approvedAt });
+    expect(done.leaveYear).toBe(2027);
+    expect(balanceOf(world, "emp", "type-CO", 2027)).toBe(1);
+    expect(balanceOf(world, "emp", "type-CO", 2026)).toBe(0);
+    expect(world.leaveBalanceLedger.filter((l) => l.idempotencyKey === `COMPOFF:${r.id}`)).toHaveLength(1);
+    expect(await svc.expireCompOffCredits(new Date("2027-02-10T12:00:00Z"))).toBe(1);
+    expect(balanceOf(world, "emp", "type-CO", 2027)).toBe(0);
+  });
+
+  it("a credit carried into the next year by the rollover is expired from the year it now sits in", async () => {
+    world.settings.compOffExpiryDays = 60;
+    world.leaveType[0].carryForwardMax = 10;
+    log("emp", SAT, 8);
+    const r = await svc.requestCompOff({ userId: "emp", workDate: SAT, now: NOW });
+    await svc.decideCompOff({ actor: actor("mgr"), requestId: r.id, decision: "APPROVE", now: NOW });
+    // The rollover closes 2026 and carries the 1 day into 2027.
+    credit(world, "emp", "type-CO", 2026, -1, "EXPIRY", "EXPIRY:emp:type-CO:2026");
+    credit(world, "emp", "type-CO", 2027, 1, "CARRY_FORWARD", "CARRY:emp:type-CO:2027");
+    expect(await svc.expireCompOffCredits(new Date("2027-01-25T12:00:00Z"))).toBe(1);
+    expect(balanceOf(world, "emp", "type-CO", 2027)).toBe(0);
+    expect(balanceOf(world, "emp", "type-CO", 2026)).toBe(0);
   });
 });

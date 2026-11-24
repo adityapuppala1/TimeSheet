@@ -3551,7 +3551,7 @@ exists and is enabled; the migration inserts a disabled `CO`.
 - `GET /api/leave/comp-off/inbox` and `POST /api/leave/comp-off/inbox/:id/decision` `{ decision:
   APPROVE|REJECT, note? }` — the leave decision rule (manager, admin pool, super-admin override,
   delegate). An id that is not yours to decide and one that does not exist are the same 403. Approval
-  credits `days` to the configured type in the worked day's leave year as one ledger row keyed
+  credits `days` to the configured type in the approval date's leave year as one ledger row keyed
   `COMPOFF:<id>`; with an expiry, the nightly accrual run takes back what is unspent
   (`COMPOFF-EXPIRY:<id>`, never below zero). `POST /api/leave/admin/accrual/run` also reports
   `compOffExpired`.
