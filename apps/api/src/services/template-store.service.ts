@@ -45,7 +45,7 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "ticket.received_via_email": ["senderName", "ticketKey", "title", "priority", "appUrl"],
   "ticket.needs_review": ["targetName", "ticketKey", "title", "senderEmail", "confidence", "ticketId", "appUrl"],
   "ticket.reporter_resolved": ["reporterName", "ticketKey", "title", "outcome", "appUrl"],
-  "digest.weekly": ["name", "weekLabel", "summary", "tablesHtml", "appUrl"],
+  "digest.weekly": ["name", "weekLabel", "summary", "expectedHoursHtml", "tablesHtml", "appUrl"],
   "digest.practice_update": ["periodLabel", "headline", "sectionsHtml", "appUrl"],
   "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "ticketId", "appUrl"],
   "ticket.reopened_digest": ["ticketKey", "title", "closedBy", "scanSummary", "riskVerdict", "survivedText", "fixedText", "slaText", "ticketId", "appUrl"],
@@ -312,6 +312,8 @@ export function sampleVariables(key: string): Record<string, string> {
       appUrl: "https://timesphere.local"
     },
     "digest.weekly": {
+      expectedHoursHtml:
+        "<p style=\"margin:0 0 12px;padding:10px 14px;border:1px solid #E2E8F0;border-left:4px solid #0EA5E9;border-radius:8px;background-color:#FAFBFC;font-size:14px;\">Expected last week: 32h (after 1 holiday). Logged: 30.5h.</p>",
       tablesHtml: "<p style=\"color:#64748B;font-size:13px;\">(the tables of last week, month-to-date and year-to-date figures render here)</p>",
       name: "Dev Patel", weekLabel: "Jun 29 - Jul 5",
       summary: "It was a solid week — you resolved 4 tickets and logged 32.5 hours, mostly on the Payments module. HICS-OPS-12 (checkout timeout) is still open and worth a look Monday morning.",
@@ -644,7 +646,7 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
   },
   "digest.weekly": {
     subject: "Your week in review - {{weekLabel}}",
-    html: compiledTemplates.weeklyDigest({ name: V("name"), weekLabel: V("weekLabel"), summary: V("summary"), tablesHtml: V("tablesHtml") })
+    html: compiledTemplates.weeklyDigest({ name: V("name"), weekLabel: V("weekLabel"), summary: V("summary"), expectedHoursHtml: V("expectedHoursHtml"), tablesHtml: V("tablesHtml") })
   },
   "digest.security_weekly": {
     subject: "Security digest - week of {{weekLabel}}",

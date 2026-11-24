@@ -31,6 +31,7 @@ import { generateWeeklyDigest, getGlobalAISettings } from "../services/ai.servic
 import { templates } from "../services/mail-templates.js";
 import { buildDigestTables, buildPeriods, type DigestScope } from "../services/weekly-digest-data.service.js";
 import { fillScopeFor } from "../services/weekly-digest-daily-status.service.js";
+import { digestExpectedHoursHtml } from "../services/weekly-digest-expected.service.js";
 import { loadRequestUser } from "../services/principal.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
@@ -207,6 +208,13 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
     // managers) would turn into "everyone" for a manager.
     const fillScope = fillScopeFor(actor?.permissions ?? [], user._count.reports);
     const tablesHtml = await buildDigestTables({ userId: user.id, periods, scope, fillScope });
+    // 7.0.0: "" unless Attendance & Leave is on — the digest is unchanged with the module off.
+    const expectedHoursHtml = await digestExpectedHoursHtml(
+      user.id,
+      weekStartUtcDate.toISOString().slice(0, 10),
+      new Date(weekEndUtcDate.getTime() - DAY_MS).toISOString().slice(0, 10),
+      hoursLogged
+    );
 
     await dispatchNotification({
       userId: user.id,
@@ -220,13 +228,13 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
       link: "/app",
       email: {
         templateKey: "digest.weekly",
-        vars: { name: user.name, weekLabel, summary, tablesHtml },
+        vars: { name: user.name, weekLabel, summary, tablesHtml, expectedHoursHtml },
         fallback: {
           subject: `Your week in review — ${weekLabel}`,
           // The designed template, not a bare paragraph. This fallback previously emitted
           // `<p>Hi name</p><p>summary</p>`, and since almost nobody overrides a template that stub
           // WAS the weekly digest for every workspace — unstyled, and with none of the figures.
-          html: templates.weeklyDigest({ name: user.name, weekLabel, summary, tablesHtml })
+          html: templates.weeklyDigest({ name: user.name, weekLabel, summary, tablesHtml, expectedHoursHtml })
         }
       }
     });

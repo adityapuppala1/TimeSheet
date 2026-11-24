@@ -688,6 +688,8 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
       body: [
         heading("Hi {{name}}, here's your week"),
         lead("{{summary}}"),
+        // 7.0.0: empty unless Attendance & Leave is on (weekly-digest-expected.service.ts).
+        "{{expectedHoursHtml}}",
         button("Open your dashboard", "{{appUrl}}/app", COLORS.info),
         muted("This recap is AI-generated from your ticket and timesheet activity — turn it off anytime in your notification preferences.")
       ].join("\n")

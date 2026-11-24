@@ -835,11 +835,13 @@ export const templates = {
    * manager or administrator also gets the workspace user-by-user and project-by-project. Deciding
    * that in a template would put an access-control rule in a presentation file.
    */
-  weeklyDigest: (params: { name: string; weekLabel: string; summary: string; tablesHtml: string }) =>
+  weeklyDigest: (params: { name: string; weekLabel: string; summary: string; tablesHtml: string; expectedHoursHtml?: string }) =>
     shell(
       { title: `Your week in review — ${params.weekLabel}`, preheader: `Last week, month to date and year to date — ${params.weekLabel}.` },
       heading(`Hi ${escape(params.name.split(" ")[0])}, here is ${escape(params.weekLabel)}`) +
         (params.summary ? paragraph(escape(params.summary)) : "") +
+        // 7.0.0: pre-rendered by weekly-digest-expected.service.ts; "" with Attendance & Leave off.
+        (params.expectedHoursHtml ?? "") +
         params.tablesHtml +
         paragraph(button("Open your dashboard", appUrl("/app"))) +
         paragraph(
