@@ -77,6 +77,22 @@ Only when Attendance or Leave is on and in the plan; otherwise these screens are
 
 ### 🐛 Fixes
 
+- **Leave and holidays on the dashboard.** With Attendance & Leave on, "Target to date", "days logged of working days"
+  and the workforce "Logging per working day" no longer count holidays or your leave as days owed (a half day counts
+  half). Off, every figure is unchanged.
+- **Draft my week asks the missed-day reason.** A past working day with nothing logged now gets the same "Why was this
+  day missed?" fields inline, sent with that day's first draft.
+- **Admins can cancel approved leave.** SUPER_ADMIN and ADMIN can cancel someone's approved (even started) leave with a
+  required comment; the balance is reversed once through the ledger, the cancel is audited and the person is told.
+- **Optional holidays.** People opt into optional holidays from their holiday list
+  (`PUT/DELETE /api/attendance/me/optional-holidays/:id`), up to the calendar's new `maxOptionalPerYear`. An opted-in
+  optional holiday is a holiday for that person everywhere; one not taken is a working day.
+- **No orphaned leave documents.** A document is deleted when the leave request it came with is refused, and the daily
+  leave job sweeps unattached leave uploads older than 24 hours.
+- **Late tile counts everyone.** The Team board's Late figure is computed by the server over everyone in scope, not
+  the first 100 people.
+- **Dismissed suggestions stay dismissed** per person, audience and range
+  (`POST /api/attendance/analytics/:audience/insights/:id/dismiss`).
 - **Email channels save.** `PATCH /settings/notifications` now accepts a partial `emailRoleMutes` map, so saving one
   role's toggle no longer fails validation; omitting the map still leaves the stored one untouched.
 - **Timesheet at 320px.** The Draft my week actions wrap, so `/app/timesheet` no longer overflows horizontally on the
