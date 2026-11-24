@@ -74,6 +74,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { DataTable } from "../components/ui/data-table";
 import { TimesheetReportPanel } from "../components/TimesheetReportPanel";
 import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
+import { AttendanceLeaveSummary } from "../components/AttendanceLeaveSummary";
 import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
 import { TimesheetAnalyticsPanel } from "../components/TimesheetAnalyticsPanel";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
@@ -3250,6 +3251,9 @@ export function ReportsPage() {
       {/* Sits under the report because it answers the follow-up question. The report says where
           the hours went; this says whether that was a reasonable amount of them. */}
       <TimesheetAnalyticsPanel />
+
+      {/* 7.0.0: only with Attendance or Leave on and in the plan; renders nothing otherwise. */}
+      <AttendanceLeaveSummary />
 
       <Card>
         <CardHeader className="flex-col items-start justify-between gap-3 space-y-0 sm:flex-row sm:items-center">
