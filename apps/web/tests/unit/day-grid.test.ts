@@ -10,7 +10,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DayFillGrid, type FillRow } from "../../src/components/DayFillGrid";
 import { AttendanceLeaveSummary, attendanceSummaryCsv } from "../../src/components/AttendanceLeaveSummary";
 import { clampGridRange, dayNote, dayStatusLookup, gridCellState, isAbsentMarker, laneLabel, tallyPerson } from "../../src/lib/day-grid";
@@ -115,7 +115,17 @@ const gridProps = { rows, roster, rangeFrom: "2026-11-16", rangeTo: "2026-11-22"
 
 describe("DayFillGrid", () => {
   it("module off: renders byte-for-byte what 6.5.0 rendered", () => {
-    expect(renderToStaticMarkup(createElement(DayFillGrid, gridProps))).toMatchSnapshot();
+    // The grid formats dates in the runner's default locale; pin it so the snapshot is the same
+    // on an en-GB laptop and an en-US CI runner.
+    const real = Date.prototype.toLocaleDateString;
+    const spy = vi.spyOn(Date.prototype, "toLocaleDateString").mockImplementation(function (this: Date, locale, opts) {
+      return real.call(this, locale ?? "en-GB", opts);
+    });
+    try {
+      expect(renderToStaticMarkup(createElement(DayFillGrid, gridProps))).toMatchSnapshot();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("module on: leave and holiday cells, the absent marker and the team-row leave note", () => {
