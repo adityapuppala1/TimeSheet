@@ -3,9 +3,9 @@
  *
  * APPLY asks the server what a request would cost (GET /api/leave/me/preview mirrors the apply rules)
  * and shows exactly that: working days, the days it skipped and why, balance before and after, an
- * overlap with your own leave, and who will decide. There is no reason field on purpose: approvers
- * decide on the calendar and never see a person's private words, so asking for them would promise a
- * conversation the product does not have. A document is asked for only when the type's rule says so.
+ * overlap with your own leave, and who will decide. An optional reason goes to the approver ONLY
+ * (the API returns it solely to whoever may decide the request; never to team views, calendars or
+ * email). A document is asked for only when the type's rule says so.
  *
  * Phone: one column with a sticky bottom summary ("3 days · balance 3.5") that expands on tap.
  */
@@ -38,7 +38,7 @@ import {
 import { runInBackground } from "../../lib/run-in-background";
 import { useMediaQuery } from "../../lib/use-media-query";
 import { cn } from "../../lib/utils";
-import { leaveApi, type LeaveHalf, type LeaveRequestRow, type LeaveTypeRow } from "../../services/leave-api";
+import { applyPayload, leaveApi, type LeaveHalf, type LeaveRequestRow, type LeaveTypeRow } from "../../services/leave-api";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -46,6 +46,7 @@ import { DatePicker } from "../ui/date-picker";
 import { EmptyState } from "../ui/empty-state";
 import { FileDropzone } from "../ui/file-dropzone";
 import { Label } from "../ui/label";
+import { Textarea } from "../ui/textarea";
 import { Skeleton } from "../ui/skeleton";
 import { toast } from "../ui/toaster";
 import { CardError, FilterChip, PersonAvatar, Segmented, SectionCard, todayKey } from "./attendance-ui";
@@ -241,6 +242,7 @@ export function ApplyLeave() {
   const [startHalf, setStartHalf] = useState<LeaveHalf>("FULL");
   const [endHalf, setEndHalf] = useState<LeaveHalf>("FULL");
   const [doc, setDoc] = useState<File | null>(null);
+  const [reason, setReason] = useState("");
   const [expanded, setExpanded] = useState(false);
 
   const typeList = useMemo(() => types.data ?? [], [types.data]);
@@ -265,7 +267,7 @@ export function ApplyLeave() {
   const p = ready ? preview.data : undefined;
 
   const submit = useMutation({
-    mutationFn: () => leaveApi.apply({ leaveTypeId: typeId, startDate: start, endDate: end, startHalf, endHalf, document: doc }),
+    mutationFn: () => leaveApi.apply(applyPayload({ leaveTypeId: typeId, startDate: start, endDate: end, startHalf, endHalf, document: doc }, reason)),
     onSuccess: (r) => {
       toast.success(r.autoApproved ? "Leave approved" : "Request sent", { description: r.autoApproved ? "It is on your calendar." : "Your approver has been notified." });
       runInBackground(queryClient.invalidateQueries({ queryKey: ["leave"] }));
@@ -321,6 +323,18 @@ export function ApplyLeave() {
               You already have leave from {p.overlap.startDate} to {p.overlap.endDate}. Pick other dates, or cancel that request first.
             </p>
           )}
+        </SectionCard>
+
+        <SectionCard title="Reason" description="Optional." headingId="apply-reason">
+          <div className="grid gap-1.5">
+            <Label htmlFor="leave-reason" className="sr-only">
+              Reason
+            </Label>
+            <Textarea id="leave-reason" rows={3} maxLength={2000} value={reason} onChange={(e) => setReason(e.target.value)} aria-describedby="leave-reason-hint" />
+            <p id="leave-reason-hint" className="text-xs text-muted-foreground">
+              Visible only to your approver
+            </p>
+          </div>
         </SectionCard>
 
         {needsDoc && (

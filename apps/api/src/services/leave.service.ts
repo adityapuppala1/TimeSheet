@@ -46,6 +46,8 @@ import { templates } from "./mail-templates.js";
 import { getPlanningSettings } from "./planning.service.js";
 import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
 import { NOT_DEACTIVATED } from "./people-visibility.service.js";
+import { carryChange, isYearSettled, settleLateMovement, settlementFacts } from "./leave-settlement.service.js";
+import { runInBackground } from "../utils/run-in-background.js";
 import {
   accrualDueThrough,
   addDaysKey,
@@ -147,7 +149,7 @@ export const decisionBody = z
 
 export const bulkDecisionBody = z
   .object({
-    ids: z.array(z.string().min(1).max(64)).min(1).max(100),
+    ids: z.array(z.string().min(1).max(64)).min(1).max(50),
     decision: z.enum(["APPROVE", "REJECT"]),
     note: z.string().trim().max(2000).optional()
   })
@@ -604,13 +606,14 @@ export async function applyLeave(input: ApplyInput): Promise<ApplyResult> {
       const pending = (await pendingDays(tx, person.id, leaveYear, type.id)).get(type.id) ?? 0;
       // Accrual due by the START of the leave counts: monthly credits that land before the trip.
       const due = dueAccrual(type, leaveYear, startMonth, span.startDate < today ? today : span.startDate, person.createdAt);
-      const available = r2((facts?.ledgerSum ?? 0) + Math.max(0, due - (facts?.accrued ?? 0)) - pending);
+      const available = availableAfterAccrual(facts, due, pending);
       if (available < days) {
         throw new AppError(422, `Not enough ${type.name}: ${available} day(s) available, ${days} requested.`, {
           code: "LEAVE_INSUFFICIENT_BALANCE",
           details: { available, requested: days }
         });
       }
+      if (autoApprove) await assertSettledCarryCovers(tx, person.id, type, leaveYear, days, type.name, 422);
     }
 
     const row = await tx.leaveRequest.create({
@@ -652,6 +655,7 @@ export async function applyLeave(input: ApplyInput): Promise<ApplyResult> {
           idempotencyKey: `DEBIT:${row.id}`
         }
       });
+      await settleLateMovement(tx, { userId: person.id, type, year: leaveYear, sourceKey: `DEBIT:${row.id}` });
     }
     return row;
   });
@@ -722,11 +726,42 @@ async function activeApprover(managerId: string | null) {
   return prisma.user.findFirst({ where: { id: managerId, ...NOT_DEACTIVATED }, select: { id: true, name: true, avatarUrl: true } });
 }
 
-/** Ledger sum plus accrual due but not yet posted, minus what is already pending. */
-function availableAfterAccrual(facts: { ledgerSum: number; accrued: number } | undefined, due: number, pending = 0): number {
-  const ledger = facts?.ledgerSum ?? 0;
+/**
+ * Ledger sum plus accrual due but not yet posted, minus what is already pending. A year the
+ * rollover has closed is judged as it stood BEFORE closing (its EXPIRY transfers are added back):
+ * a December request decided in January draws on December's balance, and leave-settlement then
+ * moves the effect into the new year.
+ */
+function availableAfterAccrual(facts: { ledgerSum: number; accrued: number; expired: number } | undefined, due: number, pending = 0): number {
+  const ledger = (facts?.ledgerSum ?? 0) + (facts?.expired ?? 0);
   const posted = facts?.accrued ?? 0;
   return r2(ledger + Math.max(0, due - posted) - pending);
+}
+
+/**
+ * A closed year's days may already have been carried into the next year AND spent there. Taking
+ * `days` more from the closed year shrinks that carry (leave-settlement.service.ts); refuse when
+ * the next year cannot absorb the shrink (no type that forbids a negative balance goes negative).
+ */
+async function assertSettledCarryCovers(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  type: Pick<LeaveType, "id" | "carryForwardMax">,
+  year: number,
+  days: number,
+  label: string,
+  status: 409 | 422
+): Promise<void> {
+  if (!(await isYearSettled(tx, userId, type.id, year))) return;
+  const f = await settlementFacts(tx, userId, type.id, year);
+  const change = carryChange(r2(f.activity - days), f.carried, num(type.carryForwardMax));
+  if (change < 0 && r2(f.newYearSum + change) < 0) {
+    const left = r2(f.newYearSum);
+    throw new AppError(status, `${label}: ${year} has been closed and its carried-forward days are already used in ${year + 1} (${left} day(s) left there).`, {
+      code: "LEAVE_INSUFFICIENT_BALANCE",
+      details: { available: left, requested: days, closedYear: year }
+    });
+  }
 }
 
 /**
@@ -849,8 +884,9 @@ async function notifyApprovers(request: RequestRow, person: { name: string }, fa
     employeeName: person.name,
     leaveType: request.leaveType.name,
     dates: datesLabel(request),
-    days: String(num(request.days)),
-    reason: request.reason ?? "-"
+    days: String(num(request.days))
+    // No reason on purpose: an email outlives the decision and is copied to the super-admin BCC.
+    // The approver reads the reason (and any document) in the app.
   };
   for (const r of recipients) {
     await dispatchNotification({
@@ -917,6 +953,20 @@ export interface DecideInput {
 }
 
 export async function decideLeave(input: DecideInput): Promise<PublicLeaveRequest> {
+  return decideOne(input, "await");
+}
+
+/**
+ * Re-check the balance on approval? In-app requests always (unless the type allows a negative
+ * balance). External ones (HRMS / API / CSV) only when the workspace does NOT trust the source's
+ * approvals: an untrusted HRMS "approved" is just a request, and must not overdraw.
+ */
+function needsBalanceCheck(type: Pick<LeaveType, "allowNegative">, source: AttendanceSourceKind, trustExternal: boolean): boolean {
+  if (type.allowNegative) return false;
+  return !EXTERNAL_SOURCES.has(source) || !trustExternal;
+}
+
+async function decideOne(input: DecideInput, notify: "await" | "background"): Promise<PublicLeaveRequest> {
   const now = input.now ?? new Date();
   const settings = await getAttendanceSettings();
   const fallback: Fallback = settings.leaveApprovalFallback ?? "ADMINS";
@@ -953,18 +1003,18 @@ export async function decideLeave(input: DecideInput): Promise<PublicLeaveReques
       throw new AppError(409, "This request has just been decided by someone else.", { code: "LEAVE_ALREADY_DECIDED" });
     }
     if (approve) {
-      // An HRMS / API request already said what the balance is; only in-app requests are re-checked.
-      if (!type.allowNegative && !EXTERNAL_SOURCES.has(request.source)) {
+      if (needsBalanceCheck(type, request.source, Boolean(settings.trustExternalApprovals))) {
         const startMonth = settings.leaveYearStartMonth ?? 1;
         const facts = (await ledgerFacts(tx, request.userId, request.leaveYear, type.id)).get(type.id);
         const due = dueAccrual(type, request.leaveYear, startMonth, toKey(request.startDate), request.user.createdAt);
-        const balance = r2((facts?.ledgerSum ?? 0) + Math.max(0, due - (facts?.accrued ?? 0)));
+        const balance = availableAfterAccrual(facts, due);
         if (balance < days) {
           throw new AppError(409, `${request.user.name} has ${balance} day(s) of ${type.name} left; this request needs ${days}.`, {
             code: "LEAVE_INSUFFICIENT_BALANCE",
             details: { available: balance, requested: days }
           });
         }
+        await assertSettledCarryCovers(tx, request.userId, type, request.leaveYear, days, `${request.user.name}'s ${type.name}`, 409);
       }
       await tx.leaveBalanceLedger.create({
         data: {
@@ -979,6 +1029,7 @@ export async function decideLeave(input: DecideInput): Promise<PublicLeaveReques
           idempotencyKey: `DEBIT:${request.id}`
         }
       });
+      await settleLateMovement(tx, { userId: request.userId, type, year: request.leaveYear, sourceKey: `DEBIT:${request.id}`, actorId: input.actor.id });
     }
     return tx.leaveRequest.findUniqueOrThrow({ where: { id: request.id }, include: REQUEST_INCLUDE });
   });
@@ -990,9 +1041,14 @@ export async function decideLeave(input: DecideInput): Promise<PublicLeaveReques
     ...(overridden ? { designatedApproverId: request.approverId } : {})
   });
   emitDomainEvent(approve ? "leave.approved" : "leave.rejected", webhookPayload(decided, request.user));
-  await notifyRequester(decided, approve ? "approved" : "rejected", input.actor.name ?? "your approver");
+  const told = notifyRequester(decided, approve ? "approved" : "rejected", input.actor.name ?? "your approver");
+  if (notify === "await") await told;
+  else runInBackground(told, "leave.decided notify");
   return publicRequest(decided);
 }
+
+/** One bulk call decides at most this many (the inbox selects a page; 50 keeps the response quick). */
+export const BULK_DECISION_MAX = 50;
 
 export async function decideMany(
   actor: DecideInput["actor"],
@@ -1000,11 +1056,15 @@ export async function decideMany(
   decision: "APPROVE" | "REJECT",
   note?: string | null
 ): Promise<Array<{ id: string; ok: boolean; status?: LeaveRequestStatus; error?: string; httpStatus?: number }>> {
+  const unique = [...new Set(ids)];
+  if (unique.length > BULK_DECISION_MAX) throw new AppError(422, `Decide at most ${BULK_DECISION_MAX} requests at a time.`);
   const results = [];
   // One by one: each is its own transaction, so one stale or out-of-scope id never undoes the rest.
-  for (const id of [...new Set(ids)]) {
+  // The requester emails go out in the background: an SMTP round-trip per item would hold the
+  // response open for minutes.
+  for (const id of unique) {
     try {
-      const r = await decideLeave({ actor, requestId: id, decision, note });
+      const r = await decideOne({ actor, requestId: id, decision, note }, "background");
       results.push({ id, ok: true, status: r.status });
     } catch (error) {
       if (!(error instanceof AppError)) throw error;
@@ -1064,6 +1124,13 @@ export async function cancelLeave(input: CancelInput): Promise<PublicLeaveReques
           actorId: input.actor?.id ?? null,
           idempotencyKey: `REVERSAL:${request.id}`
         }
+      });
+      await settleLateMovement(tx, {
+        userId: request.userId,
+        type: request.leaveType,
+        year: request.leaveYear,
+        sourceKey: `REVERSAL:${request.id}`,
+        actorId: input.actor?.id ?? null
       });
     }
     return tx.leaveRequest.findUniqueOrThrow({ where: { id: request.id }, include: REQUEST_INCLUDE });
@@ -1143,8 +1210,30 @@ export async function listInbox(
       include: REQUEST_INCLUDE
     })
   ]);
-  const after = await balanceAfterFor(rows);
-  return { total, page, pageSize, items: rows.map((r) => ({ ...publicRequest(r), balanceAfter: after.get(r.id) ?? null })) };
+  const [after, mayDecide] = await Promise.all([balanceAfterFor(rows), decisionRightsFor(actor, rows, settings.leaveApprovalFallback ?? "ADMINS")]);
+  return {
+    total,
+    page,
+    pageSize,
+    items: rows.map((r) => {
+      const item = publicRequest(r);
+      // The reason and document are for whoever DECIDES this request, and nobody else.
+      const visible = mayDecide(r) ? item : { ...item, reason: null, attachment: null };
+      return { ...visible, balanceAfter: after.get(r.id) ?? null };
+    })
+  };
+}
+
+/**
+ * Per row: does `actor` hold a decision right over it (decisionRight, the one rule)? The inbox
+ * query already expresses the same rule, so this normally passes every row — it is the second
+ * lock on the door, so a future change to inboxWhere cannot leak a reason by itself.
+ */
+async function decisionRightsFor(actor: { id: string; role: string }, rows: ReadonlyArray<RequestRow>, fallback: Fallback) {
+  const approverIds = [...new Set(rows.map((r) => r.approverId).filter((x): x is string => Boolean(x)))];
+  const active = approverIds.length ? await prisma.user.findMany({ where: { id: { in: approverIds }, ...NOT_DEACTIVATED }, select: { id: true } }) : [];
+  const activeIds = new Set(active.map((u) => u.id));
+  return (r: RequestRow) => decisionRight(actor, r, Boolean(r.approverId && activeIds.has(r.approverId)), fallback) !== null;
 }
 
 /**
@@ -1170,7 +1259,7 @@ async function balanceAfterFor(rows: ReadonlyArray<RequestRow>): Promise<Map<str
     if (!facts.has(key)) facts.set(key, await ledgerFacts(prisma, r.userId, r.leaveYear));
     const f = facts.get(key)!.get(type.id);
     const due = dueAccrual(type, r.leaveYear, startMonth, toKey(r.startDate), joined.get(r.userId) ?? null);
-    out.set(r.id, r2((f?.ledgerSum ?? 0) + Math.max(0, due - (f?.accrued ?? 0)) - num(r.days)));
+    out.set(r.id, r2(availableAfterAccrual(f, due) - num(r.days)));
   }
   return out;
 }

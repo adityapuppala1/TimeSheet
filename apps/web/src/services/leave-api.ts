@@ -138,6 +138,21 @@ export type LeaveTypeInput = Omit<LeaveTypeRow, "id" | "sortOrder"> & { sortOrde
 
 export const LEAVE_STATUS_KEY = ["leave", "status"] as const;
 
+/** Mirrors the API's cap on one bulk decision (leave.service.ts#BULK_DECISION_MAX). */
+export const BULK_DECISION_MAX = 50;
+
+export function chunkIds(ids: readonly string[], size: number): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
+  return out;
+}
+
+/** The Apply body: the optional reason trimmed, and left out entirely when empty. */
+export function applyPayload(fields: Omit<ApplyPayload, "reason">, reason: string): ApplyPayload {
+  const trimmed = reason.trim();
+  return trimmed ? { ...fields, reason: trimmed } : { ...fields };
+}
+
 export const leaveApi = {
   status: async () => (await api.get<{ enabled: boolean; leaveYearStartMonth: number }>("/leave/status")).data,
   types: async () => (await api.get<{ items: LeaveTypeRow[] }>("/leave/types")).data.items,
@@ -161,8 +176,14 @@ export const leaveApi = {
   decide: async (id: string, decision: "APPROVE" | "REJECT", note?: string) =>
     (await api.post<LeaveRequestRow>(`/leave/inbox/${id}/decision`, { decision, note })).data,
   // validateStatus lets the 207 body through whatever the per-item outcome was.
-  bulkDecide: async (ids: string[], decision: "APPROVE" | "REJECT", note?: string) =>
-    (await api.post<{ results: BulkResult[] }>("/leave/inbox/bulk-decision", { ids, decision, note })).data.results,
+  // The server decides at most BULK_DECISION_MAX per call; a bigger selection goes in chunks, in order.
+  bulkDecide: async (ids: string[], decision: "APPROVE" | "REJECT", note?: string) => {
+    const results: BulkResult[] = [];
+    for (const chunk of chunkIds(ids, BULK_DECISION_MAX)) {
+      results.push(...(await api.post<{ results: BulkResult[] }>("/leave/inbox/bulk-decision", { ids: chunk, decision, note })).data.results);
+    }
+    return results;
+  },
   team: async (from: string, to: string) => (await api.get<{ from: string; to: string; items: TeamLeaveItem[] }>("/leave/team", { params: { from, to } })).data.items
 };
 
@@ -170,7 +191,11 @@ const ADMIN = "/leave/admin";
 
 export const leaveAdminApi = {
   settings: async () =>
-    (await api.get<{ settings: LeaveSettings; entitled: boolean; effective: boolean }>(`${ADMIN}/settings`)).data,
+    (
+      await api.get<{ settings: LeaveSettings; entitled: boolean; effective: boolean; leaveYearLocked?: boolean; leaveYearLockedMessage?: string | null }>(
+        `${ADMIN}/settings`
+      )
+    ).data,
   updateSettings: async (payload: Partial<LeaveSettings>) => (await api.put<LeaveSettings>(`${ADMIN}/settings`, payload)).data,
   types: async () => (await api.get<{ items: LeaveTypeRow[] }>(`${ADMIN}/types`)).data.items,
   createType: async (payload: LeaveTypeInput & { code: string }) => (await api.post<LeaveTypeRow>(`${ADMIN}/types`, payload)).data,

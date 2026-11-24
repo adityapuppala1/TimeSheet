@@ -96,7 +96,9 @@ describe("year-end rollover", () => {
 
   it("a debt carries in full", async () => {
     world.leaveType.find((t) => t.code === "CL")!.allowNegative = true;
-    credit(world, "a", "type-CL", 2026, -2, "DEBIT");
+    // The year's 6 (posted, as the worker would have in January) and 8 used: 2 in debt.
+    credit(world, "a", "type-CL", 2026, 6, "ACCRUAL", "ACCRUAL:a:type-CL:2026-01");
+    credit(world, "a", "type-CL", 2026, -8, "DEBIT");
     await runLeaveAccrual(JAN_2);
     expect(balanceOf(world, "a", "type-CL", 2026)).toBe(0);
     expect(balanceOf(world, "a", "type-CL", 2027)).toBe(4); // −2 carried + 6 upfront

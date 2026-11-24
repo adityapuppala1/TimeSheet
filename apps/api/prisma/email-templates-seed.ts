@@ -428,11 +428,13 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
         infoCard(
           [
             { label: "Dates", value: "{{dates}}", emphasize: true },
-            { label: "Days", value: "{{days}}" },
-            { label: "Reason", value: "{{reason}}" }
+            { label: "Days", value: "{{days}}" }
           ],
           COLORS.accent
         ),
+        // No reason here on purpose: it is personal, and an email outlives the decision (and is
+        // copied to the super-admin BCC). The approver reads it in the app.
+        lead("Open TimeSphere to review the request and any reason or document attached to it."),
         button("Review the request", "{{appUrl}}/app/attendance", COLORS.accent)
       ].join("\n"),
       footerNote: "You are receiving this because you approve leave for this person in TimeSphere."

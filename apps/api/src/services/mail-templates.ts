@@ -491,12 +491,13 @@ export const templates = {
     ),
 
   /** V17 Phase B: a leave request waiting on its approver. */
-  leaveRequested: (params: { approverName: string; employeeName: string; leaveType: string; dates: string; days: string; reason: string }) =>
+  leaveRequested: (params: { approverName: string; employeeName: string; leaveType: string; dates: string; days: string }) =>
     shell(
       { title: "Leave request", preheader: `${params.employeeName} requested ${params.leaveType}.`, accentColor: ACCENT },
       heading(`Hi ${escape(params.approverName.split(" ")[0])}, a leave request needs your decision`) +
         paragraph(`<strong>${escape(params.employeeName)}</strong> asked for ${escape(params.leaveType)}: ${escape(params.dates)} (${escape(params.days)} day(s)).`) +
-        paragraph(`Reason: ${escape(params.reason)}`) +
+        // No reason in the email: it is personal and an email outlives the decision.
+        paragraph("Open TimeSphere to review the request and any reason or document attached to it.") +
         paragraph(button("Review the request", appUrl("/app/attendance"), ACCENT))
     ),
 

@@ -33,7 +33,7 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   // V17 A4 attendance
   "reminder.punch_in": ["name", "date", "appUrl"],
   // V17 Phase B leave
-  "leave.requested": ["approverName", "employeeName", "leaveType", "dates", "days", "reason", "appUrl"],
+  "leave.requested": ["approverName", "employeeName", "leaveType", "dates", "days", "appUrl"],
   "leave.decided": ["name", "leaveType", "decision", "decidedBy", "dates", "days", "note", "appUrl"],
 
   // Ticketing
@@ -237,7 +237,7 @@ export function sampleVariables(key: string): Record<string, string> {
     "reminder.punch_in": { name: "Aanya Sharma", date: "2026-05-27", appUrl: "https://timesphere.local" },
     "leave.requested": {
       approverName: "Mira Kapoor", employeeName: "Aanya Sharma", leaveType: "Privilege leave",
-      dates: "2026-06-01 to 2026-06-03", days: "3", reason: "Family wedding", appUrl: "https://timesphere.local"
+      dates: "2026-06-01 to 2026-06-03", days: "3", appUrl: "https://timesphere.local"
     },
     "leave.decided": {
       name: "Aanya Sharma", leaveType: "Privilege leave", decision: "approved", decidedBy: "Mira Kapoor",
@@ -546,7 +546,7 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
     subject: "{{employeeName}} requested {{days}} day(s) of {{leaveType}}",
     html: compiledTemplates.leaveRequested({
       approverName: V("approverName"), employeeName: V("employeeName"), leaveType: V("leaveType"),
-      dates: V("dates"), days: V("days"), reason: V("reason")
+      dates: V("dates"), days: V("days")
     })
   },
   "leave.decided": {

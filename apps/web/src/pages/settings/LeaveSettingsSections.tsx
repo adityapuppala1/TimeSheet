@@ -260,8 +260,17 @@ export function LeaveSettingsFields({
   values,
   readOnly,
   enabledTypes,
+  yearLockedMessage = null,
   onChange
-}: Readonly<{ saved: LeaveSettings; values: LeaveSettings; readOnly: boolean; enabledTypes: number; onChange: (patch: Partial<LeaveSettings>) => void }>) {
+}: Readonly<{
+  saved: LeaveSettings;
+  values: LeaveSettings;
+  readOnly: boolean;
+  enabledTypes: number;
+  /** Set once leave has been requested or balances posted: the start month can no longer change. */
+  yearLockedMessage?: string | null;
+  onChange: (patch: Partial<LeaveSettings>) => void;
+}>) {
   return (
     <div className="grid min-w-0 gap-3">
       <StagedToggle
@@ -277,9 +286,9 @@ export function LeaveSettingsFields({
         <StagedSelect
           id="leave-year-start"
           label="Leave year starts in"
-          hint="Balances reset, carry forward and expire on this boundary. Change it before anyone has taken leave."
+          hint={yearLockedMessage ?? "Balances reset, carry forward and expire on this boundary. Change it before anyone has taken leave."}
           value={String(values.leaveYearStartMonth)}
-          disabled={readOnly}
+          disabled={readOnly || Boolean(yearLockedMessage)}
           onChange={(v) => onChange({ leaveYearStartMonth: Number(v) })}
           options={MONTHS.map((m, i) => [String(i + 1), m] as [string, string])}
         />

@@ -31,7 +31,7 @@ const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "reminder.escalation.employee": ["name", "missedDate", "managerName", "appUrl"],
   "reminder.escalation.manager": ["managerName", "employeeName", "missedDate", "employeeEmail", "appUrl"],
   "reminder.punch_in": ["name", "date", "appUrl"],
-  "leave.requested": ["approverName", "employeeName", "leaveType", "dates", "days", "reason", "appUrl"],
+  "leave.requested": ["approverName", "employeeName", "leaveType", "dates", "days", "appUrl"],
   "leave.decided": ["name", "leaveType", "decision", "decidedBy", "dates", "days", "note", "appUrl"],
   "ticket.assigned": ["assigneeName", "ticketKey", "title", "priority", "assignedBy", "appUrl"],
   "ticket.status_changed": ["ticketKey", "title", "from", "to", "changedBy", "appUrl"],

@@ -44,6 +44,7 @@ import {
   type PresetId,
   type SettingsDraft
 } from "../../lib/attendance-settings-model";
+import { planSettingsSave, runSettingsSave } from "../../lib/attendance-settings-save";
 import { runInBackground } from "../../lib/run-in-background";
 import { cn } from "../../lib/utils";
 import {
@@ -105,12 +106,27 @@ export function AttendanceSettingsCard({ readOnly }: { readOnly: boolean }) {
 
   const saveAll = useMutation({
     mutationFn: async () => {
-      if (!saved || !savedLeave) throw new Error("not loaded");
-      const payload = changesPayload(saved, draft);
-      if (Object.keys(payload).length > 0) await attendanceAdminApi.settings.update(payload);
-      if (leaveChanges.length > 0) await leaveAdminApi.updateSettings(leaveDraft);
+      // Only attendance must be loaded: on the Team plan (or when the leave GET failed) there is no leave half.
+      if (!saved) throw new Error("not loaded");
+      const plan = planSettingsSave({ attendancePayload: changesPayload(saved, draft), leaveLoaded: Boolean(savedLeave), leaveChangeCount: leaveChanges.length, leaveDraft });
+      const outcome = await runSettingsSave(plan, { saveAttendance: attendanceAdminApi.settings.update, saveLeave: leaveAdminApi.updateSettings });
+      if (outcome.status === "failed") throw outcome.error;
+      return outcome;
     },
-    onSuccess: afterSave,
+    onSuccess: (outcome) => {
+      if (outcome.status === "saved") {
+        afterSave();
+        return;
+      }
+      // Half-saved: the attendance part is live, so it leaves the staged set; only leave stays staged.
+      setDraft({});
+      setConfirm(null);
+      runInBackground(queryClient.invalidateQueries({ queryKey: SETTINGS_KEY }));
+      runInBackground(queryClient.invalidateQueries({ queryKey: MY_TODAY_QUERY_KEY }));
+      toast.error("Attendance settings saved; leave settings were not", {
+        description: serverMessage(outcome.error, "Your leave changes are still staged. Try saving again.")
+      });
+    },
     onError: (err: unknown) => {
       toast.error("Could not save", { description: serverMessage(err, "Nothing was lost; your changes are still staged.") });
       setConfirm(null);
@@ -418,10 +434,10 @@ export function AttendanceSettingsCard({ readOnly }: { readOnly: boolean }) {
   );
 }
 
-function LeaveSettingsPanel({ query, saved, values, readOnly, enabledTypes, onChange }: Readonly<{ query: { isLoading: boolean; isError: boolean; refetch: () => Promise<unknown> }; saved: LeaveSettings | undefined; values: LeaveSettings | null; readOnly: boolean; enabledTypes: number; onChange: (patch: Partial<LeaveSettings>) => void }>) {
+function LeaveSettingsPanel({ query, saved, values, readOnly, enabledTypes, onChange }: Readonly<{ query: { isLoading: boolean; isError: boolean; refetch: () => Promise<unknown>; data?: { leaveYearLockedMessage?: string | null } }; saved: LeaveSettings | undefined; values: LeaveSettings | null; readOnly: boolean; enabledTypes: number; onChange: (patch: Partial<LeaveSettings>) => void }>) {
   if (query.isLoading) return <Skeleton className="h-40 w-full" />;
   if (query.isError || !values || !saved) return <CardError message="Leave settings could not be loaded." onRetry={() => runInBackground(query.refetch())} />;
-  return <LeaveSettingsFields saved={saved} values={values} readOnly={readOnly} enabledTypes={enabledTypes} onChange={onChange} />;
+  return <LeaveSettingsFields saved={saved} values={values} readOnly={readOnly} enabledTypes={enabledTypes} yearLockedMessage={query.data?.leaveYearLockedMessage ?? null} onChange={onChange} />;
 }
 
 function DirtyBar({ changes, saving, onDiscard, onSave }: Readonly<{ changes: Array<{ label: string; from: string; to: string }>; saving: boolean; onDiscard: () => void; onSave: () => void }>) {

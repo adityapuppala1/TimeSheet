@@ -14,7 +14,11 @@
  *
  * ROLLOVER: on (or after) the first day of a leave year, each person/type's CLOSING balance is
  * settled — up to carryForwardMax carries into the new year, the rest expires (leave-calc.ts#
- * rolloverDeltas). A debt (negative balance on an allowNegative type) carries in full.
+ * rolloverDeltas). A debt (negative balance on an allowNegative type) carries in full. The closing
+ * year's due-but-unposted accrual is posted first, so a year is never settled short. Movement in a
+ * year AFTER it was settled (a December request approved in January, a cancellation, a backdated
+ * debit) is re-settled into the new year by leave-settlement.service.ts; this run also heals any
+ * residual such a movement left by racing it (reconcileSettled).
  *
  * Sends nothing. It writes ledger rows only; there is no email leg to worry about on a dev box.
  */
@@ -26,7 +30,8 @@ import { requireTenantContext } from "../config/tenant-context.js";
 import { getAttendanceSettings } from "../services/attendance-settings.service.js";
 import { todayKeyFor } from "../services/attendance-day-status.js";
 import { isLeaveOn } from "../services/leave.service.js";
-import { accrualDueThrough, leaveYearOf, rolloverDeltas } from "../services/leave-calc.js";
+import { accrualDueThrough, leaveYearBounds, leaveYearOf, rolloverDeltas } from "../services/leave-calc.js";
+import { settleLateMovement } from "../services/leave-settlement.service.js";
 import { COUNTED_PEOPLE } from "../services/people-visibility.service.js";
 import { runOncePerTick } from "../services/job-claim.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
@@ -55,21 +60,67 @@ export async function runLeaveAccrual(now: Date = new Date()): Promise<AccrualRu
   ]);
   if (types.length === 0 || people.length === 0) return { accrued: 0, rolledOver: 0 };
 
-  const accrued = await insertKeyed(accrualRows(people, types, year, startMonth, today));
+  const where = { leaveYear: year - 1, userId: { in: people.map((p) => p.id) }, leaveTypeId: { in: types.map((t) => t.id) } };
+  const accrued = (await insertKeyed(await closingAccrualRows(people, types, year, startMonth, where))) + (await insertKeyed(accrualRows(people, types, year, startMonth, today)));
 
   // Rollover: settle the closing year once (the keys make every later run a no-op).
-  const sums = await prisma.leaveBalanceLedger.groupBy({
-    by: ["userId", "leaveTypeId"],
-    where: { leaveYear: year - 1, userId: { in: people.map((p) => p.id) }, leaveTypeId: { in: types.map((t) => t.id) } },
-    _sum: { delta: true }
-  });
+  const sums = await prisma.leaveBalanceLedger.groupBy({ by: ["userId", "leaveTypeId"], where, _sum: { delta: true } });
   const typeById = new Map(types.map((t) => [t.id, t]));
   const rollRows = sums.flatMap((s) => {
     const t = typeById.get(s.leaveTypeId);
     return t ? rolloverRows(s.userId, t, Number(s._sum.delta ?? 0), year) : [];
   });
-  const rolledOver = await insertKeyed(rollRows);
+  let rolledOver = await insertKeyed(rollRows);
+  rolledOver += await reconcileSettled(where, typeById, year - 1);
   return { accrued, rolledOver };
+}
+
+/**
+ * The closing year's due-but-unposted slots (a server that was down for December's run, or the 1st
+ * of the year before 02:20): a year must be settled WITH its full accrual. Only for a person/type
+ * that has ledger activity in the closing year and is NOT settled yet — a type created this year
+ * must not be handed last year's quota (and then carry it), and a settled year is never reopened
+ * by accrual. Keyed, so a slot already posted is skipped.
+ */
+async function closingAccrualRows(
+  people: ReadonlyArray<{ id: string; createdAt: Date }>,
+  types: readonly TypeRow[],
+  year: number,
+  startMonth: number,
+  where: Prisma.LeaveBalanceLedgerWhereInput
+): Promise<Prisma.LeaveBalanceLedgerCreateManyInput[]> {
+  const groups = await prisma.leaveBalanceLedger.groupBy({ by: ["userId", "leaveTypeId", "kind"], where, _sum: { delta: true } });
+  const active = new Set(groups.map((g) => `${g.userId}|${g.leaveTypeId}`));
+  const settled = new Set(groups.filter((g) => g.kind === "EXPIRY").map((g) => `${g.userId}|${g.leaveTypeId}`));
+  const closingEnd = leaveYearBounds(year - 1, startMonth).to;
+  return accrualRows(people, types, year - 1, startMonth, closingEnd).filter((r) => {
+    const k = `${r.userId}|${r.leaveTypeId}`;
+    return active.has(k) && !settled.has(k);
+  });
+}
+
+/**
+ * A settled year must sit at zero. A late movement normally re-settles itself in its own
+ * transaction (leave-settlement.service.ts); one that raced this run (written between the sums
+ * above and the EXPIRY insert) would be left behind. Re-settle any residual. The source key names
+ * the year's row count, so a given state is settled once however often this runs.
+ */
+async function reconcileSettled(where: Prisma.LeaveBalanceLedgerWhereInput, typeById: Map<string, TypeRow>, closing: number): Promise<number> {
+  const after = await prisma.leaveBalanceLedger.groupBy({ by: ["userId", "leaveTypeId"], where, _sum: { delta: true }, _count: { _all: true } });
+  let written = 0;
+  for (const s of after) {
+    const t = typeById.get(s.leaveTypeId);
+    if (!t || Math.round(Number(s._sum.delta ?? 0) * 100) === 0) continue;
+    const count = (s as { _count?: { _all?: number } })._count?._all ?? 0;
+    const sourceKey = `RECON:${s.userId}:${t.id}:${closing}:${count}`;
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM \`User\` WHERE id = ${s.userId} FOR UPDATE`;
+      const exists = await tx.leaveBalanceLedger.findFirst({ where: { idempotencyKey: `SETTLE-CLOSE:${sourceKey}` }, select: { id: true } });
+      if (exists) return;
+      written += (await settleLateMovement(tx, { userId: s.userId, type: t, year: closing, sourceKey })).written;
+    });
+  }
+  return written;
 }
 
 type TypeRow = { id: string; code: string; annualQuota: unknown; accrual: "YEARLY_UPFRONT" | "MONTHLY_PRORATA"; carryForwardMax: unknown };

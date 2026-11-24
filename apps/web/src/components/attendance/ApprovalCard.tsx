@@ -3,9 +3,10 @@
  * the Team rail, the Approvals tab on a phone, and the bulk list.
  *
  * What it shows an approver: who, which type, the dates, the working days, what their balance will be
- * afterwards, and an advisory line when others are off at the same time. What it NEVER shows: the
- * reason the person wrote, a decision note or the document itself. A manager decides on the
- * calendar, not on someone's private words (a user decision, recorded in the design brief).
+ * afterwards, the reason the person wrote (if any) and whether a document is attached, and an
+ * advisory line when others are off at the same time. The reason is for the APPROVER only (a lead
+ * decision): the API returns it solely to whoever may decide the request, and it never appears on a
+ * team view, a calendar or in an email.
  *
  * Reject is secondary and needs a comment: it opens an inline field in the card (no modal) and the
  * button stays disabled until there is one.
@@ -36,12 +37,19 @@ export interface ApprovalCardProps {
   error?: string | null;
 }
 
+/** The reason to show the approver, or null when there is none (or the API withheld it). */
+export function approverReason(request: Pick<LeaveRequestRow, "reason">): string | null {
+  const text = request.reason?.trim();
+  return text || null;
+}
+
 export function ApprovalCard({ request, overlap, busy = false, onApprove, onReject, selectable = false, selected = false, onSelect, error }: Readonly<ApprovalCardProps>) {
   const [rejecting, setRejecting] = useState(false);
   const [note, setNote] = useState("");
   const noteId = useId();
   const name = request.user?.name ?? "Someone";
   const balance = request.balanceAfter;
+  const reason = approverReason(request);
   return (
     <li className={cn("grid min-w-0 gap-3 rounded-lg border bg-card p-3", selected ? "border-primary" : "border-border")}>
       <div className="flex min-w-0 items-start gap-3">
@@ -72,6 +80,12 @@ export function ApprovalCard({ request, overlap, busy = false, onApprove, onReje
           <div className="flex min-w-0 justify-between gap-3 text-xs text-muted-foreground">
             <dt>Balance after</dt>
             <dd className={cn("font-medium tabular-nums", balance < 0 && "text-foreground")}>{Math.round(balance * 100) / 100} days</dd>
+          </div>
+        )}
+        {reason && (
+          <div className="grid gap-0.5 text-xs">
+            <dt className="text-muted-foreground">Reason</dt>
+            <dd className="whitespace-pre-line break-words text-foreground">{reason}</dd>
           </div>
         )}
         {request.attachment && (

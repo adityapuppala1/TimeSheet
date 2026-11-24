@@ -24,7 +24,7 @@ import { audit } from "../services/audit.service.js";
 import { processUpload } from "../services/attachment-storage.service.js";
 import { getAttendanceEntitlements, getAttendanceSettings, isoDate } from "../services/attendance-settings.service.js";
 import { spanDays } from "../services/attendance-team.service.js";
-import { expectedHoursFor } from "../services/leave-capacity.service.js";
+import { attendanceOrLeaveOn, expectedHoursFor } from "../services/leave-capacity.service.js";
 import {
   adjustBalance,
   adjustmentBody,
@@ -137,7 +137,11 @@ leaveRouter.post("/me/requests/:id/cancel", requireAuth, async (req, res) => {
   res.json(await cancelLeave({ actor: actorOf(req), requestId: String(req.params.id) }));
 });
 
+/** Gated like its siblings: holidays and leave are Attendance & Leave data (either part on + plan). */
 leaveRouter.get("/me/expected-hours", requireAuth, async (req, res) => {
+  if (!(await attendanceOrLeaveOn())) {
+    throw new AppError(403, "Attendance & Leave is off for this workspace, so there are no holidays or leave to count.");
+  }
   const { from, to } = rangeQuery(req.query, 366);
   const result = (await expectedHoursFor([req.user!.id], from, to)).get(req.user!.id);
   if (!result) throw new AppError(404, "User not found");
@@ -201,7 +205,7 @@ async function assertLeaveEntitled(): Promise<void> {
 }
 
 admin.get("/settings", async (_req, res) => {
-  const [settings, entitlements] = await Promise.all([getAttendanceSettings(), getAttendanceEntitlements()]);
+  const [settings, entitlements, locked] = await Promise.all([getAttendanceSettings(), getAttendanceEntitlements(), leaveYearLocked()]);
   res.json({
     settings: {
       leaveEnabled: settings.leaveEnabled,
@@ -210,7 +214,10 @@ admin.get("/settings", async (_req, res) => {
       leaveApprovalFallback: settings.leaveApprovalFallback
     },
     entitled: entitlements.leaveManagementEnabled,
-    effective: settings.leaveEnabled && entitlements.leaveManagementEnabled
+    effective: settings.leaveEnabled && entitlements.leaveManagementEnabled,
+    // The settings UI disables the start-month picker and says why (the PUT refuses with the same text).
+    leaveYearLocked: locked,
+    leaveYearLockedMessage: locked ? LEAVE_YEAR_LOCKED_MESSAGE : null
   });
 });
 
@@ -220,6 +227,7 @@ admin.put("/settings", validate(z.object({ body: leaveSettingsBody })), async (r
   if (body.leaveEnabled === true && (await prisma.leaveType.count({ where: { enabled: true } })) === 0) {
     throw new AppError(409, "Enable at least one leave type before switching leave on.");
   }
+  await assertLeaveYearChangeAllowed(body.leaveYearStartMonth);
   const updated = await prisma.globalAttendanceSettings.upsert({
     where: { id: "global" },
     update: { ...body, updatedById: req.user!.id },
@@ -233,6 +241,29 @@ admin.put("/settings", validate(z.object({ body: leaveSettingsBody })), async (r
     leaveApprovalFallback: updated.leaveApprovalFallback
   });
 });
+
+export const LEAVE_YEAR_LOCKED_MESSAGE =
+  "The leave year start month can't be changed once leave has been requested or balances posted: every balance and request is filed under its leave year, and moving the boundary would re-file them. Keep the current start month.";
+
+/**
+ * Every ledger row and request carries a leaveYear computed from the start month at the time. A new
+ * start month would silently re-slice years that already hold balances, so it may only change while
+ * there is no leave data at all.
+ */
+async function assertLeaveYearChangeAllowed(next: number | undefined): Promise<void> {
+  if (next === undefined) return;
+  const current = (await getAttendanceSettings()).leaveYearStartMonth ?? 1;
+  if (next === current) return;
+  if (await leaveYearLocked()) throw new AppError(409, LEAVE_YEAR_LOCKED_MESSAGE, { code: "LEAVE_YEAR_LOCKED" });
+}
+
+async function leaveYearLocked(): Promise<boolean> {
+  const [ledger, request] = await Promise.all([
+    prisma.leaveBalanceLedger.findFirst({ select: { id: true } }),
+    prisma.leaveRequest.findFirst({ select: { id: true } })
+  ]);
+  return Boolean(ledger || request);
+}
 
 admin.get("/types", async (_req, res) => {
   res.json({ items: await listLeaveTypes(true) });

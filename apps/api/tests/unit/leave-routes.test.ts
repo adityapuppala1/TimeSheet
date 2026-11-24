@@ -334,3 +334,98 @@ describe("leave items on the signed attendance webhook", () => {
     expect(world.leaveRequest).toHaveLength(0);
   });
 });
+
+/* ------------------------------------------------ review fixes: gate, leave-year lock, capacity */
+
+describe("GET /api/leave/me/expected-hours is gated like its siblings", () => {
+  const url = "/leave/me/expected-hours?from=2026-11-30&to=2026-12-04";
+
+  it("is 403 with both attendance and leave off", async () => {
+    world.settings.leaveEnabled = false;
+    world.settings.attendanceEnabled = false;
+    const res = await request(app()).get(url);
+    expect(res.status).toBe(403);
+    expect(res.body.message).toMatch(/off for this workspace/);
+  });
+
+  it("is 403 with the toggles on but neither module in the plan", async () => {
+    world.settings.attendanceEnabled = true;
+    entitlements.leaveManagementEnabled = false;
+    entitlements.attendanceEnabled = false;
+    expect((await request(app()).get(url)).status).toBe(403);
+  });
+
+  it("answers with leave on, or with attendance alone on", async () => {
+    expect((await request(app()).get(url)).body).toMatchObject({ workingDays: 5, expectedHours: 40 });
+    world.settings.leaveEnabled = false;
+    world.settings.attendanceEnabled = true;
+    expect((await request(app()).get(url)).status).toBe(200);
+  });
+});
+
+describe("PUT /api/leave/admin/settings — the leave year start month", () => {
+  it("is refused with a clear 409 once balances or requests exist", async () => {
+    as("super");
+    const res = await request(app()).put("/leave/admin/settings").send({ leaveYearStartMonth: 4 });
+    expect(res.status).toBe(409);
+    expect(res.body.message).toMatch(/leave year start month can't be changed/);
+    expect(world.settings.leaveYearStartMonth).toBe(1);
+  });
+
+  it("a request alone (no ledger rows) also locks it", async () => {
+    as("super");
+    world.leaveBalanceLedger.length = 0;
+    world.leaveRequest.push({ id: "r1", userId: "emp", leaveTypeId: "type-PL", status: "PENDING" });
+    expect((await request(app()).put("/leave/admin/settings").send({ leaveYearStartMonth: 4 })).status).toBe(409);
+  });
+
+  it("is allowed while there is no leave data, and re-sending the same month is never refused", async () => {
+    as("super");
+    expect((await request(app()).put("/leave/admin/settings").send({ leaveYearStartMonth: 1, trustExternalApprovals: true })).status).toBe(200);
+    world.leaveBalanceLedger.length = 0;
+    const res = await request(app()).put("/leave/admin/settings").send({ leaveYearStartMonth: 4 });
+    expect(res.status).toBe(200);
+    expect(res.body.leaveYearStartMonth).toBe(4);
+  });
+});
+
+describe("capacity with both modules off is exactly what it was", () => {
+  it("absenceByPerson subtracts no holiday and no leave unless a module is effectively on", async () => {
+    const { absenceByPerson, mergedTimeOffHours } = await import("../../src/services/leave-capacity.service.js");
+    world.holidayCalendar.push({ id: "cal", isDefault: true });
+    world.holiday.push({ id: "h1", calendarId: "cal", date: new Date("2026-12-01T00:00:00Z"), name: "Founders day" });
+    world.leaveRequest.push({
+      id: "r1", userId: "emp", leaveTypeId: "type-PL", status: "APPROVED", startHalf: "FULL", endHalf: "FULL",
+      startDate: new Date("2026-12-02T00:00:00Z"), endDate: new Date("2026-12-02T00:00:00Z"), leaveType: { code: "PL" }
+    });
+    const people = [{ id: "emp", holidayCalendarId: null, weeklyCapacityHours: 40 }];
+    const args = ["2026-11-30", "2026-12-04", [1, 2, 3, 4, 5], 40] as const;
+    const booked = [{ startDate: new Date("2026-12-03T00:00:00Z"), endDate: new Date("2026-12-03T00:00:00Z"), hoursPerDay: 8 }];
+
+    world.settings.attendanceEnabled = false;
+    world.settings.leaveEnabled = false;
+    const off = await absenceByPerson(people, ...args);
+    expect(off.size).toBe(0);
+    // The capacity board's number: only the isTimeOff booking, as before the module existed.
+    expect(mergedTimeOffHours(booked, off.get("emp"), "2026-11-30", "2026-12-04", [1, 2, 3, 4, 5])).toBe(8);
+
+    // Toggles on but no plan: still nothing.
+    world.settings.attendanceEnabled = true;
+    entitlements.attendanceEnabled = false;
+    entitlements.leaveManagementEnabled = false;
+    expect((await absenceByPerson(people, ...args)).size).toBe(0);
+
+    // Attendance on (toggle + plan): the configured holiday reduces capacity, as intended.
+    entitlements.attendanceEnabled = true;
+    expect((await absenceByPerson(people, ...args)).get("emp")?.get("2026-12-01")).toBe(8);
+  });
+});
+
+describe("GET /api/leave/admin/settings says when the leave year is locked", () => {
+  it("reports the lock and its message, so the UI can disable the picker", async () => {
+    as("super");
+    expect((await request(app()).get("/leave/admin/settings")).body).toMatchObject({ leaveYearLocked: true, leaveYearLockedMessage: expect.stringMatching(/can't be changed/) });
+    world.leaveBalanceLedger.length = 0;
+    expect((await request(app()).get("/leave/admin/settings")).body).toMatchObject({ leaveYearLocked: false, leaveYearLockedMessage: null });
+  });
+});

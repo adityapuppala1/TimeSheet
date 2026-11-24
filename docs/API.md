@@ -3276,11 +3276,11 @@ or two approvers at once produce exactly one debit and one `409 LEAVE_ALREADY_DE
 | `GET /me/requests/:id` | self | `LeaveRequest` (404 for anyone else's) |
 | `POST /me/requests` | self | JSON or multipart (`document` = supporting file): `{ leaveTypeId \| leaveTypeCode, startDate, endDate, startHalf?, endHalf?, reason? }` → `201 { request: LeaveRequest, autoApproved }` |
 | `POST /me/requests/:id/cancel` | self; SUPER_ADMIN any | → `LeaveRequest`. Pending: cancelled. Approved and not started: cancelled with a `CREDIT_REVERSAL`. Started: SUPER_ADMIN only. |
-| `GET /me/expected-hours?from=&to=` | self | `{ from, to, workingDays, holidays, leaveDays, expectedDays, dailyHours, expectedHours }` |
+| `GET /me/expected-hours?from=&to=` | self | `{ from, to, workingDays, holidays, leaveDays, expectedDays, dailyHours, expectedHours }`. 403 unless attendance or leave is on (toggle + plan). |
 | `GET /me/preview?typeId=&start=&end=&startHalf=&endHalf=` | self | Read-only mirror of apply: `{ ok, problems: [{ code, message }], days, excluded: [{ date, reason: WEEKEND|HOLIDAY, label }], balanceBefore, balanceAfter, allowNegative, overlap, documentRequired, requiresApproval, approver }`. Writes nothing. |
 | `GET /inbox?scope=mine\|all&status=PENDING\|APPROVED\|REJECTED\|CANCELLED\|ALL&page=&pageSize=` | approvers (`all`: SUPER_ADMIN) | `{ total, page, pageSize, items: LeaveRequest[] }` |
 | `POST /inbox/:id/decision` | approver | `{ decision: "APPROVE" \| "REJECT", note? }` (note required to reject) → `LeaveRequest` |
-| `POST /inbox/bulk-decision` | approver | `{ ids: string[≤100], decision, note? }` → `207 { results: [{ id, ok, status?, error?, httpStatus? }] }` |
+| `POST /inbox/bulk-decision` | approver | `{ ids: string[≤50], decision, note? }` (requester notifications are sent in the background) → `207 { results: [{ id, ok, status?, error?, httpStatus? }] }` |
 | `GET /team?from=&to=&managerId=` | managers, team leads, admins | `{ from, to, items }` — approved + pending leave of the people Team Activity shows them, without reason, note or document |
 
 `LeaveRequest` = `{ id, user?, leaveType: { id, code, name, colour, isPaid }, startDate, endDate,
@@ -3297,7 +3297,9 @@ halves of one day do not overlap), `LEAVE_INSUFFICIENT_BALANCE` (`details.availa
 
 Super-admin configuration under `/api/leave/admin` (reads need no entitlement; writes need the
 plan): `GET|PUT /settings` (`{ leaveEnabled, leaveYearStartMonth, trustExternalApprovals,
-leaveApprovalFallback }` — switching on needs at least one enabled type), `GET|POST /types`,
+leaveApprovalFallback }` — switching on needs at least one enabled type; `leaveYearStartMonth` is
+refused with 409 `LEAVE_YEAR_LOCKED` once any balance-ledger row or leave request exists, and GET
+also returns `leaveYearLocked` / `leaveYearLockedMessage`), `GET|POST /types`,
 `PUT /types/:id` (no delete: disable instead), `POST /adjustments` (`{ userId, leaveTypeId,
 leaveYear?, delta, reason }`), `GET /balances/:userId?year=` (balances plus the ledger), and
 `POST /accrual/run` (posts what is due now; idempotent).

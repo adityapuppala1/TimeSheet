@@ -17,9 +17,11 @@
  * anyone with no approved leave.
  */
 import { prisma } from "../config/prisma.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 import { getAttendanceSettings } from "./attendance-settings.service.js";
 import { loadHolidays } from "./attendance-team.service.js";
 import { getPlanningSettings } from "./planning.service.js";
+import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
 import { addDaysKey, expectedHours, type ExpectedHours } from "./leave-calc.js";
 import { leaveFractionOf, loadApprovedLeave } from "./leave-query.service.js";
 
@@ -42,6 +44,15 @@ function workingDayKeys(from: string, to: string, workingDays: readonly number[]
   return keys;
 }
 
+/** Attendance (toggle + plan) or leave (toggle + plan) is on. One settings read when both toggles are off. */
+export async function attendanceOrLeaveOn(): Promise<boolean> {
+  const settings = await getAttendanceSettings();
+  if (!settings?.attendanceEnabled && !settings?.leaveEnabled) return false;
+  const orgId = requireTenantContext().orgId;
+  if (settings?.attendanceEnabled && (await isPlanningCapabilityAllowed(orgId, "attendanceEnabled"))) return true;
+  return Boolean(settings?.leaveEnabled) && (await isPlanningCapabilityAllowed(orgId, "leaveManagementEnabled"));
+}
+
 export async function absenceByPerson(
   people: readonly AbsencePerson[],
   from: string,
@@ -51,10 +62,9 @@ export async function absenceByPerson(
 ): Promise<AbsenceMap> {
   const out: AbsenceMap = new Map();
   if (people.length === 0 || to < from) return out;
-  // Holidays and leave are Attendance & Leave data: a workspace that never switched either part on
-  // keeps exactly the capacity it had (and pays one settings read, not two queries).
-  const settings = await getAttendanceSettings();
-  if (!settings?.attendanceEnabled && !settings?.leaveEnabled) return out;
+  // Holidays and leave are Attendance & Leave data: a workspace with neither part EFFECTIVELY on
+  // (toggle AND plan) keeps exactly the capacity it had — byte-identical, no holiday subtracted.
+  if (!(await attendanceOrLeaveOn())) return out;
   const [holidayOf, leaveOf] = await Promise.all([
     loadHolidays(people.map((p) => p.holidayCalendarId), from, to),
     loadApprovedLeave(people.map((p) => p.id), from, to)

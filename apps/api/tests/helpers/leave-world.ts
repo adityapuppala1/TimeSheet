@@ -219,11 +219,12 @@ function model(world: LeaveWorld, table: keyof LeaveWorld & string) {
       rows().push(row);
       return row;
     },
-    groupBy: async (args: { by: string[]; where?: Row; _sum?: Record<string, boolean> }) => {
+    groupBy: async (args: { by: string[]; where?: Row; _sum?: Record<string, boolean>; _count?: { _all?: boolean } }) => {
       const groups = new Map<string, Row>();
       for (const r of rows().filter((x) => matchWhere(x, args.where, world))) {
         const k = args.by.map((b) => String(r[b])).join("|");
-        const g = groups.get(k) ?? { ...Object.fromEntries(args.by.map((b) => [b, r[b]])), _sum: Object.fromEntries(Object.keys(args._sum ?? {}).map((f) => [f, 0])) };
+        const g = groups.get(k) ?? { ...Object.fromEntries(args.by.map((b) => [b, r[b]])), _sum: Object.fromEntries(Object.keys(args._sum ?? {}).map((f) => [f, 0])), ...(args._count ? { _count: { _all: 0 } } : {}) };
+        if (args._count) g._count._all += 1;
         for (const f of Object.keys(args._sum ?? {})) g._sum[f] = Math.round((g._sum[f] + Number(r[f] ?? 0)) * 100) / 100;
         groups.set(k, g);
       }
