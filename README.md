@@ -90,13 +90,13 @@ that looks stale.
 
 | | |
 |---|---|
-| REST routes | **646** across 68 controllers |
-| Prisma models / enums | **149** / 60, plus **145** tenant migrations and 35 control-plane migrations |
-| Services / cron workers | **209** / 36 |
-| Web pages | **114** |
-| Unit tests | **5,222** across 384 files (`npm test -w apps/api`), plus **826** in `apps/web` |
+| REST routes | **704** across 70 controllers |
+| Prisma models / enums | **161** / 62, plus **160** tenant migrations and 35 control-plane migrations |
+| Services / cron workers | **226** / 36 |
+| Web pages | **115** |
+| Unit tests | **5,424** across 405 files (`npm test -w apps/api`), plus **866** in `apps/web` |
 | End-to-end specs | **33** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
-| Editable email templates | **47**, every one of them with preview, test send, revert and per-template delivery analytics |
+| Editable email templates | **50**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **20**, over 5 roles — plus **5** platform-console capabilities over 5 operator roles |
 | Lint | **0 errors**, **672** warnings held under a per-rule ceiling that can only fall — see below |
 
