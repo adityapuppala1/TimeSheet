@@ -21,7 +21,9 @@ import { CardError, SectionCard, todayKey } from "./attendance-ui";
 interface PayrollReport {
   month: string;
   leaveYearClosed: boolean;
-  rows: Array<{ userId: string; workingDays: number; present: number; absent: number; paidLeave: number; unpaidLeave: number; loggedHours: number }>;
+  /** 7.0.0: present while some leave type has the sandwich rule on. */
+  sandwichRule?: boolean;
+  rows: Array<{ userId: string; workingDays: number; present: number; absent: number; paidLeave: number; unpaidLeave: number; loggedHours: number; sandwichDays?: number }>;
 }
 
 /** Pure: the month before `today` as YYYY-MM (payroll is run for the month that just ended). */
@@ -43,7 +45,7 @@ export function PayrollExportCard() {
   });
   if (!admin) return null;
   const rows = q.data?.rows ?? [];
-  const sum = (k: "paidLeave" | "unpaidLeave" | "loggedHours" | "absent") => Math.round(rows.reduce((s, r) => s + r[k], 0) * 100) / 100;
+  const sum = (k: "paidLeave" | "unpaidLeave" | "loggedHours" | "absent" | "sandwichDays") => Math.round(rows.reduce((s, r) => s + (r[k] ?? 0), 0) * 100) / 100;
   return (
     <SectionCard title="Payroll export" description="One row per person for a month: working days, holidays, present, absent, leave by type (paid and unpaid), comp-off and logged hours.">
       <div className="grid gap-3">
@@ -80,6 +82,11 @@ export function PayrollExportCard() {
                 </div>
               ))}
             </dl>
+            {q.data.sandwichRule && (
+              <p className="text-xs text-muted-foreground">
+                Leave days include {sum("sandwichDays")} weekend or holiday day(s) debited by the sandwich rule. The CSV has a "Sandwich days" column.
+              </p>
+            )}
           </>
         )}
       </div>
