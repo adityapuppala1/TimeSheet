@@ -364,7 +364,7 @@ const FEATURES: Feature[] = [
     group: "Track the work",
     gate: "leaveManagementEnabled",
     title: "Leave you can approve, count and audit",
-    body: "Leave types such as PL, CL and SL with accrual, carry-forward, half days and document rules, over a balance ledger. Requests go to the manager with an admin fallback and a super-admin override, with bulk approve; an HRMS can send leave in, either trusted or re-approved here. Leave reduces expected hours, managers get a team activity view, and Me, Team and Organisation analytics carry AI suggestions built only from k-anonymous aggregates. Public API grants and leave webhooks included."
+    body: "Leave types such as PL, CL and SL with accrual, carry-forward, half days and document rules, over a balance ledger. Requests go to the manager with an admin fallback and a super-admin override, with bulk approve; an HRMS can send leave in, either trusted or re-approved here. Leave reduces expected hours, managers get a team activity view, and Me, Team and Organisation analytics carry AI suggestions built only from k-anonymous aggregates. Comp-off for weekend and holiday work, approval cover while a manager is away, a private calendar feed and a monthly payroll CSV. Public API grants and leave webhooks included."
   },
   {
     icon: Workflow,

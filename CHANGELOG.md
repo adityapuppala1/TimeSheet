@@ -33,6 +33,17 @@ as days anyone owed a timesheet on. With the module off, every screen and API re
 - **The weekly digest template gains `{{expectedHoursHtml}}`.** A tenant migration adds it to the default
   `digest.weekly` template only when that template is still the untouched default (SHA-256 guard); an admin-edited
   template is left as it is. It renders nothing with Attendance & Leave off.
+- **Three more tenant migrations, all additive and empty:** comp-off (five `GlobalAttendanceSettings` columns, all
+  off, a `CompOffRequest` table, and a **disabled** `CO` "Compensatory off" leave type inserted with `INSERT IGNORE`,
+  so an admin's own `CO` is left alone), `ApprovalDelegation`, and `CalendarFeedToken`. No new entitlement: all three
+  sit under `leaveManagementEnabled` (Enterprise), and the calendar feed also serves holidays when only attendance is on.
+- **`GET /api/leave/inbox` may carry `compOffPending`** (only while comp-off is on); the sidebar badge adds it.
+  `/api/leave/status` gains `compOffEnabled`.
+- **`GET /api/leave/inbox?scope=all` is now open to ADMIN** as well as SUPER_ADMIN (an admin could already cancel
+  anyone's leave through the API). Reasons and documents are still stripped from every row the caller may not decide.
+- **Two new webhook events, `compoff.requested` and `compoff.approved`.** Existing subscriptions are not opted in.
+- **The access log redacts calendar feed tokens** (`/api/calendar/feed/[redacted]`). A log shipper that parsed the
+  raw path of that route will see the placeholder.
 
 ### ✨ Features: Attendance, leave and holiday calendars
 
@@ -71,8 +82,28 @@ as days anyone owed a timesheet on. With the module off, every screen and API re
   timesheet entry screen says "You're on leave today (PL)" or "Holiday: Diwali" on such a day. Profile and the
   People edit dialog show the leave balance (another person's only to a super admin), who approves the person's
   leave and a link to attendance history. The sidebar's Attendance item shows how many leave requests wait on you.
-- **Super admins cancel approved leave from the app.** Attendance → Team → Leave calendar lists approved leave that
-  has not ended, each with Cancel leave… and a required comment that the person is told.
+- **Administrators cancel approved leave from the app.** Attendance → Team → Leave calendar lists approved leave that
+  has not ended, each with Cancel leave… and a required comment that the person is told. Admins and super admins
+  both see it; the API already let both cancel.
+- **Comp-off (off by default).** Logging at least 4 hours (half a day) or 8 hours (a full day) on a weekend or
+  holiday, judged by the same day resolver as everything else, lets the person request comp-off from My attendance
+  or the day sheet. Their approver decides it like leave; approval credits the configured leave type (a new `CO`,
+  disabled until you enable it) through the ledger with the idempotency key `COMPOFF:<id>`, so a double click or a
+  race credits once. An optional expiry takes back what is unspent through the nightly accrual run
+  (`COMPOFF-EXPIRY:<id>`, never below zero). Settings → Attendance & Leave → Leave settings. In-app notifications,
+  and the `compoff.requested` / `compoff.approved` webhook events.
+- **Approval cover (delegation).** An approver hands their leave and comp-off decisions to a manager, team lead or
+  admin for a date range; an admin can set cover for anyone. While it lasts the delegate sees those requests in
+  their inbox and badge, is notified of new ones, and decides on the approver's behalf (the audit row says so).
+  One hop only, never their own request, no self-delegation and no loops. Attendance → Team → Approvals.
+- **Calendar sync.** Profile → Calendar sync gives a private iCal URL of your approved leave and holidays to add to
+  Google, Outlook or Apple Calendar; managers, team leads and admins also get a team feed of approved leave (name and
+  leave type only, never a reason). The token is random, shown once, stored only as a hash, rotatable and revocable;
+  the feed is rate-limited, needs no sign-in header, and a token only ever resolves in its own workspace.
+- **Payroll export.** Organisation insights → Payroll export (admins): per person for a month, working days,
+  holidays, present, absent, leave by type, paid and unpaid (LOP) leave, comp-off taken and earned, and logged hours,
+  as a CSV, and on the public API as `GET /api/public/v1/attendance/payroll?month=YYYY-MM` under `attendance:read`. A month
+  whose leave year has ended or been settled is flagged as closed.
 - **Optional holidays, opt-in.** The Holidays screen shows how many optional holidays you have taken against the
   calendar's cap and lets you take or drop each one, with the reason shown when a choice is disabled. Admins set
   "Optional holidays per person per year" on each calendar.

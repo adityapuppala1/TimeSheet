@@ -3143,6 +3143,16 @@ integrations). The loser is kept in the admin delivery log, never dropped.
   evidence (coordinates, IP, user agent) is never returned.
 - `GET /holidays?from=YYYY-MM-DD&to=YYYY-MM-DD` *(attendance:read)* — holidays in every calendar,
   with the calendar's name and whether it is the workspace default. Range up to 93 days.
+- `GET /attendance/payroll?month=YYYY-MM&employee=&format=csv` *(attendance:read, 7.0.0)* — the
+  monthly payroll report, one row per counted person: `workingDays` (scheduled days minus the
+  person's holidays), `holidays`, `present`, `absent` (a working day that is over with no punch and
+  no leave; only counted while attendance is on), `leave` (days by type code, working days only,
+  halves as 0.5), `paidLeave`, `unpaidLeave` (LOP: types with `isPaid: false`), `compOffTaken`,
+  `compOffEarned`, `loggedHours` (timesheets not rejected or deleted). The response also carries
+  `leaveTypes`, `leaveYear` and `leaveYearClosed` — true once that leave year has ended or been
+  settled by the year-end rollover; treat that month as final. `format=csv` returns the same as a
+  CSV (UTF-8 BOM, CRLF, a column per leave type, a formula-looking cell prefixed with `'`). Never a
+  reason, note or location.
 
 ### Signed attendance webhook (devices, HRMS)
 
@@ -3360,6 +3370,66 @@ need the plan's attendance integrations.
 The signed attendance webhook (above) accepts leave items too: add `"kind": "leave"` to an item with
 the same fields, and the source's match field applies when only `identifier` is sent.
 
+#### Comp-off, approval cover, calendar feed and payroll (7.0.0)
+
+All are off until switched on and need leave on (`leaveEnabled` and the `leaveManagementEnabled`
+plan, Enterprise), except the calendar feed, which also works with only attendance on (holidays).
+
+**Comp-off** (Workspace Settings → Attendance & Leave → Leave settings; also `PUT
+/api/leave/admin/comp-off`, super admin, body `{ compOffEnabled, compOffHalfDayHours (default 4),
+compOffFullDayHours (default 8), compOffLeaveTypeCode (default "CO"), compOffExpiryDays (null =
+never) }`, any subset). Switching on is refused (`409 COMPOFF_TYPE_DISABLED`) until the credited type
+exists and is enabled; the migration inserts a disabled `CO`.
+
+- `GET /api/leave/me/comp-off/eligibility?date=YYYY-MM-DD` — `{ eligible, dayKind (WEEKEND|HOLIDAY),
+  holidayName, hoursLogged, days (0|0.5|1), problem, thresholds }`. The day kind comes from the day
+  resolver (the person's calendar and optional-holiday opt-ins); the hours from their timesheets.
+  Not in the future, at most 60 days back.
+- `GET /api/leave/me/comp-off`, `POST /api/leave/me/comp-off` `{ workDate, reason? }` (`422
+  COMPOFF_NOT_ELIGIBLE`, `409 COMPOFF_DUPLICATE` for a second open request on the day),
+  `POST /api/leave/me/comp-off/:id/cancel` (pending only).
+- `GET /api/leave/comp-off/inbox` and `POST /api/leave/comp-off/inbox/:id/decision` `{ decision:
+  APPROVE|REJECT, note? }` — the leave decision rule (manager, admin pool, super-admin override,
+  delegate). An id that is not yours to decide and one that does not exist are the same 403. Approval
+  credits `days` to the configured type in the worked day's leave year as one ledger row keyed
+  `COMPOFF:<id>`; with an expiry, the nightly accrual run takes back what is unspent
+  (`COMPOFF-EXPIRY:<id>`, never below zero). `POST /api/leave/admin/accrual/run` also reports
+  `compOffExpired`.
+
+**Approval cover (delegation).**
+
+- `GET /api/leave/delegations` (`?scope=all` for ADMIN / SUPER_ADMIN), `GET
+  /api/leave/delegations/candidates?q=` (active managers, team leads and admins: id and name).
+- `POST /api/leave/delegations` `{ delegateId, startDate, endDate, delegatorId? }` — `delegatorId`
+  (someone else's approvals) for ADMIN / SUPER_ADMIN only. Refused: yourself (`422 DELEGATION_SELF`),
+  someone who may not approve (`422 DELEGATION_INELIGIBLE`), a loop along overlapping ranges (`409
+  DELEGATION_CYCLE`), a range over 366 days or already ended.
+- `POST /api/leave/delegations/:id/revoke` — the approver, the delegate or an admin (anyone else: 404).
+- While a delegation covers today (server calendar day), the delegate's leave inbox, comp-off inbox
+  and badge include the requests captured for the delegator (who must still be active), approval
+  notifications go to the delegate too, and a decision is audited with `onBehalfOf`. One hop only;
+  nobody decides their own request.
+
+**Calendar feed.**
+
+- `GET /api/calendar/feed-token` (signed in) — `{ enabled, hint, createdAt, lastUsedAt,
+  teamFeedAvailable }`. `POST /api/calendar/feed-token/rotate` creates or replaces the token and
+  returns `{ token, hint }` once; `DELETE /api/calendar/feed-token` revokes it.
+- `GET /api/calendar/feed/<token>.ics` — **no auth header**; the 64-hex token in the path is the
+  credential. Approved leave (type name, half) and holidays (mandatory plus opted-in optional), 60
+  days back to a year ahead. `GET /api/calendar/feed/<token>-team.ics` — managers, team leads and
+  admins: approved leave of the people the Team view shows them, `Name: Leave type`, from two weeks
+  back to eleven weeks ahead; never a reason, note or document. Only the token's SHA-256 is stored;
+  the token resolves only in the workspace whose host it is requested on; every failure is the same
+  404; 30 requests a minute per IP; `Cache-Control: private, max-age=300`; the access log redacts it.
+
+**Payroll.** `GET /api/leave/payroll?month=YYYY-MM[&format=csv]` (ADMIN / SUPER_ADMIN, audited) —
+the same report as the public `GET /attendance/payroll` above.
+
+`GET /api/leave/inbox?scope=all` is open to ADMIN as well as SUPER_ADMIN since 7.0.0 (reasons and
+documents are stripped from rows the caller may not decide). While comp-off is on, the pending
+inbox also carries `compOffPending` for the badge.
+
 #### MCP tools
 
 `apply_leave` (`leaveType`, `startDate`, `endDate`, `startHalf?`, `endHalf?`, `reason?`),
@@ -3399,9 +3469,13 @@ one or more events and receives a signed `POST` when they happen:
 | `leave.approved` | A leave request is approved (by an approver, automatically, or a trusted HRMS) |
 | `leave.rejected` | A leave request is rejected |
 | `leave.cancelled` | A leave request is cancelled (an approved one has its days reversed) |
+| `compoff.requested` | 7.0.0: someone requests comp-off for a weekend or holiday they worked |
+| `compoff.approved` | 7.0.0: a comp-off request is approved and its days credited |
 
 A leave event's `data` is `{ id, employee: { email, employeeCode }, leaveType, startDate, endDate,
-startHalf, endHalf, days, status, source, externalRef }` — never the reason or decision note.
+startHalf, endHalf, days, status, source, externalRef }` — never the reason or decision note. A
+comp-off event's `data` is `{ id, employee: { email, employeeCode }, workDate, dayKind, days, status,
+leaveType, expiresOn }`, also without the reason.
 
 Payload shape:
 

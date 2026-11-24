@@ -383,14 +383,14 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "The Attendance item in the sidebar shows a count of the requests waiting on you; it refreshes every couple of minutes."
     ],
     notes:
-      "If a person has no manager, an admin approves; a super admin can override. A decision cannot be undone from this screen. Reasons are visible to approvers only. Ask AI's \"who's off this week?\" (and the MCP tool who_is_off) answers for your reports only, with names, types and dates, never a reason.",
+      "If a person has no manager, an admin approves; a super admin can override. Comp-off requests appear in their own list beside the leave inbox and are decided the same way. Going away? Set Approval cover so someone decides for you. A decision cannot be undone from this screen. Reasons are visible to approvers only. Ask AI's \"who's off this week?\" (and the MCP tool who_is_off) answers for your reports only, with names, types and dates, never a reason.",
     keywords: ["approve leave", "reject leave", "bulk approve", "leave calendar", "approvals", "manager", "team"]
   },
   {
     id: "leave-cancel-admin",
     category: "Timesheets",
-    title: "Cancel someone's approved leave (super admin)",
-    roles: ["SUPER_ADMIN"],
+    title: "Cancel someone's approved leave (admins)",
+    roles: ADMIN,
     where: "Sidebar → Attendance → Team → Leave calendar → Cancel someone's approved leave",
     when: "When approved leave has to be withdrawn, for example a booking made in error, including leave that has already started.",
     steps: [
@@ -400,8 +400,76 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Press Cancel leave. The days go back to the person's balance."
     ],
     notes:
-      "Changed in 7.0.0: a super admin now needs a comment to cancel someone else's leave (the API answers 422 LEAVE_CANCEL_COMMENT_REQUIRED without one). Cancelling your own leave needs no comment.",
-    keywords: ["cancel leave", "withdraw leave", "revoke leave", "super admin", "comment", "credit reversal"]
+      "Changed in 7.0.0: admins and super admins both see this card, and both need a comment to cancel someone else's leave (the API answers 422 LEAVE_CANCEL_COMMENT_REQUIRED without one). Cancelling your own leave needs no comment.",
+    keywords: ["cancel leave", "withdraw leave", "revoke leave", "admin", "super admin", "comment", "credit reversal"]
+  },
+  {
+    id: "comp-off",
+    category: "Timesheets",
+    title: "Request comp-off for working a weekend or holiday",
+    where: "Sidebar → Attendance → My attendance → Comp-off",
+    when: "When you logged time on a weekend or a holiday and your workspace has comp-off switched on.",
+    steps: [
+      "Log the hours you worked on that day in your timesheet first: comp-off is judged on them.",
+      "Open Sidebar → Attendance → My attendance. In the Comp-off card pick the day you worked, or tap the day on the calendar and press Request comp-off for this day.",
+      "The card says what the day earns: half a day from 4 hours, a full day from 8 (your admin may set other thresholds), or why it does not qualify.",
+      "Add a note for your approver if you like and press Request comp-off. Your approver is told.",
+      "Once approved, the days are added to your Compensatory off (CO) balance; apply for leave of that type as usual. A pending request can be cancelled from the same card."
+    ],
+    notes:
+      "Only weekends and holidays in your own calendar count (an optional holiday only if you took it). One open request per day, up to 60 days after it. If your admin set an expiry, an unused credit lapses that many days after approval; whatever you have already taken is never taken back.",
+    keywords: ["comp-off", "comp off", "compensatory off", "weekend work", "holiday work", "time in lieu", "toil", "CO"]
+  },
+  {
+    id: "approval-cover",
+    category: "Timesheets",
+    title: "Let someone cover your leave approvals",
+    roles: ["MANAGER", "TEAM_LEAD", "ADMIN", "SUPER_ADMIN"],
+    where: "Sidebar → Attendance → Team → Approvals → Approval cover",
+    when: "Before you go on leave, so requests from your team do not wait for you.",
+    steps: [
+      "Open Sidebar → Attendance → Team. Approval cover sits under the approvals inbox (on a phone, choose Approvals first).",
+      "Choose who covers: a manager, team lead or admin. Admins can also pick whose approvals are covered.",
+      "Set the From and To dates and press Set cover.",
+      "While the dates cover today, that person sees the leave and comp-off requests waiting on you, gets the notifications and decides them on your behalf. You can still decide them too.",
+      "Back early? Press End beside the cover."
+    ],
+    notes:
+      "The audit log records every such decision as made on your behalf. Cover is one step only: if your cover is away too and hands their own approvals on, yours are not passed along. Nobody decides their own request, and you cannot hand approvals to yourself or set up a loop.",
+    keywords: ["delegate", "delegation", "approval cover", "out of office", "away", "on behalf of", "covering manager"]
+  },
+  {
+    id: "calendar-sync",
+    category: "Timesheets",
+    title: "See your leave and holidays in your own calendar",
+    where: "Sidebar → Profile → Calendar sync",
+    when: "When you want approved leave and holidays to show in Google, Outlook or Apple Calendar.",
+    steps: [
+      "Open your Profile and find Calendar sync (shown while Attendance or Leave is on).",
+      "Press Create link and copy the URL straight away: it is shown only once.",
+      "In your calendar app add a calendar From URL (Google: Other calendars → From URL; Outlook: Add calendar → Subscribe from web) and paste it.",
+      "Managers, team leads and admins also get a team link with the approved leave of the people they can see, by name and leave type.",
+      "Lost the link or shared it by mistake? Press Rotate link (the old one stops working) or Turn off."
+    ],
+    notes:
+      "Anyone who has the link can read that calendar, so treat it like a password. It never contains a leave reason, note or document. Calendar apps refresh subscribed calendars on their own schedule, often every few hours.",
+    keywords: ["ical", "ics", "calendar feed", "google calendar", "outlook", "apple calendar", "subscribe", "sync"]
+  },
+  {
+    id: "payroll-export",
+    category: "Dashboards & reports",
+    title: "Export the monthly payroll report",
+    roles: ADMIN,
+    where: "Sidebar → Attendance → Organisation → Payroll export",
+    when: "At month end, to hand attendance and leave to payroll.",
+    steps: [
+      "Open Sidebar → Attendance → Organisation and scroll to More detail → Payroll export.",
+      "Pick the month (last month is preselected). The card previews the number of people, paid and unpaid leave days and logged hours.",
+      "Press Download CSV. Each row is one person: working days, holidays, present, absent, leave days by type, paid leave, unpaid leave (LOP), comp-off taken and earned, and logged hours."
+    ],
+    notes:
+      "A month whose leave year has ended or been closed by the year-end rollover is marked closed: treat that export as final. Integrations can fetch the same report from the public API (GET /attendance/payroll, with the attendance:read grant). Reference: docs/API.md.",
+    keywords: ["payroll", "export", "csv", "lop", "loss of pay", "unpaid leave", "month end", "working days", "present", "absent"]
   },
   {
     id: "optional-holidays",
@@ -433,7 +501,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Mark a holiday Optional if people choose it, and set \"Optional holidays per person per year\" on the calendar (empty = no limit). An optional holiday is a day off only for the people who opt in on their Holidays screen.",
       "Choose who approves when there is no manager (any admin, or super admins only).",
       "If an HRMS sends leave in on the signed webhook, choose whether its approvals are trusted (recorded as approved) or re-approved here (queued for your approvers).",
-      "Switch leave on. Balances start from the allowance and follow a ledger you can read."
+      "Switch leave on. Balances start from the allowance and follow a ledger you can read.",
+      "Optional: to offer comp-off, enable the Compensatory off (CO) leave type, then under Leave settings switch on Comp-off and set the hours for half and full days and an expiry if you want one."
     ],
     notes:
       "API keys can be granted leave:read and leave:write. Reference: docs/API.md.",
