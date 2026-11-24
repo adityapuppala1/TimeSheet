@@ -261,6 +261,8 @@ function usePendingApprovals(enabled: boolean): number {
     refetchIntervalInBackground: false,
     retry: false
   });
+  // The cache entry is shared, so a row that did not ask must not read it either.
+  if (!enabled) return 0;
   return q.data?.total ?? 0;
 }
 
