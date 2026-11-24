@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { readMissedDayRefusal } from "../lib/missed-day-reason";
+import { readMissedDayRefusal, type MissedReasonOption } from "../lib/missed-day-reason";
+import { reasonFieldsFor, reasonProblems, type DayReason } from "../lib/week-draft-reasons";
+import { MissedDayReasonFields } from "./MissedDayReasonFields";
 import { AlertTriangle, CalendarRange, Check, MessageSquare, RefreshCw, Sparkles, Ticket } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
@@ -47,6 +49,10 @@ export function WeekDraftPanel() {
   const [unchecked, setUnchecked] = useState<Set<string>>(new Set());
   const [failures, setFailures] = useState<Record<string, string>>({});
   const [added, setAdded] = useState<number | null>(null);
+  // Days the server said need a missed-day reason, the reason picked for each, and field errors.
+  const [needReason, setNeedReason] = useState<Record<string, MissedReasonOption[]>>({});
+  const [reasons, setReasons] = useState<Record<string, DayReason>>({});
+  const [reasonErrors, setReasonErrors] = useState<Record<string, { field: "missedReasonCode" | "missedReasonNote"; message: string }>>({});
   const weekStart = mondayOf(week);
 
   const draft = useQuery({
@@ -68,8 +74,14 @@ export function WeekDraftPanel() {
   const addDrafts = useMutation({
     mutationFn: async (rows: WeekDraftSuggestion[]) => {
       const failed: Record<string, string> = {};
+      const asked: Record<string, MissedReasonOption[]> = {};
+      const extra = reasonFieldsFor(rows, needReason, reasons);
       let ok = 0;
-      for (const s of rows) {
+      for (const [index, s] of rows.entries()) {
+        if (asked[s.workDate]) {
+          failed[rowKey(s)] = "Add the reason for this day above, then add these again.";
+          continue;
+        }
         try {
           await timesheetApi.submit(
             {
@@ -80,25 +92,29 @@ export function WeekDraftPanel() {
               taskDescription: s.taskDescription,
               workDate: s.workDate,
               startTime: s.startTime,
-              endTime: s.endTime
+              endTime: s.endTime,
+              ...extra[index]
             },
             true
           );
           ok++;
         } catch (error) {
-          // V17 A4: a missed working day needs a reason first, which this bulk list cannot ask for.
-          if (readMissedDayRefusal(error)) {
-            failed[rowKey(s)] = `Nothing was logged on ${s.workDate}, so it needs a reason first. Log one entry for that day in the form below (it will ask why), then add these.`;
+          // V17 A4 / 7.0.0: a missed working day needs a reason first. Ask for it on that day, inline.
+          const refusal = readMissedDayRefusal(error);
+          if (refusal) {
+            asked[s.workDate] = refusal.options;
+            failed[rowKey(s)] = "Nothing was logged on this day, so it needs a reason. Pick one above, then add these again.";
             continue;
           }
           const message = (error as { response?: { data?: { message?: string } } }).response?.data?.message;
           failed[rowKey(s)] = message ?? "This row could not be saved.";
         }
       }
-      return { ok, failed };
+      return { ok, failed, asked };
     },
-    onSuccess: ({ ok, failed }) => {
+    onSuccess: ({ ok, failed, asked }) => {
       setFailures(failed);
+      if (Object.keys(asked).length > 0) setNeedReason((prev) => ({ ...prev, ...asked }));
       setAdded(ok);
       // Re-ask the server: rows that saved are now logged and drop out; refused ones come back,
       // still ticked, with their reason beside them.
@@ -112,6 +128,23 @@ export function WeekDraftPanel() {
     setUnchecked(new Set());
     setFailures({});
     setAdded(null);
+    setNeedReason({});
+    setReasons({});
+    setReasonErrors({});
+  };
+  const addSelected = () => {
+    const problems = reasonProblems(selected, needReason, reasons);
+    setReasonErrors(problems);
+    if (Object.keys(problems).length > 0) return;
+    addDrafts.mutate(selected);
+  };
+  const setReason = (day: string, patch: Partial<DayReason>) => {
+    setReasons((prev) => ({ ...prev, [day]: { code: prev[day]?.code ?? "", note: prev[day]?.note ?? "", ...patch } }));
+    setReasonErrors((prev) => {
+      const next = { ...prev };
+      delete next[day];
+      return next;
+    });
   };
   const toggle = (key: string, on: boolean) =>
     setUnchecked((prev) => {
@@ -212,6 +245,17 @@ export function WeekDraftPanel() {
             {byDay.map(([day, rows]) => (
               <section key={day} aria-label={dayLabel(day)} className="grid gap-1.5">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{dayLabel(day)}</h3>
+                {needReason[day] && (
+                  <MissedDayReasonFields
+                    date={dayLabel(day)}
+                    options={needReason[day]}
+                    code={reasons[day]?.code ?? ""}
+                    note={reasons[day]?.note ?? ""}
+                    onCodeChange={(code) => setReason(day, { code })}
+                    onNoteChange={(note) => setReason(day, { note })}
+                    error={reasonErrors[day] ?? null}
+                  />
+                )}
                 <ul className="grid gap-1.5">
                   {rows.map((s) => (
                     <SuggestionRow
@@ -229,7 +273,7 @@ export function WeekDraftPanel() {
               <span className="text-sm text-muted-foreground">
                 {selected.length} of {suggestions.length} selected · {hoursLabel(selectedHours)}
               </span>
-              <Button type="button" disabled={selected.length === 0 || addDrafts.isPending} onClick={() => addDrafts.mutate(selected)}>
+              <Button type="button" disabled={selected.length === 0 || addDrafts.isPending} onClick={addSelected}>
                 <Check className="h-4 w-4" aria-hidden />
                 {addDrafts.isPending ? "Adding drafts…" : `Add ${selected.length} as drafts`}
               </Button>
