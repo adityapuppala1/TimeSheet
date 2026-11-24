@@ -710,6 +710,25 @@ function spanLimits(span: { startDate: string; endDate: string }, today: string,
   }
 }
 
+/** Declined for lack of balance, unless the type allows a negative one. */
+function shortBalanceProblem(type: { name: string; allowNegative: boolean }, available: number, days: number) {
+  if (type.allowNegative || days <= 0 || available >= days) return null;
+  return { code: "LEAVE_INSUFFICIENT_BALANCE", message: `Not enough ${type.name}: ${available} day(s) available, ${days} requested.` };
+}
+
+/** The person's manager as the approver, only while that account is active. */
+async function activeApprover(managerId: string | null) {
+  if (!managerId) return null;
+  return prisma.user.findFirst({ where: { id: managerId, ...NOT_DEACTIVATED }, select: { id: true, name: true, avatarUrl: true } });
+}
+
+/** Ledger sum plus accrual due but not yet posted, minus what is already pending. */
+function availableAfterAccrual(facts: { ledgerSum: number; accrued: number } | undefined, due: number, pending = 0): number {
+  const ledger = facts?.ledgerSum ?? 0;
+  const posted = facts?.accrued ?? 0;
+  return r2(ledger + Math.max(0, due - posted) - pending);
+}
+
 /**
  * Read-only mirror of applyLeave's checks, for the Apply screen's live summary. It reuses the same
  * pure functions (spanErrors, countLeaveDays, findClash) so the number shown is the number charged.
@@ -764,9 +783,7 @@ export async function previewLeave(userId: string, q: z.infer<typeof previewQuer
     }),
     ledgerFacts(prisma, userId, leaveYear, type.id),
     pendingDays(prisma, userId, leaveYear, type.id),
-    person.managerId
-      ? prisma.user.findFirst({ where: { id: person.managerId, ...NOT_DEACTIVATED }, select: { id: true, name: true, avatarUrl: true } })
-      : Promise.resolve(null)
+    activeApprover(person.managerId)
   ]);
   const isHoliday = (d: string) => Boolean(holidayOf(person.holidayCalendarId, d));
   const days = countLeaveDays(span, { workingDays: planning.workingDays, isHoliday });
@@ -783,12 +800,10 @@ export async function previewLeave(userId: string, q: z.infer<typeof previewQuer
   );
   if (clash) problems.push({ code: "LEAVE_OVERLAP", message: `This overlaps your leave from ${clash.startDate} to ${clash.endDate}.` });
 
-  const f = facts.get(type.id);
   const due = dueAccrual(type, leaveYear, startMonth, span.startDate < today ? today : span.startDate, person.createdAt);
-  const available = r2((f?.ledgerSum ?? 0) + Math.max(0, due - (f?.accrued ?? 0)) - (pending.get(type.id) ?? 0));
-  if (!type.allowNegative && days > 0 && available < days) {
-    problems.push({ code: "LEAVE_INSUFFICIENT_BALANCE", message: `Not enough ${type.name}: ${available} day(s) available, ${days} requested.` });
-  }
+  const available = availableAfterAccrual(facts.get(type.id), due, pending.get(type.id));
+  const short = shortBalanceProblem(type, available, days);
+  if (short) problems.push(short);
   return {
     ok: problems.length === 0,
     problems,

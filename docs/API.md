@@ -3277,6 +3277,7 @@ or two approvers at once produce exactly one debit and one `409 LEAVE_ALREADY_DE
 | `POST /me/requests` | self | JSON or multipart (`document` = supporting file): `{ leaveTypeId \| leaveTypeCode, startDate, endDate, startHalf?, endHalf?, reason? }` → `201 { request: LeaveRequest, autoApproved }` |
 | `POST /me/requests/:id/cancel` | self; SUPER_ADMIN any | → `LeaveRequest`. Pending: cancelled. Approved and not started: cancelled with a `CREDIT_REVERSAL`. Started: SUPER_ADMIN only. |
 | `GET /me/expected-hours?from=&to=` | self | `{ from, to, workingDays, holidays, leaveDays, expectedDays, dailyHours, expectedHours }` |
+| `GET /me/preview?typeId=&start=&end=&startHalf=&endHalf=` | self | Read-only mirror of apply: `{ ok, problems: [{ code, message }], days, excluded: [{ date, reason: WEEKEND|HOLIDAY, label }], balanceBefore, balanceAfter, allowNegative, overlap, documentRequired, requiresApproval, approver }`. Writes nothing. |
 | `GET /inbox?scope=mine\|all&status=PENDING\|APPROVED\|REJECTED\|CANCELLED\|ALL&page=&pageSize=` | approvers (`all`: SUPER_ADMIN) | `{ total, page, pageSize, items: LeaveRequest[] }` |
 | `POST /inbox/:id/decision` | approver | `{ decision: "APPROVE" \| "REJECT", note? }` (note required to reject) → `LeaveRequest` |
 | `POST /inbox/bulk-decision` | approver | `{ ids: string[≤100], decision, note? }` → `207 { results: [{ id, ok, status?, error?, httpStatus? }] }` |
@@ -3513,3 +3514,12 @@ The admin surface, on the normal JWT session. **SUPER_ADMIN only**, and every ac
 Operating guidance — what an operator is actually turning on, and how to connect a client — is in
 [DEPLOYMENT.md](DEPLOYMENT.md#operating-the-mcp-server).
 
+
+### Attendance UI v2 additions
+
+- `POST /api/attendance/punch-out` — stamps today's WEB punch with the server clock (no body; a time in the body is ignored). Same gates as punch-in (module on, web punching not OFF). Idempotent (`200 { updated: false }` when already out); `409` with no punch-in today, or when today's punch came from another source. Goes through the ingest service as a WEB event and is audited as `attendance.punched_out`.
+- `GET /api/attendance/me/holidays?from=&to=` — the person's holiday calendar (own, else default), at most 400 days.
+- `GET /api/attendance/admin/impact` (super admin) — `{ people }`, the number a workspace-wide setting change reaches.
+- `GET /api/attendance/me/history` days now also carry `punchOutAt`, `isWorkingDay`, `leave`, `hours` and `reasonCode` (own data only).
+- `GET /api/attendance/analytics/org` now carries `trend` (daily presence, `null` below the k-anonymity floor) and `hours` (average logged vs expected).
+- `GET /api/leave/inbox` items carry `balanceAfter` for pending requests. `GET /api/attendance/me/today` carries `latenessEnabled`/`expectedStartMinute` only when lateness is on.
