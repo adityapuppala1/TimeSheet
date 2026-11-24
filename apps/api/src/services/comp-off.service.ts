@@ -306,18 +306,14 @@ export async function decideCompOff(input: { actor: { id: string; role: string; 
   const fallback: Fallback = settings.leaveApprovalFallback ?? "ADMINS";
   const request = await prisma.compOffRequest.findUnique({ where: { id: input.requestId } });
   if (!request) throw new AppError(403, OUT_OF_SCOPE);
-  const approverActive = request.approverId
-    ? Boolean(await prisma.user.findFirst({ where: { id: request.approverId, ...NOT_DEACTIVATED }, select: { id: true } }))
-    : false;
-  const right = await resolveDecisionRight(input.actor, request, approverActive, fallback, now);
+  const right = await resolveDecisionRight(input.actor, request, await isActiveApprover(request.approverId), fallback, now);
   if (!right) throw new AppError(403, OUT_OF_SCOPE);
   if (request.status !== "PENDING") throw new AppError(409, `This request is already ${request.status.toLowerCase()}.`, { code: "COMPOFF_ALREADY_DECIDED" });
   const approve = input.decision === "APPROVE";
   const days = Number(request.days);
   const workDate = toKey(request.workDate);
   const leaveYear = leaveYearOf(workDate, settings.leaveYearStartMonth ?? 1);
-  const type = approve ? await prisma.leaveType.findUnique({ where: { code: settings.compOffLeaveTypeCode ?? "CO" } }) : null;
-  if (approve && !type) throw new AppError(409, `The comp-off leave type (${settings.compOffLeaveTypeCode ?? "CO"}) does not exist. An admin must create it.`, { code: "COMPOFF_TYPE_MISSING" });
+  const type = approve ? await compOffType(settings.compOffLeaveTypeCode ?? "CO") : null;
   const today = todayKeyFor(now, null, serverTimezone);
   const expiresOn = approve && settings.compOffExpiryDays ? addDaysKey(today, Number(settings.compOffExpiryDays)) : null;
   const person = await prisma.user.findUnique({ where: { id: request.userId }, select: { id: true, name: true, email: true, employeeCode: true } });
@@ -363,15 +359,37 @@ export async function decideCompOff(input: { actor: { id: string; role: string; 
     ...(right.onBehalfOfId ? { onBehalfOf: right.onBehalfOfId } : {})
   });
   if (approve && person) emitDomainEvent("compoff.approved", webhookPayload(decided, person, type?.code));
+  await notifyCompOffDecided(request, { approve, days, workDate, typeName: type?.name ?? null, expiresOn, note: input.note ?? null });
+  return publicCompOff(decided);
+}
+
+/** The requester's in-app notice: approved (how much, into which type, until when) or rejected (the note). */
+async function notifyCompOffDecided(
+  request: { id: string; userId: string },
+  d: { approve: boolean; days: number; workDate: string; typeName: string | null; expiresOn: string | null; note: string | null }
+): Promise<void> {
+  const until = d.expiresOn ? ", use by " + d.expiresOn : "";
+  const body = d.approve ? `${d.days} day(s) added to ${d.typeName ?? "your balance"}${until}` : (d.note?.trim() ?? "");
   await dispatchNotification({
     userId: request.userId,
     category: "leave.decided",
-    title: `Your comp-off for ${workDate} was ${approve ? "approved" : "rejected"}`,
-    body: approve ? `${days} day(s) added to ${type!.name}${expiresOn ? `, use by ${expiresOn}` : ""}` : (input.note?.trim() ?? ""),
+    title: `Your comp-off for ${d.workDate} was ${d.approve ? "approved" : "rejected"}`,
+    body,
     link: "/app/attendance?tab=leave",
     metadata: { compOffRequestId: request.id }
   });
-  return publicCompOff(decided);
+}
+
+/** The configured credit type, or a 409 naming the code (approval only). */
+async function compOffType(code: string) {
+  const type = await prisma.leaveType.findUnique({ where: { code } });
+  if (!type) throw new AppError(409, `The comp-off leave type (${code}) does not exist. An admin must create it.`, { code: "COMPOFF_TYPE_MISSING" });
+  return type;
+}
+
+async function isActiveApprover(id: string | null): Promise<boolean> {
+  if (!id) return false;
+  return Boolean(await prisma.user.findFirst({ where: { id, ...NOT_DEACTIVATED }, select: { id: true } }));
 }
 
 /* ------------------------------------------------------------------ *

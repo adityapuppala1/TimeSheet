@@ -80,7 +80,8 @@ export async function revokeFeedToken(userId: string): Promise<void> {
 /* ------------------------------ the feed ------------------------------ */
 
 const compact = (k: string) => k.replaceAll("-", "");
-const halfText = (h: string) => (h === "FIRST_HALF" ? " (first half)" : h === "SECOND_HALF" ? " (second half)" : "");
+const HALF_TEXT: Record<string, string> = { FIRST_HALF: " (first half)", SECOND_HALF: " (second half)" };
+const halfText = (h: string) => HALF_TEXT[h] ?? "";
 
 export interface FeedEvent {
   uid: string;
@@ -111,57 +112,70 @@ export function buildFeedIcs(name: string, events: readonly FeedEvent[], now: Da
   return `${lines.map(foldIcsLine).join("\r\n")}\r\n`;
 }
 
+type FeedPerson = { id: string; name: string; holidayCalendarId: string | null };
+
+/** The team feed: approved leave of the people the Team view shows `person` (name + type only). */
+async function teamEvents(person: FeedPerson, role: string, today: string): Promise<FeedEvent[]> {
+  // listTeamLeave enforces who may be seen, and strips reason / note / document.
+  const team = await listTeamLeave({ id: person.id, role }, addDaysKey(today, -14), addDaysKey(today, 78));
+  return team.items
+    .filter((r) => r.status === "APPROVED" && r.user?.id !== person.id)
+    .map((r) => ({ uid: `team-${r.id}`, start: r.startDate, end: r.endDate, summary: `${r.user?.name ?? "Someone"}: ${r.leaveType.name}`, busy: false }));
+}
+
+/** The personal feed: my approved leave (when leave is on) and my holidays. */
+async function myEvents(person: FeedPerson, today: string, leaveOn: boolean): Promise<FeedEvent[]> {
+  const from = addDaysKey(today, -60);
+  const to = addDaysKey(today, 365);
+  const events: FeedEvent[] = [];
+  const rows = leaveOn
+    ? await prisma.leaveRequest.findMany({
+        where: { userId: person.id, status: "APPROVED", startDate: { lte: new Date(`${to}T00:00:00Z`) }, endDate: { gte: new Date(`${from}T00:00:00Z`) } },
+        select: { id: true, startDate: true, endDate: true, startHalf: true, endHalf: true, leaveType: { select: { name: true } } },
+        orderBy: { startDate: "asc" },
+        take: 1000
+      })
+    : [];
+  for (const r of rows) {
+    const s = r.startDate.toISOString().slice(0, 10);
+    const e = r.endDate.toISOString().slice(0, 10);
+    events.push({ uid: `leave-${r.id}`, start: s, end: e, summary: r.leaveType.name + (s === e ? halfText(r.startHalf) : ""), busy: true });
+  }
+  const holidayOf = await loadHolidays([person.holidayCalendarId], from, to);
+  for (let d = from; d <= to; d = addDaysKey(d, 1)) {
+    const h = holidayOf(person.holidayCalendarId, d, person.id);
+    if (h) events.push({ uid: `holiday-${compact(d)}`, start: d, end: d, summary: `Holiday: ${h.name}`, busy: false });
+  }
+  return events;
+}
+
+/** The token's live, active owner, or null. Malformed tokens never reach the database. */
+async function feedOwner(token: string) {
+  const row = await prisma.calendarFeedToken.findUnique({ where: { tokenHash: hashFeedToken(token) }, select: { id: true, userId: true } });
+  if (!row) return null;
+  const person = await prisma.user.findFirst({
+    where: { id: row.userId, status: "ACTIVE", deletedAt: null },
+    select: { id: true, name: true, timezone: true, holidayCalendarId: true, role: { select: { name: true } } }
+  });
+  return person ? { rowId: row.id, person } : null;
+}
+
 /**
  * The feed for a token, or a 404 AppError. `now` is injectable for tests. Everything that is not a
  * valid, live token for an active person in this workspace with the module on is the same 404.
  */
 export async function renderFeed(file: string, now: Date = new Date()): Promise<string> {
   const parsed = parseFeedFile(file);
-  if (!parsed) throw new AppError(404, NOT_FOUND);
-  if (!(await attendanceOrLeaveOn())) throw new AppError(404, NOT_FOUND);
-  const row = await prisma.calendarFeedToken.findUnique({ where: { tokenHash: hashFeedToken(parsed.token) }, select: { id: true, userId: true } });
-  if (!row) throw new AppError(404, NOT_FOUND);
-  const person = await prisma.user.findFirst({
-    where: { id: row.userId, status: "ACTIVE", deletedAt: null },
-    select: { id: true, name: true, timezone: true, holidayCalendarId: true, role: { select: { name: true } } }
-  });
-  if (!person) throw new AppError(404, NOT_FOUND);
+  if (!parsed || !(await attendanceOrLeaveOn())) throw new AppError(404, NOT_FOUND);
+  const owner = await feedOwner(parsed.token);
+  if (!owner) throw new AppError(404, NOT_FOUND);
+  const { person } = owner;
   const role = String(person.role?.name ?? "EMPLOYEE");
   const today = todayKeyFor(now, person.timezone, serverTimezone);
   const leaveOn = await isLeaveOn();
-  const events: FeedEvent[] = [];
-
-  if (parsed.kind === "team") {
-    if (!teamScopeFor(role) || !leaveOn) throw new AppError(404, NOT_FOUND);
-    // listTeamLeave enforces who may be seen, and strips reason / note / document.
-    const team = await listTeamLeave({ id: person.id, role }, addDaysKey(today, -14), addDaysKey(today, 78));
-    for (const r of team.items) {
-      if (r.status !== "APPROVED" || r.user?.id === person.id) continue;
-      events.push({ uid: `team-${r.id}`, start: r.startDate, end: r.endDate, summary: `${r.user?.name ?? "Someone"}: ${r.leaveType.name}`, busy: false });
-    }
-  } else {
-    const from = addDaysKey(today, -60);
-    const to = addDaysKey(today, 365);
-    if (leaveOn) {
-      const rows = await prisma.leaveRequest.findMany({
-        where: { userId: person.id, status: "APPROVED", startDate: { lte: new Date(`${to}T00:00:00Z`) }, endDate: { gte: new Date(`${from}T00:00:00Z`) } },
-        select: { id: true, startDate: true, endDate: true, startHalf: true, endHalf: true, leaveType: { select: { name: true } } },
-        orderBy: { startDate: "asc" },
-        take: 1000
-      });
-      for (const r of rows) {
-        const s = r.startDate.toISOString().slice(0, 10);
-        const e = r.endDate.toISOString().slice(0, 10);
-        const half = s === e ? halfText(r.startHalf) : "";
-        events.push({ uid: `leave-${r.id}`, start: s, end: e, summary: `${r.leaveType.name}${half}`, busy: true });
-      }
-    }
-    const holidayOf = await loadHolidays([person.holidayCalendarId], from, to);
-    for (let d = from; d <= to; d = addDaysKey(d, 1)) {
-      const h = holidayOf(person.holidayCalendarId, d, person.id);
-      if (h) events.push({ uid: `holiday-${compact(d)}`, start: d, end: d, summary: `Holiday: ${h.name}`, busy: false });
-    }
-  }
-  await prisma.calendarFeedToken.update({ where: { id: row.id }, data: { lastUsedAt: now } });
-  return buildFeedIcs(parsed.kind === "team" ? `${person.name}'s team leave` : "My leave and holidays", events, now);
+  const team = parsed.kind === "team";
+  if (team && (!teamScopeFor(role) || !leaveOn)) throw new AppError(404, NOT_FOUND);
+  const events = team ? await teamEvents(person, role, today) : await myEvents(person, today, leaveOn);
+  await prisma.calendarFeedToken.update({ where: { id: owner.rowId }, data: { lastUsedAt: now } });
+  return buildFeedIcs(team ? `${person.name}'s team leave` : "My leave and holidays", events, now);
 }

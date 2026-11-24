@@ -23,7 +23,9 @@ const serverMessage = (err: unknown, fallback: string) => (err as { response?: {
 
 /** "Priya covers Ravi, 1 Dec – 5 Dec" style line (pure, exported for the unit test). */
 export function delegationLine(d: Pick<DelegationRow, "delegator" | "delegate" | "startDate" | "endDate">, viewerId: string): string {
-  const who = d.delegator.id === viewerId ? `${d.delegate.name} covers your approvals` : d.delegate.id === viewerId ? `You cover ${d.delegator.name}` : `${d.delegate.name} covers ${d.delegator.name}`;
+  let who = `${d.delegate.name} covers ${d.delegator.name}`;
+  if (d.delegator.id === viewerId) who = `${d.delegate.name} covers your approvals`;
+  else if (d.delegate.id === viewerId) who = `You cover ${d.delegator.name}`;
   return `${who}, ${d.startDate} to ${d.endDate}`;
 }
 

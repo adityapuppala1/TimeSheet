@@ -116,56 +116,18 @@ export async function buildPayrollReport(month: string, opts: { now?: Date; empl
   const rows: PayrollRow[] = people.map((p) => {
     const isHoliday = (d: string) => Boolean(holidayOf(p.holidayCalendarId, d, p.id));
     const isWorking = (d: string) => planning.workingDays.includes(weekday(d)) && !isHoliday(d);
-    const leaveByType: Record<string, number> = {};
-    let paid = 0;
-    let unpaid = 0;
-    const fullLeave = new Set<string>();
-    for (const l of leaves) {
-      if (l.userId !== p.id) continue;
-      for (const [d, half] of dayPortions({ startDate: toKey(l.startDate), endDate: toKey(l.endDate), startHalf: l.startHalf, endHalf: l.endHalf })) {
-        if (d < from || d > to || !isWorking(d)) continue;
-        const f = half === "FULL" ? 1 : 0.5;
-        if (f === 1) fullLeave.add(d);
-        leaveByType[l.leaveType.code] = r2((leaveByType[l.leaveType.code] ?? 0) + f);
-        if (l.leaveType.isPaid) paid += f;
-        else unpaid += f;
-      }
-    }
-    let workingDays = 0;
-    let holidays = 0;
-    let present = 0;
-    let absent = 0;
-    for (let d = from; d <= to; d = addDaysKey(d, 1)) {
-      const scheduled = planning.workingDays.includes(weekday(d));
-      if (scheduled && isHoliday(d)) holidays += 1;
-      if (!isWorking(d)) continue;
-      workingDays += 1;
-      const status = resolveDayStatus({
-        dateKey: d,
-        workingDays: planning.workingDays,
-        holiday: null,
-        leave: fullLeave.has(d) ? { type: "LEAVE", half: "FULL" } : null,
-        punchedIn: punched.has(`${p.id}|${d}`),
-        now,
-        timeZone: p.timezone,
-        fallbackZone: serverTimezone
-      }).status;
-      if (status === "PRESENT") present += 1;
-      else if (status === "ABSENT" && settings.attendanceEnabled) absent += 1;
-    }
+    const totals = leaveTotals(leaves.filter((l) => l.userId === p.id), from, to, isWorking);
+    const days = dayCounts({ from, to, workingDays: planning.workingDays, isHoliday, isWorking, fullLeave: totals.fullLeave, punched: (d) => punched.has(`${p.id}|${d}`), now, timeZone: p.timezone, countAbsent: Boolean(settings.attendanceEnabled) });
     return {
       userId: p.id,
       name: p.name,
       email: p.email,
       employeeCode: p.employeeCode ?? null,
-      workingDays,
-      holidays,
-      present,
-      absent,
-      leave: leaveByType,
-      paidLeave: r2(paid),
-      unpaidLeave: r2(unpaid),
-      compOffTaken: leaveByType[compOffCode] ?? 0,
+      ...days,
+      leave: totals.byType,
+      paidLeave: r2(totals.paid),
+      unpaidLeave: r2(totals.unpaid),
+      compOffTaken: totals.byType[compOffCode] ?? 0,
       compOffEarned: r2(earned.get(p.id) ?? 0),
       loggedHours: r2(hours.get(p.id) ?? 0)
     };
@@ -173,6 +135,63 @@ export async function buildPayrollReport(month: string, opts: { now?: Date; empl
 
   const yearEnded = leaveYearBounds(leaveYear, startMonth).to < today;
   return { month, from, to, leaveYear, leaveYearClosed: yearEnded || Boolean(settled), leaveTypes: types, rows };
+}
+
+type LeaveRow = { startDate: Date; endDate: Date; startHalf: "FULL" | "FIRST_HALF" | "SECOND_HALF"; endHalf: "FULL" | "FIRST_HALF" | "SECOND_HALF"; leaveType: { code: string; isPaid: boolean } };
+
+/** One person's approved leave inside [from, to], working days only: by type, paid / unpaid, and the full days. */
+function leaveTotals(leaves: readonly LeaveRow[], from: string, to: string, isWorking: (d: string) => boolean) {
+  const byType: Record<string, number> = {};
+  const fullLeave = new Set<string>();
+  let paid = 0;
+  let unpaid = 0;
+  const counted = (d: string) => d >= from && d <= to && isWorking(d);
+  for (const l of leaves) {
+    const portions = [...dayPortions({ startDate: toKey(l.startDate), endDate: toKey(l.endDate), startHalf: l.startHalf, endHalf: l.endHalf })].filter(([d]) => counted(d));
+    for (const [d, half] of portions) {
+      if (half === "FULL") fullLeave.add(d);
+    }
+    const days = portions.reduce((sum, [, half]) => sum + (half === "FULL" ? 1 : 0.5), 0);
+    if (days === 0) continue;
+    byType[l.leaveType.code] = r2((byType[l.leaveType.code] ?? 0) + days);
+    if (l.leaveType.isPaid) paid += days;
+    else unpaid += days;
+  }
+  return { byType, fullLeave, paid, unpaid };
+}
+
+/** Working days, holidays on scheduled days, present and absent (resolveDayStatus) for one person. */
+function dayCounts(a: {
+  from: string;
+  to: string;
+  workingDays: readonly number[];
+  isHoliday: (d: string) => boolean;
+  isWorking: (d: string) => boolean;
+  fullLeave: ReadonlySet<string>;
+  punched: (d: string) => boolean;
+  now: Date;
+  timeZone: string | null;
+  countAbsent: boolean;
+}) {
+  const out = { workingDays: 0, holidays: 0, present: 0, absent: 0 };
+  for (let d = a.from; d <= a.to; d = addDaysKey(d, 1)) {
+    if (a.workingDays.includes(weekday(d)) && a.isHoliday(d)) out.holidays += 1;
+    if (!a.isWorking(d)) continue;
+    out.workingDays += 1;
+    const status = resolveDayStatus({
+      dateKey: d,
+      workingDays: a.workingDays,
+      holiday: null,
+      leave: a.fullLeave.has(d) ? { type: "LEAVE", half: "FULL" } : null,
+      punchedIn: a.punched(d),
+      now: a.now,
+      timeZone: a.timeZone,
+      fallbackZone: serverTimezone
+    }).status;
+    if (status === "PRESENT") out.present += 1;
+    else if (status === "ABSENT" && a.countAbsent) out.absent += 1;
+  }
+  return out;
 }
 
 /** The report as CSV: one column per leave type, then the totals. UTF-8 BOM and CRLF for Excel. */

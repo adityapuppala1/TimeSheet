@@ -37,6 +37,18 @@ export function compOffLine(r: Pick<CompOffRow, "workDate" | "dayKind" | "days" 
   return `${r.dayKind === "HOLIDAY" ? "Holiday" : "Weekend"} ${r.workDate} · ${r.hoursLogged}h logged · ${compOffDaysText(r.days)}`;
 }
 
+/** "Weekend" / "Holiday (Diwali)" (pure). */
+export function dayKindText(kind: CompOffRow["dayKind"] | null, holidayName: string | null): string {
+  if (kind !== "HOLIDAY") return "Weekend";
+  return holidayName ? `Holiday (${holidayName})` : "Holiday";
+}
+
+/** The expiry suffix of an approved credit (pure). */
+export function expiryText(r: Pick<CompOffRow, "status" | "expiresOn" | "expiredAt">): string {
+  if (!r.expiresOn || r.status !== "APPROVED") return "";
+  return r.expiredAt ? " · expired" : ` · use by ${r.expiresOn}`;
+}
+
 function useInvalidate() {
   const qc = useQueryClient();
   return () => {
@@ -68,7 +80,7 @@ function RequestForm({ date, onDone }: Readonly<{ date: string; onDone?: () => v
     <div className="grid gap-2" aria-live="polite">
       {e.eligible ? (
         <p className="text-sm">
-          {e.dayKind === "HOLIDAY" ? `Holiday${e.holidayName ? ` (${e.holidayName})` : ""}` : "Weekend"}, {e.hoursLogged}h logged: earns <strong>{compOffDaysText(e.days)}</strong>.
+          {dayKindText(e.dayKind, e.holidayName)}, {e.hoursLogged}h logged: earns <strong>{compOffDaysText(e.days)}</strong>.
         </p>
       ) : (
         <p className="text-sm text-muted-foreground">{e.problem}</p>
@@ -135,7 +147,7 @@ export function MyCompOffCard() {
                   <p className="truncate">{compOffLine(r)}</p>
                   <p className="text-xs text-muted-foreground">
                     {STATUS_TEXT[r.status]}
-                    {r.expiresOn && r.status === "APPROVED" ? (r.expiredAt ? " · expired" : ` · use by ${r.expiresOn}`) : ""}
+                    {expiryText(r)}
                   </p>
                 </div>
                 {r.status === "PENDING" && (

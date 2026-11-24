@@ -35,6 +35,13 @@ export function feedUrls(origin: string, token: string): { mine: string; team: s
   return { mine: `${base}.ics`, team: `${base}-team.ics` };
 }
 
+/** Pure: the line shown when no fresh URL is on screen. */
+export function feedStatusText(s: Pick<FeedStatus, "enabled" | "hint" | "lastUsedAt">): string {
+  if (!s.enabled) return "No calendar link yet.";
+  const read = s.lastUsedAt ? ", last read " + new Date(s.lastUsedAt).toLocaleString() : "";
+  return `A link is active (starts ${s.hint}…)${read}.`;
+}
+
 function CopyRow({ label, value }: Readonly<{ label: string; value: string }>) {
   return (
     <div className="grid gap-1">
@@ -112,7 +119,7 @@ export function CalendarFeedCard() {
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
-            {s.enabled ? `A link is active (starts ${s.hint}…)${s.lastUsedAt ? `, last read ${new Date(s.lastUsedAt).toLocaleString()}` : ""}.` : "No calendar link yet."}
+            {feedStatusText(s)}
           </p>
         )}
         <div className="flex flex-wrap gap-2">
