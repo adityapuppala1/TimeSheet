@@ -102,6 +102,7 @@ import { SsoSettingsCard } from "./settings/SsoSettingsCard";
 import { CompanyDomainsCard } from "./settings/CompanyDomainsCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
+import { AttendanceSettingsCard } from "./settings/AttendanceSettingsCard";
 import { BrandingSettingsCard } from "./settings/BrandingSettingsCard";
 import { MaintenanceSettingsCard } from "./settings/MaintenanceSettingsCard";
 import { ChangeManagementSettingsCard } from "./settings/ChangeManagementSettingsCard";
@@ -137,6 +138,9 @@ const emailRows = [
   { group: "Timesheets", key: "emailEscalation", label: "Approval escalations", description: "Email the manager-of-manager (or admin) when an SLA is missed.", icon: <ShieldX className="h-4 w-4 text-destructive" /> },
   { group: "Timesheets", key: "emailDailyReminder", label: "Daily reminder (4 PM)", description: "Nudge employees who haven't logged today's time.", icon: <Clock className="h-4 w-4 text-primary" /> },
   { group: "Timesheets", key: "emailDailyEscalation", label: "Next-morning escalation (9 AM)", description: "Email both the employee and their manager when yesterday's log was missed.", icon: <Timer className="h-4 w-4 text-destructive" /> },
+  { group: "Timesheets", key: "emailPunchInReminder", label: "Punch-in reminder (11 AM)", description: "Remind everyone, of every role, who has not punched in by the hour set under Attendance & Leave, on their working days. Untick a role to stop its emails. Only sends when attendance and its punch-in reminder are switched on.", icon: <Clock className="h-4 w-4 text-warning" /> },
+  { group: "Timesheets", key: "emailLeaveRequested", label: "Leave and attendance requests", description: "Email the approver (the person's manager, or the admins when they have none) when a leave request, comp-off request, attendance correction or overtime claim needs a decision. Only sends when the feature is switched on under Attendance & Leave.", icon: <CalendarClock className="h-4 w-4 text-primary" /> },
+  { group: "Timesheets", key: "emailLeaveDecided", label: "Leave and attendance decisions", description: "Email the person who made a leave request, comp-off request, attendance correction or overtime claim when it is approved or rejected.", icon: <Check className="h-4 w-4 text-success" /> },
   { group: "Timesheets", key: "emailDeadlineReminder", label: "Monthly deadline reminder", description: "Email employees a few days before the monthly cutoff.", icon: <CalendarClock className="h-4 w-4 text-warning" /> },
   { group: "Digests", key: "emailWeeklyDigest", label: "Weekly digest", description: "AI-authored Monday-morning recap of your ticket and timesheet activity. Requires the \"Weekly digest\" capability in the AI tab.", icon: <BellRing className="h-4 w-4 text-info" /> },
   { group: "Digests", key: "emailPracticeUpdate", label: "Weekly AI/ML practice update", description: "The consolidated leadership update — products, POCs, bugs, security, training, metrics, risks and decisions required. Sent on demand from Practice Update, and optionally every Monday. Recipients are set there by a super admin.", icon: <BellRing className="h-4 w-4 text-primary" /> },
@@ -287,6 +291,7 @@ export function WorkspaceSettingsPage() {
           <TabsTrigger value="chat-integrations">Chat integrations</TabsTrigger>
           <TabsTrigger value="security-devops">Security & DevOps</TabsTrigger>
           <TabsTrigger value="face-verification">Face verification</TabsTrigger>
+          <TabsTrigger value="attendance">Attendance & Leave</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
           <TabsTrigger value="billing">Billing</TabsTrigger>
           <TabsTrigger value="public-api">Public API</TabsTrigger>
@@ -344,6 +349,10 @@ export function WorkspaceSettingsPage() {
 
         <TabsContent value="face-verification">
           <FaceVerificationSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="attendance">
+          <AttendanceSettingsCard readOnly={!isSuperAdmin} />
         </TabsContent>
 
         <TabsContent value="security-devops">

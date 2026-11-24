@@ -142,22 +142,22 @@ model UserRole {
 }
 
 model User {
-  id                       String     @id @default(uuid())
+  id                       String             @id @default(uuid())
   name                     String
-  email                    String     @unique
+  email                    String             @unique
   passwordHash             String
   /// True while this person is using a password somebody else knows — set by admin creation and
   /// every admin reset, cleared the moment they choose their own (change-password or the emailed
   /// reset flow). A GATE for password sessions (security audit #11): until it clears, requireAuth
   /// allows only the forced change-password screen. SSO and LDAP sessions are not gated.
-  mustChangePassword       Boolean    @default(false)
+  mustChangePassword       Boolean            @default(false)
   /// Two-factor sign-in (TOTP). `mfaSecret` is encrypted (utils/encryption.ts) because the server has
   /// to read it back to check a code; `mfaPendingSecret` holds a secret between "set up" and the first
   /// confirmed code, so an abandoned setup never turns two-factor on. `mfaLastStep` is the last
   /// 30-second step accepted, so one code cannot be used twice.
-  mfaEnabled               Boolean    @default(false)
-  mfaSecret                String?    @db.Text
-  mfaPendingSecret         String?    @db.Text
+  mfaEnabled               Boolean            @default(false)
+  mfaSecret                String?            @db.Text
+  mfaPendingSecret         String?            @db.Text
   mfaEnabledAt             DateTime?
   mfaLastStep              Int?
   recoveryCodes            UserRecoveryCode[]
@@ -172,17 +172,17 @@ model User {
   ///   2. It can never authenticate (`establishSession` refuses it) — a security rule.
   /// A third consequence: it has no mailbox, so the mail choke point skips it rather than posting
   /// digests to a synthesised address.
-  isAgent                  Boolean    @default(false)
-  status                   UserStatus @default(PENDING_VERIFICATION)
+  isAgent                  Boolean            @default(false)
+  status                   UserStatus         @default(PENDING_VERIFICATION)
   roleId                   String
-  role                     Role       @relation(fields: [roleId], references: [id])
+  role                     Role               @relation(fields: [roleId], references: [id])
   /// Roles this account is allowed to switch into — see UserRole's own comment. `role` above is
   /// always the currently ACTIVE one; every account holds at least one row here matching it.
   userRoles                UserRole[]
-  avatarUrl                String?    @db.VarChar(500)
-  bio                      String?    @db.Text
-  phoneNumber              String?    @db.VarChar(40)
-  timezone                 String?    @db.VarChar(80)
+  avatarUrl                String?            @db.VarChar(500)
+  bio                      String?            @db.Text
+  phoneNumber              String?            @db.VarChar(40)
+  timezone                 String?            @db.VarChar(80)
   /// The person's saved appearance — `{ mode?: "system"|"light"|"dark", accent?: <palette id> }`,
   /// validated against `packages/shared/src/appearance.ts` on write. JSON rather than two columns
   /// because the two are one preference edited from one card, and because a third knob (density is
@@ -215,19 +215,19 @@ model User {
   /// designation has no bearing on what they can do in the app; it's display-only context shown
   /// alongside their name (Users table, org chart) so "who does what" reads clearly even when
   /// several people share the same RBAC role.
-  designation              String?    @db.VarChar(120)
+  designation              String?            @db.VarChar(120)
   /// GitHub login (no leading @), admin-set — lets the security-ingestion pipeline resolve a
   /// finding's CODEOWNERS entry or last-committer to a real TimeSphere user for auto-assignment
   /// (security-report.service.ts#maybeAssignFindingViaCodeowners). Optional and unrelated to
   /// GitConnection (that's the org's OAuth App credential; this is one person's identity on
   /// whatever repo the org connected). No uniqueness constraint — nothing in this app requires
   /// one GitHub login map to exactly one user, though in practice it always will.
-  githubUsername           String?    @db.VarChar(120)
+  githubUsername           String?            @db.VarChar(120)
   /// The IdP's own opaque id for this user (SCIM's `externalId`), set only for users provisioned
   /// via SCIM (scim.controller.ts). Unique so a single IdP push always maps to exactly one row;
   /// null for every manually-created/SSO-first-login user, which is fine — MySQL unique indexes
   /// allow any number of NULLs.
-  scimExternalId           String?    @unique @db.VarChar(255)
+  scimExternalId           String?            @unique @db.VarChar(255)
   emailVerifiedAt          DateTime?
   lastLoginAt              DateTime?
   /// Stamped exactly once, on the account's very first successful login (any method — password
@@ -236,14 +236,14 @@ model User {
   /// so pre-existing users show "—" in the admin list until... never. Null means "unknown".
   firstLoginAt             DateTime?
   /// Admin-only, opt-in. Only read when GlobalTicketSettings.enableCostAnalytics is on.
-  hourlyRate               Decimal?   @db.Decimal(10, 2)
+  hourlyRate               Decimal?           @db.Decimal(10, 2)
   /// Admin-set per-user override for face (identity) verification, in the same
   /// "global switch + per-user opt-in" shape as `hourlyRate`/`enableCostAnalytics`: only read
   /// when GlobalFaceVerificationSettings.enabled is on, and only consulted when that row's
   /// enforcementMode is SELECTED (in ALL mode every non-exempt user is covered regardless).
   /// Defaults false so enabling the workspace switch never silently starts demanding a webcam
   /// from an entire company at once.
-  faceVerificationRequired Boolean    @default(false)
+  faceVerificationRequired Boolean            @default(false)
 
   /// --- Planning layer (V6) -----------------------------------------------------------------
   /// Contracted hours per week, the denominator of every utilisation/over-allocation number on
@@ -265,7 +265,7 @@ model User {
   sessions               Session[]
   resetTokens            PasswordResetToken[]
   /// Join requests this person decided (signup Phase 1).
-  decidedJoinRequests    JoinRequest[]          @relation("JoinRequestDecider")
+  decidedJoinRequests    JoinRequest[]           @relation("JoinRequestDecider")
   projectAssignments     UserProjectAssignment[]
   timesheets             Timesheet[]
   notifications          Notification[]
@@ -277,9 +277,9 @@ model User {
   reportedTickets          Ticket[]             @relation("TicketReporter")
   assignedTickets          Ticket[]             @relation("TicketAssignee")
   ticketComments           TicketComment[]
-  assignedComments         TicketComment[] @relation("CommentAssignee")
+  assignedComments         TicketComment[]      @relation("CommentAssignee")
   ticketDocumentLinks      TicketDocumentLink[] @relation("TicketDocumentLinkCreator")
-  resolvedComments         TicketComment[] @relation("CommentResolver")
+  resolvedComments         TicketComment[]      @relation("CommentResolver")
   ticketWatches            TicketWatcher[]
   ticketCollaborations     TicketCollaborator[] @relation("TicketCollaboratorUser")
   ticketCollaboratorsAdded TicketCollaborator[] @relation("TicketCollaboratorAddedBy")
@@ -360,12 +360,64 @@ model User {
   practiceUpdatesGenerated       PracticeUpdateRecord[] @relation("PracticeUpdateGeneratedBy")
   practiceUpdatesSent            PracticeUpdateRecord[] @relation("PracticeUpdateSentBy")
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  /// --- Attendance (V17) ----------------------------------------------------------------------
+  /// The id an external attendance source (biometric terminal, HRMS) knows this person by.
+  /// Unique when set so an inbound punch matched on it resolves to exactly one person; nullable
+  /// because most workspaces never connect such a source.
+  employeeCode                     String?                           @unique @db.VarChar(64)
+  /// Which holiday calendar decides this person's days off. NULL = the workspace default calendar
+  /// (HolidayCalendar.isDefault), so a fresh workspace needs no per-person assignment at all.
+  /// SetNull on delete: removing a calendar drops people back to the default, never orphans them.
+  holidayCalendarId                String?
+  /// 7.0.0 leave policies: what kind of employment this is (leave types and holiday calendars may be
+  /// scoped to some kinds). NULL = not set; a scoped policy then does not apply to them.
+  employmentType                   EmploymentType?
+  /// 7.0.0: the person's home work site. A holiday calendar scoped to the site applies to them when
+  /// they have no calendar of their own; leave types may be scoped to sites. SetNull on delete.
+  siteId                           String?
+  site                             AttendanceSite?                   @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  /// When this person first accepted the workspace's location-consent wording for punch-in (V17 A2).
+  /// NULL = never asked yet; the punch-in dialog shows the consent text before the first location read.
+  attendanceLocationConsentAt      DateTime?
+  /// --- Celebrations (7.0.0) ------------------------------------------------------------------
+  /// Birthday, set by the person on their Profile. The YEAR is private: the API returns it only to
+  /// the person and to super admins (the tenant client omits this column by default — see
+  /// config/prisma.ts); the strip shows day and month only, never an age.
+  dateOfBirth                      DateTime?                         @db.Date
+  /// First working day, set by an admin. Drives work anniversaries (years shown only when >= 1).
+  joinDate                         DateTime?                         @db.Date
+  /// Leave me out of the birthday / anniversary strip.
+  celebrationsOptOut               Boolean                           @default(false)
+  holidayCalendar                  HolidayCalendar?                  @relation(fields: [holidayCalendarId], references: [id], onDelete: SetNull)
+  attendanceRecords                AttendanceRecord[]
+  missedDayReasons                 MissedDayReason[]
+  attendanceInsightDismissals      AttendanceInsightDismissal[]
+  holidayOptIns                    HolidayOptIn[]
+  /// V17 Phase B leave. Cascade with the person (personal data), like attendance.
+  compOffRequests                  CompOffRequest[]
+  attendanceRegularizationRequests AttendanceRegularizationRequest[]
+  overtimeClaims                   OvertimeClaim[]
+  leaveRequests                    LeaveRequest[]
+  leaveLedger                      LeaveBalanceLedger[]
+
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+  deletedAt            DateTime?
+  calendarFeedToken    CalendarFeedToken?
+  shiftAssignments     AttendanceShiftAssignment[] @relation("ShiftAssignee")
+  teamShiftAssignments AttendanceShiftAssignment[] @relation("ShiftTeam")
 
   @@index([roleId, status])
   @@index([managerId])
+  @@index([holidayCalendarId])
+  @@index([siteId])
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERN
 }
 
 model Session {
@@ -936,19 +988,19 @@ model EmailTemplate {
 }
 
 model Ticket {
-  id        String         @id @default(uuid())
+  id          String         @id @default(uuid())
   /// Human-readable key, e.g. "WEB-123" — `${project.code}-${seq}`, seq issued via Project.ticketSeq.
-  key       String         @unique @db.VarChar(20)
-  projectId String
-  project   Project        @relation(fields: [projectId], references: [id])
-  moduleId  String?
-  module    ProjectModule? @relation(fields: [moduleId], references: [id])
+  key         String         @unique @db.VarChar(20)
+  projectId   String
+  project     Project        @relation(fields: [projectId], references: [id])
+  moduleId    String?
+  module      ProjectModule? @relation(fields: [moduleId], references: [id])
   /// V12 sprints (default-off workspace toggle `enableSprints`). Nullable, SET NULL when the sprint
   /// is deleted: a ticket outlives the iteration it was planned into. Points are a Decimal(5,1) so
   /// half-points are representable without inviting fractions of fractions.
   sprintId    String?
-  sprint      Sprint?  @relation(fields: [sprintId], references: [id], onDelete: SetNull)
-  storyPoints Decimal? @db.Decimal(5, 1)
+  sprint      Sprint?        @relation(fields: [sprintId], references: [id], onDelete: SetNull)
+  storyPoints Decimal?       @db.Decimal(5, 1)
 
   /// Free string validated at the API layer against active TicketType.name rows —
   /// mirrors how Timesheet.activityType relates to ActivityType (no hard FK), so
@@ -1089,14 +1141,14 @@ model Ticket {
 }
 
 model TicketComment {
-  id        String   @id @default(uuid())
-  ticketId  String
-  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  authorId  String
-  author    User     @relation(fields: [authorId], references: [id])
-  body      String   @db.Text
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String    @id @default(uuid())
+  ticketId     String
+  ticket       Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  authorId     String
+  author       User      @relation(fields: [authorId], references: [id])
+  body         String    @db.Text
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
   /// V12 8.3: a comment assigned as an action item. NULL = an ordinary comment. Resolution is
   /// recorded by whom and when, so the tick can show a name.
   assigneeId   String?
@@ -1225,18 +1277,18 @@ model TicketLabel {
 /// TICKET_SLA_*_HOURS env vars, now editable without a server restart) plus opt-in,
 /// off-by-default analytics that touch sensitive data (hourly rates, per-person rankings).
 model GlobalTicketSettings {
-  id                         String  @id
-  slaLowHours                Int     @default(168)
-  slaMediumHours             Int     @default(72)
-  slaHighHours               Int     @default(24)
-  slaCriticalHours           Int     @default(4)
-  enableCostAnalytics        Boolean @default(false)
-  enableLeaderboard          Boolean @default(false)
+  id                               String  @id
+  slaLowHours                      Int     @default(168)
+  slaMediumHours                   Int     @default(72)
+  slaHighHours                     Int     @default(24)
+  slaCriticalHours                 Int     @default(4)
+  enableCostAnalytics              Boolean @default(false)
+  enableLeaderboard                Boolean @default(false)
   /// See docs/ROADMAP.md's "Auto testing on branch/PR push" theme. When true, a ticket whose
   /// latest ingested TestRun is FAILED cannot transition to RESOLVED (ticket.controller.ts's
   /// status route enforces this). Default false — orgs that don't ingest test runs yet, or
   /// that want this as a warning rather than a hard gate, are unaffected either way.
-  blockResolveOnFailingTests Boolean @default(false)
+  blockResolveOnFailingTests       Boolean @default(false)
   /// The sibling of the switch above, for SonarQube's quality gate. When true, a ticket cannot move
   /// to RESOLVED while the most recent QualityGateRun on any branch linked to it (TicketBranch)
   /// reports ERROR. Default false, for the same reason: an org that does not send quality-gate
@@ -1590,7 +1642,7 @@ model NativeModelDownload {
   sha256        String? @db.Char(64)
 
   /// Absolute path of the stored file. NULL until `ready`, and cleared by a delete.
-  filePath String? @db.VarChar(500)
+  filePath  String? @db.VarChar(500)
   /// Where it came from, recorded so a support conversation does not have to re-derive it.
   sourceUrl String? @db.VarChar(1000)
 
@@ -1603,11 +1655,11 @@ model NativeModelDownload {
   /// benchmark against the running server recorded. `suggestedMaxOutputTokens` is the number
   /// `AIProviderConfig.maxOutputTokens` should hold — deriving it from a measurement instead of a
   /// guess is the entire point of the benchmark.
-  benchmarkedAt           DateTime?
-  timeToFirstTokenMs      Int?
-  tokensPerSecond         Float?
-  benchmarkOutputTokens   Int?
-  benchmarkTotalMs        Int?
+  benchmarkedAt            DateTime?
+  timeToFirstTokenMs       Int?
+  tokensPerSecond          Float?
+  benchmarkOutputTokens    Int?
+  benchmarkTotalMs         Int?
   suggestedMaxOutputTokens Int?
 
   requestedById String?
@@ -1655,8 +1707,8 @@ model NativeEngineInstall {
   releaseTag String @db.VarChar(20)
   /// The published asset's file name, so a support conversation does not have to re-derive which
   /// platform/arch build this box has.
-  assetName String @db.VarChar(200)
-  sourceUrl String @db.VarChar(1000)
+  assetName  String @db.VarChar(200)
+  sourceUrl  String @db.VarChar(1000)
 
   bytesDownloaded Float  @default(0)
   /// NULL means the server sent no Content-Length — a real outcome, not zero.
@@ -1669,7 +1721,7 @@ model NativeEngineInstall {
   /// Absolute path of the installed `llama-server`, set only after it has been RUN and answered.
   /// NULL is what "not installed" looks like, including for a row that downloaded perfectly and
   /// then failed its version probe.
-  binaryPath String? @db.VarChar(500)
+  binaryPath    String? @db.VarChar(500)
   /// What the binary said when asked its version — the evidence behind the word "installed",
   /// stored so an operator sees the same string the installer accepted.
   versionOutput String? @db.VarChar(500)
@@ -2298,6 +2350,13 @@ model GlobalNotificationSettings {
   emailWeeklyDigest         Boolean @default(false)
   emailDailyReminder        Boolean @default(true)
   emailDailyEscalation      Boolean @default(true)
+  /// V17 A4: the 11:00 "you haven't punched in" reminder (workers/daily-reminder.worker.ts). Only
+  /// ever fires when attendance is on and its own punchInReminderEnabled is set, so ON here is safe.
+  emailPunchInReminder      Boolean @default(true)
+  /// V17 Phase B: a leave request waiting on this approver, and the requester's decision mail.
+  /// Both are direct consequences of somebody's action, so they ship ON (the codebase's rule).
+  emailLeaveRequested       Boolean @default(true)
+  emailLeaveDecided         Boolean @default(true)
   emailTicketAssigned       Boolean @default(true)
   emailTicketStatusChanged  Boolean @default(true)
   emailTicketCommented      Boolean @default(true)
@@ -2506,23 +2565,23 @@ model GlobalMailSettings {
 }
 
 model EmailIntakeSettings {
-  id                  String    @id
-  imapHost            String?   @db.VarChar(255)
-  imapPort            Int       @default(993)
-  imapSecure          Boolean   @default(true)
-  imapUser            String?   @db.VarChar(255)
+  id                      String    @id
+  imapHost                String?   @db.VarChar(255)
+  imapPort                Int       @default(993)
+  imapSecure              Boolean   @default(true)
+  imapUser                String?   @db.VarChar(255)
   /// Never returned to the client — GET responses expose only `imapPasswordSet: boolean`.
-  imapPassword        String?   @db.VarChar(500)
-  pollIntervalMinutes Int       @default(5)
+  imapPassword            String?   @db.VarChar(500)
+  pollIntervalMinutes     Int       @default(5)
   /// Email the outside person who reported a ticket (email intake or a public request form) when
   /// it is resolved or closed. OFF by default: it is mail to a customer, which a workspace opts into.
-  notifyReporterOnResolve Boolean @default(false)
-  fallbackProjectId   String?
-  fallbackProject     Project?  @relation(fields: [fallbackProjectId], references: [id], onDelete: SetNull)
-  lastPolledAt        DateTime?
-  lastPollError       String?   @db.Text
-  updatedAt           DateTime  @updatedAt
-  updatedById         String?
+  notifyReporterOnResolve Boolean   @default(false)
+  fallbackProjectId       String?
+  fallbackProject         Project?  @relation(fields: [fallbackProjectId], references: [id], onDelete: SetNull)
+  lastPolledAt            DateTime?
+  lastPollError           String?   @db.Text
+  updatedAt               DateTime  @updatedAt
+  updatedById             String?
 }
 
 /// Routes an inbound email to a project (+ optional default module) by matching the
@@ -3380,6 +3439,11 @@ model ApiKey {
   /// scoping yet — see docs/ROADMAP.md for why a fuller scopes list is future work, not this
   /// phase.
   scope       String    @default("READ") @db.VarChar(10)
+  /// Granular grants ON TOP of `scope`, comma-separated (`attendance:read,attendance:write`).
+  /// NULL on every key issued before V17 A3, which is exactly "no attendance access": a broad
+  /// WRITE key minted for Zapier must not start punching people in because a module shipped.
+  /// See middleware/public-api-auth.ts#requireApiGrant.
+  grants      String?   @db.VarChar(255)
   lastUsedAt  DateTime?
   createdById String?
   createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
@@ -3713,7 +3777,7 @@ model FaceVerificationAttempt {
   userId String
   user   User   @relation("FaceVerificationSubject", fields: [userId], references: [id], onDelete: Cascade)
 
-  /// TIMESHEET | TICKET | APPROVAL
+  /// TIMESHEET | TICKET | APPROVAL | PUNCH_IN (V17: validated by the zod enums in face.controller.ts)
   context String @db.VarChar(20)
 
   /// PASSED | NO_FACE | MULTIPLE_FACES | NO_MATCH | SPOOF_SUSPECTED | CHALLENGE_FAILED |
@@ -4291,7 +4355,7 @@ model RequirementsDocument {
   /// V12 8.4: tickets related to this document (either side may add the link).
   ticketLinks TicketDocumentLink[]
   /// V12 9.4: proposals materialised from this document.
-  proposals   AiProposal[] @relation("AiProposalSourceDocument")
+  proposals   AiProposal[]         @relation("AiProposalSourceDocument")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4601,10 +4665,10 @@ model AiProposal {
   kind AiProposalKind
 
   /// Scope — at most one is set, depending on kind.
-  scopeProjectId String?
-  scopeProject   Project? @relation("AiProposalProjectScope", fields: [scopeProjectId], references: [id], onDelete: Cascade)
-  scopeTicketId  String?
-  scopeTicket    Ticket?  @relation("AiProposalTicketScope", fields: [scopeTicketId], references: [id], onDelete: Cascade)
+  scopeProjectId   String?
+  scopeProject     Project?              @relation("AiProposalProjectScope", fields: [scopeProjectId], references: [id], onDelete: Cascade)
+  scopeTicketId    String?
+  scopeTicket      Ticket?               @relation("AiProposalTicketScope", fields: [scopeTicketId], references: [id], onDelete: Cascade)
   /// V12 9.4: the requirements document this proposal was materialised from, when it was. Sits
   /// beside the scope fields on purpose — like them it is set by the SERVER at construction and is
   /// trusted at apply time, unlike a change's model-authored `after` payload. A ticket created from
@@ -4660,6 +4724,10 @@ model AiProposal {
   @@index([status, createdAt])
   @@index([scopeProjectId, status])
   @@index([expiresAt])
+  /// Declared because migration 20260917140000_proposal_source_document creates it by this name; without
+  /// it a fresh replay of the migrations and this schema disagree (the schema expects MySQL's implicit
+  /// `_fkey` index instead).
+  @@index([sourceDocumentId])
 }
 
 /// One row per calendar month: the serialized gate the AI budget check goes through.
@@ -6064,4 +6132,825 @@ model UserRecoveryCode {
   createdAt DateTime  @default(now())
 
   @@index([userId])
+}
+
+/**
+ * ------------------------------------------------------------------ *
+ * ATTENDANCE, LEAVE & HOLIDAYS (V17)
+ * Every switch here defaults OFF. A workspace opts in from Settings → Attendance & Leave, and the
+ * module only runs when BOTH that toggle and PlanTierLimit.attendanceEnabled are true — the same
+ * toggle-AND-entitlement rule every optional module follows. A downgraded workspace keeps every
+ * record; it just stops collecting new ones.
+ * Day status is resolved by one pure function, in this order: weekend (GlobalPlanningSettings.
+ * workingDays) → holiday (the person's calendar) → approved leave (phase B) → punched in (any
+ * source) → ABSENT, only once the day's cutoff has passed, all in the person's User.timezone.
+ * ------------------------------------------------------------------ *
+ */
+
+enum PunchInMode {
+  OFF
+  /// A dismissible dialog, then a dismissible banner that stays dismissed for the day.
+  OPTIONAL
+  /// An overlay like OnboardingGate — only the profile page and sign-out stay reachable.
+  MANDATORY
+}
+
+enum AttendanceLocationMode {
+  OFF
+  OPTIONAL
+  REQUIRED
+}
+
+/// What happens when the punch-in face check fails. ALLOW_FLAGGED exists because a camera that
+/// cannot see someone at 9am must not cost them a day's attendance — it records the punch and
+/// puts the attempt in the review queue instead.
+/// 7.0.0: what a web punch-in outside every work site does. OFF only labels it.
+enum AttendanceSiteRule {
+  OFF
+  BLOCK
+  ALLOW_FLAGGED
+}
+
+enum AttendanceInsightFrequency {
+  DAILY
+  WEEKLY
+}
+
+enum AttendanceFaceFailureRule {
+  BLOCK
+  ALLOW_FLAGGED
+}
+
+enum AttendanceSourceKind {
+  WEB
+  API
+  WEBHOOK
+  MCP
+  CSV
+  /// 7.0.0: an approved regularisation (correction) request. Outranks every other source: it is a
+  /// decision about the day, made after the fact. The replaced punch stays on the event history.
+  REGULARIZATION
+  /// 7.0.0: a signed-in person scanned the rotating QR code on a kiosk device (attendance-kiosk.service.ts).
+  KIOSK
+}
+
+/// Which field on an inbound event identifies the person. employeeCode and externalId exist
+/// because a biometric terminal rarely knows anyone's email.
+enum AttendanceMatchField {
+  EMAIL
+  EMPLOYEE_CODE
+  EXTERNAL_ID
+}
+
+/// Workspace switches for the module. Singleton (`id = "global"`), upserted on read, mirroring
+/// GlobalChangeSettings and GlobalPlanningSettings.
+model GlobalAttendanceSettings {
+  id String @id
+
+  /// The admin half of the gate. The other half is PlanTierLimit.attendanceEnabled.
+  attendanceEnabled   Boolean                   @default(false)
+  punchInMode         PunchInMode               @default(OFF)
+  locationMode        AttendanceLocationMode    @default(OFF)
+  /// Reuses face.service (liveness + match) with context PUNCH_IN. Ignored without the face
+  /// entitlement, for the same fail-open reason face enforcement on timesheets is.
+  punchInFaceRequired Boolean                   @default(false)
+  faceFailureRule     AttendanceFaceFailureRule @default(BLOCK)
+  /// Conflict priorities for punches with no configured source row (A3). Higher wins; a WEBHOOK
+  /// source ranks 1000 + its own priority, so biometrics beat these unless an admin raises one.
+  apiPriority         Int                       @default(30)
+  webPriority         Int                       @default(20)
+  mcpPriority         Int                       @default(20)
+  csvPriority         Int                       @default(10)
+
+  /// Local hour (0-23, recipient's timezone) of the "you haven't punched in" reminder. 11 is late
+  /// enough that someone on a normal morning has already punched in, early enough to matter.
+  punchInReminderHour    Int     @default(11)
+  punchInReminderEnabled Boolean @default(false)
+  /// Require a reason when someone logs time for a past working day that has no entries at all.
+  missedDayReasonEnabled Boolean @default(false)
+
+  /// AI suggestions per audience. Separate because "show me my own pattern" and "show a manager
+  /// their team's pattern" are different privacy decisions. Aggregates only, never raw GPS/face.
+  aiInsightsSelf      Boolean                    @default(false)
+  aiInsightsManager   Boolean                    @default(false)
+  aiInsightsOrg       Boolean                    @default(false)
+  /// Never show an aggregate over fewer people than this — below it an "average" is one person.
+  minGroupSize        Int                        @default(5)
+  /// How long an AI suggestion set is reused before the model is asked again (V17 A6). Rule-based
+  /// suggestions are recomputed on every request; only the paid call is cached.
+  aiInsightsFrequency AttendanceInsightFrequency @default(WEEKLY)
+  /// Lateness is OFF by default: many workspaces run flexible hours, and "late" against a start
+  /// time nobody agreed to is an accusation, not a metric. Off, analytics report each person's
+  /// punch-in trend against their OWN median instead of an on-time percentage.
+  latenessEnabled     Boolean                    @default(false)
+  /// Expected local start, minutes after midnight (600 = 10:00). Only read when latenessEnabled.
+  expectedStartMinute Int                        @default(600)
+
+  /// Shown the first time someone is asked for their location. NULL = the built-in wording.
+  locationConsentText   String? @db.Text
+  /// How long raw punch coordinates / IP / user agent are kept before the retention worker nulls
+  /// them. The punch itself (time + source) is kept; it is the record.
+  locationRetentionDays Int     @default(90)
+
+  /// --- Leave (V17 Phase B) -------------------------------------------------------------------
+  /// The admin half of the leave gate. The other half is PlanTierLimit.leaveManagementEnabled.
+  /// Independent of attendanceEnabled: a workspace can run leave without punch-in.
+  leaveEnabled           Boolean               @default(false)
+  /// First month of the leave year, 1 = January, 4 = April (the Indian financial year). Balances,
+  /// accrual and carry-forward are all per leave year.
+  leaveYearStartMonth    Int                   @default(1)
+  /// An HRMS that says "approved" is believed (approved as-is, ledger debited) when true; when
+  /// false every external request lands PENDING and goes through the normal approver.
+  trustExternalApprovals Boolean               @default(false)
+  /// Who decides for someone with no (active) manager.
+  leaveApprovalFallback  LeaveApprovalFallback @default(ADMINS)
+
+  /// --- Comp-off (7.0.0) ----------------------------------------------------------------------
+  /// Working a weekend or holiday (per resolveDayStatus) earns a request for compensatory leave.
+  /// OFF by default; also needs leave itself on (leaveEnabled AND the leaveManagementEnabled plan).
+  compOffEnabled       Boolean @default(false)
+  /// Logged hours on the day that earn half a day / a full day of credit.
+  compOffHalfDayHours  Decimal @default(4) @db.Decimal(4, 2)
+  compOffFullDayHours  Decimal @default(8) @db.Decimal(4, 2)
+  /// The LeaveType credited on approval, by code. "CO" is seeded DISABLED by the migration.
+  compOffLeaveTypeCode String  @default("CO") @db.VarChar(20)
+  /// Days after approval an unused credit expires (the nightly accrual run). NULL = never.
+  compOffExpiryDays    Int?
+
+  /// --- Regularisation (7.0.0) ----------------------------------------------------------------
+  /// A person asks to add or correct a punch for a past day; the manager decides. OFF by default:
+  /// Phase A decided "no corrections", and this reverses that only for workspaces that opt in.
+  regularizationEnabled     Boolean @default(false)
+  /// How far back (days before today, in the person's zone) a correction may be asked for.
+  regularizationMaxDaysBack Int     @default(7)
+  /// Open or approved requests per person per calendar month (of the day corrected).
+  regularizationMonthlyCap  Int     @default(3)
+
+  /// --- Work sites (7.0.0) --------------------------------------------------------------------
+  /// Web punch-in outside every enabled AttendanceSite: OFF labels it, BLOCK refuses it,
+  /// ALLOW_FLAGGED records it with siteFlagged. Needs location on and at least one site.
+  requireSite AttendanceSiteRule @default(OFF)
+
+  /// --- Kiosk / QR punch (7.0.0) ----------------------------------------------------------------
+  /// A kiosk device shows a rotating signed QR code; a signed-in person scans it to punch in
+  /// (attendance-kiosk.service.ts). OFF by default; also needs attendance on.
+  kioskEnabled Boolean @default(false)
+
+  /// --- Celebrations (7.0.0) ------------------------------------------------------------------
+  /// The "this week" birthday and work-anniversary strip (celebrations.service.ts). OFF by default.
+  celebrationsEnabled Boolean @default(false)
+
+  /// --- Overtime (7.0.0) ----------------------------------------------------------------------
+  /// Timesheet hours above the expected day (the shift, else the workspace day) per day and per
+  /// week (attendance-overtime.service.ts). OFF by default; also needs attendance on.
+  overtimeEnabled              Boolean @default(false)
+  /// Hours over the expected day before a day's excess counts as overtime (0 = any excess).
+  overtimeDailyThresholdHours  Decimal @default(0) @db.Decimal(4, 2)
+  /// Hours over the expected week before the week's excess counts as overtime (0 = any excess).
+  overtimeWeeklyThresholdHours Decimal @default(0) @db.Decimal(5, 2)
+  /// When on, a week's overtime is claimed and decided like a correction; payroll then reports
+  /// approved hours only. Off, payroll reports the computed hours.
+  overtimeRequireApproval      Boolean @default(false)
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+/// A named set of days off ("India 2027", "US East"). People are assigned one via
+/// User.holidayCalendarId; anyone unassigned follows the calendar flagged isDefault.
+model HolidayCalendar {
+  id                   String  @id @default(uuid())
+  name                 String  @unique @db.VarChar(120)
+  description          String? @db.VarChar(500)
+  /// At most one should be true; enforced in the service (MariaDB has no partial unique index).
+  isDefault            Boolean @default(false)
+  /// 7.0.0: how many of this calendar's optional holidays one person may opt into per calendar
+  /// year. NULL = no limit set; 0 = optional holidays cannot be taken.
+  maxOptionalPerYear   Int?
+  /// 7.0.0 scope (JSON arrays; NULL or [] = no restriction on that axis). A scoped calendar applies
+  /// to people WITHOUT their own calendar who match it: explicit calendar > scoped > default.
+  scopeEmploymentTypes Json?
+  scopeSiteIds         Json?
+
+  holidays Holiday[]
+  users    User[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isDefault])
+}
+
+/// 7.0.0: a person taking an optional holiday. Only then is that day a holiday for them,
+/// everywhere the day-status resolver runs; without it the day is a working day.
+model HolidayOptIn {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  holidayId String
+  holiday   Holiday  @relation(fields: [holidayId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, holidayId])
+  @@index([holidayId])
+}
+
+/// One day off in one calendar. A DATE, not a timestamp: a holiday is a calendar day wherever the
+/// person is, and storing an instant would move it across midnight for every other timezone.
+model Holiday {
+  id         String          @id @default(uuid())
+  calendarId String
+  /// Cascade: a holiday has no meaning outside its calendar.
+  calendar   HolidayCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  date       DateTime        @db.Date
+  name       String          @db.VarChar(120)
+  /// An optional (restricted) holiday — counted only for people who take it (phase B leave).
+  isOptional Boolean         @default(false)
+  optIns     HolidayOptIn[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([calendarId, date])
+  @@index([date])
+}
+
+/// A configured inbound source of punches (a biometric terminal, an HRMS, a CSV feed). The secret
+/// is stored only as a hash: it signs webhooks, and a leaked database must not let anyone forge a
+/// punch.
+model AttendanceSource {
+  id              String               @id @default(uuid())
+  name            String               @unique @db.VarChar(120)
+  kind            AttendanceSourceKind
+  /// Unused since A3 (an HMAC verifier needs the secret itself, not a hash of it). Kept so the
+  /// A1 migration is not rewritten; see secretEncrypted.
+  secretHash      String?              @db.VarChar(255)
+  /// The webhook signing secret, AES-GCM encrypted with utils/encryption.ts — the same at-rest
+  /// treatment as the git webhook secret. Revealed once on create/rotate, never returned again.
+  secretEncrypted String?              @db.Text
+  matchField      AttendanceMatchField @default(EMAIL)
+  /// Higher wins when two sources disagree about the same person-day; the losers are kept on
+  /// AttendanceRecord.rawPayload history for audit (A3), never silently dropped.
+  priority        Int                  @default(0)
+  enabled         Boolean              @default(false)
+  lastEventAt     DateTime?
+
+  records AttendanceRecord[]
+  events  AttendanceEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum AttendanceEventStatus {
+  /// Became (or updated) the day's AttendanceRecord.
+  ACCEPTED
+  /// Same (source, externalRef) seen before — nothing changed.
+  DUPLICATE
+  /// Matched a person but lost to a higher-priority source, or was overtaken by one later.
+  SUPERSEDED
+  /// No active person carries that identifier. Replayable once the mapping is fixed.
+  UNMATCHED
+  /// Malformed (bad timestamp, missing identifier) or refused (module/plan off).
+  REJECTED
+}
+
+/// Every inbound punch from any source, kept whether or not it won (V17 A3). The record is the
+/// answer; this is the evidence. Admin-only (delivery log), never shown to the person.
+model AttendanceEvent {
+  id          String                @id @default(uuid())
+  source      AttendanceSourceKind
+  /// SetNull: deleting a source keeps its history readable.
+  sourceId    String?
+  sourceRef   AttendanceSource?     @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  status      AttendanceEventStatus
+  reason      String?               @db.VarChar(255)
+  /// `${kind}:${sourceId}:${externalRef}` — unique so dedupe survives two concurrent deliveries.
+  /// NULL for events with no externalRef and for DUPLICATE rows (they repeat a key by definition).
+  dedupeKey   String?               @unique @db.VarChar(255)
+  externalRef String?               @db.VarChar(191)
+  /// What the event claimed identifies the person. Kept for UNMATCHED replay; not a user id.
+  identifier  String?               @db.VarChar(191)
+  userId      String?
+  recordId    String?
+  workDate    DateTime?             @db.Date
+  punchInAt   DateTime?
+  punchOutAt  DateTime?
+  /// True for "send test event" deliveries: verified end to end, never touches a record.
+  isTest      Boolean               @default(false)
+  /// The normalized input, so a replay re-runs exactly what arrived.
+  input       Json?
+  /// Raw payload, size-capped by the ingest service (see RAW_PAYLOAD_CAP).
+  rawPayload  Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([status, createdAt])
+  @@index([sourceId, createdAt])
+  @@index([recordId])
+  @@index([createdAt])
+}
+
+/// One punch per person per working day — the unique key is what makes ingest from several
+/// sources idempotent rather than a race between them.
+model AttendanceRecord {
+  id         String    @id @default(uuid())
+  userId     String
+  /// Cascade with the person: attendance is personal data and goes when they are erased.
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The person's local calendar day (their User.timezone), not the UTC date of punchInAt.
+  workDate   DateTime  @db.Date
+  punchInAt  DateTime
+  punchOutAt DateTime?
+
+  /// Location evidence. Nulled by the retention worker after locationRetentionDays.
+  lat       Decimal? @db.Decimal(9, 6)
+  lng       Decimal? @db.Decimal(9, 6)
+  accuracyM Int?
+  ip        String?  @db.VarChar(64)
+  userAgent String?  @db.Text
+
+  /// The FaceVerificationAttempt (context PUNCH_IN) behind this punch, when one was required.
+  /// A plain id, not a relation, matching how FaceVerificationAttempt itself refers to timesheets.
+  faceAttemptId String? @db.VarChar(64)
+  /// True when the punch was accepted under ALLOW_FLAGGED despite a failed face check.
+  flagged       Boolean @default(false)
+
+  /// 7.0.0: "At <site>" or "Outside work sites", matched when the punch arrived. NULL = no sites
+  /// defined or no location sent. Kept after the retention worker clears lat/lng: it is a label,
+  /// not a coordinate, and it is the only location detail person-facing views show.
+  siteLabel   String? @db.VarChar(140)
+  /// Accepted under requireSite = ALLOW_FLAGGED although outside every site (or with no location).
+  siteFlagged Boolean @default(false)
+
+  source      AttendanceSourceKind
+  /// Set for API/WEBHOOK/CSV punches. SetNull: deleting a source must not erase history.
+  sourceId    String?
+  sourceRef   AttendanceSource?    @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  externalRef String?              @db.VarChar(191)
+  rawPayload  Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, workDate])
+  @@index([workDate])
+  @@index([sourceId])
+}
+
+/// 7.0.0: a named work site — a circle on the map. A punch inside one is labelled "At <name>".
+model AttendanceSite {
+  id        String            @id @default(uuid())
+  name      String            @unique @db.VarChar(120)
+  latitude  Decimal           @db.Decimal(9, 6)
+  longitude Decimal           @db.Decimal(9, 6)
+  radiusM   Int
+  enabled   Boolean           @default(true)
+  /// 7.0.0: people whose home site this is (User.siteId).
+  users     User[]
+  /// 7.0.0: kiosk devices standing at this site (their punches carry its name).
+  kiosks    AttendanceKiosk[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// 7.0.0 kiosk device (attendance-kiosk.service.ts). The device token is shown ONCE; only its
+/// SHA-256 is kept. `keySalt` feeds the QR signing key and changes on rotate, so codes signed for the
+/// old token stop verifying at once. Revoked devices keep their row for the event history.
+model AttendanceKiosk {
+  id          String          @id @default(uuid())
+  name        String          @db.VarChar(120)
+  siteId      String?
+  site        AttendanceSite? @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  tokenHash   String          @unique @db.VarChar(64)
+  tokenHint   String          @db.VarChar(8)
+  keySalt     String          @db.VarChar(64)
+  revokedAt   DateTime?
+  lastSeenAt  DateTime?
+  createdById String?         @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([siteId])
+}
+
+/// 7.0.0: a QR nonce that has been used. Single use across EVERYONE (unique per kiosk), so a code
+/// photographed and forwarded cannot punch a second person in; the kiosk shows a fresh code as soon
+/// as its current one is used. Rows older than a few minutes are useless (the code has expired) and
+/// are pruned on write.
+model AttendanceKioskNonce {
+  id        String   @id @default(uuid())
+  kioskId   String   @db.VarChar(64)
+  userId    String   @db.VarChar(64)
+  nonce     String   @db.VarChar(32)
+  createdAt DateTime @default(now())
+
+  @@unique([kioskId, nonce])
+  @@index([createdAt])
+}
+
+/// Admin-editable list behind the "why is this day empty?" prompt. Seeded by migration with nine
+/// codes so fresh and upgraded installs agree; `code` is stable, `label` is what people see.
+model MissedReasonOption {
+  id           String  @id @default(uuid())
+  code         String  @unique @db.VarChar(40)
+  label        String  @db.VarChar(120)
+  enabled      Boolean @default(true)
+  order        Int     @default(0)
+  requiresNote Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([enabled, order])
+}
+
+/// The reason someone gave for a past working day with no time logged. No approval — it is an
+/// explanation, not a request. `reasonCode` is a string rather than an FK so an option an admin
+/// later deletes cannot take people's history with it.
+model MissedDayReason {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workDate    DateTime @db.Date
+  reasonCode  String   @db.VarChar(40)
+  note        String?  @db.Text
+  timesheetId String?  @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, workDate])
+  @@index([workDate])
+}
+
+/// V17 A6: one cached AI suggestion set per audience + scope + date range. Rule-based insights are
+/// never stored — they are free to recompute. `cacheKey` is `${audience}:${scope}:${from}:${to}`.
+/// 7.0.0: a suggestion card someone dismissed. Per person, per insight id, per period
+/// ("<audience>:<from>:<to>"), so the same card comes back for a different range or audience.
+model AttendanceInsightDismissal {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  insightId String   @db.VarChar(64)
+  period    String   @db.VarChar(64)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, insightId, period])
+}
+
+model AttendanceInsightCache {
+  id        String   @id @default(uuid())
+  cacheKey  String   @unique @db.VarChar(191)
+  /// The model's suggestions only (title + detail strings). Never the aggregate that was sent.
+  insights  Json
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+/**
+ * ------------------------------------------------------------------ *
+ * LEAVE (V17 Phase B)
+ * The balance is the SUM of LeaveBalanceLedger rows for (person, type, leave year) — never a
+ * mutable column. A column can be overwritten by two concurrent approvals; an append-only ledger
+ * with a unique idempotency key cannot be double-written, and it explains itself.
+ * ------------------------------------------------------------------ *
+ */
+
+enum LeaveAccrual {
+  /// The whole annual quota lands on the first day of the leave year.
+  YEARLY_UPFRONT
+  /// quota / 12 lands on the first of every month of the leave year.
+  MONTHLY_PRORATA
+}
+
+enum LeaveLedgerKind {
+  ACCRUAL
+  CARRY_FORWARD
+  DEBIT
+  CREDIT_REVERSAL
+  ADJUSTMENT
+  EXPIRY
+}
+
+enum LeaveHalf {
+  FULL
+  FIRST_HALF
+  SECOND_HALF
+}
+
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum LeaveApprovalFallback {
+  /// Any ADMIN or SUPER_ADMIN.
+  ADMINS
+  /// SUPER_ADMIN only.
+  SUPER_ADMINS
+}
+
+/// A kind of leave (Privilege, Casual, Sick ...). Seeded PL/CL/SL by migration, all DISABLED, so
+/// fresh and upgraded installs agree and nothing is offered until an admin opts in.
+model LeaveType {
+  id                        String       @id @default(uuid())
+  /// Stable short code an HRMS sends ("PL"). Upper-case, unique.
+  code                      String       @unique @db.VarChar(20)
+  name                      String       @db.VarChar(80)
+  /// A design-token name (primary, success, warning, info, danger ...), never a raw hex: the UI
+  /// themes it for light and dark.
+  colour                    String       @default("primary") @db.VarChar(32)
+  annualQuota               Decimal      @default(0) @db.Decimal(6, 2)
+  accrual                   LeaveAccrual @default(YEARLY_UPFRONT)
+  /// Most unused days that roll into the next leave year; the rest expire. 0 = nothing carries.
+  carryForwardMax           Decimal      @default(0) @db.Decimal(6, 2)
+  allowHalfDay              Boolean      @default(true)
+  isPaid                    Boolean      @default(true)
+  /// false = requests are approved the moment they are made (the ledger is still debited).
+  requiresApproval          Boolean      @default(true)
+  /// A request LONGER than this many days needs a document (a sick note). NULL = never.
+  requiresDocumentAfterDays Int?
+  /// Lets the balance go below zero (unpaid leave, or "borrow from next month").
+  allowNegative             Boolean      @default(false)
+  enabled                   Boolean      @default(false)
+  sortOrder                 Int          @default(0)
+  /// 7.0.0 scope (JSON arrays; NULL or [] = everyone on that axis). Out of scope, a person neither
+  /// sees, applies for nor accrues the type (leave-calc.ts#inPolicyScope).
+  scopeEmploymentTypes      Json?
+  scopeSiteIds              Json?
+  /// 7.0.0 sandwich rule: weekends and holidays fully enclosed between leave days of the SAME
+  /// request are counted as leave (leave-calc.ts#sandwichedDays). OFF by default.
+  sandwichRule              Boolean      @default(false)
+
+  ledger   LeaveBalanceLedger[]
+  requests LeaveRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([enabled, sortOrder])
+}
+
+/// Append-only. Every change to a balance is one row with a sign; the balance is the sum.
+model LeaveBalanceLedger {
+  id             String          @id @default(uuid())
+  userId         String
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Restrict: a type with history is disabled, never deleted.
+  leaveTypeId    String
+  leaveType      LeaveType       @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+  /// The calendar year the leave year STARTS in (an April-March year 2027-28 is 2027).
+  leaveYear      Int
+  delta          Decimal         @db.Decimal(6, 2)
+  kind           LeaveLedgerKind
+  reason         String?         @db.VarChar(255)
+  /// The LeaveRequest behind a DEBIT / CREDIT_REVERSAL. A plain id so cancelling or erasing a
+  /// request can never rewrite the ledger.
+  refRequestId   String?         @db.VarChar(64)
+  /// Who caused it. NULL = the system (accrual worker, auto-approval, trusted HRMS).
+  actorId        String?         @db.VarChar(64)
+  /// `DEBIT:<requestId>`, `REVERSAL:<requestId>`, `ACCRUAL:<user>:<type>:<year>-<mm>`,
+  /// `CARRY:<user>:<type>:<year>`, `EXPIRY:<user>:<type>:<year>`. UNIQUE: this is what makes a
+  /// double-clicked approval or a re-run worker unable to write the same entry twice, whatever
+  /// races above it. NULL for manual adjustments, which are allowed to repeat.
+  idempotencyKey String?         @unique @db.VarChar(191)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, leaveTypeId, leaveYear])
+  @@index([refRequestId])
+}
+
+/// 7.0.0 private calendar feed: one revocable token per person. Only the SHA-256 of the token is
+/// stored; the token itself is shown once (in the feed URL) and travels in the URL path, because
+/// calendar apps cannot send an auth header. Rotating replaces the hash; revoking deletes the row.
+model CalendarFeedToken {
+  id         String    @id @default(uuid())
+  userId     String    @unique
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique @db.VarChar(64)
+  /// The first characters of the token, so the Profile card can show which URL is live.
+  hint       String    @db.VarChar(8)
+  lastUsedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// 7.0.0 approval delegation: while [startDate, endDate] covers today, `delegateId` may see and
+/// decide the leave and comp-off requests whose captured approver is `delegatorId`, on their behalf
+/// (the audit row names both). One hop only: a delegate's own delegations never pass this on.
+/// Plain ids, like LeaveRequest.approverId: deleting a person must not rewrite history.
+model ApprovalDelegation {
+  id          String    @id @default(uuid())
+  delegatorId String    @db.VarChar(64)
+  delegateId  String    @db.VarChar(64)
+  startDate   DateTime  @db.Date
+  endDate     DateTime  @db.Date
+  createdById String    @db.VarChar(64)
+  revokedAt   DateTime?
+  revokedById String?   @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([delegateId, startDate, endDate])
+  @@index([delegatorId, startDate, endDate])
+}
+
+/// 7.0.0 comp-off: a request for leave credit for working on a weekend or holiday. Decided by the
+/// same rule as leave (decisionRight); approval credits the configured type through the ledger with
+/// idempotency key `COMPOFF:<id>`, and the accrual run expires it (`COMPOFF-EXPIRY:<id>`).
+/// 7.0.0 regularisation: "add or correct my punch for that day". Decided like leave
+/// (resolveDecisionRight). Approval writes through ingestPunch (source REGULARIZATION, externalRef
+/// `REG:<id>`), so the record's old punch stays on its AttendanceEvent history; the request also
+/// keeps the punch it saw when it was made (original*), for the approver and the audit trail.
+model AttendanceRegularizationRequest {
+  id                     String             @id @default(uuid())
+  userId                 String
+  user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workDate               DateTime           @db.Date
+  punchInAt              DateTime
+  punchOutAt             DateTime?
+  originalPunchInAt      DateTime?
+  originalPunchOutAt     DateTime?
+  /// Shown to the requester and the people who may decide; never to anyone else.
+  reason                 String             @db.Text
+  status                 LeaveRequestStatus @default(PENDING)
+  approverId             String?            @db.VarChar(64)
+  decidedById            String?            @db.VarChar(64)
+  onBehalfOfId           String?            @db.VarChar(64)
+  decidedAt              DateTime?
+  decisionNote           String?            @db.Text
+  overriddenBySuperAdmin Boolean            @default(false)
+  /// The AttendanceEvent the approval produced.
+  eventId                String?            @db.VarChar(64)
+  cancelledAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, workDate])
+  @@index([approverId, status])
+  @@index([status])
+}
+
+/// 7.0.0 overtime claim: one per person per week (Monday `weekStart`), only while
+/// overtimeRequireApproval is on. `hours` is computed server-side when the claim is made. Decided by
+/// the leave rule (resolveDecisionRight); approval is a conditional PENDING → APPROVED update.
+model OvertimeClaim {
+  id                     String             @id @default(uuid())
+  userId                 String
+  user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  weekStart              DateTime           @db.Date
+  hours                  Decimal            @db.Decimal(6, 2)
+  workedHours            Decimal            @db.Decimal(6, 2)
+  expectedHours          Decimal            @db.Decimal(6, 2)
+  status                 LeaveRequestStatus @default(PENDING)
+  approverId             String?            @db.VarChar(64)
+  decidedById            String?            @db.VarChar(64)
+  onBehalfOfId           String?            @db.VarChar(64)
+  decidedAt              DateTime?
+  decisionNote           String?            @db.Text
+  overriddenBySuperAdmin Boolean            @default(false)
+  cancelledAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, weekStart])
+  @@index([approverId, status])
+  @@index([status, weekStart])
+}
+
+model CompOffRequest {
+  id                     String             @id @default(uuid())
+  userId                 String
+  user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The weekend / holiday that was worked.
+  workDate               DateTime           @db.Date
+  /// WEEKEND or HOLIDAY, as resolveDayStatus judged it when the request was made.
+  dayKind                String             @db.VarChar(16)
+  /// Timesheet hours logged on workDate when the request was made (server-computed).
+  hoursLogged            Decimal            @db.Decimal(5, 2)
+  /// 0.5 or 1, from the configured thresholds. Never taken from the client.
+  days                   Decimal            @db.Decimal(4, 2)
+  reason                 String?            @db.Text
+  status                 LeaveRequestStatus @default(PENDING)
+  /// Plain ids (see LeaveRequest.approverId).
+  approverId             String?            @db.VarChar(64)
+  decidedById            String?            @db.VarChar(64)
+  /// Set when a delegate decided on the approver's behalf.
+  onBehalfOfId           String?            @db.VarChar(64)
+  decidedAt              DateTime?
+  decisionNote           String?            @db.Text
+  overriddenBySuperAdmin Boolean            @default(false)
+  /// Filled on approval.
+  leaveTypeId            String?            @db.VarChar(64)
+  leaveYear              Int?
+  expiresOn              DateTime?          @db.Date
+  expiredAt              DateTime?
+  cancelledAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, workDate])
+  @@index([approverId, status])
+  @@index([status, expiresOn])
+}
+
+model LeaveRequest {
+  id          String             @id @default(uuid())
+  userId      String
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leaveTypeId String
+  leaveType   LeaveType          @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+  /// Calendar DAYS, not instants — same reasoning as Holiday.date.
+  startDate   DateTime           @db.Date
+  endDate     DateTime           @db.Date
+  /// Single day: FULL / FIRST_HALF / SECOND_HALF. Several days: the start may be SECOND_HALF (leave
+  /// from the afternoon) and the end FIRST_HALF (back after lunch).
+  startHalf   LeaveHalf          @default(FULL)
+  endHalf     LeaveHalf          @default(FULL)
+  /// Working days the request costs, computed SERVER-side (weekends, the person's holidays and
+  /// halves excluded). Never taken from the client.
+  days        Decimal            @db.Decimal(6, 2)
+  /// The leave year the days are debited from. A request may not straddle two leave years.
+  leaveYear   Int
+  reason      String?            @db.Text
+  status      LeaveRequestStatus @default(PENDING)
+
+  /// Supporting document, stored through services/attachment-storage.service.ts like every upload.
+  attachmentUrl      String? @db.VarChar(512)
+  attachmentName     String? @db.VarChar(255)
+  attachmentMimeType String? @db.VarChar(120)
+  attachmentSize     Int?
+
+  /// The person's manager when the request was made. NULL = the admin pool decides
+  /// (GlobalAttendanceSettings.leaveApprovalFallback). Plain ids, not relations, like
+  /// AttendanceRecord.faceAttemptId: deleting a manager must not rewrite history.
+  approverId             String?   @db.VarChar(64)
+  decidedById            String?   @db.VarChar(64)
+  decidedAt              DateTime?
+  decisionNote           String?   @db.Text
+  /// A SUPER_ADMIN decided a request that was not theirs to decide. Audited as well.
+  overriddenBySuperAdmin Boolean   @default(false)
+  cancelledAt            DateTime?
+
+  source      AttendanceSourceKind @default(WEB)
+  /// Set for HRMS / API requests.
+  externalRef String?              @db.VarChar(191)
+  /// `${source}:${sourceId|apiKeyId}:${externalRef}`, unique, so an HRMS re-sending the same leave
+  /// is a DUPLICATE, never a second request.
+  dedupeKey   String?              @unique @db.VarChar(255)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status, startDate])
+  @@index([status, startDate, endDate])
+  @@index([approverId, status])
+  @@index([leaveTypeId])
+}
+
+/// 7.0.0 shifts. A named working window. endMinute <= startMinute means it crosses midnight, and
+/// the work date of a night shift is the day it STARTS (attendance-day-status.ts#workDateKeyFor).
+model AttendanceShift {
+  id           String                      @id @default(cuid())
+  name         String                      @unique @db.VarChar(80)
+  startMinute  Int
+  endMinute    Int
+  breakMinutes Int                         @default(0)
+  /// 0 = Sunday … 6 = Saturday, like GlobalPlanningSettings.workingDays.
+  workingDays  Json
+  createdAt    DateTime                    @default(now())
+  updatedAt    DateTime                    @updatedAt
+  assignments  AttendanceShiftAssignment[]
+}
+
+/// Who works a shift from when. Exactly one of userId (a person) or managerId (everyone who reports
+/// to that manager). A person's own assignment beats their team's; the latest effectiveFrom wins.
+model AttendanceShiftAssignment {
+  id            String          @id @default(cuid())
+  shiftId       String
+  shift         AttendanceShift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  userId        String?
+  user          User?           @relation("ShiftAssignee", fields: [userId], references: [id], onDelete: Cascade)
+  managerId     String?
+  manager       User?           @relation("ShiftTeam", fields: [managerId], references: [id], onDelete: Cascade)
+  effectiveFrom DateTime        @db.Date
+  effectiveTo   DateTime?       @db.Date
+  createdAt     DateTime        @default(now())
+
+  @@index([userId, effectiveFrom])
+  @@index([managerId, effectiveFrom])
+  @@index([shiftId])
 }

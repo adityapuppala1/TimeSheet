@@ -324,6 +324,23 @@
     --info: 215 88% 52%;
     --info-foreground: 0 0% 100%;
 
+    /*
+     * ATTENDANCE STATUS (V17 UI v2) — one place for every day-status colour. Each status has a
+     * COLOUR (--status-X, the ink: text and icon on its own tint), a SOFT fill (--status-X-soft) and is
+     * ALWAYS shown with an icon and a word (lib/attendance-status.ts), never colour alone. Light: ink is
+     * dark (>= 4.5:1 on the soft fill, 3:1 as an icon on the card). Dark: the fill is the same hue at
+     * ~15% alpha (--status-alpha) and the ink is a lighter shade. Weekend and "not yet in" are neutral
+     * greys on purpose: neither is a verdict.
+     */
+    --status-alpha: 1;
+    --status-present: 152 70% 24%;      --status-present-soft: 152 55% 91%;
+    --status-late: 28 92% 28%;          --status-late-soft: 38 95% 88%;
+    --status-absent: 0 72% 38%;         --status-absent-soft: 0 85% 94%;
+    --status-leave: 215 82% 36%;        --status-leave-soft: 215 90% 93%;
+    --status-holiday: 268 52% 38%;      --status-holiday-soft: 268 75% 94%;
+    --status-weekend: 220 10% 36%;      --status-weekend-soft: 220 14% 91%;
+    --status-pending: 220 12% 34%;      --status-pending-soft: 220 14% 95%;
+
     --border: 216 24% 86%;
     --input: 216 24% 86%;
     --ring: 186 82% 30%;
@@ -449,6 +466,15 @@
 
     --info: 215 90% 60%;
     --info-foreground: 0 0% 100%;
+
+    --status-alpha: 0.16;
+    --status-present: 152 60% 66%;      --status-present-soft: 152 60% 46%;
+    --status-late: 38 92% 66%;          --status-late-soft: 38 92% 52%;
+    --status-absent: 0 82% 74%;         --status-absent-soft: 0 72% 56%;
+    --status-leave: 213 92% 74%;        --status-leave-soft: 215 90% 60%;
+    --status-holiday: 270 80% 78%;      --status-holiday-soft: 268 70% 62%;
+    --status-weekend: 215 14% 72%;      --status-weekend-soft: 215 14% 60%;
+    --status-pending: 215 14% 72%;      --status-pending-soft: 215 14% 60%;
 
     --border: 221 20% 24%;
     --input: 221 20% 24%;
@@ -1190,3 +1216,38 @@ html.theme-switching *::after {
   padding: 0 0.15em;
   background: hsl(var(--primary) / 0.1);
 }
+
+/* V17 A2 — the punch-in "done" check. Opacity + transform only (compositor-friendly), and only when
+   the person has not asked for reduced motion; PunchIn.tsx also drops the class in that case. */
+@media (prefers-reduced-motion: no-preference) {
+  .punch-in-check {
+    animation: punch-in-check 420ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+}
+@keyframes punch-in-check {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* V17 UI v2 — attendance status chips and calendar cells. The element sets --s (ink) and --s-soft
+   through a .status-* class; the chip then paints ink on its soft fill, theme-aware via --status-alpha. */
+.status-present { --s: var(--status-present); --s-soft: var(--status-present-soft); }
+.status-late { --s: var(--status-late); --s-soft: var(--status-late-soft); }
+.status-absent { --s: var(--status-absent); --s-soft: var(--status-absent-soft); }
+.status-leave { --s: var(--status-leave); --s-soft: var(--status-leave-soft); }
+.status-holiday { --s: var(--status-holiday); --s-soft: var(--status-holiday-soft); }
+.status-weekend { --s: var(--status-weekend); --s-soft: var(--status-weekend-soft); }
+.status-pending { --s: var(--status-pending); --s-soft: var(--status-pending-soft); }
+.status-ink { color: hsl(var(--s)); }
+.status-fill { background-color: hsl(var(--s-soft) / var(--status-alpha)); color: hsl(var(--s)); }
+.status-chip { background-color: hsl(var(--s-soft) / var(--status-alpha)); color: hsl(var(--s)); border: 1px solid hsl(var(--s) / 0.28); }
+.status-pending.status-chip, .status-pending.status-cell { border-style: dashed; }
+.status-cell { background-color: hsl(var(--s-soft) / var(--status-alpha)); color: hsl(var(--s)); border: 1px solid hsl(var(--s) / 0.22); }
+/* "Busy" team-leave day: a hatch (pattern) plus a label, so it never relies on colour alone. */
+.busy-hatch { background-image: repeating-linear-gradient(135deg, hsl(var(--status-late) / 0.28) 0 2px, transparent 2px 7px); }

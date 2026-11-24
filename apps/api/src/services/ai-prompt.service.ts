@@ -421,6 +421,36 @@ what's given. Respond with ONLY that one sentence — no preamble.`
   }
 ];
 
+SPECS.push({
+  feature: "attendance_insights",
+  label: "Attendance insights",
+  description:
+    "Turns attendance aggregates (counts and rates only — never names, locations or notes) into up to four practical suggestions for an employee, a manager or an administrator.",
+  placeholders: [
+    { name: "audienceLabel", description: "Who will read the suggestions, in words.", sample: "a manager, about their direct reports as a group" },
+    {
+      name: "facts",
+      description: "The aggregate figures as JSON: rates, counts, histograms and pseudonymous person labels. Computed in code; the model never recomputes them.",
+      sample: '{"range":{"from":"2026-10-25","to":"2026-11-23","workingDays":21},"presenceRate":0.86,"missedReasons":{"FORGOT":6}}'
+    }
+  ],
+  required: ["facts"],
+  // "Never name or guess at a person" matters even though the facts carry only labels: a model asked
+  // about "Person 3" will happily speculate about why, and that speculation is about a real person.
+  defaultTemplate: `You are reviewing attendance figures for {{audienceLabel}}.
+
+Figures (computed by the system; do not recompute or contradict them):
+{{facts}}
+
+Write at most four short, practical suggestions that follow from these figures — for example a better reminder time, a process gap, or an integration that needs attention. Rules:
+- Use only what the figures show. Never invent a number, a cause or a person.
+- Never speculate about why any individual behaves as they do, and never describe anyone as lazy, late or unreliable.
+- Skip anything the figures do not support; fewer suggestions is fine.
+
+Write each suggestion on its own line as: - Short title: one-sentence suggestion.
+Respond with ONLY those lines.`
+});
+
 const SPEC_BY_FEATURE = new Map(SPECS.map((s) => [s.feature, s]));
 
 export function listPromptSpecs(): PromptSpec[] {

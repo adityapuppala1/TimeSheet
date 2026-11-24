@@ -11,7 +11,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Copy, KeyRound, Plus, RotateCcw, Trash2, Webhook } from "lucide-react";
 import { useState } from "react";
-import { apiKeyScopes, outboundWebhookEvents, type ApiKeyScope, type OutboundWebhookEvent } from "@timesheet/shared";
+import { apiKeyGrants, apiKeyScopes, outboundWebhookEvents, type ApiKeyGrant, type ApiKeyScope, type OutboundWebhookEvent } from "@timesheet/shared";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
@@ -30,7 +30,13 @@ const EVENT_LABEL: Record<OutboundWebhookEvent, string> = {
   "ticket.status_changed": "Ticket status changed",
   "ticket.closed": "Ticket closed",
   "timesheet.submitted": "Timesheet submitted",
-  "timesheet.approved": "Timesheet approved"
+  "timesheet.approved": "Timesheet approved",
+  "leave.requested": "Leave requested",
+  "leave.approved": "Leave approved",
+  "leave.rejected": "Leave rejected",
+  "leave.cancelled": "Leave cancelled",
+  "compoff.requested": "Comp-off requested",
+  "compoff.approved": "Comp-off approved"
 };
 
 function CopyableSecret({ value }: { value: string }) {
@@ -194,6 +200,10 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
 
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyScope, setNewKeyScope] = useState<ApiKeyScope>("READ");
+  // Granular grants (V17 A3) are opt-in per key: READ/WRITE never imply them.
+  const [newKeyGrants, setNewKeyGrants] = useState<ApiKeyGrant[]>([]);
+  const toggleGrant = (grant: ApiKeyGrant, on: boolean) =>
+    setNewKeyGrants((prev) => (on ? [...prev.filter((x) => x !== grant), grant] : prev.filter((x) => x !== grant)));
   const [newKeyLifetime, setNewKeyLifetime] = useState<KeyLifetime>("90");
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
 
@@ -202,6 +212,7 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
       settingsApi.createApiKey({
         name: newKeyName.trim(),
         scope: newKeyScope,
+        grants: newKeyGrants,
         // Omitted entirely for "never" — the server reads a missing field as "no expiry", which is
         // also what every key issued before expiry existed carries.
         expiresAt: expiryFromLifetime(newKeyLifetime)
@@ -209,6 +220,7 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
     onSuccess: (created) => {
       setRevealedKey(created.key);
       setNewKeyName("");
+      setNewKeyGrants([]);
       runInBackground(queryClient.invalidateQueries({ queryKey: ["settings", "api-keys"] }));
     },
     onError: (err: any) => toast.error("Could not create key", { description: err?.response?.data?.message ?? "Try again." })
@@ -287,6 +299,9 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
                     <span className="font-medium">{k.name}</span>
                     <code className="text-xs text-muted-foreground">{k.keyPrefix}…</code>
                     <Badge variant={k.scope === "WRITE" ? "warning" : "muted"}>{k.scope}</Badge>
+                    {(k.grants ?? []).map((g) => (
+                      <Badge key={g} variant="info">{g}</Badge>
+                    ))}
                     {expiryBadge(k.expiresAt)}
                     <span className="ml-auto text-xs text-muted-foreground">
                       {k.lastUsedAt ? `Last used ${new Date(k.lastUsedAt).toLocaleDateString()}` : "Never used"}
@@ -336,6 +351,19 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
                   <Button size="sm" disabled={!newKeyName.trim() || createKey.isPending} onClick={() => createKey.mutate()}>
                     <Plus className="h-4 w-4" />Generate
                   </Button>
+                  <fieldset className="flex w-full flex-wrap items-center gap-x-4 gap-y-1.5">
+                    <legend className="sr-only">Extra scopes</legend>
+                    <span className="text-xs text-muted-foreground">Extra scopes:</span>
+                    {apiKeyGrants.map((g) => (
+                      <label key={g} className="flex items-center gap-1.5 text-sm">
+                        <Checkbox
+                          checked={newKeyGrants.includes(g)}
+                          onCheckedChange={(checked) => toggleGrant(g, checked === true)}
+                        />
+                        <code className="text-xs">{g}</code>
+                      </label>
+                    ))}
+                  </fieldset>
                 </div>
               )}
             </>

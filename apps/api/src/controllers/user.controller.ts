@@ -8,6 +8,7 @@
  * WHO calls this: `apps/web/src/pages/AdminPages.tsx` (UsersPage).
  */
 import { Router } from "express";
+import { adminCelebrationFields, joinDateSchema } from "../services/celebrations.service.js";
 import { z } from "zod";
 import { permissions, resolveHeldRoles, roles, type RoleName } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
@@ -798,7 +799,13 @@ const patchSchema = z.object({
     managerId: z.string().uuid().nullable().optional(),
     designation: z.string().max(120).nullable().optional(),
     faceVerificationRequired: z.boolean().optional(),
-    githubUsername: z.string().max(120).nullable().optional()
+    githubUsername: z.string().max(120).nullable().optional(),
+    // 7.0.0 leave policies: scope leave types and holiday calendars by these. Null clears.
+    employmentType: z.enum(["FULL_TIME", "PART_TIME", "CONTRACT", "INTERN"]).nullable().optional(),
+    siteId: z.string().min(1).max(64).nullable().optional(),
+    // 7.0.0 celebrations: the join date (admins), the birthday (super admins only, checked below).
+    joinDate: joinDateSchema,
+    dateOfBirth: joinDateSchema
   })
 });
 
@@ -853,6 +860,10 @@ function assertRoleSetShape(actor: { role: string }, body: { role?: string; role
 type PatchData = {
   name?: string;
   email?: string;
+  employmentType?: "FULL_TIME" | "PART_TIME" | "CONTRACT" | "INTERN" | null;
+  siteId?: string | null;
+  joinDate?: Date | null;
+  dateOfBirth?: Date | null;
   status?: "ACTIVE" | "INACTIVE" | "PENDING_VERIFICATION";
   roleId?: string;
   managerId?: string | null;
@@ -870,7 +881,35 @@ function plainPatchFields(body: Record<string, unknown>): PatchData {
   if ("designation" in body) data.designation = (body.designation as string | null) ?? null;
   if ("faceVerificationRequired" in body) data.faceVerificationRequired = Boolean(body.faceVerificationRequired);
   if ("githubUsername" in body) data.githubUsername = (body.githubUsername as string | null) ?? null;
+  if ("employmentType" in body) data.employmentType = (body.employmentType as PatchData["employmentType"]) ?? null;
   return data;
+}
+
+/** 7.0.0: a site that does not exist is a 422, not an FK error (the edit dialog lists the real ones). */
+async function checkedSiteId(siteId: string | null | undefined): Promise<string | null> {
+  if (siteId && !(await prisma.attendanceSite.findUnique({ where: { id: siteId }, select: { id: true } }))) {
+    throw new AppError(422, "That work site does not exist.");
+  }
+  return siteId ?? null;
+}
+
+/** Never a birthday in the audit row: it is read far more widely than a profile. */
+function auditablePatch(body: Record<string, unknown>): Record<string, unknown> {
+  if (!("dateOfBirth" in body)) return body;
+  const { dateOfBirth, ...rest } = body;
+  return { ...rest, dateOfBirthSet: Boolean(dateOfBirth) };
+}
+
+/** 7.0.0: join date (any user manager) and birthday (super admins only: the birth year is private). */
+function celebrationPatchFields(body: Record<string, unknown>, actorRole: string): Pick<PatchData, "joinDate" | "dateOfBirth"> {
+  const day = (v: unknown) => (v ? new Date(`${String(v)}T00:00:00Z`) : null);
+  const out: Pick<PatchData, "joinDate" | "dateOfBirth"> = {};
+  if ("joinDate" in body) out.joinDate = day(body.joinDate);
+  if ("dateOfBirth" in body) {
+    if (actorRole !== "SUPER_ADMIN") throw new AppError(403, "Only a super admin can set someone's birthday.");
+    out.dateOfBirth = day(body.dateOfBirth);
+  }
+  return out;
 }
 
 userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
@@ -899,6 +938,8 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
     const role = await prisma.role.findUniqueOrThrow({ where: { name: req.body.role } });
     data.roleId = role.id;
   }
+  if ("siteId" in req.body) data.siteId = await checkedSiteId(req.body.siteId);
+  Object.assign(data, celebrationPatchFields(req.body, req.user!.role));
   if ("managerId" in req.body) {
     // Only a CHANGE is checked: the edit dialog sends the current manager back on every save, and
     // refusing that because the manager was deactivated since would block fixing a typo in a name.
@@ -908,7 +949,7 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
 
   const user = await prisma.user.update({ where: { id: targetId }, data, include: { role: true } });
   if (newHeldRoleNames) await replaceHeldRoles(user.id, newHeldRoleNames);
-  await audit(req.user!.id, "user.updated", "User", user.id, req.body);
+  await audit(req.user!.id, "user.updated", "User", user.id, auditablePatch(req.body));
   if (req.body.status && req.body.status !== row.status) await syncSeatsAfterChange();
 
   // The person just became individually covered by the face policy — tell them now, not at
@@ -923,6 +964,11 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
   }
 
   res.json(user);
+});
+
+/** 7.0.0 celebrations fields for the edit dialog: join date; the full birthday for super admins only. */
+userRouter.get("/:id/celebrations", async (req, res) => {
+  res.json(await adminCelebrationFields(String(req.params.id), req.user!.role));
 });
 
 userRouter.delete("/:id", async (req, res) => {

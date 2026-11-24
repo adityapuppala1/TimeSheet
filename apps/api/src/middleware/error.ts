@@ -15,16 +15,21 @@
 import { Prisma } from "@prisma/client";
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
+import { redactUrlForLog } from "../utils/log-redact.js";
 
 export class AppError extends Error {
   /** Optional machine-readable code for clients that must BRANCH on the error kind rather than
    *  parse prose — e.g. "MAINTENANCE", where the right reaction (show the maintenance page)
    *  differs from every other 503 (show the outage banner). Human text stays the main channel. */
   public code?: string;
+  /** Optional structured payload a client needs to recover without a second request (e.g. the
+   *  reason options for MISSED_DAY_REASON_REQUIRED). Never put anything secret in here. */
+  public details?: Record<string, unknown>;
 
-  constructor(public statusCode: number, message: string, options?: { code?: string }) {
+  constructor(public statusCode: number, message: string, options?: { code?: string; details?: Record<string, unknown> }) {
     super(message);
     this.code = options?.code;
+    this.details = options?.details;
   }
 }
 
@@ -99,13 +104,15 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   // to lose one).
   const deliberateLockout = error instanceof AppError && error.code === "MAINTENANCE";
   if (statusCode >= 500 && !deliberateLockout) {
-    console.error(`[error] ${req.method} ${req.originalUrl}`, error);
+    // Redacted: a feed token in the path or a query value (an OIDC code) must not reach the log.
+    console.error(`[error] ${req.method} ${redactUrlForLog(req.originalUrl)}`, error);
   }
   return res.status(statusCode).json({
     message: error.message || "Unexpected server error",
     // Only present when an AppError carries one — absent otherwise, so no client is tempted to
     // treat "no code" as a code.
-    ...(error instanceof AppError && error.code ? { code: error.code } : {})
+    ...(error instanceof AppError && error.code ? { code: error.code } : {}),
+    ...(error instanceof AppError && error.details ? { details: error.details } : {})
   });
 };
 

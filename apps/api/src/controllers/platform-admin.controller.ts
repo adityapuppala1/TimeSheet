@@ -829,7 +829,11 @@ const capabilityKeys = [
   "aiPmCopilotEnabled",
   "goalsEnabled",
   "changeManagementEnabled",
-  "practiceUpdateEnabled"
+  "practiceUpdateEnabled",
+  "attendanceEnabled",
+  "leaveManagementEnabled",
+  "attendanceIntegrationsEnabled",
+  "attendanceAiInsightsEnabled"
 ] as const;
 
 const quotaKeys = [

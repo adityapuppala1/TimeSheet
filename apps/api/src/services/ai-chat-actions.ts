@@ -55,7 +55,7 @@ export const AI_CHAT_ACTIONS: ReadonlyArray<AiChatToolSpec & { run: (args: Recor
       "Record time the asking person says they worked, as a DRAFT they will review and submit themselves. " +
       "Ask them for anything you are missing before calling — never invent hours, dates or descriptions. " +
       "A refusal (overlap, future date, unassigned project) is final: report it, do not adjust values to get around it.",
-    args: '{ "projectCode": string, "moduleName"?: string, "workDate": "YYYY-MM-DD", "startTime": "HH:MM", "endTime": "HH:MM", "activityType": string, "taskDescription": string, "ticketKey"?: string }',
+    args: '{ "projectCode": string, "moduleName"?: string, "workDate": "YYYY-MM-DD", "startTime": "HH:MM", "endTime": "HH:MM", "activityType": string, "taskDescription": string, "ticketKey"?: string, "missedReasonCode"?: string, "missedReasonNote"?: string } — the two missedReason fields only after a refusal asked for them, with the reason the PERSON chose',
     run: async (args, ctx) => {
       const projectCode = String(args.projectCode ?? "").trim();
       const workDate = String(args.workDate ?? "").trim();
@@ -104,7 +104,11 @@ export const AI_CHAT_ACTIONS: ReadonlyArray<AiChatToolSpec & { run: (args: Recor
         const entry = await saveTimesheet(
           {
             user: ctx.req.user,
-            body: { projectId: project.id, moduleId: module.id, workDate, startTime, endTime, activityType, taskDescription, ticketId, notes: typeof args.notes === "string" ? args.notes : undefined },
+            body: { projectId: project.id, moduleId: module.id, workDate, startTime, endTime, activityType, taskDescription, ticketId,
+              notes: typeof args.notes === "string" ? args.notes : undefined,
+              missedReasonCode: typeof args.missedReasonCode === "string" ? args.missedReasonCode : undefined,
+              missedReasonNote: typeof args.missedReasonNote === "string" ? args.missedReasonNote : undefined
+            },
             files: []
           },
           "DRAFT"

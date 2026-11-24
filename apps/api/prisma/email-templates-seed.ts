@@ -400,6 +400,108 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
     })
   },
 
+  "reminder.punch_in": {
+    subject: "You haven't punched in yet ({{date}})",
+    bodyHtml: shell({
+      preheader: "Log in and punch in so today's attendance is recorded.",
+      accent: COLORS.accent,
+      body: [
+        heading("Hi {{name}}, you haven't punched in yet"),
+        lead("We haven't recorded a punch-in for you on <strong>{{date}}</strong>."),
+        para("Log in to TimeSphere and punch in so your attendance for today is recorded. It takes a few seconds."),
+        infoCard([{ label: "Date", value: "{{date}}", emphasize: true }], COLORS.accent),
+        button("Open TimeSphere and punch in", "{{appUrl}}/app", COLORS.accent),
+        muted("Already punched in through a badge reader or another system? It can take a few minutes to arrive - you can ignore this.")
+      ].join("\n"),
+      footerNote: "Sent at the punch-in reminder hour set in Workspace Settings - Attendance & Leave, on your working days only."
+    })
+  },
+
+  "leave.requested": {
+    subject: "{{employeeName}} requested {{days}} day(s) of {{leaveType}}",
+    bodyHtml: shell({
+      preheader: "A leave request is waiting for your decision.",
+      accent: COLORS.accent,
+      body: [
+        heading("Hi {{approverName}}, a leave request needs your decision"),
+        lead("<strong>{{employeeName}}</strong> has asked for {{leaveType}}."),
+        infoCard(
+          [
+            { label: "Dates", value: "{{dates}}", emphasize: true },
+            { label: "Days", value: "{{days}}" }
+          ],
+          COLORS.accent
+        ),
+        // No reason here on purpose: it is personal, and an email outlives the decision (and is
+        // copied to the super-admin BCC). The approver reads it in the app.
+        lead("Open TimeSphere to review the request and any reason or document attached to it."),
+        button("Review the request", "{{appUrl}}/app/attendance", COLORS.accent)
+      ].join("\n"),
+      footerNote: "You are receiving this because you approve leave for this person in TimeSphere."
+    })
+  },
+
+  "leave.decided": {
+    subject: "Your {{leaveType}} request was {{decision}}",
+    bodyHtml: shell({
+      preheader: "Your leave request has been decided.",
+      accent: COLORS.accent,
+      body: [
+        heading("Hi {{name}}, your leave request was {{decision}}"),
+        lead("Your request for {{leaveType}} has been <strong>{{decision}}</strong> by {{decidedBy}}."),
+        infoCard(
+          [
+            { label: "Dates", value: "{{dates}}", emphasize: true },
+            { label: "Days", value: "{{days}}" },
+            { label: "Note", value: "{{note}}" }
+          ],
+          COLORS.accent
+        ),
+        button("Open TimeSphere", "{{appUrl}}/app/attendance", COLORS.accent)
+      ].join("\n"),
+      footerNote: "Sent when a leave request you made is approved or rejected."
+    })
+  },
+
+  "attendance.requested": {
+    subject: "{{employeeName}} sent {{requestKind}} for your decision",
+    bodyHtml: shell({
+      preheader: "An attendance request is waiting for your decision.",
+      accent: COLORS.accent,
+      body: [
+        heading("Hi {{approverName}}, a request needs your decision"),
+        lead("<strong>{{employeeName}}</strong> sent {{requestKind}}."),
+        infoCard([{ label: "Details", value: "{{summary}}", emphasize: true }], COLORS.accent),
+        // No reason here on purpose, same as leave.requested: it is personal and an email outlives
+        // the decision. The approver reads it in the app.
+        lead("Open TimeSphere to review the request and the reason attached to it."),
+        button("Review the request", "{{appUrl}}/app/attendance", COLORS.accent)
+      ].join("\n"),
+      footerNote: "You are receiving this because you decide attendance requests for this person in TimeSphere."
+    })
+  },
+
+  "attendance.decided": {
+    subject: "Your {{requestKind}} was {{decision}}",
+    bodyHtml: shell({
+      preheader: "Your attendance request has been decided.",
+      accent: COLORS.accent,
+      body: [
+        heading("Hi {{name}}, your request was {{decision}}"),
+        lead("Your {{requestKind}} has been <strong>{{decision}}</strong> by {{decidedBy}}."),
+        infoCard(
+          [
+            { label: "Details", value: "{{summary}}", emphasize: true },
+            { label: "Note", value: "{{note}}" }
+          ],
+          COLORS.accent
+        ),
+        button("Open TimeSphere", "{{appUrl}}/app/attendance", COLORS.accent)
+      ].join("\n"),
+      footerNote: "Sent when a comp-off request, attendance correction or overtime claim you made is approved or rejected."
+    })
+  },
+
   "reminder.escalation.manager": {
     subject: "{{employeeName}} missed yesterday's timesheet",
     bodyHtml: shell({
@@ -625,6 +727,10 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
       body: [
         heading("Hi {{name}}, here's your week"),
         lead("{{summary}}"),
+        // 7.0.0: empty unless Attendance & Leave is on (weekly-digest-expected.service.ts).
+        "{{expectedHoursHtml}}",
+        // 7.0.0: the counted last-week / month / year tables (weekly-digest-data.service.ts).
+        "{{tablesHtml}}",
         button("Open your dashboard", "{{appUrl}}/app", COLORS.info),
         muted("This recap is AI-generated from your ticket and timesheet activity — turn it off anytime in your notification preferences.")
       ].join("\n")

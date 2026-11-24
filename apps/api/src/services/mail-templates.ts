@@ -490,6 +490,57 @@ export const templates = {
         paragraph(button("Log time now", appUrl("/app/timesheet"), ACCENT))
     ),
 
+  /** V17 Phase B: a leave request waiting on its approver. */
+  leaveRequested: (params: { approverName: string; employeeName: string; leaveType: string; dates: string; days: string }) =>
+    shell(
+      { title: "Leave request", preheader: `${params.employeeName} requested ${params.leaveType}.`, accentColor: ACCENT },
+      heading(`Hi ${escape(params.approverName.split(" ")[0])}, a leave request needs your decision`) +
+        paragraph(`<strong>${escape(params.employeeName)}</strong> asked for ${escape(params.leaveType)}: ${escape(params.dates)} (${escape(params.days)} day(s)).`) +
+        // No reason in the email: it is personal and an email outlives the decision.
+        paragraph("Open TimeSphere to review the request and any reason or document attached to it.") +
+        paragraph(button("Review the request", appUrl("/app/attendance"), ACCENT))
+    ),
+
+  /** V17 Phase B: the requester hears the decision. */
+  leaveDecided: (params: { name: string; leaveType: string; decision: string; decidedBy: string; dates: string; days: string; note: string }) =>
+    shell(
+      { title: "Leave decided", preheader: `Your leave request was ${params.decision}.`, accentColor: ACCENT },
+      heading(`Hi ${escape(params.name.split(" ")[0])}, your leave request was ${escape(params.decision)}`) +
+        paragraph(`${escape(params.leaveType)}, ${escape(params.dates)} (${escape(params.days)} day(s)) was <strong>${escape(params.decision)}</strong> by ${escape(params.decidedBy)}.`) +
+        paragraph(`Note: ${escape(params.note)}`) +
+        paragraph(button("Open TimeSphere", appUrl("/app/attendance"), ACCENT))
+    ),
+
+  /** Comp-off, attendance correction and overtime claim: the approver's side. No reason, as for leave. */
+  attendanceRequested: (params: { approverName: string; employeeName: string; requestKind: string; summary: string }) =>
+    shell(
+      { title: "Attendance request", preheader: `${params.employeeName} sent ${params.requestKind}.`, accentColor: ACCENT },
+      heading(`Hi ${escape(params.approverName.split(" ")[0])}, a request needs your decision`) +
+        paragraph(`<strong>${escape(params.employeeName)}</strong> sent ${escape(params.requestKind)}: ${escape(params.summary)}.`) +
+        paragraph("Open TimeSphere to review the request and the reason attached to it.") +
+        paragraph(button("Review the request", appUrl("/app/attendance"), ACCENT))
+    ),
+
+  /** The requester hears the decision on a comp-off, correction or overtime claim. */
+  attendanceDecided: (params: { name: string; requestKind: string; decision: string; decidedBy: string; summary: string; note: string }) =>
+    shell(
+      { title: "Request decided", preheader: `Your ${params.requestKind} was ${params.decision}.`, accentColor: ACCENT },
+      heading(`Hi ${escape(params.name.split(" ")[0])}, your request was ${escape(params.decision)}`) +
+        paragraph(`Your ${escape(params.requestKind)} (${escape(params.summary)}) was <strong>${escape(params.decision)}</strong> by ${escape(params.decidedBy)}.`) +
+        paragraph(`Note: ${escape(params.note)}`) +
+        paragraph(button("Open TimeSphere", appUrl("/app/attendance"), ACCENT))
+    ),
+
+  /** V17 A4: the punch-in reminder — sent only on a working day with no punch from ANY source yet. */
+  punchInReminder: (params: { name: string; date: string }) =>
+    shell(
+      { title: "You haven't punched in yet", preheader: `No punch-in recorded for ${params.date} yet.`, accentColor: ACCENT },
+      heading(`Hi ${escape(params.name.split(" ")[0])}, you haven't punched in yet`) +
+        paragraph(`We haven't recorded a punch-in for you on <strong>${escape(params.date)}</strong>. Log in and punch in so your attendance for today is recorded.`) +
+        paragraph(button("Open TimeSphere and punch in", appUrl("/app"), ACCENT)) +
+        paragraph(`<span style="color:${MUTED};">Already punched in through a badge reader or another system? It can take a few minutes to arrive — you can ignore this.</span>`)
+    ),
+
   /**
    * The two change-management messages.
    *
@@ -804,11 +855,13 @@ export const templates = {
    * manager or administrator also gets the workspace user-by-user and project-by-project. Deciding
    * that in a template would put an access-control rule in a presentation file.
    */
-  weeklyDigest: (params: { name: string; weekLabel: string; summary: string; tablesHtml: string }) =>
+  weeklyDigest: (params: { name: string; weekLabel: string; summary: string; tablesHtml: string; expectedHoursHtml?: string }) =>
     shell(
       { title: `Your week in review — ${params.weekLabel}`, preheader: `Last week, month to date and year to date — ${params.weekLabel}.` },
       heading(`Hi ${escape(params.name.split(" ")[0])}, here is ${escape(params.weekLabel)}`) +
         (params.summary ? paragraph(escape(params.summary)) : "") +
+        // 7.0.0: pre-rendered by weekly-digest-expected.service.ts; "" with Attendance & Leave off.
+        (params.expectedHoursHtml ?? "") +
         params.tablesHtml +
         paragraph(button("Open your dashboard", appUrl("/app"))) +
         paragraph(

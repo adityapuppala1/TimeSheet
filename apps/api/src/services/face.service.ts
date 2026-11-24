@@ -625,7 +625,7 @@ export async function assertFaceEntitlement(): Promise<void> {
 // Enforcement
 // ---------------------------------------------------------------------------------------------
 
-export type FaceContext = "TIMESHEET" | "TICKET" | "APPROVAL";
+export type FaceContext = "TIMESHEET" | "TICKET" | "APPROVAL" | "PUNCH_IN";
 
 /**
  * Whether THIS user must pass a face check for THIS action right now. Read live on every

@@ -19,6 +19,7 @@ import { AnimatedThemeToggler } from "./ui/animated-theme-toggler";
 import { CommandPalette } from "./command-palette";
 import { ShortcutsDialog, useGlobalShortcuts } from "./ShortcutsDialog";
 import { ProductTour, shouldAutoStartTour, useTourController } from "./ProductTour";
+import { usePunchInGate } from "../lib/punch-in-gate";
 import { authApi, fileUrl } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { rememberTheme } from "../lib/remember-theme";
@@ -47,13 +48,15 @@ export function Topbar() {
   // The tour's state is a shared store (see ProductTour.tsx) precisely because the account menu
   // that offers "Take the tour" now renders in two places while only this one renders the tour.
   const { running: tourRunning, start: startTour, stop: stopTour } = useTourController();
+  const punchInHolds = usePunchInGate((s) => s.holdsOthers);
 
   useEffect(() => {
-    if (!user || !shouldAutoStartTour(onboarding.data?.completedAt)) return;
+    // Waits while the punch-in prompt is asking (lib/punch-in-gate.ts) — never two modals at once.
+    if (!user || punchInHolds || !shouldAutoStartTour(onboarding.data?.completedAt)) return;
     // Deferred so it measures a settled layout rather than a half-rendered dashboard.
     const timer = window.setTimeout(() => startTour(), 900);
     return () => window.clearTimeout(timer);
-  }, [user, onboarding.data?.completedAt, startTour]);
+  }, [user, punchInHolds, onboarding.data?.completedAt, startTour]);
 
   const avatarSrc = fileUrl(user?.avatarUrl);
 

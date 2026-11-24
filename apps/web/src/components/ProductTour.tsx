@@ -364,6 +364,8 @@ function placeCard(spot: Rect | null, placement: TourStep["placement"] = "bottom
  * unaffected — the product behaviour and the test fix are the same change, not a workaround.
  */
 const FIRST_LOGIN_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** How far behind the server a browser clock may be before "just completed" stops being believable. */
+const CLOCK_SKEW_TOLERANCE_MS = 10 * 60 * 1000;
 
 /**
  * True when the tour should open itself: this browser session hasn't seen it AND the account is
@@ -372,10 +374,17 @@ const FIRST_LOGIN_WINDOW_MS = 24 * 60 * 60 * 1000;
  * `completedAt` null means the first-run gate is still up — the tour waits, because a walkthrough
  * on top of a blocking gate is two modals arguing.
  */
-export function shouldAutoStartTour(completedAt?: string | null): boolean {
+export function shouldAutoStartTour(completedAt?: string | null, now: number = Date.now()): boolean {
   if (sessionStorage.getItem(SESSION_KEY) === "1") return false;
   if (!completedAt) return false;
-  return Date.now() - new Date(completedAt).getTime() < FIRST_LOGIN_WINDOW_MS;
+  const age = now - new Date(completedAt).getTime();
+  // BOTH BOUNDS. `completedAt` is the SERVER's clock and `now` is the BROWSER's. A browser running
+  // behind (a wrong device clock, or an e2e spec that pins the page to an earlier date) makes `age`
+  // hugely negative, which a one-sided `< window` check reads as "completed a moment ago" — so a
+  // years-old account got the tour, which navigates to /app and yanked the person off whatever page
+  // they had opened. A small negative allowance keeps a genuinely new account working when the two
+  // clocks merely disagree by a few minutes.
+  return age > -CLOCK_SKEW_TOLERANCE_MS && age < FIRST_LOGIN_WINDOW_MS;
 }
 
 export function markTourSeen(): void {

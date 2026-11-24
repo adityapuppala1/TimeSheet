@@ -45,6 +45,8 @@ vi.mock("../../src/middleware/auth.js", async () => {
   };
 });
 vi.mock("../../src/services/audit.service.js", () => ({ audit: vi.fn().mockResolvedValue(undefined) }));
+// V17 A4 missed-day reason gate: off here, these tests are about other rules (see missed-day-reason.test.ts).
+vi.mock("../../src/services/missed-day-reason.service.js", () => ({ assertMissedDayReason: vi.fn().mockResolvedValue(null), saveMissedDayReason: vi.fn() }));
 vi.mock("../../src/services/notify.service.js", () => ({ dispatchNotification: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../../src/services/face.service.js", () => ({
   isFaceVerificationRequired: vi.fn().mockResolvedValue(false),

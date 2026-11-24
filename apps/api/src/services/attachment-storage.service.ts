@@ -131,7 +131,7 @@ export interface ProcessedUpload {
 export interface UploadOwner {
   /** Used only for the filename prefix — never for authorisation. */
   userName?: string | null;
-  entityType: "ticket" | "timesheet";
+  entityType: "ticket" | "timesheet" | "leave";
   entityId: string;
 }
 

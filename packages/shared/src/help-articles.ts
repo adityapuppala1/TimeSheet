@@ -228,6 +228,456 @@ export const HELP_ARTICLES: HelpArticle[] = [
     keywords: ["status", "draft", "pending", "approved", "rejected", "resubmit", "history"]
   },
   {
+    id: "attendance-punch-in",
+    category: "Timesheets",
+    title: "Punch in for the day",
+    where: "The punch-in prompt when you open the app, or Sidebar → Attendance (shown once your workspace turns attendance on)",
+    when: "When your workspace has attendance on and you want to mark the start of your working day, or you were asked to.",
+    steps: [
+      "Open the app on a working day. If you have not punched in, a prompt appears (a bottom sheet on a phone).",
+      "If your workspace asks for location, accept the one-time consent and allow the browser to share it. If the browser cannot, your network address is used instead where the workspace allows it.",
+      "If your workspace asks for face verification, follow the on-screen check. A weak enrolment links you to the pose wizard to improve it.",
+      "Press Punch in. A short confirmation shows and the prompt does not return that day.",
+      "Optional mode: you can dismiss the prompt, then the banner, and either stays away for the rest of the day. Mandatory mode: the app is locked to Profile and sign-out until you punch in."
+    ],
+    notes:
+      "A punch recorded by a device, HRMS, API or CSV import counts too, and you then see a small notice instead of the prompt. Weekends and workspace holidays never ask. Punch-in time, source and (if collected) location are visible to your manager and the workspace's admins.",
+    keywords: ["punch", "punch in", "attendance", "check in", "clock in", "location", "face", "mandatory", "banner"]
+  },
+  {
+    id: "attendance-missed-day-reason",
+    category: "Timesheets",
+    title: "Give a reason for a missed day",
+    where: "Sidebar → Timesheet → log time for a past working day",
+    when: "When you add the first entry for a past working day that has no time logged and your workspace requires a reason.",
+    steps: [
+      "Pick the past date and fill the entry as usual.",
+      "A reason field appears. Choose one of the listed reasons (for example Sick, Travel or Forgot).",
+      "If the reason needs a note (Other always does), write it in the note box.",
+      "Save or submit. The reason is recorded once for that day."
+    ],
+    notes:
+      "There is no approval step. Weekends and workspace holidays never ask. The same rule applies to the API and the AI assistant, which answer with a clear field error naming the reason code.",
+    keywords: ["missed day", "reason", "forgot", "sick", "past date", "backdate", "attendance"]
+  },
+  {
+    id: "attendance-my-attendance",
+    category: "Timesheets",
+    title: "See my attendance and insights",
+    where: "Sidebar → Attendance → My attendance",
+    when: "When you want your recent punch-ins, day status and your own patterns.",
+    steps: [
+      "Open Sidebar → Attendance. My attendance is the first tab.",
+      "Read the last 30 days: each day shows its status (present, weekend, holiday or absent) and your punch-in time.",
+      "Scroll to the analytics for your own punch-in consistency and timesheet follow-through.",
+      "Where your plan includes AI insights and your admin turned them on for individuals, suggestions appear beside the numbers; otherwise you get the rule-based tips."
+    ],
+    notes: "Only you see this view. Suggestions are built from aggregates, never raw coordinates, face data or anyone else's text.",
+    keywords: ["my attendance", "history", "insights", "analytics", "punch history", "suggestions"]
+  },
+  {
+    id: "attendance-team-activity",
+    category: "People & roles",
+    title: "Check team attendance and a person's timeline",
+    roles: ["MANAGER", "TEAM_LEAD", "ADMIN", "SUPER_ADMIN"],
+    where: "Sidebar → Attendance → Team",
+    when: "When you want to know who has punched in today, who is missing a timesheet, or what one person did on a given day.",
+    steps: [
+      "Open Sidebar → Attendance → Team. Today lists everyone you can see with their day status.",
+      "Filter by status or by source (web, API, webhook, MCP, CSV), or search by name.",
+      "Open a row to see punch time, source, location and face result where collected, timesheet status, missed-day reasons and reminder emails.",
+      "Use the date range in the sheet to walk back through the person's days, up to 31 at a time.",
+      "Switch to Insights for team aggregates and suggestions.",
+      "On the Team board, the Late tile counts everyone in your scope who punched in after the expected start (only when an admin switched lateness on), not just the people on the current page. A suggestion you dismiss under Insights stays dismissed for that view and date range, on every device."
+    ],
+    notes:
+      "Managers see their direct reports; admins and super admins see everyone. Insights for groups smaller than the workspace minimum are suppressed so no individual can be inferred.",
+    keywords: ["team", "attendance", "who punched in", "absent", "timeline", "manager", "reminders", "insights"]
+  },
+  {
+    id: "attendance-org-insights",
+    category: "Dashboards & reports",
+    title: "Read organisation-wide attendance insights",
+    roles: ["ADMIN", "SUPER_ADMIN"],
+    where: "Sidebar → Attendance → Organisation",
+    when: "When you want punch-in and timesheet patterns across the whole workspace.",
+    steps: [
+      "Open Sidebar → Attendance → Organisation.",
+      "Read the rates for the default window (the last 30 days).",
+      "Open the suggestions panel: rule-based tips always show; AI suggestions appear when the plan includes them and Attendance & Leave → Analytics & AI allows organisation insights."
+    ],
+    notes:
+      "Aggregates only: small groups are hidden, and no raw location or face data is exposed here. AI suggestions are cached for the frequency chosen in settings.",
+    keywords: ["organisation", "organization", "org", "analytics", "attendance insights", "AI suggestions"]
+  },
+  {
+    id: "attendance-setup",
+    category: "Workspace settings",
+    title: "Switch on and configure Attendance",
+    roles: ADMIN,
+    where: "Workspace Settings → Attendance & Leave",
+    when: "When you want punch-in, holiday calendars and missed-day reasons for the workspace.",
+    steps: [
+      "Check your plan: attendance is on Team and above; integrations and AI insights are Enterprise (a platform administrator can also grant them per workspace). Without it the tab shows an upgrade note and the server refuses the calls.",
+      "Open Workspace Settings → Attendance & Leave and switch Overview on (a super admin makes the changes; admins can read).",
+      "Punch-in: choose Off, Optional or Mandatory, and whether location and face verification are off, optional or required.",
+      "Reminders: set the hour for the punch-in nudge. It goes to every active person, whatever their role, on a working day with no punch from any source. Choose which roles get the email in Workspace Settings → Email channels, on the Punch-in reminder row (every role is ticked by default).",
+      "Working days & holidays: add a calendar (the first is the default), then its holidays; assign another calendar to people who follow a different one.",
+      "Missed-day reasons: keep, edit or add reasons and mark which need a note. Deleting asks you to confirm. While the reason rule is on, at least one reason must stay enabled, and the rule cannot be switched on with none.",
+      "Privacy & retention: set the location consent wording and how many days raw location evidence is kept."
+    ],
+    notes:
+      "Everything defaults to off for existing workspaces. Working days come from the Planning settings. Leave types, balances and approvals are in the Leave sections and need the leave-management entitlement (Enterprise by default).",
+    keywords: ["attendance", "settings", "enable", "holiday", "calendar", "reasons", "punch in mode", "plan", "tier", "retention"]
+  },
+  {
+    id: "attendance-sources",
+    category: "Workspace settings",
+    title: "Send attendance from devices, HRMS, API or CSV",
+    roles: ADMIN,
+    where: "Workspace Settings → Attendance & Leave → Sources & integrations",
+    when: "When punches come from a biometric device, an HRMS or another system and should count the same as a web punch-in.",
+    steps: [
+      "Open Sources & integrations (needs the attendance-integrations entitlement, Enterprise by default).",
+      "Add a source: name it, choose the person field it matches on (email, employee code or external id) and a priority.",
+      "Copy the webhook URL and the secret shown once. Sign each request with HMAC and send an idempotency key; replayed or stale requests are rejected.",
+      "Press Send test event to prove signing works. It is logged as a test and records no attendance.",
+      "For scripts, issue a Public API key with the attendance:write or attendance:read grant and call POST /attendance/punches. MCP clients get the punch_in, get_my_attendance and list_holidays tools.",
+      "For a one-off load, import a CSV: validate first, then commit.",
+      "Check the delivery log for unmatched people and replay them after fixing the employee code."
+    ],
+    notes:
+      "When two sources report the same day the higher priority wins and the other punch is kept for audit. Deleting a source stops it immediately; past records and the log stay. Reference: docs/API.md.",
+    keywords: ["integration", "webhook", "biometric", "hrms", "api key", "csv import", "mcp", "source", "device", "hmac"]
+  },
+  {
+    id: "leave-apply",
+    category: "Timesheets",
+    title: "Apply for leave and track your requests",
+    where: "Sidebar → Attendance → Leave (shown once your workspace turns leave on)",
+    when: "When you need time off, or want to see where a request stands or what your balance is.",
+    steps: [
+      "Open Sidebar → Attendance → Leave. Apply is the first view.",
+      "Pick the leave type (for example Privilege, Casual or Sick). Your balance for it is shown.",
+      "Choose the first and last day. For half a day, set the part of the day on the first or last date.",
+      "Add a reason if you wish. If the type needs a supporting document beyond a number of days, attach it.",
+      "Check the summary and submit. Your approver is named on the form.",
+      "My requests lists every request with its state. Cancel one that is still open from there; Holidays shows your calendar."
+    ],
+    notes:
+      "Your Profile shows your leave balance, who approves your leave and a link to your attendance history. On a day you are on leave or on a holiday the timesheet entry screen says so (for example \"You're on leave today (PL)\"), and on the Home dashboard's logging grid a leave or holiday cell links to your request or the holiday calendar. Ask AI can answer \"what's my leave balance?\" and \"is my leave approved?\"; it never repeats a reason. Approved leave and holidays reduce your expected hours and never ask for a missed-day reason. Leave sent in from an HRMS may arrive already approved or wait for a re-approve, depending on how your admin set the integration.",
+    keywords: ["leave", "time off", "vacation", "sick", "casual", "balance", "half day", "holiday", "apply", "request"]
+  },
+  {
+    id: "leave-approve",
+    category: "Timesheets",
+    title: "Approve leave requests",
+    roles: ["MANAGER", "TEAM_LEAD", "ADMIN", "SUPER_ADMIN"],
+    where: "Sidebar → Attendance → Team → Approvals",
+    when: "When a person who reports to you has asked for leave.",
+    steps: [
+      "Open Sidebar → Attendance → Team. Approvals lists the requests waiting on you (on a wide screen it sits beside the board).",
+      "Open a request to see the dates, type, balance and any document, then Approve or Reject. A rejection can carry a reason.",
+      "To clear several, switch on bulk mode, tick the requests and approve them together after the confirmation.",
+      "The Leave calendar tab shows who is away and when.",
+      "The Attendance item in the sidebar shows a count of the requests waiting on you; it refreshes every couple of minutes."
+    ],
+    notes:
+      "If a person has no manager, an admin approves; a super admin can override. Comp-off requests appear in their own list beside the leave inbox and are decided the same way. Going away? Set Approval cover so someone decides for you. A decision cannot be undone from this screen. Reasons are visible to approvers only. Ask AI's \"who's off this week?\" (and the MCP tool who_is_off) answers for your reports only, with names, types and dates, never a reason.",
+    keywords: ["approve leave", "reject leave", "bulk approve", "leave calendar", "approvals", "manager", "team"]
+  },
+  {
+    id: "leave-cancel-admin",
+    category: "Timesheets",
+    title: "Cancel someone's approved leave (admins)",
+    roles: ADMIN,
+    where: "Sidebar → Attendance → Team → Leave calendar → Cancel someone's approved leave",
+    when: "When approved leave has to be withdrawn, for example a booking made in error, including leave that has already started.",
+    steps: [
+      "Open Sidebar → Attendance → Team and choose the Leave calendar tab.",
+      "Under Cancel someone's approved leave, find the person and press Cancel leave….",
+      "Write a comment saying why. It is required: the person is told it and it is kept in the audit log.",
+      "Press Cancel leave. The days go back to the person's balance."
+    ],
+    notes:
+      "Changed in 7.0.0: admins and super admins both see this card, and both need a comment to cancel someone else's leave (the API answers 422 LEAVE_CANCEL_COMMENT_REQUIRED without one). Cancelling your own leave needs no comment.",
+    keywords: ["cancel leave", "withdraw leave", "revoke leave", "admin", "super admin", "comment", "credit reversal"]
+  },
+  {
+    id: "comp-off",
+    category: "Timesheets",
+    title: "Request comp-off for working a weekend or holiday",
+    where: "Sidebar → Attendance → My attendance → Comp-off",
+    when: "When you logged time on a weekend or a holiday and your workspace has comp-off switched on.",
+    steps: [
+      "Log the hours you worked on that day in your timesheet first: comp-off is judged on them.",
+      "Open Sidebar → Attendance → My attendance. In the Comp-off card pick the day you worked, or tap the day on the calendar and press Request comp-off for this day.",
+      "The card says what the day earns: half a day from 4 hours, a full day from 8 (your admin may set other thresholds), or why it does not qualify.",
+      "Add a note for your approver if you like and press Request comp-off. Your approver is told.",
+      "Once approved, the days are added to your Compensatory off (CO) balance; apply for leave of that type as usual. A pending request can be cancelled from the same card.",
+      "You get an email, as well as the bell notice, when your request is approved or rejected. Under Balance history on My attendance the credit reads Comp-off credit, and an unused one that lapsed reads Comp-off expired."
+    ],
+    notes:
+      "Only weekends and holidays in your own calendar count (an optional holiday only if you took it). One open request per day, up to 60 days after it. If your admin set an expiry, an unused credit lapses that many days after approval; whatever you have already taken is never taken back.",
+    keywords: ["comp-off", "comp off", "compensatory off", "weekend work", "holiday work", "time in lieu", "toil", "CO"]
+  },
+  {
+    id: "attendance-shifts",
+    category: "Timesheets",
+    title: "Set up shifts and rosters",
+    roles: ["SUPER_ADMIN"],
+    where: "Workspace Settings → Attendance & Leave → Shifts",
+    when: "When some people do not work the workspace day, for example a night shift or a Sunday-to-Thursday week.",
+    steps: [
+      "Open Workspace Settings → Attendance & Leave and choose Shifts.",
+      "Add a shift: a name, when it starts and ends, the break in minutes and its working days. A shift that ends before it starts runs past midnight.",
+      "Under Who works which shift, pick the shift, then a person or a manager (their whole team), and the date it starts from. Press Assign.",
+      "From that date the person's punch-in, lateness and the point a day counts as missed follow the shift. They see Your shift on My attendance."
+    ],
+    notes:
+      "A night shift counts on the day it starts: punching in at 02:00 on a 22:00-06:00 shift belongs to the previous evening's shift, and the day is only marked missed after the shift has ended. A person's own assignment beats their team's; the newest start date wins. People without a shift keep the workspace day.",
+    keywords: ["shift", "roster", "night shift", "rota", "working hours", "schedule", "lateness"]
+  },
+  {
+    id: "attendance-corrections",
+    category: "Timesheets",
+    title: "Ask to correct a missed or wrong punch",
+    roles: ["EMPLOYEE", "TEAM_LEAD", "MANAGER", "ADMIN", "SUPER_ADMIN"],
+    where: "Attendance → My attendance → open a past day",
+    when: "When you forgot to punch in or out, or the recorded time is wrong, and your workspace has turned corrections on.",
+    steps: [
+      "Open Attendance → My attendance and tap the day in the calendar.",
+      "Press Request correction. Enter the punch-in time and, if you have it, the punch-out time.",
+      "Write a short reason and press Send request. Your manager is told.",
+      "Once approved, the day shows the corrected times. You can cancel a request while it is still waiting."
+    ],
+    notes:
+      "Corrections are off unless an admin turns them on (Workspace Settings → Attendance & Leave → Corrections), with a limit on how many days back and how many a month. Only past days can be corrected. Your reason is seen only by you and the person who decides. Managers decide from the Attendance team view; an active approval delegate can decide on their behalf. The original punch is kept in the history. Deciders are emailed when a request arrives and you are emailed the decision, under the same Email channels switches as leave requests (Leave and attendance requests, Leave and attendance decisions); the reason is never in the email.",
+    keywords: ["regularisation", "regularization", "correction", "missed punch", "forgot to punch", "punch out", "attendance correction", "fix attendance"]
+  },
+  {
+    id: "attendance-work-sites",
+    category: "Timesheets",
+    title: "Set up work sites",
+    roles: ["SUPER_ADMIN"],
+    where: "Workspace Settings → Attendance & Leave → Work sites",
+    when: "When you want punches to say where they happened (At Head office, Outside work sites) without anyone seeing a location.",
+    steps: [
+      "Open Workspace Settings → Attendance & Leave and choose Work sites.",
+      "Add a site: a name, its latitude and longitude (or press Use my current location while you are there), and a radius in metres.",
+      "Optionally choose what happens when someone punches in from the web outside every site: Label only, Allow and flag, or Block. This needs location turned on.",
+      "Punches now show At <site> or Outside work sites, and the organisation breakdown can be grouped by Location label."
+    ],
+    notes:
+      "Nobody, including managers, sees a coordinate: only the site label. A punch is matched to the nearest site whose circle contains it. Punches without a location, or with no sites defined, keep their usual label. Pausing a site stops new punches matching it; labels already recorded stay. The rule also covers punching in through an AI assistant (MCP), which cannot share a location: Block refuses it and Allow and flag records it flagged. Badge devices, the kiosk, the attendance API, webhooks and CSV imports are trusted integrations and are not held to the rule.",
+    keywords: ["work site", "geofence", "office location", "location label", "site", "outside work sites", "radius"]
+  },
+  {
+    id: "attendance-overtime",
+    category: "Timesheets",
+    title: "See and claim your overtime",
+    roles: ["EMPLOYEE", "TEAM_LEAD", "MANAGER", "ADMIN", "SUPER_ADMIN"],
+    where: "Attendance → My attendance → Overtime",
+    when: "When your workspace counts overtime and you want to see it, or claim a week when claims need approval.",
+    steps: [
+      "Log your hours in your timesheet as usual: overtime is worked out from them.",
+      "Open Attendance → My attendance. The Overtime card lists the last eight weeks: hours logged, hours expected, and the overtime.",
+      "If your workspace asks for approval, press Claim beside a finished week. Your manager (or their active delegate) decides it from the Team view, and it counts in the Attendance badge.",
+      "A claim can be cancelled while it is still waiting."
+    ],
+    notes:
+      "Expected hours are your shift's on its working days, else the workspace day; nothing is expected on a weekend, a holiday or full-day leave, and half on a half day. A night shift counts on the day it starts. A day's overtime is what you logged above the expected day (beyond the daily threshold); a week's is the larger of its days' total and its excess over the expected week (beyond the weekly threshold), never both. Team and organisation views show only totals for groups at or above the smallest group size, never a ranking of people.",
+    keywords: ["overtime", "OT", "extra hours", "claim overtime", "hours above", "payroll overtime"]
+  },
+  {
+    id: "attendance-overtime-setup",
+    category: "Timesheets",
+    title: "Turn on overtime",
+    roles: ["SUPER_ADMIN"],
+    where: "Workspace Settings → Attendance & Leave → Overtime",
+    when: "When payroll or managers need hours above the expected day and week.",
+    steps: [
+      "Open Workspace Settings → Attendance & Leave and choose Overtime.",
+      "Switch on Count overtime and set the daily and weekly thresholds (0 counts any excess).",
+      "Optionally switch on Overtime needs approval: people then claim each finished week and their approver decides.",
+      "Save. The payroll export gains an overtime column: approved hours when approval is on, otherwise the computed hours. A week counts in the month its Monday falls in."
+    ],
+    notes:
+      "Off by default and needs Attendance on. With it off, the payroll export and analytics are exactly as before.",
+    keywords: ["overtime settings", "overtime threshold", "overtime approval", "payroll overtime"]
+  },
+  {
+    id: "leave-policy-scopes",
+    category: "Timesheets",
+    title: "Limit leave types and holiday calendars by employment type or site",
+    roles: ["SUPER_ADMIN"],
+    where: "Workspace Settings → Attendance & Leave → Leave types / Working days & holidays; People → Edit",
+    when: "When contractors, interns or a particular office get different leave or public holidays.",
+    steps: [
+      "On People, edit each person and set their Employment type and, if you use work sites, their Work site.",
+      "Under Leave types, edit a type and tick who it applies to: employment types and/or work sites. Nothing ticked means everyone.",
+      "Under Working days & holidays, tick the sites or employment types a calendar is for, and press Save scope.",
+      "People now see, apply for and accrue only the leave types in their scope, and get their site's calendar unless they are assigned one of their own."
+    ],
+    notes:
+      "Calendar order: a person's own calendar, then a scoped calendar that matches them (a site match first), then the default. Someone whose employment type is not set is outside a type-scoped policy. Existing balances are kept; an out-of-scope type simply stops accruing and is refused on apply.",
+    keywords: ["employment type", "contractor leave", "intern leave", "part time", "location", "site holidays", "leave policy", "scope", "eligibility"]
+  },
+  {
+    id: "leave-sandwich-rule",
+    category: "Timesheets",
+    title: "Count weekends and holidays inside a leave (sandwich rule)",
+    roles: ["SUPER_ADMIN"],
+    where: "Workspace Settings → Attendance & Leave → Leave types → Edit",
+    when: "When your leave policy counts the weekend or holiday sandwiched between leave days.",
+    steps: [
+      "Open Leave types, edit the type and switch on Sandwich rule. Save.",
+      "From then on a request of that type counts every weekend and holiday fully between its leave days: Friday to Monday costs 4 days, not 2.",
+      "The Apply screen says how many enclosed days it counted."
+    ],
+    notes:
+      "Off by default. Days at the start or end of a request are never counted (Saturday to Monday costs 1). A half day at either end still encloses the gap. Requests made before you switched it on keep their days; cancelling one gives back exactly what it took.",
+    keywords: ["sandwich", "sandwich leave", "weekend in leave", "holiday in leave", "intervening holidays"]
+  },
+  {
+    id: "attendance-kiosk-setup",
+    category: "Timesheets",
+    title: "Set up a punch-in kiosk (QR code)",
+    roles: ["SUPER_ADMIN"],
+    where: "Workspace Settings → Attendance & Leave → Kiosk / QR punch",
+    when: "When people should punch in at the office door by scanning a code with their own phone.",
+    steps: [
+      "Open Workspace Settings → Attendance & Leave and choose Kiosk / QR punch.",
+      "Switch on Let people punch in by scanning a kiosk's QR code, and save.",
+      "Add a kiosk: give it a name and, optionally, the work site it stands at. Copy the device token shown: it is shown only once.",
+      "On the kiosk device (a tablet or a screen), open /kiosk on your workspace's address and paste the token. It shows a QR code that changes every 30 seconds, and straight after each scan.",
+      "Lost a device? Revoke it. Rotate gives a new token and stops the old one at once."
+    ],
+    notes:
+      "Off by default and needs Attendance on. A kiosk punch counts as being at the kiosk's site, so the work-site rule never blocks or flags it; it records no location. When the face check is required for punch-in, people do it on their own phone after scanning, exactly as for a web punch. Codes are signed, last about a minute and work once, for one person: a photographed or forwarded code is refused; a code from one workspace never works in another.",
+    keywords: ["kiosk", "QR code", "qr punch", "scan to punch in", "front door", "tablet punch", "device token"]
+  },
+  {
+    id: "attendance-kiosk-punch",
+    category: "Timesheets",
+    title: "Punch in by scanning the kiosk",
+    roles: ["EMPLOYEE", "TEAM_LEAD", "MANAGER", "ADMIN", "SUPER_ADMIN"],
+    where: "The kiosk screen at your office → your phone's camera",
+    when: "When your office has a punch-in kiosk.",
+    steps: [
+      "Point your phone's camera at the QR code on the kiosk and open the link.",
+      "Sign in if asked, then press Punch in. If your workspace requires a face check, it runs on your phone first.",
+      "You see Punched in and the time. Scanning again the same day just says you are already in."
+    ],
+    notes: "Use your own phone and your own account. The code changes every 30 seconds; if it has expired, scan again.",
+    keywords: ["kiosk", "scan", "QR", "punch in at office", "qr code punch"]
+  },
+  {
+    id: "celebrations",
+    category: "Timesheets",
+    title: "Birthdays and work anniversaries this week",
+    roles: ["EMPLOYEE", "TEAM_LEAD", "MANAGER", "ADMIN", "SUPER_ADMIN"],
+    where: "Dashboard; Attendance → Team → Leave calendar; Profile → Birthday and work anniversary",
+    when: "When your workspace shows birthdays and work anniversaries, and you want to add yours or stay out of it.",
+    steps: [
+      "A super admin switches it on under Workspace Settings → Attendance & Leave → Birthdays & anniversaries. Admins set each person's join date on People → Edit.",
+      "On your Profile, add your birthday under Birthday and work anniversary and press Save birthday.",
+      "To stay out of the strip, switch off Show me in the This week strip.",
+      "The Dashboard and the Team leave calendar show a This week strip for the people you can see in the team view."
+    ],
+    notes:
+      "Off by default. Only the day and month are shown, never the year or an age. Anniversaries show years of service from the first year. Only you and super admins can see your birth year.",
+    keywords: ["birthday", "work anniversary", "celebrations", "join date", "this week", "opt out"]
+  },
+  {
+    id: "approval-cover",
+    category: "Timesheets",
+    title: "Let someone cover your leave approvals",
+    roles: ["MANAGER", "TEAM_LEAD", "ADMIN", "SUPER_ADMIN"],
+    where: "Sidebar → Attendance → Team → Approvals → Approval cover",
+    when: "Before you go on leave, so requests from your team do not wait for you.",
+    steps: [
+      "Open Sidebar → Attendance → Team. Approval cover sits under the approvals inbox (on a phone, choose Approvals first).",
+      "Choose who covers: a manager, team lead or admin. Admins can also pick whose approvals are covered.",
+      "Set the From and To dates and press Set cover.",
+      "While the dates cover today, that person sees the leave and comp-off requests waiting on you, gets the notifications and decides them on your behalf. You can still decide them too.",
+      "Back early? Press End beside the cover."
+    ],
+    notes:
+      "The audit log records every such decision as made on your behalf. Cover is one step only: if your cover is away too and hands their own approvals on, yours are not passed along. Nobody decides their own request, and you cannot hand approvals to yourself or set up a loop.",
+    keywords: ["delegate", "delegation", "approval cover", "out of office", "away", "on behalf of", "covering manager"]
+  },
+  {
+    id: "calendar-sync",
+    category: "Timesheets",
+    title: "See your leave and holidays in your own calendar",
+    where: "Sidebar → Profile → Calendar sync",
+    when: "When you want approved leave and holidays to show in Google, Outlook or Apple Calendar.",
+    steps: [
+      "Open your Profile and find Calendar sync (shown while Attendance or Leave is on).",
+      "Press Create link and copy the URL straight away: it is shown only once.",
+      "In your calendar app add a calendar From URL (Google: Other calendars → From URL; Outlook: Add calendar → Subscribe from web) and paste it.",
+      "Managers, team leads and admins also get a team link with the approved leave of the people they can see, by name and leave type.",
+      "Lost the link or shared it by mistake? Press Rotate link (the old one stops working) or Turn off."
+    ],
+    notes:
+      "Anyone who has the link can read that calendar, so treat it like a password. It never contains a leave reason, note or document. Calendar apps refresh subscribed calendars on their own schedule, often every few hours.",
+    keywords: ["ical", "ics", "calendar feed", "google calendar", "outlook", "apple calendar", "subscribe", "sync"]
+  },
+  {
+    id: "payroll-export",
+    category: "Dashboards & reports",
+    title: "Export the monthly payroll report",
+    roles: ADMIN,
+    where: "Sidebar → Attendance → Organisation → Payroll export",
+    when: "At month end, to hand attendance and leave to payroll.",
+    steps: [
+      "Open Sidebar → Attendance → Organisation and scroll to More detail → Payroll export.",
+      "Pick the month (last month is preselected). The card previews the number of people, paid and unpaid leave days and logged hours.",
+      "Press Download CSV. Each row is one person: working days, holidays, present, absent, leave days by type, paid leave, unpaid leave (LOP), comp-off taken and earned, and logged hours."
+    ],
+    notes:
+      "A month whose leave year has ended or been closed by the year-end rollover is marked closed: treat that export as final. Integrations can fetch the same report from the public API (GET /attendance/payroll, with the attendance:read grant). Reference: docs/API.md.",
+    keywords: ["payroll", "export", "csv", "lop", "loss of pay", "unpaid leave", "month end", "working days", "present", "absent"]
+  },
+  {
+    id: "optional-holidays",
+    category: "Timesheets",
+    title: "Take an optional holiday",
+    where: "Sidebar → Attendance → Leave → Holidays",
+    when: "When your calendar has optional holidays (festivals you choose from) and you want one off.",
+    steps: [
+      "Open Sidebar → Attendance → Leave → Holidays and use the List view.",
+      "The line above the list shows how many optional holidays you have taken this year and the limit, if there is one.",
+      "Press Take this day on an optional holiday. It becomes a day off for you: your expected hours drop and no missed-day reason is asked.",
+      "Changed your mind? Press Taken · Drop before the day."
+    ],
+    notes:
+      "Since 7.0.0 an optional holiday counts only for people who opted in; everyone else works it as a normal day. When a choice is disabled the reason is shown beside it: the day has passed, or you have taken all the optional holidays your calendar allows this year.",
+    keywords: ["optional holiday", "restricted holiday", "floating holiday", "opt in", "festival", "holiday limit"]
+  },
+  {
+    id: "leave-setup",
+    category: "Workspace settings",
+    title: "Set up leave types, balances and holiday calendars",
+    roles: ADMIN,
+    where: "Workspace Settings → Attendance & Leave",
+    when: "Before you switch leave on for the workspace.",
+    steps: [
+      "Confirm the plan includes leave management (Enterprise by default; a platform administrator can grant it per workspace).",
+      "Add leave types such as PL, CL and SL, each with its yearly allowance, accrual (monthly or all at once), carry-forward, whether half days are allowed and when a document is required.",
+      "Add holiday calendars and their holidays; assign a calendar to people who follow a different one.",
+      "Mark a holiday Optional if people choose it, and set \"Optional holidays per person per year\" on the calendar (empty = no limit). An optional holiday is a day off only for the people who opt in on their Holidays screen.",
+      "Choose who approves when there is no manager (any admin, or super admins only).",
+      "If an HRMS sends leave in on the signed webhook, choose whether its approvals are trusted (recorded as approved) or re-approved here (queued for your approvers).",
+      "Switch leave on. Balances start from the allowance and follow a ledger you can read.",
+      "Optional: to offer comp-off, enable the Compensatory off (CO) leave type, then under Leave settings switch on Comp-off and set the hours for half and full days and an expiry if you want one."
+    ],
+    notes:
+      "API keys can be granted leave:read and leave:write. Reference: docs/API.md.",
+    keywords: ["leave types", "accrual", "carry forward", "balance", "ledger", "holiday calendar", "hrms", "leave settings", "PL", "CL", "SL"]
+  },
+  {
     id: "approve-timesheets",
     category: "Timesheets",
     title: "Approving or rejecting timesheets",
@@ -399,10 +849,11 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Hover, tap or tab to a cell to list that person's activities for the day: project, activity, time range and duration, with the number of entries and the total hours underneath.",
       "The last column reads days filled out of working days so far, hours logged out of planned hours (8 hours for each working day so far), and the percentage. It can pass 100% when someone works extra or on a day off.",
       "You only see the people you are entitled to: employees see themselves, managers see themselves and their direct reports, and admins see everyone.",
+      "When Attendance or Leave is switched on for your workspace, the grid also shows days off. A blue cell with a plane and a code such as PL is a day of approved leave; a violet cell with a star is a holiday, and its popover names it. A small ½ marks a half day of leave, and a small A on a red cell means the person did not punch in that day. Leave and holiday days are not gaps: they are left out of the days-filled ratio, the people-with-gaps count and Plan hours (a half day plans 4 hours). If someone logged time on a day off, the cell is still green and the popover says it was a leave day or a holiday. The popover links on: a holiday to the holiday calendar, your own leave to your leave requests, and a report's leave to the team leave calendar (managers and admins only; nobody else's leave links anywhere, and no link ever shows a reason). The Day timeline labels a person's lane On leave, Holiday or Not punched in, and Reports → Attendance & leave totals it all per person, with a CSV export.",
       "Admins in a workspace with several managers also get a strip of team chips above the grid — people, hours against plan and how many have gaps. Click a chip, or use the manager picker in the expanded view, to narrow the grid to one team. Each team has a roll-up row showing how many of the team logged on each day; click it to collapse or expand the team. Large workspaces start with the teams collapsed, and Show more loads further people.",
-      "The Monday weekly digest email carries the same grid for the week just finished — one cell per day, green for logged and red for a working day with nothing — with days filled, hours against plan and the percentage. Employees get their own week, managers get themselves and their team, and admins get everyone, with a by-team table and the people who missed the most days listed first (up to 40 rows). Hours in that grid include drafts and pending entries, so they can be higher than the approved hours elsewhere in the email."
+      "The Monday weekly digest email carries the same grid for the week just finished — one cell per day, green for logged and red for a working day with nothing — with days filled, hours against plan and the percentage. Employees get their own week, managers get themselves and their team, and admins get everyone, with a by-team table and the people who missed the most days listed first (up to 40 rows). Hours in that grid include drafts and pending entries, so they can be higher than the approved hours elsewhere in the email. With Attendance or Leave on, the digest also states your expected hours for the week after holidays and approved leave, next to what you logged."
     ],
-    keywords: ["logging status", "who has logged", "missing timesheet", "unfilled", "gaps", "manager", "team", "compliance", "daily", "planned hours", "home", "weekly digest", "monday email", "digest"]
+    keywords: ["logging status", "who has logged", "missing timesheet", "unfilled", "gaps", "manager", "team", "compliance", "daily", "planned hours", "home", "weekly digest", "monday email", "digest", "leave", "holiday", "absent", "punch in", "attendance"]
   },
   {
     id: "insights-reports",
@@ -521,7 +972,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Rate answers with the thumbs — ratings feed the workspace's quality datasets.",
       "Expand Tool evidence to inspect the recorded calls. Scoped ticket searches include links to the ticket rows they returned; other arguments are audit context and may be truncated.",
       "Choose an answer style in the header: Default, Concise, Detailed or Checklist. It is saved to your profile, so it follows you to your phone and to any other browser you sign in from; choosing Default deletes it rather than storing it, on the server as well as here. It affects ordinary Ask AI answers, not report or workflow generation, and never changes permissions.",
-      "The one thing it writes is a DRAFT timesheet entry, which you review and submit yourself."
+      "The one thing it writes is a DRAFT timesheet entry, which you review and submit yourself.",
+      "With leave on, ask \"who's off this week?\", \"who is on leave on Friday?\", \"what's my leave balance?\" or \"is my leave approved?\". Who's off is scoped like the Team view (your reports if you manage people, everyone for an admin, otherwise just you), and no answer ever contains a leave reason."
     ],
     notes: "It answers only about this product and workspace — no web search, no outside knowledge. Off-topic questions get a polite fixed refusal.",
     keywords: ["ask ai", "assistant", "chat", "question", "slash", "capabilities", "chart"]

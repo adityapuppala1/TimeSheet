@@ -14,6 +14,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const userFindMany = vi.fn().mockResolvedValue([]);
 const entryFindMany = vi.fn().mockResolvedValue([]);
 
+// V17 Phase B: approved leave / holidays on capacity are covered by leave-calc.test.ts; none here.
+vi.mock("../../src/services/leave-capacity.service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/services/leave-capacity.service.js")>()),
+  absenceByPerson: async () => new Map()
+}));
 vi.mock("../../src/config/prisma.js", () => ({
   prisma: {
     user: { findMany: (...a: unknown[]) => userFindMany(...a) },

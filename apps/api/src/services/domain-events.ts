@@ -2,7 +2,7 @@
  * WHAT: the one place something notable happens, and the place anything wanting to react to it
  * subscribes.
  *
- * WHY IT SITS BESIDE `webhook-dispatch.service.ts` RATHER THAN INSIDE IT: `WEBHOOK_EVENTS`' five
+ * WHY IT SITS BESIDE `webhook-dispatch.service.ts` RATHER THAN INSIDE IT: `WEBHOOK_EVENTS`' public
  * strings are a PUBLIC CONTRACT — customers subscribe to them and they are documented in
  * docs/API.md. Putting an internal subscriber registry inside that function leaves two bad
  * options: either every new internal event becomes a customer-visible webhook event, leaking
@@ -78,7 +78,7 @@ export interface DomainSubscriber {
 /**
  * The outbound-webhook fan-out, as an ordinary subscriber.
  *
- * It only ever sees the five public events, which is what keeps the internal vocabulary internal.
+ * It only ever sees the public events, which is what keeps the internal vocabulary internal.
  */
 const webhookSubscriber: DomainSubscriber = {
   name: "outbound-webhooks",

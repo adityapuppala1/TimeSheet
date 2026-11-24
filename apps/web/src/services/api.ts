@@ -5,6 +5,7 @@ import type { SignupVerifyResult } from "../utils/signup-flow";
 import type { BulkUploadResult } from "../components/CsvBulkUploadDialog";
 import type {
   AiProposalTargetType,
+  ApiKeyGrant,
   ApiKeyScope,
   AuthUser,
   ChatIntegrationRow,
@@ -1395,6 +1396,9 @@ export interface UserRow {
   /// Admin-set per-user opt-in for face (identity) verification. Only consulted while the
   /// workspace-level switch is on AND its enforcement mode is SELECTED.
   faceVerificationRequired: boolean;
+  /** 7.0.0 leave policies: scopes leave types and holiday calendars. */
+  employmentType?: "FULL_TIME" | "PART_TIME" | "CONTRACT" | "INTERN" | null;
+  siteId?: string | null;
   managerId: string | null;
   manager?: { id: string; name: string; email: string } | null;
   role: { name: string };
@@ -2579,7 +2583,7 @@ export const settingsApi = {
   // Public API keys & outbound webhooks — see docs/ROADMAP.md's "Public REST API + outbound
   // webhooks" theme. Both "create" endpoints return the plaintext secret exactly once.
   listApiKeys: async () => (await api.get<ApiKeyRow[]>("/settings/api-keys")).data,
-  createApiKey: async (payload: { name: string; scope: ApiKeyScope; expiresAt?: string }) =>
+  createApiKey: async (payload: { name: string; scope: ApiKeyScope; grants?: ApiKeyGrant[]; expiresAt?: string }) =>
     (await api.post<ApiKeyCreated>("/settings/api-keys", payload)).data,
   revokeApiKey: async (id: string) => api.delete(`/settings/api-keys/${id}`),
 
@@ -2649,6 +2653,8 @@ export interface ApiKeyRow {
   name: string;
   keyPrefix: string;
   scope: ApiKeyScope;
+  /** Granular grants (V17 A3). Empty on every key issued before they existed. */
+  grants: ApiKeyGrant[];
   lastUsedAt: string | null;
   createdAt: string;
   revokedAt: string | null;
@@ -2660,6 +2666,7 @@ export interface ApiKeyCreated {
   id: string;
   name: string;
   scope: ApiKeyScope;
+  grants: ApiKeyGrant[];
   expiresAt: string | null;
   /** Shown exactly once — the server never returns it again after this response. */
   key: string;
@@ -4232,7 +4239,7 @@ export interface FaceVerifyResult {
 
 /** Mirrors `FaceContext` in apps/api/src/services/face.service.ts — not imported from there since
  *  the web app doesn't depend on API source, but named the same to keep the two in sync by eye. */
-export type FaceContext = "TIMESHEET" | "TICKET" | "APPROVAL";
+export type FaceContext = "TIMESHEET" | "TICKET" | "APPROVAL" | "PUNCH_IN";
 
 export interface FaceAttemptRow {
   id: string;

@@ -131,8 +131,12 @@ export async function getTenantClient(orgId: string, dsn: string): Promise<Prism
     new PrismaClient({
       // Prisma 7 connects through a driver adapter; the pool size rides in the URL as before.
       adapter: mysqlAdapter(withConnectionLimit(dsn)),
-      log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"]
-    })
+      log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
+      // 7.0.0: a birth YEAR is private (the person and super admins only). Omitted from every User
+      // read unless a query asks for it by name (`select: { dateOfBirth: true }`), so no list,
+      // include or update response can leak it by accident.
+      omit: { user: { dateOfBirth: true } }
+    }) as unknown as PrismaClient
   );
   clientCache.set(orgId, { client, lastUsedAt: Date.now() });
   await applyDatabaseTimezone(client).catch((error) => {

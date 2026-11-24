@@ -27,6 +27,7 @@ import { permissions, searchHelpArticles, type RoleName } from "@timesheet/share
 import { prisma } from "../config/prisma.js";
 import { ticketProjectScope } from "./ticket.service.js";
 import { AI_CHAT_ADMIN_TOOLS } from "./ai-chat-admin-tools.js";
+import { AI_CHAT_LEAVE_TOOLS } from "./ai-chat-leave-tools.js";
 import type { ToolAccess } from "./ai-chat-guardrails.js";
 
 /** What the model sees per tool: the name it must use, and when to use it. */
@@ -484,7 +485,8 @@ const EVERYDAY_TOOLS: ReadonlyArray<AiChatTool> = [
  * question "which tools reach past the asking person's projects" is answered by which FILE a tool is
  * in, not by reading every entry.
  */
-export const AI_CHAT_TOOLS: ReadonlyArray<AiChatTool> = [...EVERYDAY_TOOLS, ...AI_CHAT_ADMIN_TOOLS];
+// 7.0.0: the leave reads are self- or team-scoped inside their own run (ai-chat-leave-tools.ts).
+export const AI_CHAT_TOOLS: ReadonlyArray<AiChatTool> = [...EVERYDAY_TOOLS, ...AI_CHAT_LEAVE_TOOLS, ...AI_CHAT_ADMIN_TOOLS];
 
 export function findAiChatTool(name: string) {
   return AI_CHAT_TOOLS.find((t) => t.name === name);

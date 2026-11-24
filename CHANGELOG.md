@@ -10,6 +10,270 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 7.0.0 — Attendance, leave and holiday calendars: off until you switch them on — 2026-11-24
+
+A new module, **off for every workspace until an admin opts in**. It adds a tenant migration, which `update.sh` applies, and a control-plane migration for the four new plan entitlements.
+
+**Why this is a major.** Once a workspace switches the module on, figures people already read change meaning:
+the Home dashboard's "x with gaps", its team-row ratios and its Plan hours stop counting leave and holiday days
+as days anyone owed a timesheet on. With the module off, every screen and API response is exactly what it was.
+
+### ⬆ Upgrade notes
+
+- Nothing to run beyond `update.sh` (or `migrate deploy` plus the tenant fan-out). Nothing switches on by itself.
+- After a super admin enables Attendance or Leave, expect lower Plan hours and fewer gaps on the Home dashboard
+  for anyone on leave or on a holiday. That is the intended change, not a data fault.
+- **Cancelling someone else's leave now needs a comment, super admins included.** `POST
+  /api/leave/me/requests/:id/cancel` answers `422 LEAVE_CANCEL_COMMENT_REQUIRED` without `{ "comment": "…" }` when
+  the request is not yours. A script or HRMS bridge that cancelled other people's leave as an admin must send one.
+  In the app the Cancel leave dialog will not submit until the comment has text. Cancelling your own leave is unchanged.
+- **Optional holidays now count only for people who opted in.** An optional holiday used to be a day off for
+  everyone on the calendar; it is now a working day for anyone who has not taken it on their Holidays screen. Tell
+  people to opt in, and set a yearly cap per calendar if you want one.
+- **The weekly digest template gains `{{expectedHoursHtml}}`.** A tenant migration adds it to the default
+  `digest.weekly` template only when that template is still the untouched default (SHA-256 guard); an admin-edited
+  template is left as it is. It renders nothing with Attendance & Leave off.
+- **Three more tenant migrations, all additive and empty:** comp-off (five `GlobalAttendanceSettings` columns, all
+  off, a `CompOffRequest` table, and a **disabled** `CO` "Compensatory off" leave type inserted with `INSERT IGNORE`,
+  so an admin's own `CO` is left alone), `ApprovalDelegation`, and `CalendarFeedToken`. No new entitlement: all three
+  sit under `leaveManagementEnabled` (Enterprise), and the calendar feed also serves holidays when only attendance is on.
+- **`GET /api/leave/inbox` may carry `compOffPending`** (only while comp-off is on); the sidebar badge adds it.
+  `/api/leave/status` gains `compOffEnabled`.
+- **`GET /api/leave/inbox?scope=all` is now open to ADMIN** as well as SUPER_ADMIN (an admin could already cancel
+  anyone's leave through the API). Reasons and documents are still stripped from every row the caller may not decide.
+- **Shifts (one more additive tenant migration: `AttendanceShift` and `AttendanceShiftAssignment`, both empty).**
+  No new entitlement: shifts sit under `attendanceEnabled` (Team). With no shift assigned nothing changes. Once a
+  person is on a night shift, punches from every source (web, API, webhook, CSV) are filed on the shift's START date,
+  so an integration that matched records on the calendar date of the punch should expect the previous day's key for
+  after-midnight punches. `GET /api/attendance/me/today` gains `shift` (null without one).
+- **Expected hours follow the person's shift.** The weekly digest, the leave preview and the capacity board now count
+  a shifted person's own working days and shift length (start to end minus break). People without a shift keep the
+  workspace week, so nothing moves until a shift is assigned.
+- **Attendance corrections reverse a Phase A decision, so they ship OFF (one more additive tenant migration:
+  `AttendanceRegularizationRequest` and three settings columns).** Phase A deliberately had no correction request;
+  a workspace that wants one turns it on under Workspace Settings → Attendance & Leave → Corrections (defaults: 7 days
+  back, 3 a month). The punch source enum gains `REGULARIZATION` on `AttendanceSource`, `AttendanceEvent`,
+  `AttendanceRecord` and `LeaveRequest`: an approved correction outranks every other source, including a
+  biometric webhook, so a later device swipe will not undo it. A reporting job that switched on the source should
+  expect the new value. `GET /api/attendance/me/today` gains `regularization` (absent while off).
+- **Work sites (one more additive tenant migration: `AttendanceSite`, `AttendanceRecord.siteLabel` /
+  `siteFlagged`, `GlobalAttendanceSettings.requireSite`).** With no site defined nothing changes. Once sites exist,
+  every punch that carries a location (web, API, webhook, CSV) is labelled "At <site>" or "Outside work sites";
+  Team Activity shows that label in place of "Location shared". `requireSite` defaults to OFF and only acts on the
+  web punch-in.
+- **Overtime ships OFF (one more additive tenant migration: four `GlobalAttendanceSettings` columns and an empty
+  `OvertimeClaim` table).** With it off nothing changes: the payroll export (CSV and public API) and analytics keep
+  their exact shape. Once on, payroll gains `overtimeHours` and an `Overtime hours` CSV column before `Leave year
+  closed`, so a CSV importer that reads columns by position should be checked. `GET /api/attendance/me/today` gains
+  `overtime` (absent while off).
+- **Leave policies per employment type or site (one more additive tenant migration: `User.employmentType`,
+  `User.siteId`, and two nullable JSON scope columns on `LeaveType` and `HolidayCalendar`).** Every existing type and
+  calendar is unscoped, so nothing moves until an admin sets a scope. Holiday calendar precedence is now: a person's
+  own calendar, then a scoped calendar matching them, then the default.
+- **Sandwich rule (one more additive tenant migration: `LeaveType.sandwichRule`, default false).** Requests made
+  before an admin switches it on keep their stored days. While any type has the rule on, the payroll export's leave
+  columns count what was debited (the stored days of a request inside the month; a request straddling two months
+  splits its enclosed days by month) and gain `sandwichDays` plus a `Sandwich days` CSV column before `Leave year
+  closed`. With no type using the rule the export is unchanged.
+- **Scope site ids are checked.** Saving a leave type or holiday calendar whose `scopeSiteIds` names a site that does
+  not exist is now a 422 (`UNKNOWN_SITE`); deleting a work site removes its id from every scope, and a scope left
+  empty means everyone again. A script that saved stale ids will now be refused.
+- **Kiosk / QR punch ships OFF (one more additive tenant migration: `GlobalAttendanceSettings.kioskEnabled`, the
+  `AttendanceKiosk` and `AttendanceKioskNonce` tables, and `KIOSK` added to the attendance source enum).** Code that
+  switches over `AttendanceRecord.source` or the team view's `source` filter should expect `KIOSK`. Kiosk codes are
+  signed with a key derived from `ENCRYPTION_KEY`: rotating that key invalidates the codes on screen for at most a
+  minute, and nothing else.
+- **Birthdays and work anniversaries ship OFF (one more additive tenant migration: `User.dateOfBirth`,
+  `User.joinDate`, `User.celebrationsOptOut` and `GlobalAttendanceSettings.celebrationsEnabled`).** The tenant
+  database client now omits `User.dateOfBirth` from every read unless a query selects it by name, so no user list,
+  include or update response can carry a birth year. Code that needs it must `select: { dateOfBirth: true }`.
+- **Two new webhook events, `compoff.requested` and `compoff.approved`.** Existing subscriptions are not opted in.
+- **The access log redacts calendar feed tokens** (`/api/calendar/feed/[redacted]`). A log shipper that parsed the
+  raw path of that route will see the placeholder.
+
+### ✨ Features: Attendance, leave and holiday calendars
+
+- **Attendance corrections (off by default).** When an admin turns them on, a person opens a past day on My
+  attendance and presses Request correction: the right punch-in (and punch-out) and a reason. Their manager, or an
+  active delegate, approves or rejects it from the Team view (it counts in the Attendance badge). Approval replaces
+  that day's punch; the original stays in the history. Limits: how many days back and how many a month. The reason
+  is shown only to the person and whoever decides.
+- **Work sites.** Workspace Settings → Attendance & Leave → Work sites: named sites with a centre (typed in, or
+  "Use my current location") and a radius. Punches say "At Head office" or "Outside work sites"; nobody sees a
+  coordinate. An optional rule for the web punch-in: label only, allow and flag for review, or block. The
+  organisation breakdown gains a Location label grouping.
+- **Overtime (off by default).** Timesheet hours above each person's expected day (their shift, else the workspace
+  day) and week, with a daily and a weekly threshold; a week's overtime is the larger of the two, never both. People
+  see it on My attendance; teams and the organisation see totals only, hidden below the smallest group size. With
+  approval on, people claim a finished week and their approver (or delegate) decides it in the same inbox and badge
+  as corrections and comp-off. The payroll export gains an overtime column.
+- **Leave policies per employment type or work site.** Set a person's employment type and work site on People. Leave
+  types and holiday calendars can be limited to some employment types and/or sites: people see, apply for and accrue
+  only the types meant for them, and get their site's holiday calendar unless they have one of their own.
+- **Sandwich rule (off by default, per leave type).** Weekends and holidays fully inside one leave request count as
+  leave: Friday to Monday costs 4 days. The Apply screen says how many enclosed days it counted, and the payroll
+  export counts the same days, with a Sandwich days column while the rule is in use.
+- **Email for comp-off, corrections and overtime.** Approvers are emailed when one of these needs a decision and the
+  person is emailed the outcome, through the same two Email channels switches and role mutes as leave (now labelled
+  "Leave and attendance requests" and "Leave and attendance decisions"). Two new editable templates,
+  `attendance.requested` and `attendance.decided`, are added by a tenant migration with `INSERT IGNORE`. The reason
+  is never in the email.
+- **Balance history on My attendance.** Comp-off credits and expiries read "Comp-off credit" and "Comp-off expired"
+  instead of looking like a manual adjustment; the ledger API gains a `label` on each row.
+- **Birthday on the Edit user dialog (super admins only).** The join date was already there; the birthday is shown
+  and sent only for a super admin, and only when changed.
+- **Kiosk / QR punch (off by default).** A super admin registers a kiosk device, optionally at a work site, and gets
+  a one-time device token (rotate or revoke it any time). Open /kiosk on the device: it shows a QR code that changes
+  every 30 seconds. People scan it with their own phone while signed in and punch in. Codes are signed, expire after
+  about a minute and cannot be reused; a kiosk punch counts as being at the kiosk's site, and the face check applies
+  as for any punch.
+- **Birthdays and work anniversaries this week (off by default).** A small strip on the Dashboard and the Team leave
+  calendar, for the people you can already see in the team view. Day and month only, never a year or an age; years
+  of service from one year on. People add their birthday and can opt out on their Profile; admins set join dates.
+- **Expected hours follow shifts.** A person on a 4×10 shift is expected 10 hours on their four days, in the digest,
+  the leave preview and the capacity board.
+
+- **Shifts and rosters.** Workspace Settings → Attendance & Leave → Shifts: define shifts (start, end, break,
+  working days; a shift may run past midnight) and assign one to a person or to a manager's whole team from a date.
+  The person's own assignment beats the team's. The shift replaces the workspace working days and start time for that
+  person: lateness is judged on the shift start, and a day only counts as missed once the shift has ended. A night
+  shift counts on the day it starts. People see "Your shift" on My attendance. Off until a shift is assigned.
+
+- **A plan-tier module.** Starter has none. Team gets attendance, holidays and missed-day reasons. Enterprise adds leave
+  management, integrations and AI insights. A platform administrator can override each of the four entitlements
+  (`attendanceEnabled`, `leaveManagementEnabled`, `attendanceIntegrationsEnabled`, `attendanceAiInsightsEnabled`) per
+  workspace. The server refuses calls without the entitlement and the UI shows the upgrade note.
+- **Punch in after login.** A dialog (a bottom sheet on a phone) in Off, Optional (dismissible, then a banner) or
+  Mandatory (locks the app to Profile and sign-out) mode. Location (consent first) and face verification are optional
+  and off by default; no map or coordinates are shown anywhere. Admins and super admins are never locked behind the
+  Mandatory overlay, so they can always reach Settings.
+- **Attendance from any source.** The web prompt, a public API, a signed webhook, MCP tools, CSV import and
+  HRMS/biometric feeds all go through one ingest service. Every record keeps its source, source priorities settle
+  conflicts, and there is a delivery log. Settings → Attendance & Leave → Sources & integrations. The webhook signature
+  covers the event id: `HMAC(secret, "<timestamp>.<event id>.<raw body>")`.
+- **Leave management (Enterprise).** Leave types such as PL, CL and SL with accrual, carry-forward, half days and
+  document rules, over a balance ledger. Requests go to the manager, with an admin fallback and a super-admin override;
+  a manager can bulk approve. An HRMS can send leave in, either trusted (recorded as approved) or re-approved here.
+  Leave is gated by its own entitlement and a locked leave year.
+- **Holiday calendars** with a default and per-person assignment. Expected hours are adjusted for holidays and approved leave.
+- **Reminder.** An 11:00 punch-in reminder email through the existing pipeline, to every active person, with its own
+  template and category. Which roles receive it is the *Punch-in reminder* row in Workspace Settings → Email channels.
+  The 17:00 reminder and next-morning escalation are unchanged.
+- **Missed-day reason.** A mandatory, editable reason (a dropdown plus Other) the first time someone logs time for a
+  past working day with no entries, on web, API and MCP. The rule cannot be left with no enabled reason.
+- **Attendance pages.** My attendance, a manager's team activity view (today's status, source, face result, reminders
+  and a person timeline), and Organisation, plus a leave calendar and approvals inbox. Analytics for Me, Team and
+  Organisation come with rule-based insights and plan-gated AI suggestions that are k-anonymous: built only from
+  aggregates, cached per day or week over the last 30 days, with a per-user rate limit and never a per-person figure.
+- **Public API and webhooks.** New key grants `attendance:read`, `attendance:write`, `leave:read` and `leave:write`
+  (`READ`/`WRITE` never imply them), and leave events on the signed webhook. See `docs/API.md`.
+- **Weekly digest: expected hours.** With Attendance & Leave on, the Monday digest states the week's expected hours
+  after holidays and approved leave, next to the hours logged. Off, the email is unchanged.
+- **Leave everywhere it is asked about.** Cells for leave and holidays on the Daily logging status grid link to the
+  leave request (your own), the team leave calendar (a manager's or admin's reports) or the holiday calendar. The
+  timesheet entry screen says "You're on leave today (PL)" or "Holiday: Diwali" on such a day. Profile and the
+  People edit dialog show the leave balance (another person's only to a super admin), who approves the person's
+  leave and a link to attendance history. The sidebar's Attendance item shows how many leave requests wait on you.
+- **Administrators cancel approved leave from the app.** Attendance → Team → Leave calendar lists approved leave that
+  has not ended, each with Cancel leave… and a required comment that the person is told. Admins and super admins
+  both see it; the API already let both cancel.
+- **Comp-off (off by default).** Logging at least 4 hours (half a day) or 8 hours (a full day) on a weekend or
+  holiday, judged by the same day resolver as everything else, lets the person request comp-off from My attendance
+  or the day sheet. Their approver decides it like leave; approval credits the configured leave type (a new `CO`,
+  disabled until you enable it) through the ledger with the idempotency key `COMPOFF:<id>`, so a double click or a
+  race credits once. An optional expiry takes back what is unspent through the nightly accrual run
+  (`COMPOFF-EXPIRY:<id>`, never below zero). Settings → Attendance & Leave → Leave settings. In-app notifications,
+  and the `compoff.requested` / `compoff.approved` webhook events.
+- **Approval cover (delegation).** An approver hands their leave and comp-off decisions to a manager, team lead or
+  admin for a date range; an admin can set cover for anyone. While it lasts the delegate sees those requests in
+  their inbox and badge, is notified of new ones, and decides on the approver's behalf (the audit row says so).
+  One hop only, never their own request, no self-delegation and no loops. Attendance → Team → Approvals.
+- **Calendar sync.** Profile → Calendar sync gives a private iCal URL of your approved leave and holidays to add to
+  Google, Outlook or Apple Calendar; managers, team leads and admins also get a team feed of approved leave (name and
+  leave type only, never a reason). The token is random, shown once, stored only as a hash, rotatable and revocable;
+  the feed is rate-limited, needs no sign-in header, and a token only ever resolves in its own workspace.
+- **Payroll export.** Organisation insights → Payroll export (admins): per person for a month, working days,
+  holidays, present, absent, leave by type, paid and unpaid (LOP) leave, comp-off taken and earned, and logged hours,
+  as a CSV, and on the public API as `GET /api/public/v1/attendance/payroll?month=YYYY-MM` under `attendance:read`. A month
+  whose leave year has ended or been settled is flagged as closed.
+- **Optional holidays, opt-in.** The Holidays screen shows how many optional holidays you have taken against the
+  calendar's cap and lets you take or drop each one, with the reason shown when a choice is disabled. Admins set
+  "Optional holidays per person per year" on each calendar.
+- **Ask AI and MCP know about leave.** Ask AI answers "who's off this week / on a date", "my leave balance" and "my
+  leave requests"; MCP adds `who_is_off` beside `apply_leave`, `get_leave_balance` and `list_my_leave`. Who's off
+  is scoped like the Team view, and none of them ever returns a leave reason.
+- **Help.** New articles for punching in, missed-day reasons, my attendance, team activity, organisation insights,
+  applying for and approving leave, cancelling someone's leave, taking an optional holiday, and setting the module up. Ask AI answers from the same articles.
+
+### 📊 On the dashboard and in Reports: leave, holidays and absence
+
+Only when Attendance or Leave is on and in the plan; otherwise these screens are unchanged.
+
+- **Daily logging status.** A day of leave shows a plane and the leave type code ("PL"), a holiday a star, each in
+  its own status colour (never red); a half day of leave carries a "½" marker. A working day with nothing logged
+  and no punch-in carries an "A" marker. The popover names the leave type or holiday, and says so when time was
+  logged anyway (the cell stays green).
+- **Leave and holidays are not gaps.** They leave the "x with gaps" count, each person's days ratio and Plan hours
+  (a half day plans 4h). Team rows read e.g. "2/3" with an on-leave count beneath.
+- **Day timeline.** A person's lane is labelled "On leave · PL", "Holiday · Diwali" or "Not punched in", and
+  someone off for the whole day gets a labelled lane of their own.
+- **Reports → Attendance & leave.** Per person for a chosen range: working days, holidays, leave days by type,
+  present and absent days and logged hours, with a CSV export.
+- **API.** `GET /api/attendance/day-grid?from&to` returns each visible person's day status (the dashboard's own
+  people scope: admins see everyone, anyone else themselves and their direct reports). It never returns a leave
+  reason, a note or a coordinate, and answers `{ "enabled": false }` with the module off.
+
+### 🐛 Fixes
+
+- **Leave and holidays on the dashboard.** With Attendance & Leave on, "Target to date", "days logged of working days"
+  and the workforce "Logging per working day" no longer count holidays or your leave as days owed (a half day counts
+  half). Off, every figure is unchanged.
+- **Draft my week asks the missed-day reason.** A past working day with nothing logged now gets the same "Why was this
+  day missed?" fields inline, sent with that day's first draft.
+- **Admins can cancel approved leave.** SUPER_ADMIN and ADMIN can cancel someone's approved (even started) leave with a
+  required comment (now also required of a super admin, see the upgrade notes); the balance is reversed once through the ledger, the cancel is audited and the person is told.
+- **Optional holidays.** People opt into optional holidays from their holiday list
+  (`PUT/DELETE /api/attendance/me/optional-holidays/:id`), up to the calendar's new `maxOptionalPerYear`. An opted-in
+  optional holiday is a holiday for that person everywhere; one not taken is a working day.
+- **No orphaned leave documents.** A document is deleted when the leave request it came with is refused, and the daily
+  leave job sweeps unattached leave uploads older than 24 hours.
+- **Late tile counts everyone.** The Team board's Late figure is computed by the server over everyone in scope, not
+  the first 100 people.
+- **Dismissed suggestions stay dismissed** per person, audience and range
+  (`POST /api/attendance/analytics/:audience/insights/:id/dismiss`).
+- **Email channels save.** `PATCH /settings/notifications` now accepts a partial `emailRoleMutes` map, so saving one
+  role's toggle no longer fails validation; omitting the map still leaves the stored one untouched.
+- **Timesheet at 320px.** The Draft my week actions wrap, so `/app/timesheet` no longer overflows horizontally on the
+  narrowest phones.
+- **Comp-off across the year end.** A comp-off is credited to the leave year of the day it is approved, so December
+  work approved after the rollover is no longer expired or capped by the closed year. Expiry takes the credit back from
+  the year it now sits in, carried or not.
+- **CSV formula cells, everywhere.** Every export neutralises a cell starting with `=`, `+`, `-`, `@`, tab or CR after
+  trimming, so a leading space or newline no longer slips a formula into Excel. The timesheet report export, which had
+  no guard, now has one; plain numbers are left as numbers.
+- **Assistant punch-in follows the work-site rule.** The MCP `punch_in` tool is refused under "Block" and recorded
+  flagged under "Allow and flag" once a site exists. Devices, the kiosk, the attendance API, webhooks and CSV imports
+  stay exempt as trusted integrations.
+- **A kiosk code works once.** A QR code is single use across everyone, so a forwarded photo of it cannot punch
+  someone else in, and the kiosk shows a fresh code straight after each scan (one more additive tenant migration,
+  `20261130300000_kiosk_nonce_single_use`, and `GET /api/attendance/kiosk/device/code/used`).
+- **Decision notes stay private in the admin "all" inbox.** An admin browsing requests they cannot decide no longer
+  sees the decider's note, as they already did not see the reason or the document.
+- **No credentials in logs.** A 500's log line, the access log and request telemetry redact calendar feed tokens and
+  every query-string value (an OIDC callback's code and state included).
+- **Approval delegations cannot loop under a race.** Creating A to B and B to A at the same moment locks both people,
+  so one of them is refused.
+- **Payroll's "Leave year closed" is per person**, rather than set for everyone by one person's rollover; the report
+  flag is true only when the whole export is final.
+- **Late leave changes two years back settle fully.** A correction to a year whose next year is also closed now
+  cascades through every closed year, leaving nothing behind.
+- **Payroll counts an unpunched half-day leave as half a day absent**, not a whole one.
+- **The weekly digest shows its tables.** The seeded `digest.weekly` template now carries `{{tablesHtml}}`, so the
+  counted last-week, month-to-date and year-to-date tables reach people on the default template (tenant migration
+  `20261130400000_weekly_digest_tables_html`, which updates only an unedited default).
+- **A fresh install's database matches the schema.** Two indexes the migrations create are now declared in the schema,
+  verified by replaying every tenant and control-plane migration into an empty database.
+
 ## 6.4.0 — the Agents Office: watch your AI teammates work, and replay their last 24 hours — 2026-11-23
 
 A new view at the top of the Agents page. Nothing to configure and no migration; it reads the runs your teammates already record.

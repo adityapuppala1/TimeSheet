@@ -9,7 +9,8 @@
  */
 import { Router } from "express";
 import { z } from "zod";
-import { nativeKvCacheTypes, notificationPreferenceKeys, permissions, roles, TIMESHEET_BACKDATE_MAX_DAYS, type NativeKvCacheType } from "@timesheet/shared";
+import { apiKeyGrants, nativeKvCacheTypes, notificationPreferenceKeys, permissions, roles, TIMESHEET_BACKDATE_MAX_DAYS, type NativeKvCacheType } from "@timesheet/shared";
+import { parseApiKeyGrants } from "../middleware/public-api-auth.js";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
@@ -203,7 +204,7 @@ settingsRouter.get("/notifications", requireSuperAdmin, async (_req, res) => {
   res.json(withRuntimeMeta(settings));
 });
 
-const updateSchema = z.object({
+export const notificationsUpdateSchema = z.object({
   body: z
     .object({
       ...Object.fromEntries(
@@ -217,7 +218,8 @@ const updateSchema = z.object({
       // known roles so a typo can't silently persist a mute that no UI can ever clear again —
       // this column is free-form JSON at the DB level, so this schema IS its only integrity check.
       emailRoleMutes: z
-        .record(
+        // partialRecord: zod 4's z.record over an enum key is exhaustive, so the web's partial map 422'd.
+        .partialRecord(
           z.enum(notificationPreferenceKeys as unknown as [string, ...string[]]),
           z.array(z.enum(roles as unknown as [string, ...string[]]))
         )
@@ -226,7 +228,7 @@ const updateSchema = z.object({
     .strict()
 });
 
-settingsRouter.patch("/notifications", requireSuperAdmin, validate(updateSchema), async (req, res) => {
+settingsRouter.patch("/notifications", requireSuperAdmin, validate(notificationsUpdateSchema), async (req, res) => {
   const data: Record<string, boolean | number | Record<string, string[]>> = {};
   for (const key of notificationPreferenceKeys) {
     if (typeof req.body[key] === "boolean") data[key] = req.body[key];
@@ -1930,6 +1932,7 @@ settingsRouter.get("/api-keys", requireSuperAdmin, async (_req, res) => {
       name: true,
       keyPrefix: true,
       scope: true,
+      grants: true,
       lastUsedAt: true,
       createdAt: true,
       revokedAt: true,
@@ -1937,7 +1940,7 @@ settingsRouter.get("/api-keys", requireSuperAdmin, async (_req, res) => {
       createdBy: { select: { id: true, name: true } }
     }
   });
-  res.json(keys);
+  res.json(keys.map((k) => ({ ...k, grants: parseApiKeyGrants(k.grants) })));
 });
 
 /**
@@ -1969,6 +1972,8 @@ const createApiKeySchema = z.object({
     .object({
       name: z.string().min(1).max(120),
       scope: z.enum(["READ", "WRITE"]).default("READ"),
+      /** Granular grants (V17 A3), e.g. attendance:read. Optional; none is the old behaviour. */
+      grants: z.array(z.enum(apiKeyGrants)).max(apiKeyGrants.length).optional(),
       /** Absolute expiry. Omitted means it never expires, which is the pre-existing behaviour and
        *  what every key issued before this field existed does — same shape and same reasoning as
        *  the MCP credential's `expiresAt` below. */
@@ -1989,6 +1994,7 @@ settingsRouter.post("/api-keys", requireSuperAdmin, validate(createApiKeySchema)
     data: {
       name: req.body.name,
       scope: req.body.scope,
+      grants: Array.isArray(req.body.grants) && req.body.grants.length ? [...new Set<string>(req.body.grants)].join(",") : null,
       keyHash,
       keyPrefix: plaintext.slice(0, 12),
       createdById: req.user!.id,
@@ -1998,11 +2004,12 @@ settingsRouter.post("/api-keys", requireSuperAdmin, validate(createApiKeySchema)
   await audit(req.user!.id, "settings.api_key_created", "ApiKey", created.id, {
     name: created.name,
     scope: created.scope,
+    grants: parseApiKeyGrants(created.grants),
     expiresAt: created.expiresAt
   });
   // Same one-time-plaintext-reveal pattern as /security-ingestion/rotate-token above — this
   // response is the only place the full key is ever visible again.
-  res.status(201).json({ id: created.id, name: created.name, scope: created.scope, expiresAt: created.expiresAt, key: plaintext });
+  res.status(201).json({ id: created.id, name: created.name, scope: created.scope, grants: parseApiKeyGrants(created.grants), expiresAt: created.expiresAt, key: plaintext });
 });
 
 settingsRouter.delete("/api-keys/:id", requireSuperAdmin, async (req, res) => {

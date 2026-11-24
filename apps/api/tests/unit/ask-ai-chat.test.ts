@@ -51,6 +51,10 @@ describe("the Ask AI tool registry", () => {
         "ticket_metrics",
         "timesheet_report",
         "timesheet_stats",
+        // 7.0.0 leave reads, self/team-scoped inside their run, never a reason.
+        "my_leave_balance",
+        "my_leave_requests",
+        "who_is_off",
         // Operational — every one of these carries an access gate, asserted below.
         "ai_quality",
         "ai_spend",

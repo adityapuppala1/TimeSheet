@@ -18,6 +18,7 @@ import { Prisma } from "@prisma/client";
 import { calculateHours } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { htmlToText } from "../utils/sanitize.js";
+import { neutraliseFormula } from "../utils/csv.js";
 
 export type TimesheetStatusValue = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
 
@@ -233,7 +234,7 @@ export function timesheetCsvValues(row: ReportRow, reviewerName: string): Array<
 /** Every field is quoted unconditionally — a task description containing a comma, a newline or a
  *  quote is the normal case here, not the edge case. */
 export function toCsvLine(values: ReadonlyArray<string | null | undefined>): string {
-  return values.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(",");
+  return values.map((value) => `"${neutraliseFormula(String(value ?? "")).replace(/"/g, '""')}"`).join(",");
 }
 
 function bucketOf(row: ReportRow, groupBy: GroupByKey): { key: string; label: string } {

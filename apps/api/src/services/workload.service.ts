@@ -29,6 +29,7 @@ import {
   DEFAULT_WORKING_DAYS
 } from "./plan-schedule.service.js";
 import { getPlanningSettings } from "./planning.service.js";
+import { absenceByPerson, mergedTimeOffHours, type AbsenceMap } from "./leave-capacity.service.js";
 import { LOGGED_HOURS_WHERE } from "./workspace-metrics.js";
 import { platformDayStart } from "../utils/date-window.js";
 import { platformDayKey } from "../utils/platform-time.js";
@@ -300,6 +301,10 @@ export function buildWorkload(params: {
   buckets: Bucket[];
   workingDays: WorkingDays;
   defaultWeeklyCapacityHours: number;
+  /** V17 Phase B: hours per person per day lost to approved leave and holidays. Absent = none, so
+   *  every existing caller and test stands. Merged with isTimeOff bookings per day (the larger
+   *  wins), never added to them — see leave-capacity.service.ts. */
+  absence?: AbsenceMap;
 }): WorkloadRow[] {
   const { people, bookings, logged, buckets, workingDays, defaultWeeklyCapacityHours } = params;
   const ticketsByUser = groupByUser(params.tickets ?? []);
@@ -324,6 +329,16 @@ export function buildWorkload(params: {
         const hours = bookedHoursInRange(b, from, to, workingDays);
         if (b.isTimeOff) timeOff += hours;
         else booked += hours;
+      }
+      const theirAbsence = params.absence?.get(person.id);
+      if (theirAbsence) {
+        timeOff = mergedTimeOffHours(
+          theirBookings.filter((b) => b.isTimeOff),
+          theirAbsence,
+          dayKey(from),
+          dayKey(to),
+          workingDays
+        );
       }
 
       let loggedHours = 0;
@@ -515,7 +530,8 @@ export async function loadWorkload(params: {
       email: true,
       avatarUrl: true,
       weeklyCapacityHours: true,
-      plannedUtilizationPct: true
+      plannedUtilizationPct: true,
+      holidayCalendarId: true
     },
     orderBy: { name: "asc" }
   });
@@ -603,7 +619,19 @@ export async function loadWorkload(params: {
     tickets,
     buckets,
     workingDays,
-    defaultWeeklyCapacityHours: settings.defaultWeeklyCapacityHours
+    defaultWeeklyCapacityHours: settings.defaultWeeklyCapacityHours,
+    // V17 Phase B: approved leave and holidays reduce availability without an isTimeOff booking.
+    absence: await absenceByPerson(
+      people.map((p) => ({
+        id: p.id,
+        holidayCalendarId: p.holidayCalendarId ?? null,
+        weeklyCapacityHours: p.weeklyCapacityHours ? Number(p.weeklyCapacityHours) : null
+      })),
+      dayKey(params.from),
+      dayKey(params.to),
+      workingDays,
+      settings.defaultWeeklyCapacityHours
+    )
   });
 
   if (params.groupBy !== "project") return { buckets, rows, workingDays };

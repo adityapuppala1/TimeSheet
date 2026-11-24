@@ -43,7 +43,7 @@ export interface CsvColumn<T> {
 export function csvCell(value: string | number | boolean | null | undefined): string {
   if (value === null || value === undefined) return '""';
   const raw = String(value);
-  const guarded = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  const guarded = /^\s*[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
   return `"${guarded.replaceAll('"', '""')}"`;
 }
 

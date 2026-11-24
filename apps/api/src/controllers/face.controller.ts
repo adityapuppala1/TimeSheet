@@ -143,7 +143,7 @@ faceRouter.get("/status", async (req, res) => {
   });
 });
 
-const challengeSchema = z.object({ body: z.object({ context: z.enum(["TIMESHEET", "TICKET", "APPROVAL"]) }) });
+const challengeSchema = z.object({ body: z.object({ context: z.enum(["TIMESHEET", "TICKET", "APPROVAL", "PUNCH_IN"]) }) });
 
 /**
  * POST /face/skip — the insecure-context pass-through. Mints a SKIPPED_INSECURE attempt the
@@ -344,7 +344,7 @@ faceRouter.post("/enroll", preserveTenantContext(faceCaptureUpload.array("captur
 
 const verifySchema = z.object({
   body: z.object({
-    context: z.enum(["TIMESHEET", "TICKET", "APPROVAL"]),
+    context: z.enum(["TIMESHEET", "TICKET", "APPROVAL", "PUNCH_IN"]),
     /// Required while GlobalFaceVerificationSettings.challengeEnabled — from POST /face/challenge.
     challengeId: z.string().uuid().optional().or(z.literal("")),
     /// The active camera's MediaDeviceInfo.label, self-reported by the browser. Recorded as a

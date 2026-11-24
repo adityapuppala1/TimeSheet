@@ -12,10 +12,22 @@
 import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { prisma } from "../config/prisma.js";
+import { apiKeyGrants, type ApiKeyGrant } from "@timesheet/shared";
 import { AppError } from "./error.js";
 
 export interface PublicApiRequest extends Request {
-  apiKey?: { id: string; scope: "READ" | "WRITE" };
+  apiKey?: { id: string; scope: "READ" | "WRITE"; grants: ApiKeyGrant[] };
+}
+
+/**
+ * ApiKey.grants (comma-separated) → the known grants. Unknown tokens are dropped rather than
+ * trusted: a typo in a hand-edited row must not become a capability. NULL → none, which is what
+ * every key issued before grants existed carries.
+ */
+export function parseApiKeyGrants(raw: string | null | undefined): ApiKeyGrant[] {
+  if (!raw) return [];
+  const known = new Set<string>(apiKeyGrants);
+  return [...new Set(raw.split(",").map((s) => s.trim()).filter((s) => known.has(s)))] as ApiKeyGrant[];
 }
 
 function hashKey(plaintext: string): string {
@@ -41,7 +53,7 @@ export async function publicApiAuth(req: PublicApiRequest, _res: Response, next:
   }
 
   await prisma.apiKey.update({ where: { id: record.id }, data: { lastUsedAt: new Date() } }).catch(() => undefined);
-  req.apiKey = { id: record.id, scope: record.scope as "READ" | "WRITE" };
+  req.apiKey = { id: record.id, scope: record.scope as "READ" | "WRITE", grants: parseApiKeyGrants(record.grants) };
   next();
 }
 
@@ -52,4 +64,18 @@ export function requireWriteScope(req: PublicApiRequest, _res: Response, next: N
     throw new AppError(403, "This API key is read-only. Generate a write-scoped key from Workspace Settings -> Public API to use this endpoint.");
   }
   next();
+}
+
+/**
+ * Granular grant check (V17 A3). Deliberately independent of READ/WRITE: a WRITE key does NOT
+ * imply attendance:write, because broad keys were minted before attendance existed and their
+ * holders never agreed to carry the power to punch people in. Only an explicit tick grants it.
+ */
+export function requireApiGrant(grant: ApiKeyGrant) {
+  return (req: PublicApiRequest, _res: Response, next: NextFunction) => {
+    if (!req.apiKey?.grants.includes(grant)) {
+      throw new AppError(403, `This API key lacks the '${grant}' scope. Create a key with it ticked in Workspace Settings -> Public API.`);
+    }
+    next();
+  };
 }

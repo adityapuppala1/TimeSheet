@@ -3099,6 +3099,528 @@ logic the authenticated endpoint owns — see [docs/ROADMAP.md](ROADMAP.md)).
 
 Rate limit: 120 requests/minute per IP (separate from the UI's own rate limits).
 
+### Granular scopes (attendance)
+
+On top of `READ`/`WRITE`, a key can carry **granular scopes**, ticked when it is generated:
+
+| Scope | Can do |
+|---|---|
+| `attendance:read` | `GET /attendance`, `GET /holidays` |
+| `attendance:write` | `POST /attendance/punches` |
+| `leave:read` | `GET /leave-requests` (V17 Phase B) |
+| `leave:write` | `POST /leave-requests` |
+
+`READ`/`WRITE` never imply them: every key issued before they existed has **no attendance access**,
+and a `WRITE` key calling an attendance route gets `403` naming the missing scope. The attendance
+routes also need the Attendance module switched on and the plan's **attendance integrations**
+entitlement (Enterprise); otherwise `403`.
+
+### Attendance endpoints
+
+All punches, from any source, go through one ingest pipeline: dedupe on `(source, externalRef)`,
+the person matched among **active** users, the work date taken in **the person's own timezone**,
+and conflicts settled by source priority (Workspace Settings → Attendance & Leave → Sources &
+integrations). The loser is kept in the admin delivery log, never dropped.
+
+- `POST /attendance/punches` *(attendance:write)* — one punch object, or an array of up to 500.
+  ```json
+  { "email": "ana@acme.com", "punchInAt": "2026-11-23T09:02:00+05:30", "punchOutAt": null,
+    "externalRef": "door-7-evt-88123", "location": { "lat": 12.97, "lng": 77.59, "accuracyM": 20 } }
+  ```
+  Identify the person with exactly one of `email`, `employeeCode`, `externalId` (the SCIM id).
+  `punchInAt`/`punchOutAt` must be ISO-8601 **with a zone** (`Z` or `±hh:mm`) — a bare local time
+  is refused. `externalRef` is **required** (it is the idempotency key). Optional `?sourceId=` ties
+  the punches to an enabled source of kind API, so its priority applies.
+
+  A single object answers `202` with one result; an array answers `207` with
+  `{ "results": [ { "index": 0, "status": "RECEIVED", "eventId": "..." }, ... ] }`. `status` is
+  `RECEIVED`, `DUPLICATE` (that `externalRef` was already received) or `REJECTED` (with `error`).
+  **An unknown person is also `RECEIVED`** — the API never confirms who works here; unmatched punches
+  wait in the admin delivery log, where they can be replayed once the person's identifier is fixed.
+- `GET /attendance?from=YYYY-MM-DD&to=YYYY-MM-DD&employee=&limit=500` *(attendance:read)* — one
+  row per person per day (`workDate`, `punchInAt`, `punchOutAt`, `source`, source name, person's
+  name/email/employeeCode). Range up to 93 days; `employee` is an email or employee code. Raw
+  evidence (coordinates, IP, user agent) is never returned.
+- `GET /holidays?from=YYYY-MM-DD&to=YYYY-MM-DD` *(attendance:read)* — holidays in every calendar,
+  with the calendar's name and whether it is the workspace default. Range up to 93 days.
+- `GET /attendance/payroll?month=YYYY-MM&employee=&format=csv` *(attendance:read, 7.0.0)* — the
+  monthly payroll report, one row per counted person: `workingDays` (scheduled days minus the
+  person's holidays), `holidays`, `present`, `absent` (a working day that is over with no punch and
+  no leave; a day with half a day of leave and no punch counts 0.5; only counted while attendance is on), `leave` (days by type code, working days only,
+  halves as 0.5), `paidLeave`, `unpaidLeave` (LOP: types with `isPaid: false`), `compOffTaken`,
+  `compOffEarned`, `loggedHours` (timesheets not rejected or deleted). The response also carries
+  `leaveTypes`, `leaveYear` and `leaveYearClosed`. Each row has its own `leaveYearClosed`: true once that leave
+  year has ended or the year-end rollover has settled THAT person's balances (the CSV's "Leave year closed" column is
+  per row). The report-level flag is true only when every row is closed; treat that month as final. `format=csv` returns the same as a
+  CSV (UTF-8 BOM, CRLF, a column per leave type, a formula-looking cell prefixed with `'`). Never a
+  reason, note or location. While overtime is on (7.0.0) each row also has `overtimeHours` and the report
+  `overtime: { basis: "APPROVED" | "COMPUTED" }` (approved claim hours when claims need approval, else the
+  computed hours; a week counts in the month its Monday falls in), and the CSV gains an `Overtime hours`
+  column before `Leave year closed`. With overtime off both are absent.
+
+### Signed attendance webhook (devices, HRMS)
+
+For a biometric terminal or an HRMS that pushes punches. Create a **webhook source** in Workspace
+Settings → Attendance & Leave → Sources & integrations; it shows the URL and a signing secret
+(`whsec_...`) **once** — rotate it to get a new one. The secret is stored encrypted, never in plain
+text, and never shown again.
+
+```
+POST <your-workspace-url>/api/integrations/attendance/<sourceId>
+Content-Type: application/json
+X-TimeSphere-Timestamp: 1795430400            (unix seconds)
+X-TimeSphere-Event-Id: <unique id per delivery>
+X-TimeSphere-Signature: sha256=<hex HMAC-SHA256(secret, "<timestamp>.<event id>.<raw body>")>
+```
+
+The event id is part of the signed bytes, so a captured delivery cannot be replayed under a fresh
+id. Node example:
+
+```js
+const signature = "sha256=" + crypto.createHmac("sha256", secret).update(`${timestamp}.${eventId}.${rawBody}`).digest("hex");
+```
+
+Body: one punch or an array of up to 500, same fields as the API, except the person may also be
+sent as `identifier`, read by the source's **match field** (email, employee code or external id).
+Without an `externalRef`, the event id (plus `#index` in an array) is the idempotency key.
+
+| Response | Meaning |
+|---|---|
+| `202` | Verified; per-item `results` as above (`RECEIVED` / `DUPLICATE` / `REJECTED`). |
+| `200 { "duplicate": true }` | That `X-TimeSphere-Event-Id` was already delivered. |
+| `400` | No event id, or the body is not JSON. |
+| `401` | Missing/invalid signature, or a timestamp more than **5 minutes** from server time. |
+| `404` | Unknown source, disabled source, or the module/plan is off — all identical. |
+| `413` | Body over 512 KB or more than 500 punches. |
+
+Signature compare is constant-time; the timestamp is inside the signed bytes, so a captured
+delivery cannot be refreshed. Rate limit: 120 requests/minute per IP. **Send test event** in
+settings signs a test delivery server-side and runs it through the same handler: it is verified
+and logged (marked *test*) and never creates attendance.
+
+### Attendance (signed-in app): team, timeline, history, analytics
+
+These are the routes behind the Attendance page. They use the normal session cookie / bearer token
+(not the public API keys above) and every one is refused when the workspace has attendance off or
+its plan lacks it. Dates are `YYYY-MM-DD`.
+
+- `GET /api/attendance/me/today` — the caller's day: status, punch (if any) and what the punch-in
+  prompt should do.
+- `POST /api/attendance/punch-in` — `{ lat?, lng?, accuracyM?, consentAccepted?, verificationId? }`.
+  `201` when it created the punch, `200` when one already existed (from any source).
+- `GET /api/attendance/team/today?date=&search=&status=&source=&managerId=&page=1&pageSize=25` — one
+  day for the people the caller may see: managers get their direct reports, admins and super admins
+  everyone. Each row carries status, punch time, source, location/face result where collected,
+  timesheet status, missed-day reason and reminders sent. `pageSize` is at most 100.
+- `GET /api/attendance/team/:userId/timeline?from=&to=` — one person's events (login, punch,
+  timesheet create/update, reason, reminder emails). Same visibility rule; at most 31 days.
+- `GET /api/attendance/me/history?from=&to=` — the caller's own days; at most 93 days.
+- `GET /api/attendance/day-grid?from=&to=` (7.0.0) — every visible person's day over at most 93 days,
+  for the Home dashboard's logging grid and timeline and the Reports summary. People scope is the
+  dashboard's (`users:manage` → everyone; anyone else → themselves and their direct reports). Each
+  day is `{status, holidayName?, leaveTypeCode?, leaveTypeName?, halfDay?}` with `status` one of
+  WEEKEND, HOLIDAY, LEAVE, PRESENT, ABSENT, PENDING; each person also carries a `summary` (working
+  days, holidays, leave days by type, present and absent days, logged hours). No leave reason, note or
+  coordinate is ever returned. With Attendance and Leave both off (or not in the plan) the answer is
+  `{"enabled": false}` rather than a 403; with Leave on and Attendance off a working day is never
+  PRESENT or ABSENT.
+- `GET /api/attendance/analytics/me|team|org?from=&to=` — aggregates. `team` is scoped like the team
+  screen; `org` is for admins and super admins. `from` and `to` are optional together (default: the
+  last 30 days ending today); at most 180 days. Groups under the minimum size are suppressed
+  (k-anonymity), and raw GPS, face data and other people's free text are never returned.
+- `GET /api/attendance/analytics/me|team|org/insights?from=&to=` — `{ audience, range, aiStatus,
+  insights[] }`: rule-based insights always, plus AI suggestions when the plan includes them and the
+  audience is enabled in settings. AI output is cached per audience for the configured frequency.
+- `POST /api/attendance/analytics/me|team|org/insights/:insightId/dismiss?from=&to=` (7.0.0) — `204`.
+  The suggestion stays dismissed for this person, audience and range (stored, not per browser).
+- `GET /api/attendance/team/today` (7.0.0) also returns `late`: how many people in scope punched in
+  after the expected start (counted server-side over everyone in scope, not just the page), or `null`
+  when lateness is off.
+- `GET /api/attendance/me/holidays?from=&to=` — the caller's calendar (own, else the default). 7.0.0:
+  `{ calendar, from, to, holidays: [{ id, date, name, isOptional, optedIn }], maxOptionalPerYear,
+  optionalTakenByYear: { "2026": 1 } }`.
+- `PUT /api/attendance/me/optional-holidays/:holidayId` / `DELETE` the same (7.0.0) — opt into or out
+  of an optional holiday. An optional holiday counts as a day off (expected hours, the dashboard grid,
+  missed-day reasons) only for people who opted in. `422 HOLIDAY_NOT_OPTIONAL`, `409 HOLIDAY_PASSED`,
+  `409 OPTIONAL_HOLIDAY_LIMIT` at the calendar's yearly cap.
+
+Admin configuration (super admin writes, admin reads) lives under `/api/attendance/admin`:
+`GET|PUT /settings`; `GET|POST /calendars`, `PUT|DELETE /calendars/:id` (7.0.0: `maxOptionalPerYear`,
+a whole number 0–366 or `null` for no limit — optional holidays one person may take per calendar year); holidays at
+`POST /calendars/:id/holidays` and `PUT|DELETE /calendars/:id/holidays/:holidayId`;
+`GET|POST /missed-reasons`, `PUT|DELETE /missed-reasons/:id`. Sources and integrations are under
+`/api/attendance/admin/integrations`: `GET|POST /sources`, `DELETE /sources/:id`,
+`POST /sources/:id/rotate-secret`, `POST /sources/:id/test`, `GET /events` (delivery log),
+`POST /events/:id/replay`, and `POST /import/preview` then `POST /import/commit` for CSV.
+
+### Missed-day reason (timesheet create)
+
+When **Attendance & Leave → Require a reason for missed days** is on (and the plan includes
+attendance), the FIRST entry a person creates for a past working day with no entries — not a
+weekend per the workspace's working days, not a holiday in their calendar — must carry a reason.
+It applies to every create path (`POST /api/timesheets/draft|submit[-with-files]`, the MCP
+`log_timesheet_entry` tool, the in-app assistant). There is no approval; it is asked once per day.
+
+Body fields: `missedReasonCode` (an enabled reason code) and `missedReasonNote` (required when that
+reason is marked *requires note*, e.g. `OTHER`). Without them the create is refused:
+
+```json
+422 { "message": "...", "code": "MISSED_DAY_REASON_REQUIRED",
+      "details": { "field": "missedReasonCode", "workDate": "2026-11-17",
+                   "options": [{ "code": "SICK", "label": "Sick", "requiresNote": false }] } }
+```
+
+`MISSED_DAY_REASON_INVALID` (same shape) means the code is not enabled or the note is missing.
+Signed-in clients can ask ahead: `GET /api/attendance/missed-reasons/options` and
+`GET /api/attendance/missed-reasons/check?date=YYYY-MM-DD` → `{ date, required, options }`.
+
+### Leave (V17 Phase B)
+
+Leave runs when **Attendance & Leave → Leave** is switched on (`GlobalAttendanceSettings.leaveEnabled`)
+AND the plan includes **leave management** (Enterprise). Otherwise every route below answers `403`
+naming which half is off — except `GET /api/leave/status`, which always answers `200
+{ enabled, leaveYearStartMonth }`. Leave is independent of the attendance toggle.
+
+**The model.** A *leave type* (`PL`, `CL`, `SL` are seeded, all disabled) has an annual quota, an
+accrual rule (`YEARLY_UPFRONT` or `MONTHLY_PRORATA`), a carry-forward cap, `allowHalfDay`,
+`isPaid`, `requiresApproval`, `requiresDocumentAfterDays` and `allowNegative`. The **balance is
+never stored**: it is the sum of ledger rows (`ACCRUAL`, `CARRY_FORWARD`, `DEBIT`,
+`CREDIT_REVERSAL`, `ADJUSTMENT`, `EXPIRY`) for a person, type and *leave year* (named by the year
+it starts in; `leaveYearStartMonth` 1 = January, 4 = April). A request's `days` are computed by the
+server — working days in the span, minus the person's holidays, a half counting 0.5 — and a `days`
+field in a body is refused. One request may not span more than 93 days or cross a leave year.
+
+**Who decides.** The person's manager (`User.managerId`, captured as `approverId`) while that manager
+is an active account; otherwise the admin pool — any ADMIN or SUPER_ADMIN, or SUPER_ADMIN only when
+`leaveApprovalFallback` is `SUPER_ADMINS`. A SUPER_ADMIN may decide any request; when it was not
+theirs it is marked `overriddenBySuperAdmin` and audited. Nobody decides their own request except a
+SUPER_ADMIN (an override). An unknown id and somebody else's request get the **same** `403`.
+
+**Concurrency.** A decision is a conditional update (`PENDING` → decided) in the same transaction
+as the `DEBIT`, whose idempotency key `DEBIT:<requestId>` is unique in the database: a double click
+or two approvers at once produce exactly one debit and one `409 LEAVE_ALREADY_DECIDED`.
+
+#### Signed-in routes (`/api/leave`)
+
+| Route | Who | Body / query → response |
+|---|---|---|
+| `GET /status` | anyone | `{ enabled, leaveYearStartMonth }` |
+| `GET /types` | anyone | `{ items: LeaveType[] }` (enabled only) |
+| `GET /me/ledger?year=` | self | `{ leaveYear, items: [ledger row + label] }` — `label` is a readable name for the row ("Leave taken", "Comp-off credit", "Comp-off expired", "Adjustment", …) |
+| `GET /me/balances?year=` | self | `{ leaveYear, from, to, yearStartMonth, balances: [{ leaveType, balance, accrued, carriedForward, used, adjusted, expired, pending, available, projectedYearEnd, expiringAtYearEnd }] }` |
+| `GET /me/ledger?year=` | self | `{ leaveYear, items: [{ id, leaveType: { code, name }, delta, kind, reason, refRequestId, createdAt }] }` |
+| `GET /me/requests?status=&year=` | self | `{ items: LeaveRequest[] }` |
+| `GET /me/requests/:id` | self | `LeaveRequest` (404 for anyone else's) |
+| `POST /me/requests` | self | JSON or multipart (`document` = supporting file): `{ leaveTypeId \| leaveTypeCode, startDate, endDate, startHalf?, endHalf?, reason? }` → `201 { request: LeaveRequest, autoApproved }` |
+| `POST /me/requests/:id/cancel` | self; SUPER_ADMIN any | `{ comment? }` → `LeaveRequest`. Pending: cancelled. Approved and not started: cancelled with a `CREDIT_REVERSAL`. Started: SUPER_ADMIN only. 7.0.0: cancelling SOMEONE ELSE's request needs a `comment` (`422 LEAVE_CANCEL_COMMENT_REQUIRED` without one); the person is told it and it is audited. Your own needs none. In the app: Attendance → Team → Leave calendar → Cancel someone's approved leave. |
+| `GET /me/expected-hours?from=&to=` | self | `{ from, to, workingDays, holidays, leaveDays, expectedDays, dailyHours, expectedHours }`. 403 unless attendance or leave is on (toggle + plan). |
+| `GET /me/preview?typeId=&start=&end=&startHalf=&endHalf=` | self | Read-only mirror of apply: `{ ok, problems: [{ code, message }], days, excluded: [{ date, reason: WEEKEND|HOLIDAY, label }], balanceBefore, balanceAfter, allowNegative, overlap, documentRequired, requiresApproval, approver }`. Writes nothing. |
+| `GET /inbox?scope=mine\|all&status=PENDING\|APPROVED\|REJECTED\|CANCELLED\|ALL&page=&pageSize=` | approvers (`all`: SUPER_ADMIN) | `{ total, page, pageSize, items: LeaveRequest[] }` |
+| `POST /inbox/:id/decision` | approver | `{ decision: "APPROVE" \| "REJECT", note? }` (note required to reject) → `LeaveRequest` |
+| `POST /inbox/bulk-decision` | approver | `{ ids: string[≤50], decision, note? }` (requester notifications are sent in the background) → `207 { results: [{ id, ok, status?, error?, httpStatus? }] }` |
+| `GET /team?from=&to=&managerId=` | managers, team leads, admins | `{ from, to, items }` — approved + pending leave of the people Team Activity shows them, without reason, note or document |
+
+`LeaveRequest` = `{ id, user?, leaveType: { id, code, name, colour, isPaid }, startDate, endDate,
+startHalf, endHalf, days, leaveYear, reason, status, attachment: { name, mimeType, size, url } | null,
+approverId, decidedById, decidedAt, decisionNote, overriddenBySuperAdmin, cancelledAt, source,
+externalRef, createdAt }`. Halves: a one-day request is `FULL`, `FIRST_HALF` or `SECOND_HALF`; a
+longer one may start `SECOND_HALF` and end `FIRST_HALF`.
+
+Errors carry a `code`: `LEAVE_TYPE_UNAVAILABLE`, `LEAVE_INVALID_SPAN`, `LEAVE_OUT_OF_RANGE`
+(more than 60 days back, 366 ahead, or 93 long), `LEAVE_CROSSES_YEAR`, `LEAVE_NO_WORKING_DAYS`,
+`LEAVE_DOCUMENT_REQUIRED` (`details.afterDays`), `LEAVE_OVERLAP` (`details.requestId`; the two
+halves of one day do not overlap), `LEAVE_INSUFFICIENT_BALANCE` (`details.available`,
+`details.requested`), `LEAVE_ALREADY_DECIDED`, `LEAVE_NOT_CANCELLABLE`.
+
+Super-admin configuration under `/api/leave/admin` (reads need no entitlement; writes need the
+plan): `GET|PUT /settings` (`{ leaveEnabled, leaveYearStartMonth, trustExternalApprovals,
+leaveApprovalFallback }` — switching on needs at least one enabled type; `leaveYearStartMonth` is
+refused with 409 `LEAVE_YEAR_LOCKED` once any balance-ledger row or leave request exists, and GET
+also returns `leaveYearLocked` / `leaveYearLockedMessage`), `GET|POST /types`,
+`PUT /types/:id` (no delete: disable instead), `POST /adjustments` (`{ userId, leaveTypeId,
+leaveYear?, delta, reason }`), `GET /balances/:userId?year=` (balances plus the ledger), and
+`POST /accrual/run` (posts what is due now; idempotent).
+
+**Accrual** runs nightly (02:20): every slot due this leave year and not yet posted, keyed
+`ACCRUAL:<user>:<type>:<YYYY-MM>` so re-runs write nothing; a joiner accrues from their joining
+month. On the first run of a new leave year the closing balance is settled: up to
+`carryForwardMax` carries (`CARRY_FORWARD`), the rest lapses (`EXPIRY`); a negative balance carries
+in full. Balances shown to people include accrual that is due but not yet posted.
+
+**Expected hours** = (working days − holidays − leave days) × weekly capacity ÷ working days per
+week, a half day of leave counting 0.5. The capacity board, the dashboard capacity widget and the
+utilisation report now subtract approved leave and holidays from what is available — per day, the
+larger of an `isTimeOff` booking and the leave, never both.
+
+**Notifications.** `leave.requested` (to the approver, or every pool member) and `leave.decided`
+(to the requester) go through the normal pipeline: their own Email channels rows, role mutes and
+EmailLog, templates `leave.requested` / `leave.decided`.
+
+#### Public API (`leave:read`, `leave:write`)
+
+Granular scopes like the attendance ones — `READ`/`WRITE` never imply them — and the routes also
+need the plan's attendance integrations.
+
+- `POST /leave-requests` *(leave:write)* — one object or an array of up to 500 (`207`):
+  `{ email | employeeCode | externalId | identifier, leaveType: "PL", startDate, endDate,
+  startHalf?, endHalf?, status?: "PENDING" | "APPROVED" | "CANCELLED", externalRef, reason? }`.
+  Each item answers `{ status: "RECEIVED" | "DUPLICATE" | "REJECTED", requestId, leaveStatus?,
+  error? }`. `externalRef` is the idempotency key (per API key). `APPROVED` is recorded as approved
+  (and debited) only when **Trust approvals from external systems** is on; otherwise the request
+  lands `PENDING` with the normal approver. `CANCELLED` with a known `externalRef` cancels it
+  (reversing the debit). External items skip the balance and document checks — the HRMS owns those.
+- `GET /leave-requests?from=&to=&employee=&status=&limit=500` *(leave:read)* — requests overlapping
+  the range (at most 366 days): person, type, dates, halves, days, status, source. Never the reason.
+
+The signed attendance webhook (above) accepts leave items too: add `"kind": "leave"` to an item with
+the same fields, and the source's match field applies when only `identifier` is sent.
+
+#### Shifts (7.0.0)
+
+Super admin, under `/api/attendance/admin` (writes need the `attendanceEnabled` plan):
+
+- `GET /shifts` — `{ shifts, assignments }`.
+- `POST /shifts`, `PUT /shifts/:id` — `{ name, startMinute, endMinute, breakMinutes, workingDays }`; minutes are
+  0-1439 from local midnight, `endMinute <= startMinute` means the shift crosses midnight, equal is a 422.
+  `409` on a duplicate name. `DELETE /shifts/:id` removes it and its assignments.
+- `POST /shift-assignments` — `{ shiftId, userId | managerId, effectiveFrom, effectiveTo? }` (exactly one of
+  `userId` or `managerId`; `managerId` means everyone reporting to that manager). `DELETE /shift-assignments/:id`.
+
+Resolution: the person's own assignment covering the date, else their manager's team assignment; newest
+`effectiveFrom` wins; none = the workspace day. A night shift's work date is the day it starts (the split is the
+middle of the off-shift gap), for every ingest source. `GET /api/attendance/me/today` returns `shift`
+(`{ id, name, startMinute, endMinute, breakMinutes, workingDays, crossesMidnight, expectedMinutes }` or null) and,
+with lateness on, `expectedStartMinute` is the shift start.
+
+#### Attendance corrections (7.0.0)
+
+Off until `regularizationEnabled` is on (and attendance is on). Any signed-in person, under `/api/attendance`:
+
+- `POST /regularizations` — `{ workDate, punchInAt, punchOutAt?, reason }`. Times are ISO-8601 instants with a zone.
+  `workDate` must be before the person's today and within `regularizationMaxDaysBack` (422
+  `REGULARIZATION_OUT_OF_RANGE`); the punch-in must fall on that work date by the same (shift-aware) rule ingest
+  uses, punch-out after punch-in and within 24 hours (422 `REGULARIZATION_INVALID_PUNCH`). One pending request per
+  day (409 `REGULARIZATION_DUPLICATE`); at most `regularizationMonthlyCap` pending + approved per calendar month of
+  the corrected day (422 `REGULARIZATION_CAP`).
+- `GET /regularizations/me` — `{ items }`, newest day first. `POST /regularizations/:id/cancel` — pending only.
+- `GET /regularizations/inbox` — `{ total, items }`: requests the caller may decide (the leave rule: the manager,
+  the admin pool when there is none, an active delegate with `onBehalfOf`).
+- `POST /regularizations/:id/decision` — `{ decision: APPROVE | REJECT, note? }` (note required to reject). `403`
+  for anyone who may not decide, including for an unknown id; `409 REGULARIZATION_ALREADY_DECIDED` for the loser of
+  a race. Approval writes through ingest with source `REGULARIZATION` and `externalRef` `REG:<id>`; the replaced
+  punch is kept on the new event's `input.previous` and the old events become `SUPERSEDED`.
+
+Rows carry `originalPunchInAt` / `originalPunchOutAt` (the punch when the request was made). `reason` and
+`decisionNote` reach only the requester and the deciders. Settings: `regularizationEnabled` (false),
+`regularizationMaxDaysBack` (7, 1-60), `regularizationMonthlyCap` (3, 1-31) on `PUT /api/attendance/admin/settings`.
+
+#### Work sites (7.0.0)
+
+Super admin, under `/api/attendance/admin` (writes need the `attendanceEnabled` plan):
+
+- `GET /sites` — `{ sites: [{ id, name, latitude, longitude, radiusM, enabled }] }`.
+- `POST /sites`, `PUT /sites/:id` — `{ name, latitude, longitude, radiusM, enabled? }`; numbers only (latitude
+  -90..90, longitude -180..180, radius 25-50000 whole metres). `409` on a duplicate name. `DELETE /sites/:id`
+  (`409 SITE_RULE_NEEDS_SITE` when it is the last enabled site and a rule is on).
+- `PUT /settings` accepts `requireSite`: `OFF` (default), `BLOCK`, `ALLOW_FLAGGED`. Anything but `OFF` needs
+  location on (`409 SITE_RULE_NEEDS_LOCATION`) and an enabled site (`409 SITE_RULE_NEEDS_SITE`).
+
+Every punch with a location, from any source, stores `siteLabel`: `"At <name>"` for the nearest site whose radius
+contains it (haversine distance; the boundary counts), `"Outside work sites"`, or null when there are no sites or no
+location. Web punch-in under `BLOCK` outside every site (or without a location) is `422 OUTSIDE_WORK_SITES`; under
+`ALLOW_FLAGGED` it is recorded with `siteFlagged: true`. The MCP `punch_in` tool cannot carry a location, so it is treated
+the same way: `403 OUTSIDE_WORK_SITES` under `BLOCK` and `siteFlagged: true` under `ALLOW_FLAGGED`, once a site is
+enabled. Trusted integrations (devices, the public attendance API, webhooks, CSV import, the kiosk) are exempt from
+the rule by design: an admin configured them, and they speak for a place rather than for a person choosing where to
+punch from. Their punches are still labelled from any location they carry. The label is what person-facing reads return (`record.siteLabel`
+on `/me/today`, `siteLabel` on `/me/history`, Team Activity's `location`); coordinates are never returned there.
+`GET /api/attendance/analytics/org` gains `bySite: [{ label, people, suppressed, punches }]`, k-anonymous like
+`bySource` (punches with no label group as `"No site label"`).
+
+#### Overtime (7.0.0)
+
+Off until `overtimeEnabled` is on (and attendance is on). Settings on `PUT /api/attendance/admin/settings`:
+`overtimeEnabled` (false), `overtimeDailyThresholdHours` (0, 0-24), `overtimeWeeklyThresholdHours` (0, 0-168),
+`overtimeRequireApproval` (false). `GET /api/attendance/me/today` gains `overtime: { enabled: true,
+requireApproval }` (absent while off).
+
+Expected hours per day are the person's shift on that work date, else the workspace day (0 on a weekend, holiday or
+full-day leave; half on a half day); worked hours are timesheet hours on the work date (not rejected or deleted). A
+day's overtime is `max(0, worked − expected − dailyThreshold)`; a week's (ISO, Monday `weekStart`) is the larger of
+the days' sum and `max(0, Σworked − Σexpected − weeklyThreshold)`, never both. Any signed-in person, under
+`/api/attendance`:
+
+- `GET /overtime/me?from=&to=` (at most 26 weeks) — `{ requireApproval, thresholds, totalHours, weeks: [{ weekStart,
+  workedHours, expectedHours, dailyOvertime, weeklyOvertime, overtimeHours, days, claim }] }`.
+- With `overtimeRequireApproval` on (otherwise `403`): `POST /overtime/claims` — `{ weekStart }` (a Monday, the week
+  over, at most 60 days back: 422 `OVERTIME_OUT_OF_RANGE`; 422 `OVERTIME_NONE` with nothing to claim; 409
+  `OVERTIME_DUPLICATE` while one is pending or approved). Hours are computed by the server. `GET /overtime/claims/me`;
+  `POST /overtime/claims/:id/cancel` (pending only); `GET /overtime/claims/inbox` — `{ total, items }`, the leave
+  decision rule including delegates (`onBehalfOf`); `POST /overtime/claims/:id/decision` — `{ decision, note? }`
+  (note required to reject), `403` for anyone who may not decide including an unknown id, `409
+  OVERTIME_ALREADY_DECIDED` for the loser of a race. Claims carry no reason text.
+
+Analytics (`/api/attendance/analytics/me|team|org`) gain `overtime` while it is on: `{ audience: "me", basis,
+hours }`, or for team/org `{ basis, people, suppressed, totalHours, averagePerPerson, peopleWithOvertime }` with the
+figures null below `minGroupSize`. There is no per-person overtime list.
+
+#### Leave policies per employment type or site (7.0.0)
+
+- `PATCH /api/users/:id` accepts `employmentType` (`FULL_TIME | PART_TIME | CONTRACT | INTERN | null`) and `siteId`
+  (an `AttendanceSite` id or null; 422 for an unknown site).
+- Leave types (`POST|PUT /api/leave/admin/types`) and holiday calendars (`POST|PUT
+  /api/attendance/admin/calendars`) accept `scopeEmploymentTypes` and `scopeSiteIds` (arrays; empty or null =
+  everyone on that axis). Types return both as arrays.
+- A person in scope only when every restricted axis contains their value. `GET /api/leave/types` and balances list
+  only the caller's in-scope types; apply and preview of an out-of-scope type are `422 LEAVE_TYPE_OUT_OF_SCOPE`; the
+  accrual run skips out-of-scope people.
+- Holiday calendar precedence everywhere holidays are read: the person's own `holidayCalendarId`, then a scoped
+  calendar matching them (a site match first), then the default.
+
+#### Sandwich rule (7.0.0)
+
+Leave types accept `sandwichRule` (false). When on, weekends and holidays fully enclosed between counted leave days
+of the same request count as full days (edges never; a half day at an edge still encloses). The count is computed at
+apply time and stored in `days`, so the debit, a reversal and settlement use it. `GET /api/leave/me/preview` gains
+`sandwiched` (the counted dates) and leaves them out of `excluded`.
+
+Payroll (`GET /api/leave/payroll`): while any leave type has `sandwichRule` on, the report carries
+`sandwichRule: true`, each row `sandwichDays` (weekends / holidays debited by the rule, already included in `leave`,
+`paidLeave` and `unpaidLeave`) and the CSV a `Sandwich days` column before `Leave year closed`. A request inside the
+month counts its stored `days`; one straddling two months counts its in-month working days plus its in-month
+enclosed days, never more than the stored count debited. Without the rule the shape is unchanged.
+
+#### Scope site ids (7.0.0)
+
+`scopeSiteIds` on `POST/PUT /api/leave/admin/types[/:id]` and `POST/PUT /api/attendance/admin/calendars[/:id]` must
+name existing work sites: an unknown id is `422` with `code: "UNKNOWN_SITE"` and `details.siteIds`. Deleting a site
+(`DELETE /api/attendance/admin/sites/:id`) removes its id from every scope in the same transaction; a list left empty
+becomes `null` (everyone).
+
+#### Kiosk / QR punch (7.0.0)
+
+Off by default (`kioskEnabled` in `PUT /api/attendance/admin/settings`, and attendance on); the device and punch
+calls answer `403 KIOSK_OFF` while off.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET | `/api/attendance/admin/kiosks` | SUPER_ADMIN | `{ items, enabled }`; never a token |
+| POST | `/api/attendance/admin/kiosks` | SUPER_ADMIN | `{ name, siteId? }` → `201 { kiosk, token }`; the token is shown once, only its SHA-256 is kept |
+| PUT | `/api/attendance/admin/kiosks/:id` | SUPER_ADMIN | `{ name?, siteId? }`; an unknown site is `422` |
+| POST | `/api/attendance/admin/kiosks/:id/rotate` | SUPER_ADMIN | new token and signing salt (the old token and its codes stop at once); un-revokes |
+| POST | `/api/attendance/admin/kiosks/:id/revoke` | SUPER_ADMIN | `204` |
+| GET | `/api/attendance/kiosk/status` | signed in | `{ enabled }` |
+| GET | `/api/attendance/kiosk/device/code` | the device (`X-Kiosk-Token` header) | `{ code, nonce, expiresAt, refreshInMs, kioskName, siteName }`; `401 KIOSK_UNAUTHORIZED` for an unknown or revoked token; 30/min per IP |
+| GET | `/api/attendance/kiosk/device/code/used?nonce=` | the device (`X-Kiosk-Token` header) | `{ used }`: has the code on screen been used? The screen polls it every 3 s and fetches a fresh code once it has; 60/min per IP |
+| POST | `/api/attendance/kiosk/punch` | signed in | `{ code, verificationId? }` → `201` punched, `200` already in today; 20/min per IP |
+
+A code is `base64url({k: kioskId, w: window, n: nonce}).base64url(HMAC-SHA256)`; `window` counts 30-second steps
+since the epoch and the key is derived from `ENCRYPTION_KEY`, the tenant's org id (from the Host), the kiosk id and
+its salt. The punch refuses a bad signature or junk (`422 KIOSK_CODE_INVALID`), a window older than the previous one
+(`422 KIOSK_CODE_EXPIRED`), a revoked kiosk (`422 KIOSK_REVOKED`) and a nonce anyone has already used
+(`409 KIOSK_CODE_USED`): a code is single use across everyone (unique on kiosk and nonce), so a photographed or
+forwarded code cannot punch a second person in. It is ingested with source `KIOSK` (ranked like `WEB`, no integrations plan needed), no
+location, and `siteLabel` = the kiosk's site name: a kiosk punch satisfies `requireSite`. Face: when
+`punchInFaceRequired` applies, send the `verificationId` of a `PUNCH_IN` face check, exactly as for the web punch;
+`faceFailureRule` decides between refusing it and recording it flagged.
+
+#### Birthdays and work anniversaries (7.0.0)
+
+Off by default (`celebrationsEnabled` in `PUT /api/attendance/admin/settings`, and attendance or leave on).
+
+- `GET /api/attendance/celebrations` → `{ enabled, from, to, items: [{ userId, name, avatarUrl, kind: "BIRTHDAY" |
+  "ANNIVERSARY", monthDay: "MM-DD", date, years? }] }` for Monday to Sunday of this week. People: the team view's
+  scope (everyone for unrestricted roles, direct reports for managers) plus yourself; opted-out people are left out.
+  Never a year of birth; `years` only on anniversaries of at least one year. `{ enabled: false, items: [] }` while off.
+- `GET /api/attendance/celebrations/me` → `{ enabled, dateOfBirth, joinDate, celebrationsOptOut }` (your own full
+  date). `PUT` the same path with `{ dateOfBirth?: "YYYY-MM-DD" | null, celebrationsOptOut?: boolean }`.
+- `PATCH /api/users/:id` accepts `joinDate` (USERS_MANAGE) and `dateOfBirth` (SUPER_ADMIN only, `403` otherwise).
+  `GET /api/users/:id/celebrations` → `{ joinDate, celebrationsOptOut }`, plus `dateOfBirth` for a super admin.
+- No other response carries `dateOfBirth`: the tenant Prisma client omits it unless a query selects it.
+
+#### Comp-off, approval cover, calendar feed and payroll (7.0.0)
+
+All are off until switched on and need leave on (`leaveEnabled` and the `leaveManagementEnabled`
+plan, Enterprise), except the calendar feed, which also works with only attendance on (holidays).
+
+**Comp-off** (Workspace Settings → Attendance & Leave → Leave settings; also `PUT
+/api/leave/admin/comp-off`, super admin, body `{ compOffEnabled, compOffHalfDayHours (default 4),
+compOffFullDayHours (default 8), compOffLeaveTypeCode (default "CO"), compOffExpiryDays (null =
+never) }`, any subset). Switching on is refused (`409 COMPOFF_TYPE_DISABLED`) until the credited type
+exists and is enabled; the migration inserts a disabled `CO`.
+
+- `GET /api/leave/me/comp-off/eligibility?date=YYYY-MM-DD` — `{ eligible, dayKind (WEEKEND|HOLIDAY),
+  holidayName, hoursLogged, days (0|0.5|1), problem, thresholds }`. The day kind comes from the day
+  resolver (the person's calendar and optional-holiday opt-ins); the hours from their timesheets.
+  Not in the future, at most 60 days back.
+- `GET /api/leave/me/comp-off`, `POST /api/leave/me/comp-off` `{ workDate, reason? }` (`422
+  COMPOFF_NOT_ELIGIBLE`, `409 COMPOFF_DUPLICATE` for a second open request on the day),
+  `POST /api/leave/me/comp-off/:id/cancel` (pending only).
+- `GET /api/leave/comp-off/inbox` and `POST /api/leave/comp-off/inbox/:id/decision` `{ decision:
+  APPROVE|REJECT, note? }` — the leave decision rule (manager, admin pool, super-admin override,
+  delegate). An id that is not yours to decide and one that does not exist are the same 403. Approval
+  credits `days` to the configured type in the approval date's leave year as one ledger row keyed
+  `COMPOFF:<id>`; with an expiry, the nightly accrual run takes back what is unspent
+  (`COMPOFF-EXPIRY:<id>`, never below zero). `POST /api/leave/admin/accrual/run` also reports
+  `compOffExpired`.
+
+**Approval cover (delegation).**
+
+- `GET /api/leave/delegations` (`?scope=all` for ADMIN / SUPER_ADMIN), `GET
+  /api/leave/delegations/candidates?q=` (active managers, team leads and admins: id and name).
+- `POST /api/leave/delegations` `{ delegateId, startDate, endDate, delegatorId? }` — `delegatorId`
+  (someone else's approvals) for ADMIN / SUPER_ADMIN only. Refused: yourself (`422 DELEGATION_SELF`),
+  someone who may not approve (`422 DELEGATION_INELIGIBLE`), a loop along overlapping ranges (`409
+  DELEGATION_CYCLE`), a range over 366 days or already ended.
+- `POST /api/leave/delegations/:id/revoke` — the approver, the delegate or an admin (anyone else: 404).
+- While a delegation covers today (server calendar day), the delegate's leave inbox, comp-off inbox
+  and badge include the requests captured for the delegator (who must still be active), approval
+  notifications go to the delegate too, and a decision is audited with `onBehalfOf`. One hop only;
+  nobody decides their own request.
+
+**Calendar feed.**
+
+- `GET /api/calendar/feed-token` (signed in) — `{ enabled, hint, createdAt, lastUsedAt,
+  teamFeedAvailable }`. `POST /api/calendar/feed-token/rotate` creates or replaces the token and
+  returns `{ token, hint }` once; `DELETE /api/calendar/feed-token` revokes it.
+- `GET /api/calendar/feed/<token>.ics` — **no auth header**; the 64-hex token in the path is the
+  credential. Approved leave (type name, half) and holidays (mandatory plus opted-in optional), 60
+  days back to a year ahead. `GET /api/calendar/feed/<token>-team.ics` — managers, team leads and
+  admins: approved leave of the people the Team view shows them, `Name: Leave type`, from two weeks
+  back to eleven weeks ahead; never a reason, note or document. Only the token's SHA-256 is stored;
+  the token resolves only in the workspace whose host it is requested on; every failure is the same
+  404; 30 requests a minute per IP; `Cache-Control: private, max-age=300`; the access log redacts it.
+
+**Payroll.** `GET /api/leave/payroll?month=YYYY-MM[&format=csv]` (ADMIN / SUPER_ADMIN, audited) —
+the same report as the public `GET /attendance/payroll` above.
+
+`GET /api/leave/inbox?scope=all` is open to ADMIN as well as SUPER_ADMIN since 7.0.0 (reasons and
+documents are stripped from rows the caller may not decide). While comp-off is on, the pending
+inbox also carries `compOffPending` for the badge.
+
+#### MCP tools
+
+`apply_leave` (`leaveType`, `startDate`, `endDate`, `startHalf?`, `endHalf?`, `reason?`),
+`get_leave_balance` and `list_my_leave` (`status?`) — always as the signed-in person, no "who"
+parameter. `apply_leave` is refused for a type that needs a document; apply in the web app then.
+`apply_leave` is a write: off by default and only callable with the workspace's `allowWrites` latch
+on. 7.0.0: `who_is_off` (`date?` or `from?`/`to?`, default this Monday–Sunday, at most 93 days) —
+approved leave only, scoped like the Team view (a manager's direct reports, an admin everyone,
+anyone else only themselves); names, type codes, dates and halves, never a reason or note.
+
+#### Ask AI (7.0.0)
+
+The Ask AI chat has three leave reads, under the same scope rules: `who_is_off` (this week or a
+date), `my_leave_balance` and `my_leave_requests`. They are reads (the chat cannot apply for leave)
+and never return a reason, decision note or document — not even the asker's own.
+
+#### Weekly digest (7.0.0)
+
+With Attendance & Leave on, the Monday digest (`digest.weekly`) carries `{{expectedHoursHtml}}`:
+the week's expected hours after holidays and approved leave, beside the hours logged. With it off
+the variable is empty and the email is unchanged. A template an admin had edited keeps their text;
+add `{{expectedHoursHtml}}` in the Email Templates editor to show the line.
+
 ### Outbound webhooks
 
 Configured alongside API keys in **Workspace Settings → Public API**. Each webhook subscribes to
@@ -3111,6 +3633,17 @@ one or more events and receives a signed `POST` when they happen:
 | `ticket.closed` | A ticket moves to `CLOSED` specifically (in addition to the status-changed event above) |
 | `timesheet.submitted` | A timesheet entry is submitted for approval |
 | `timesheet.approved` | A timesheet entry is approved |
+| `leave.requested` | A leave request is made (any source; an auto-approved one fires `leave.approved` too) |
+| `leave.approved` | A leave request is approved (by an approver, automatically, or a trusted HRMS) |
+| `leave.rejected` | A leave request is rejected |
+| `leave.cancelled` | A leave request is cancelled (an approved one has its days reversed) |
+| `compoff.requested` | 7.0.0: someone requests comp-off for a weekend or holiday they worked |
+| `compoff.approved` | 7.0.0: a comp-off request is approved and its days credited |
+
+A leave event's `data` is `{ id, employee: { email, employeeCode }, leaveType, startDate, endDate,
+startHalf, endHalf, days, status, source, externalRef }` — never the reason or decision note. A
+comp-off event's `data` is `{ id, employee: { email, employeeCode }, workDate, dayKind, days, status,
+leaveType, expiresOn }`, also without the reason.
 
 Payload shape:
 
@@ -3205,6 +3738,13 @@ hidden from the list is not callable by a client that guessed its name.
 | `create_ticket` | `tickets:write` | yes | **off** |
 | `add_ticket_comment` | `tickets:write` | yes | **off** |
 | `transition_ticket` | `tickets:write` | yes (**destructive**) | **off** |
+| `punch_in` | — | yes | **off** |
+| `get_my_attendance` | — | no | on |
+| `list_holidays` | — | no | on |
+| `apply_leave` | — | yes | **off** |
+| `get_leave_balance` | — | no | on |
+| `list_my_leave` | — | no | on |
+| `who_is_off` | — | no | on |
 
 - A dash under *Permission* means the tool's scope is the caller themselves (their own timesheets,
   their own direct reports), so there is nothing a permission would have protected.
@@ -3215,6 +3755,10 @@ hidden from the list is not callable by a client that guessed its name.
   per-tool setting says.
 - `log_timesheet_entry` creates a **DRAFT** and never submits: submitting starts an approval SLA
   clock and, where configured, requires an identity check.
+- The three attendance tools act only as the credential's own person (no "who" argument) and need
+  the Attendance module on plus the attendance-integrations entitlement. `punch_in` is refused when
+  the workspace requires a face check or location for punch-in, since an assistant can provide
+  neither; it is idempotent per day and ranks by the *AI assistant* priority.
 - `transition_ticket` is flagged `destructiveHint`, because a status change is visible to everyone
   who can see the ticket, fires this workspace's outbound webhooks (`ticket.status_changed`, plus
   `ticket.closed` on close) and stops or restarts the SLA clock. It enforces the same three rules
@@ -3257,3 +3801,12 @@ The admin surface, on the normal JWT session. **SUPER_ADMIN only**, and every ac
 Operating guidance — what an operator is actually turning on, and how to connect a client — is in
 [DEPLOYMENT.md](DEPLOYMENT.md#operating-the-mcp-server).
 
+
+### Attendance UI v2 additions
+
+- `POST /api/attendance/punch-out` — stamps today's WEB punch with the server clock (no body; a time in the body is ignored). Same gates as punch-in (module on, web punching not OFF). Idempotent (`200 { updated: false }` when already out); `409` with no punch-in today, or when today's punch came from another source. Goes through the ingest service as a WEB event and is audited as `attendance.punched_out`.
+- `GET /api/attendance/me/holidays?from=&to=` — the person's holiday calendar (own, else default), at most 400 days.
+- `GET /api/attendance/admin/impact` (super admin) — `{ people }`, the number a workspace-wide setting change reaches.
+- `GET /api/attendance/me/history` days now also carry `punchOutAt`, `isWorkingDay`, `leave`, `hours` and `reasonCode` (own data only).
+- `GET /api/attendance/analytics/org` now carries `trend` (daily presence, `null` below the k-anonymity floor) and `hours` (average logged vs expected).
+- `GET /api/leave/inbox` items carry `balanceAfter` for pending requests. `GET /api/attendance/me/today` carries `latenessEnabled`/`expectedStartMinute` only when lateness is on.

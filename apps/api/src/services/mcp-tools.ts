@@ -24,6 +24,7 @@
  * already picked from the Host header. A tool cannot name a workspace, so it cannot name someone
  * else's.
  */
+import { effectiveCalendarId } from "./attendance-team.service.js";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { permissions, type TicketStatus } from "@timesheet/shared";
@@ -44,6 +45,21 @@ import {
 } from "./ticket.service.js";
 import { buildTimesheetReport, GROUP_BY_KEYS, type GroupByKey } from "./timesheet-report.service.js";
 import { htmlToText } from "../utils/sanitize.js";
+import { assertIngestAllowed, ingestPunch } from "./attendance-ingest.service.js";
+import { isPunchInFaceRequired, publicRecord } from "./attendance-punch.service.js";
+import { getAttendanceSettings } from "./attendance-settings.service.js";
+import { locationlessSiteVerdict, OUTSIDE_SITES } from "./attendance-site.service.js";
+
+/** The work-site rule for the assistant's punch: throws under BLOCK, returns flagged evidence under ALLOW_FLAGGED. */
+async function locationlessSiteEvidence(rule: Parameters<typeof locationlessSiteVerdict>[0]): Promise<{ siteLabel: string; siteFlagged: true } | null> {
+  const site = await locationlessSiteVerdict(rule);
+  if (site === "BLOCK") {
+    throw new AppError(403, "This workspace requires you to punch in at a work site. Punch in from the TimeSphere web app.", { code: "OUTSIDE_WORK_SITES" });
+  }
+  return site === "FLAG" ? { siteLabel: OUTSIDE_SITES, siteFlagged: true } : null;
+}
+import { applyLeave, assertLeaveOn, getBalances, listMyRequests, withoutPrivateText } from "./leave.service.js";
+import { weekOf, whoIsOff } from "./leave-who-is-off.service.js";
 
 /** The subset of GlobalMcpSettings the enablement rules read. Structural rather than the Prisma
  *  row type so tests can build one without a database. */
@@ -145,6 +161,16 @@ const TICKET_SELECT = {
 
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use yyyy-mm-dd");
 const CLOCK_TIME = z.string().regex(/^\d{2}:\d{2}$/, "Use 24-hour HH:MM");
+
+/** A bounded yyyy-mm-dd range for the attendance tools. */
+function mcpRange(fromKey: string, toKey: string, maxDays = 93): { from: Date; to: Date } {
+  const from = new Date(`${fromKey}T00:00:00Z`);
+  const to = new Date(`${toKey}T00:00:00Z`);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) throw new AppError(422, "Use real dates, yyyy-mm-dd.");
+  if (to < from) throw new AppError(422, "to is before from.");
+  if ((to.getTime() - from.getTime()) / 86_400_000 > maxDays) throw new AppError(422, `The range is limited to ${maxDays} days.`);
+  return { from, to };
+}
 
 /** Restricts a ticket query to the projects this user may see. Returns null when the caller is
  *  unrestricted (privileged roles), meaning "add no filter". */
@@ -512,7 +538,16 @@ const TOOLS: readonly McpToolRegistration[] = [
       activityType: z.string().min(2).max(60).describe("e.g. Development, Testing, Meeting, Bug Fixing"),
       taskDescription: z.string().min(10).max(5000).describe("What was actually done, at least 10 characters"),
       ticketKey: z.string().min(1).max(20).optional().describe("Ticket to attribute the time to, e.g. \"WEB-142\""),
-      notes: z.string().max(5000).optional()
+      notes: z.string().max(5000).optional(),
+      missedReasonCode: z
+        .string()
+        .max(40)
+        .optional()
+        .describe(
+          "Only when a previous call was refused with MISSED_DAY_REASON_REQUIRED: the reason code the PERSON chose " +
+            "from the options listed in that refusal (e.g. SICK, FORGOT). Ask them; never pick one yourself."
+        ),
+      missedReasonNote: z.string().max(2000).optional().describe("Required with a reason the refusal marks as needing a note (e.g. OTHER), in the person's words.")
     },
     permission: permissions.TIMESHEETS_WRITE,
     mutating: true,
@@ -658,6 +693,248 @@ const TOOLS: readonly McpToolRegistration[] = [
         caller: ctx.caller
       });
       return { updated: true, key: existing.key, from, to };
+    }
+  },
+  /* ---- Attendance (V17 A3). Always the caller's own day: there is no "who" parameter. ---- */
+  {
+    name: "punch_in",
+    title: "Punch in",
+    description:
+      "Call this when the acting user asks to punch in / mark themselves present for today. It " +
+      "records the punch for THEM only (there is no parameter for anyone else) on their own local " +
+      "calendar day, and is idempotent — punching in twice returns the first punch. Refused when " +
+      "the workspace requires a face check or location for punch-in, because an assistant cannot " +
+      "provide either, and when the workspace only accepts punches at a work site; tell the user to " +
+      "punch in from the web app instead.",
+    inputSchema: {},
+    permission: null,
+    mutating: true,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx) => {
+      await assertIngestAllowed("MCP");
+      const settings = await getAttendanceSettings();
+      if (settings.punchInMode === "OFF") {
+        throw new AppError(403, "Self punch-in is not enabled for this workspace.");
+      }
+      if (settings.locationMode === "REQUIRED" || (await isPunchInFaceRequired(settings.punchInFaceRequired))) {
+        throw new AppError(403, "This workspace requires a face check or location to punch in. Punch in from the TimeSphere web app.");
+      }
+      // An assistant cannot supply a location, so the work-site rule treats this like a web punch-in
+      // without one: refused under BLOCK, recorded flagged under ALLOW_FLAGGED.
+      const siteEvidence = await locationlessSiteEvidence(settings.requireSite);
+      const me = await prisma.user.findUnique({ where: { id: ctx.user.id }, select: { id: true, timezone: true } });
+      if (!me) throw new AppError(404, "User not found");
+      const result = await ingestPunch({
+        kind: "MCP",
+        person: me,
+        userId: me.id,
+        punchInAt: new Date(),
+        gateChecked: true,
+        ...(siteEvidence ? { evidence: siteEvidence } : {})
+      });
+      const record = result.recordId
+        ? await prisma.attendanceRecord.findUnique({ where: { id: result.recordId }, include: { sourceRef: { select: { name: true } } } })
+        : null;
+      return { created: result.created, outcome: result.status, record: publicRecord(record) };
+    }
+  },
+
+  {
+    name: "get_my_attendance",
+    title: "My attendance",
+    description:
+      "Call this when the acting user asks about their OWN attendance — 'when did I punch in this " +
+      "week', 'did my badge swipe register on Monday'. Always scoped to them. Returns one row per " +
+      "day they have a punch, with the source (web, device, import). Range is at most 93 days.",
+    inputSchema: {
+      from: ISO_DATE.describe("Inclusive start date, yyyy-mm-dd"),
+      to: ISO_DATE.describe("Inclusive end date, yyyy-mm-dd")
+    },
+    permission: null,
+    mutating: false,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx, args) => {
+      await assertIngestAllowed("MCP");
+      const { from, to } = mcpRange(args.from, args.to);
+      const records = await prisma.attendanceRecord.findMany({
+        where: { userId: ctx.user.id, workDate: { gte: from, lte: to } },
+        orderBy: { workDate: "asc" },
+        include: { sourceRef: { select: { name: true } } }
+      });
+      return {
+        count: records.length,
+        days: records.map((r) => ({ ...publicRecord(r), punchOutAt: r.punchOutAt?.toISOString() ?? null }))
+      };
+    }
+  },
+
+  {
+    name: "list_holidays",
+    title: "My holidays",
+    description:
+      "Call this when the acting user asks which days are holidays for them — 'is Friday a " +
+      "holiday', 'list the holidays this quarter'. Reads THEIR holiday calendar (or the workspace " +
+      "default when they have none). Range is at most 366 days.",
+    inputSchema: {
+      from: ISO_DATE.describe("Inclusive start date, yyyy-mm-dd"),
+      to: ISO_DATE.describe("Inclusive end date, yyyy-mm-dd")
+    },
+    permission: null,
+    mutating: false,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx, args) => {
+      await assertIngestAllowed("MCP");
+      const { from, to } = mcpRange(args.from, args.to, 366);
+      const me = await prisma.user.findUnique({ where: { id: ctx.user.id }, select: { holidayCalendarId: true } });
+      const calendarId = await effectiveCalendarId(me?.holidayCalendarId ?? null, ctx.user.id);
+      if (!calendarId) return { calendar: null, holidays: [] };
+      const calendar = await prisma.holidayCalendar.findUnique({ where: { id: calendarId }, select: { name: true } });
+      const holidays = await prisma.holiday.findMany({
+        where: { calendarId, date: { gte: from, lte: to } },
+        orderBy: { date: "asc" },
+        select: { date: true, name: true, isOptional: true }
+      });
+      return { calendar: calendar?.name ?? null, holidays: holidays.map((h) => ({ ...h, date: h.date.toISOString().slice(0, 10) })) };
+    }
+  },
+
+  /* ---- Leave (V17 Phase B). Always the caller's own leave: there is no "who" parameter. ---- */
+  {
+    name: "apply_leave",
+    title: "Apply for leave",
+    description:
+      "Call this ONLY when the acting user explicitly asks to apply for / book leave — 'take Friday " +
+      "off as casual leave', 'apply for sick leave Monday to Wednesday'. It files a leave request " +
+      "for THEM (there is no parameter for anyone else); their manager is notified and decides it, " +
+      "unless the leave type needs no approval. The server counts the working days (weekends and " +
+      "their holidays excluded) and refuses overlaps, too little balance, or a type that needs a " +
+      "supporting document (tell the user to apply in the web app then). Use get_leave_balance " +
+      "first to find the type code. Confirm the dates and type with the user before calling it.",
+    inputSchema: {
+      leaveType: z.string().min(1).max(20).describe("Leave type code, e.g. PL, CL, SL"),
+      startDate: ISO_DATE.describe("First day, yyyy-mm-dd"),
+      endDate: ISO_DATE.describe("Last day, yyyy-mm-dd (same as startDate for one day)"),
+      startHalf: z.enum(["FULL", "FIRST_HALF", "SECOND_HALF"]).optional().describe("FULL, or the half of the first day taken"),
+      endHalf: z.enum(["FULL", "FIRST_HALF", "SECOND_HALF"]).optional().describe("FULL, or FIRST_HALF to come back after lunch on the last day"),
+      reason: z.string().max(2000).optional()
+    },
+    permission: null,
+    mutating: true,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx, args) => {
+      await assertLeaveOn();
+      const result = await applyLeave({
+        userId: ctx.user.id,
+        leaveTypeCode: args.leaveType,
+        startDate: args.startDate,
+        endDate: args.endDate,
+        startHalf: args.startHalf,
+        endHalf: args.endHalf,
+        reason: args.reason ?? null,
+        source: "MCP",
+        actorId: ctx.user.id
+      });
+      // The reason is the person's own words; the assistant just heard it, it need not echo it.
+      return { autoApproved: result.autoApproved, request: withoutPrivateText(result.request) };
+    }
+  },
+
+  {
+    name: "get_leave_balance",
+    title: "My leave balance",
+    description:
+      "Call this when the acting user asks how much leave THEY have — 'how many PL days do I have', " +
+      "'what leave types can I take'. Returns, per enabled leave type, the balance, pending days, " +
+      "what is available now, and what will expire at the end of the leave year. Always scoped to them.",
+    inputSchema: {},
+    permission: null,
+    mutating: false,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx) => {
+      await assertLeaveOn();
+      const b = await getBalances(ctx.user.id);
+      return {
+        leaveYear: b.leaveYear,
+        from: b.from,
+        to: b.to,
+        balances: b.balances.map((x) => ({
+          type: x.leaveType.code,
+          name: x.leaveType.name,
+          allowHalfDay: x.leaveType.allowHalfDay,
+          requiresApproval: x.leaveType.requiresApproval,
+          balance: x.balance,
+          pending: x.pending,
+          available: x.available,
+          expiringAtYearEnd: x.expiringAtYearEnd
+        }))
+      };
+    }
+  },
+
+  {
+    name: "who_is_off",
+    title: "Who is off",
+    description:
+      "Call this when the acting user asks who is on leave — 'who is off this week', 'is anyone out " +
+      "on Friday'. Returns APPROVED leave only, scoped like the Team view: a manager sees their " +
+      "direct reports, an admin everyone, anyone else only themselves. Names, leave type codes and " +
+      "dates only — never a reason or note. Defaults to the current week (Monday to Sunday).",
+    inputSchema: {
+      date: ISO_DATE.optional().describe("One day, yyyy-mm-dd"),
+      from: ISO_DATE.optional().describe("Range start, yyyy-mm-dd"),
+      to: ISO_DATE.optional().describe("Range end, yyyy-mm-dd (at most 93 days after from)")
+    },
+    permission: null,
+    mutating: false,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx, args) => {
+      await assertLeaveOn();
+      let range = weekOf(new Date().toISOString().slice(0, 10));
+      if (args.from && args.to) range = { from: args.from, to: args.to };
+      if (args.date) range = { from: args.date, to: args.date };
+      if (range.from > range.to) throw new AppError(422, "from must be on or before to.");
+      if ((Date.parse(range.to) - Date.parse(range.from)) / 86_400_000 > 93) range = { from: range.from, to: new Date(Date.parse(range.from) + 93 * 86_400_000).toISOString().slice(0, 10) };
+      const result = await whoIsOff({ id: ctx.user.id, role: ctx.user.role, name: ctx.user.name }, range.from, range.to);
+      return result.enabled ? { from: result.from, to: result.to, scope: result.scope, people: result.people } : { enabled: false };
+    }
+  },
+
+  {
+    name: "list_my_leave",
+    title: "My leave requests",
+    description:
+      "Call this when the acting user asks about THEIR leave requests — 'is my leave approved', " +
+      "'what leave have I taken this year'. Always scoped to them; optionally filter by status.",
+    inputSchema: {
+      status: z.enum(["PENDING", "APPROVED", "REJECTED", "CANCELLED"]).optional()
+    },
+    permission: null,
+    mutating: false,
+    destructive: false,
+    untrustedContent: false,
+    handler: async (ctx, args) => {
+      await assertLeaveOn();
+      const items = await listMyRequests(ctx.user.id, { status: args.status });
+      return {
+        count: items.length,
+        requests: items.slice(0, 100).map((r) => ({
+          id: r.id,
+          type: r.leaveType.code,
+          startDate: r.startDate,
+          endDate: r.endDate,
+          startHalf: r.startHalf,
+          endHalf: r.endHalf,
+          days: r.days,
+          status: r.status,
+          decidedAt: r.decidedAt
+        }))
+      };
     }
   }
 ];

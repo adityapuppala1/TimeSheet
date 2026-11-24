@@ -85,6 +85,7 @@ export const SLIDES = [
     points: [
       ["Plan", "Gantt with four dependency types, baselines, critical path, portfolios, capacity, budgets, and a risk score from six measured signals."],
       ["Track", "Timesheets and Jira-style ticketing on the same rows, with saved views, custom fields and admin-defined workflows."],
+      ["Attend", "Optional punch-in, holiday calendars, missed-day reasons and leave with balances and approvals — off until a workspace opts in, from Team up, with shifts, work sites, correction requests, overtime claims, comp-off, a kiosk QR punch, approval cover, calendar sync and a payroll CSV, punches accepted from the web, API, webhook, MCP, CSV or an HRMS, and a dashboard that never counts a day off as a gap."],
       ["Intake", "Email, Slack, Teams, Google Chat, Telegram and public request forms — all landing as routed, prioritized tickets."],
       ["Connect", "GitHub repo, branch and PR pickers; webhooks from GitLab, Bitbucket, Gitea, Forgejo and Azure DevOps; SonarQube's quality gate and issues, and eslint --format json, taken verbatim; an optional CI or quality gate on Resolved."],
       ["Verify", "A resolved security ticket is a claim the next scan settles — verified fixed with the run and commit that proved it, or reopened with the evidence and the SLA clock restarted. Findings are fingerprinted so a nightly scan stops multiplying them, and routed by repository and path to the module that owns the code."],

@@ -37,6 +37,8 @@ const FindWorkspace = lazy(() => import("./pages/FindWorkspace").then((m) => ({ 
 const SsoHandoff = lazy(() => import("./pages/SsoHandoff").then((m) => ({ default: m.SsoHandoff })));
 const Signup = lazy(() => import("./pages/Signup").then((m) => ({ default: m.Signup })));
 const ResetPassword = lazy(() => import("./pages/ResetPassword").then((m) => ({ default: m.ResetPassword })));
+const KioskDisplayPage = lazy(() => import("./components/attendance/Kiosk").then((m) => ({ default: m.KioskDisplayPage })));
+const KioskPunchPage = lazy(() => import("./components/attendance/Kiosk").then((m) => ({ default: m.KioskPunchPage })));
 const SharedAttestation = lazy(() => import("./pages/SharedAttestation").then((m) => ({ default: m.SharedAttestation })));
 const MaintenancePage = lazy(() => import("./pages/Maintenance").then((m) => ({ default: m.MaintenancePage })));
 const PlanLapsedPage = lazy(() => import("./pages/PlanLapsed").then((m) => ({ default: m.PlanLapsedPage })));
@@ -74,6 +76,7 @@ const AIActivityLog = lazy(() => import("./pages/AIActivityLog").then((m) => ({ 
 const Insights = lazy(() => import("./pages/Insights").then((m) => ({ default: m.Insights })));
 const SecurityInsightsPage = lazy(() => import("./pages/SecurityInsights").then((m) => ({ default: m.SecurityInsightsPage })));
 const Team = lazy(() => import("./pages/Team").then((m) => ({ default: m.Team })));
+const AttendancePage = lazy(() => import("./pages/Attendance").then((m) => ({ default: m.AttendancePage })));
 const WorkspaceSettingsPage = lazy(() =>
   import("./pages/WorkspaceSettings").then((m) => ({ default: m.WorkspaceSettingsPage }))
 );
@@ -152,6 +155,8 @@ const router = createBrowserRouter([
   // with no account, so it must never hit AppLayout (which assumes an authenticated user) or
   // redirect to /login. See pages/SharedAttestation.tsx.
   { path: "/shared/attestation/:token", element: <PageShell><SharedAttestation /></PageShell> },
+  // 7.0.0 kiosk screen: PUBLIC, authenticated by its own device token (components/attendance/Kiosk.tsx).
+  { path: "/kiosk", element: <PageShell><KioskDisplayPage /></PageShell> },
   // Two more unauthenticated surfaces, same rule as the attestation viewer above: the people who
   // open these have no account, so they must never touch AppLayout or redirect to /login.
   { path: "/request/:token", element: <PageShell><PublicRequestFormPage /></PageShell> },
@@ -238,6 +243,16 @@ const router = createBrowserRouter([
       // metrics and direct-reports roll-up only to an approver (see pages/Team.tsx). One page
       // rather than a second, employee-facing copy of the same chart.
       { path: "team", element: <PageShell><Team /></PageShell> },
+      // V17 A5. Open to everyone: "My attendance" is your own days; the Team tab inside is shown to
+      // managing roles and the API scopes every row (direct reports, or everyone for an admin).
+      { path: "attendance", element: <PageShell><AttendancePage /></PageShell> },
+      { path: "attendance/kiosk-punch", element: <PageShell><KioskPunchPage /></PageShell> },
+      { path: "attendance/team", element: <PageShell><AttendancePage /></PageShell> },
+      { path: "attendance/org", element: <PageShell><AttendancePage /></PageShell> },
+      // V17 UI v2: leave. One page, three sub-routes; the page itself explains when leave is off.
+      { path: "attendance/leave", element: <PageShell><AttendancePage /></PageShell> },
+      { path: "attendance/leave/requests", element: <PageShell><AttendancePage /></PageShell> },
+      { path: "attendance/leave/holidays", element: <PageShell><AttendancePage /></PageShell> },
       { path: "approvals", element: <RequirePermission permission={permissions.TIMESHEETS_APPROVE}><PageShell><ApprovalsPage /></PageShell></RequirePermission> },
       { path: "users", element: <RequirePermission permission={permissions.USERS_MANAGE}><PageShell><UsersPage /></PageShell></RequirePermission> },
       { path: "projects", element: <RequirePermission permission={permissions.PROJECTS_MANAGE}><PageShell><ProjectsPage /></PageShell></RequirePermission> },

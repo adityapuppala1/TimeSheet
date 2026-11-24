@@ -35,6 +35,7 @@ const state = vi.hoisted(() => ({
   timesheets: [] as Array<Record<string, any>>,
   tickets: [] as Array<Record<string, any>>,
   personDays: { current: 0, ytd: 0 },
+  holidays: [] as string[],
   noWorkforce: false,
   rawCalls: [] as Array<{ sql: string; values: unknown[] }>,
   slaRawCalls: [] as Array<{ sql: string; values: unknown[] }>
@@ -154,6 +155,10 @@ vi.mock("../../src/middleware/auth.js", () => ({
   },
   requirePermission: () => (_req: unknown, _res: unknown, next: () => void) => next()
 }));
+vi.mock("../../src/services/workforce-holidays.service.js", () => ({
+  defaultHolidayWorkingDays: vi.fn(async (from: Date, to: Date) =>
+    state.holidays.filter((h) => h >= from.toISOString().slice(0, 10) && h <= to.toISOString().slice(0, 10)).length)
+}));
 vi.mock("../../src/services/change.service.js", () => ({ isChangeManagementOn: vi.fn(async () => false) }));
 vi.mock("../../src/services/planning.service.js", () => ({
   getPlanningSettings: vi.fn(async () => ({ workingDays: [1, 2, 3, 4, 5], defaultWeeklyCapacityHours: 40 }))
@@ -198,6 +203,7 @@ beforeEach(() => {
   state.timesheets = [];
   state.tickets = [];
   state.personDays = { current: 0, ytd: 0 };
+  state.holidays = [];
   state.noWorkforce = false;
   state.rawCalls = [];
   state.slaRawCalls = [];
@@ -206,6 +212,15 @@ beforeEach(() => {
 const week = "from=2026-08-24&to=2026-08-27";
 
 describe("the workforce card (H4)", () => {
+  it("7.0.0: a workspace holiday is not a working day for the per-working-day average", async () => {
+    state.personDays = { current: 6, ytd: 340 };
+    state.holidays = ["2026-08-25"];
+    const res = await request(app).get(`/reports/admin-summary?${week}`).expect(200);
+    // Mon–Thu minus Tuesday's holiday: three working days, 6 person-days → 2 a day.
+    expect(res.body.workforce.avgPerWorkingDay).toBe(2);
+    expect(res.body.workforce.workingDays).toBe(3);
+  });
+
   it("counts the same people on both sides: active employees and team leads, never an agent or a leaver", async () => {
     state.timesheets = [entry("asha", "2026-08-25", 8), entry("dana", "2026-08-25", 8), entry("admin", "2026-08-25", 8)];
     const res = await request(app).get(`/reports/admin-summary?${week}`).expect(200);

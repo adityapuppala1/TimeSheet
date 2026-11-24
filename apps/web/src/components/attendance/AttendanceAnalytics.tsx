@@ -1,0 +1,401 @@
+/**
+ * Attendance analytics (V17 A6): the "Analytics" section under My attendance, the Team "Insights"
+ * tab and the admin "Organisation" tab.
+ *
+ * DATA RULES THE UI KEEPS: a rate the server could not compute is "—", never 0%; a group aggregate
+ * the server suppressed (fewer than the workspace's minimum group size) is shown as an explicit
+ * "hidden to protect individuals" note, not as an empty chart that reads as "nobody". No
+ * coordinates, notes or face images exist in these responses — the API never sends them.
+ *
+ * CHARTS: recharts with the categorical tokens (`var(--chart-1)`), so both themes resolve without
+ * JS; every chart has an aria-label and the figures it draws are also printed as text.
+ *
+ * INSIGHTS: Sparkles marks an AI suggestion, Lightbulb a rule-based one. Rule suggestions are
+ * always present; AI ones only when the workspace switched them on for this audience.
+ */
+import { runInBackground } from "../../lib/run-in-background";
+import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle, ArrowRight, CalendarDays, Clock, EyeOff, Hourglass, Lightbulb, Sparkles, TrendingUp, Users2, X } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as ChartTip, XAxis, YAxis } from "recharts";
+import {
+  countRows,
+  driftText,
+  minuteText,
+  pctText,
+  RANGE_OPTIONS,
+  rangeFor,
+  WEEKDAY_SHORT,
+  type RangeDays
+} from "../../lib/attendance-analytics";
+import { usePrefersReducedMotion } from "../../lib/use-motion";
+import { cn } from "../../lib/utils";
+import {
+  attendanceAnalyticsApi,
+  type AnalyticsAudience,
+  type AttendanceInsight,
+  type GroupSummary,
+  type TeamAnalytics,
+  type OvertimeAnalytics
+} from "../../services/attendance-api";
+import { splitInsightDetail } from "../../lib/org-kpis";
+import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
+import { CardError } from "./attendance-ui";
+import { Card, CardContent } from "../ui/card";
+import { EmptyState } from "../ui/empty-state";
+import { Skeleton } from "../ui/skeleton";
+import { StatCard } from "../ui/stat-card";
+
+function todayKey(): string {
+  return new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+const TOOLTIP_STYLE = {
+  borderRadius: 8,
+  border: "1px solid hsl(var(--border))",
+  background: "hsl(var(--popover))",
+  color: "hsl(var(--popover-foreground))",
+  fontSize: 12
+};
+
+const shortDate = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" });
+
+/* --------------------------------- shared pieces --------------------------------- */
+
+export function RangeSelector({ value, onChange }: Readonly<{ value: RangeDays; onChange: (d: RangeDays) => void }>) {
+  return (
+    <div role="group" aria-label="Date range" className="inline-flex rounded-lg border border-border bg-card p-0.5">
+      {RANGE_OPTIONS.map((d) => (
+        <button
+          key={d}
+          type="button"
+          aria-pressed={value === d}
+          onClick={() => onChange(d)}
+          className={cn(
+            "focus-ring rounded-md px-3 py-1 text-xs font-medium transition-colors",
+            value === d ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+          )}
+        >
+          {d} days
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function useRange(initial: RangeDays = 30) {
+  const [days, setDays] = useState<RangeDays>(initial);
+  return { days, setDays, ...rangeFor(days, todayKey()) };
+}
+
+export function SectionCard({ title, description, children, className }: Readonly<{ title: string; description?: string; children: ReactNode; className?: string }>) {
+  return (
+    <Card className={cn("min-w-0", className)}>
+      <CardContent className="grid min-w-0 gap-3 p-4">
+        <header>
+          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+          {description && <p className="text-xs text-muted-foreground">{description}</p>}
+        </header>
+        {children}
+      </CardContent>
+    </Card>
+  );
+}
+
+function suppressedText(people: number | undefined, min: number): string {
+  if (people === undefined) return `Hidden to protect individuals: fewer than ${min} people are behind this figure.`;
+  const who = people === 1 ? "1 person is" : `${people} people are`;
+  return `Hidden to protect individuals: ${who} in this group, and figures are only shown for ${min} or more.`;
+}
+
+export function SuppressedNote({ people, min }: Readonly<{ people?: number; min: number }>) {
+  return (
+    <p className="flex items-start gap-2 rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
+      <EyeOff className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      {suppressedText(people, min)}
+    </p>
+  );
+}
+
+/** 7.0.0 overtime: my hours, or a group total and average (never per person). Nothing while off. */
+export function OvertimeFigure({ data, min }: Readonly<{ data?: OvertimeAnalytics; min: number }>) {
+  if (!data) return null;
+  const basis = data.basis === "APPROVED" ? "Approved claims, by the week's Monday." : "Hours above the expected day and week, by the week's Monday.";
+  if (data.audience === "me") {
+    return (
+      <SectionCard title="Overtime" description={basis}>
+        <p className="text-2xl font-semibold tabular-nums">{data.hours}h</p>
+      </SectionCard>
+    );
+  }
+  return (
+    <SectionCard title="Overtime" description={basis}>
+      {data.suppressed ? (
+        <SuppressedNote people={data.people} min={min} />
+      ) : (
+        <dl className="grid grid-cols-3 gap-2 text-sm">
+          <div><dt className="text-xs text-muted-foreground">Total</dt><dd className="font-semibold tabular-nums">{data.totalHours}h</dd></div>
+          <div><dt className="text-xs text-muted-foreground">Per person</dt><dd className="font-semibold tabular-nums">{data.averagePerPerson}h</dd></div>
+          <div><dt className="text-xs text-muted-foreground">People with any</dt><dd className="font-semibold tabular-nums">{data.peopleWithOvertime} of {data.people}</dd></div>
+        </dl>
+      )}
+    </SectionCard>
+  );
+}
+
+/** A labelled bar list — readable as text, no chart needed for a handful of categories. */
+export function CountBars({ rows, empty }: Readonly<{ rows: Array<{ key: string; label: string; count: number }>; empty: string }>) {
+  if (rows.length === 0) return <p className="text-xs text-muted-foreground">{empty}</p>;
+  const max = Math.max(...rows.map((r) => r.count));
+  return (
+    <ul className="grid gap-2">
+      {rows.map((r) => (
+        <li key={r.key} className="grid min-w-0 gap-1">
+          <div className="flex min-w-0 justify-between gap-2 text-xs">
+            <span className="truncate">{r.label}</span>
+            <span className="tabular-nums text-muted-foreground">{r.count}</span>
+          </div>
+          <div className="h-1.5 rounded-full bg-muted" aria-hidden="true">
+            <div className="h-1.5 rounded-full" style={{ width: `${(r.count / max) * 100}%`, background: "var(--chart-1)" }} />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function AnalyticsSkeleton() {
+  return (
+    <div className="grid gap-3" aria-busy="true" aria-label="Loading analytics">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-20 w-full" />
+        ))}
+      </div>
+      <Skeleton className="h-56 w-full" />
+    </div>
+  );
+}
+
+export function LoadError() {
+  return <EmptyState compact icon={AlertTriangle} title="Analytics aren't available" description="The module may be off, or this view is not open to your role." />;
+}
+
+/* ------------------------------------ insights ------------------------------------ */
+
+export function InsightsList({ audience, from, to }: Readonly<{ audience: AnalyticsAudience; from: string; to: string }>) {
+  const q = useQuery({ queryKey: ["attendance", "insights", audience, from, to], queryFn: () => attendanceAnalyticsApi.insights(audience, from, to) });
+  // Saved per person, audience and range (7.0.0): the server leaves dismissed cards out next time.
+  // The local set hides a card at once, before the save round-trips.
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const shown = (q.data?.insights ?? []).filter((i) => !dismissed.has(i.id));
+  const anyDismissed = dismissed.size > 0 || (q.data?.dismissedCount ?? 0) > 0;
+  const dismiss = (id: string) => {
+    setDismissed((prev) => new Set(prev).add(id));
+    runInBackground(attendanceAnalyticsApi.dismissInsight(audience, id, from, to));
+  };
+  return (
+    <SectionCard title="Suggestions" description="What stands out in this range, the figures behind it and one thing to try.">
+      {q.isLoading && <Skeleton className="h-24 w-full" />}
+      {q.isError && <CardError message="Suggestions are not available right now." onRetry={() => runInBackground(q.refetch())} />}
+      {q.data && shown.length === 0 && <p className="text-xs text-muted-foreground">{anyDismissed ? "All suggestions for this range are dismissed." : "Nothing stands out in this range."}</p>}
+      {shown.length > 0 && (
+        <ul className="grid gap-2 lg:grid-cols-2">
+          {shown.map((i) => (
+            <InsightCard key={i.id} insight={i} onDismiss={() => dismiss(i.id)} />
+          ))}
+        </ul>
+      )}
+    </SectionCard>
+  );
+}
+
+/** Observation (title), evidence, then one suggested action — labelled AI suggestion or Rule. */
+export function InsightCard({ insight, onDismiss }: Readonly<{ insight: AttendanceInsight; onDismiss: () => void }>) {
+  const ai = insight.source === "ai";
+  const Icon = ai ? Sparkles : Lightbulb;
+  const { evidence, action } = splitInsightDetail(insight.detail ?? "");
+  return (
+    <li className="grid min-w-0 gap-2 rounded-lg border border-border bg-card p-3 motion-safe:animate-in motion-safe:fade-in">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <Badge variant={ai ? "info" : "muted"} className="gap-1">
+          <Icon className="h-3 w-3" aria-hidden="true" />
+          {ai ? "AI suggestion" : "Rule"}
+        </Badge>
+        <Button variant="ghost" size="icon" aria-label={`Dismiss: ${insight.title}`} onClick={onDismiss}>
+          <X className="h-4 w-4" aria-hidden="true" />
+        </Button>
+      </div>
+      <p className="text-sm font-semibold">{insight.title}</p>
+      {evidence && <p className="text-xs text-muted-foreground">{evidence}</p>}
+      {action && (
+        <p className="flex items-start gap-1.5 rounded-md bg-muted/60 px-2 py-1.5 text-xs">
+          <ArrowRight className="mt-0.5 h-3 w-3 shrink-0 text-primary" aria-hidden="true" />
+          <span>{action}</span>
+        </p>
+      )}
+    </li>
+  );
+}
+
+/* --------------------------------- My attendance --------------------------------- */
+
+export function MyAnalyticsSection() {
+  const range = useRange();
+  const reduced = usePrefersReducedMotion();
+  const q = useQuery({ queryKey: ["attendance", "analytics", "me", range.from, range.to], queryFn: () => attendanceAnalyticsApi.me(range.from, range.to) });
+
+  return (
+    <section aria-label="Analytics" className="grid min-w-0 gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-muted-foreground">Analytics</h2>
+        <RangeSelector value={range.days} onChange={range.setDays} />
+      </div>
+      {q.isLoading && <AnalyticsSkeleton />}
+      {q.isError && <LoadError />}
+      {q.data && (() => {
+        const s = q.data.summary;
+        const trend = s.punchTrend.map((p) => ({ ...p, label: shortDate(p.date) }));
+        return (
+          <>
+            <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+              <StatCard label="Presence" value={pctText(s.presenceRate)} icon={<CalendarDays className="h-4 w-4" />} hint="Present ÷ (present + absent). Holidays and weekends don't count." />
+              {q.data.lateness.enabled ? (
+                <StatCard label="On time" value={pctText(s.onTimeRate)} icon={<Clock className="h-4 w-4" />} hint={`Punch-ins by ${minuteText(q.data.lateness.expectedStartMinute)}.`} />
+              ) : (
+                <StatCard label="Usual punch-in" value={minuteText(s.medianPunchMinute)} icon={<Clock className="h-4 w-4" />} hint="Your median time in this range." />
+              )}
+              <StatCard label="Trend" value={driftText(s.driftMinutesPerWeek)} icon={<TrendingUp className="h-4 w-4" />} hint="How your punch-in time is moving, from at least five days." />
+              <StatCard label="Hours" value={`${s.hours.logged} / ${s.hours.expected}h`} icon={<Hourglass className="h-4 w-4" />} hint="Logged against expected for the working days so far." />
+            </div>
+            <div className="grid min-w-0 gap-3 lg:grid-cols-[1.6fr_1fr]">
+              <SectionCard title="Punch-in time" description="Each working day's punch-in, in your timezone.">
+                {trend.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No punch-ins in this range.</p>
+                ) : (
+                  <div className="h-52 w-full min-w-0" role="img" aria-label={`Punch-in times over ${trend.length} days, median ${minuteText(s.medianPunchMinute)}`}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={trend} margin={{ top: 4, right: 8, bottom: 0, left: -12 }}>
+                        <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
+                        <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+                        <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={44} domain={["dataMin - 30", "dataMax + 30"]} tickFormatter={(v: number) => minuteText(v)} />
+                        <ChartTip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => [minuteText(v), "Punch-in"]} />
+                        <Line type="monotone" dataKey="minute" stroke="var(--chart-1)" strokeWidth={2} dot={{ r: 2 }} isAnimationActive={!reduced} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </SectionCard>
+              <div className="grid min-w-0 gap-3">
+                <SectionCard title="Missed-day reasons">
+                  <CountBars rows={countRows(s.missedReasons)} empty="No reasons given in this range." />
+                </SectionCard>
+                <SectionCard title="Sources">
+                  <CountBars rows={countRows(s.sources)} empty="No punch-ins in this range." />
+                </SectionCard>
+              </div>
+            </div>
+            <OvertimeFigure data={q.data.overtime} min={3} />
+            <InsightsList audience="me" from={range.from} to={range.to} />
+          </>
+        );
+      })()}
+    </section>
+  );
+}
+
+/* ------------------------------------- group ------------------------------------- */
+
+export function HistogramChart({ data, ariaLabel, xKey, valueLabel }: Readonly<{ data: Array<Record<string, string | number>>; ariaLabel: string; xKey: string; valueLabel: string }>) {
+  const reduced = usePrefersReducedMotion();
+  return (
+    <div className="h-52 w-full min-w-0" role="img" aria-label={ariaLabel}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
+          <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
+          <XAxis dataKey={xKey} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+          <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} width={34} />
+          <ChartTip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => [v, valueLabel]} />
+          <Bar dataKey="count" fill="var(--chart-1)" radius={[3, 3, 0, 0]} isAnimationActive={!reduced} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+export function GroupFigures({ group, min, drifting }: Readonly<{ group: GroupSummary; min: number; drifting?: number }>) {
+  if (group.suppressed || !group.aggregates) return <SuppressedNote people={group.people} min={min} />;
+  const a = group.aggregates;
+  const weekdays = a.absencesByWeekday.map((count, i) => ({ key: String(i), label: WEEKDAY_SHORT[i], count })).filter((r) => r.count > 0);
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <StatCard label="Presence" value={pctText(a.presenceRate)} icon={<CalendarDays className="h-4 w-4" />} hint={`${group.people} people. Present ÷ (present + absent).`} />
+        <StatCard label="Absence" value={pctText(a.absenceRate)} icon={<AlertTriangle className="h-4 w-4" />} hint="Working days nobody punched in on, once the day was over." />
+        <StatCard label="No timesheet" value={a.presentNoTimesheet.days} icon={<Hourglass className="h-4 w-4" />} hint={`Present days with no time logged (${pctText(a.presentNoTimesheet.rate)}).`} />
+        {drifting !== undefined && <StatCard label="Drifting later" value={drifting} icon={<TrendingUp className="h-4 w-4" />} hint="People whose punch-in moves 10+ minutes later a week." />}
+      </div>
+      <div className="grid min-w-0 gap-3 lg:grid-cols-[1.6fr_1fr]">
+        <SectionCard title="Punch-in times" description="Punch-ins per half hour, in each person's own timezone.">
+          {a.punchHistogram.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No punch-ins in this range.</p>
+          ) : (
+            <HistogramChart data={a.punchHistogram} xKey="bucket" valueLabel="Punch-ins" ariaLabel={"Punch-in distribution: " + a.punchHistogram.map((b) => `${b.bucket} ${b.count}`).join(", ")} />
+          )}
+        </SectionCard>
+        <div className="grid min-w-0 gap-3">
+          <SectionCard title="Missed-day reasons">
+            <CountBars rows={countRows(a.missedReasons)} empty="No reasons given in this range." />
+          </SectionCard>
+          <SectionCard title="Absences by weekday">
+            <CountBars rows={weekdays} empty="No absences in this range." />
+          </SectionCard>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function PeopleTable({ data }: Readonly<{ data: TeamAnalytics }>) {
+  if (data.people.length === 0) return null;
+  return (
+    <SectionCard title="People" description="Each person's own trend. You can already open any of these days in Team Activity.">
+      <ul className="grid min-w-0 gap-2">
+        {data.people.map((p) => (
+          <li key={p.userId} className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md border border-border px-3 py-2">
+            <span className="min-w-0 truncate text-sm font-medium">{p.name}</span>
+            <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>Presence {pctText(p.presenceRate)}</span>
+              <span>Usual {minuteText(p.medianPunchMinute)}</span>
+              {p.drifting ? <Badge variant="warning">{driftText(p.driftMinutesPerWeek)}</Badge> : <span>{driftText(p.driftMinutesPerWeek)}</span>}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </SectionCard>
+  );
+}
+
+export function TeamInsightsView() {
+  const range = useRange();
+  const q = useQuery({ queryKey: ["attendance", "analytics", "team", range.from, range.to], queryFn: () => attendanceAnalyticsApi.team(range.from, range.to) });
+  return (
+    <section aria-label="Team insights" className="grid min-w-0 gap-3">
+      <div className="flex justify-end">
+        <RangeSelector value={range.days} onChange={range.setDays} />
+      </div>
+      {q.isLoading && <AnalyticsSkeleton />}
+      {q.isError && <LoadError />}
+      {q.data && q.data.people.length === 0 && <EmptyState compact icon={Users2} title="No one reports to you yet" />}
+      {q.data && q.data.people.length > 0 && (
+        <>
+          <GroupFigures group={q.data.group} min={q.data.minGroupSize} drifting={q.data.people.filter((p) => p.drifting).length} />
+          <OvertimeFigure data={q.data.overtime} min={q.data.minGroupSize} />
+          <PeopleTable data={q.data} />
+          <InsightsList audience="team" from={range.from} to={range.to} />
+        </>
+      )}
+    </section>
+  );
+}

@@ -66,6 +66,15 @@ import { dashboardRouter } from "./controllers/dashboard.controller.js";
 import { agentRouter } from "./controllers/agent.controller.js";
 import { automationFlowRouter } from "./controllers/automation-flow.controller.js";
 import { changeRouter } from "./controllers/change.controller.js";
+import { attendanceSettingsRouter } from "./controllers/attendance-settings.controller.js";
+import { attendanceRouter } from "./controllers/attendance.controller.js";
+import { kioskAdminRouter, kioskRouter } from "./controllers/attendance-kiosk.controller.js";
+import { leaveRouter } from "./controllers/leave.controller.js";
+import { calendarFeedRouter } from "./controllers/calendar-feed.controller.js";
+import { redactUrlForLog } from "./utils/log-redact.js";
+import { attendanceSourcesRouter } from "./controllers/attendance-sources.controller.js";
+import { attendanceWebhookRouter } from "./controllers/attendance-webhook.controller.js";
+import { WEBHOOK_BODY_LIMIT } from "./services/attendance-webhook.service.js";
 import { goalRouter } from "./controllers/goal.controller.js";
 import { inboxRouter } from "./controllers/inbox.controller.js";
 import { portfolioRouter } from "./controllers/portfolio.controller.js";
@@ -274,6 +283,16 @@ app.use("/api/platform-admin/auth/login/totp", mfaLimiter);
 app.use(rateLimit({ windowMs: 60_000, limit: env.RATE_LIMIT_PER_MINUTE, standardHeaders: true }));
 app.use(compression());
 app.use(cookieParser());
+// Signed attendance webhooks (V17 A3) need the exact bytes that were signed. Reading them as raw
+// here, BEFORE json(), is what makes json() skip them (a body parser leaves an already-read body
+// alone); the router itself is mounted after resolveTenant below, because the Host names the
+// tenant. Per-IP limit for the same reason as the receivers above: an unauthenticated POST that
+// decrypts a secret per request.
+app.use(
+  "/api/integrations/attendance",
+  rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true }),
+  express.raw({ type: () => true, limit: WEBHOOK_BODY_LIMIT })
+);
 app.use(express.json({ limit: "2mb" }));
 /**
  * Nothing under `/uploads` may address a private subtree.
@@ -396,6 +415,8 @@ for (const dir of documentReadDirs()) {
 // console capture mirrors HTTP access lines into the rotating files too — access logs are the
 // first thing anyone asks for when diagnosing a production incident. stdout is unchanged: the
 // patched console still calls the original first.
+// 7.0.0: a calendar feed URL carries its only credential in the path; the access log never sees it.
+morgan.token("url", (req) => redactUrlForLog((req as { originalUrl?: string; url?: string }).originalUrl ?? (req as { url?: string }).url ?? ""));
 app.use(morgan("tiny", { stream: { write: (message) => console.info(message.trimEnd()) } }));
 
 /**
@@ -577,6 +598,21 @@ app.use("/api/portfolios", portfolioRouter);
 // planning.service.ts#assertGoalsEnabled), and reading them needs no permission at all.
 app.use("/api/goals", goalRouter);
 app.use("/api/changes", changeRouter);
+// Before the settings router: its prefix is longer, and its own entitlement gate must not run for
+// /settings requests (it would lock the tab's read on a plan without integrations).
+app.use("/api/attendance/admin/kiosks", kioskAdminRouter);
+app.use("/api/attendance/admin/integrations", attendanceSourcesRouter);
+app.use("/api/attendance/admin", attendanceSettingsRouter);
+app.use("/api/integrations/attendance", attendanceWebhookRouter);
+// The punch is idempotent but writes evidence and may spend a face check. Per IP, so the budget has
+// to cover a whole office behind one NAT arriving at 9:00 — 120 a minute does, and still stops a loop.
+app.use("/api/attendance/punch-in", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true }));
+// 7.0.0 kiosk / QR punch: the device route is public (device token), rate-limited in the router.
+app.use("/api/attendance/kiosk", kioskRouter);
+app.use("/api/attendance", attendanceRouter);
+// V17 Phase B leave: employee, approver and super-admin routes, all behind the leave gate.
+app.use("/api/leave", leaveRouter);
+app.use("/api/calendar", calendarFeedRouter);
 // The inbox is a personal surface: no permission, no entitlement, every route scoped to the
 // caller's own rows. It sits beside /notifications rather than inside it because the bell is a
 // glance and the inbox is a queue with triage state — see controllers/inbox.controller.ts.

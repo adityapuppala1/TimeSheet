@@ -1,0 +1,159 @@
+/**
+ * V17 Phase B — expected hours and capacity, now that approved leave and holidays are real data.
+ *
+ *   expected hours = (working days − holidays − leave days) × daily hours
+ *   daily hours    = weeklyCapacityHours ÷ the workspace's working days per week
+ * with a half day of leave counting 0.5 (leave-calc.ts#expectedHours is the arithmetic).
+ *
+ * WHO READS THIS:
+ *   - GET /api/leave/me/expected-hours (dashboard / digest consumers);
+ *   - the capacity board (workload.service.ts) and the utilisation table
+ *     (timesheet-analytics.service.ts): approved leave and holidays now reduce what is AVAILABLE,
+ *     without anyone having to mirror leave as an `isTimeOff` booking.
+ *
+ * NO DOUBLE COUNTING: a workspace that already books leave as `isTimeOff` and now also approves it
+ * here must not lose the day twice. mergedTimeOffHours takes, per day, the LARGER of the booked
+ * time off and the absence — never the sum. isTimeOff bookings keep working exactly as before for
+ * anyone with no approved leave.
+ */
+import { prisma } from "../config/prisma.js";
+import { requireTenantContext } from "../config/tenant-context.js";
+import { getAttendanceSettings } from "./attendance-settings.service.js";
+import { loadHolidays } from "./attendance-team.service.js";
+import { getPlanningSettings } from "./planning.service.js";
+import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
+import { addDaysKey, expectedHours, type ExpectedHours } from "./leave-calc.js";
+import { leaveFractionOf, loadApprovedLeave } from "./leave-query.service.js";
+import { shiftsForUsersInRange } from "./attendance-shift.service.js";
+
+export interface AbsencePerson {
+  id: string;
+  holidayCalendarId: string | null;
+  /** Null = the workspace default. */
+  weeklyCapacityHours: number | null;
+}
+
+/** Hours unavailable per person per day (holiday = a full day, leave = its fraction). */
+export type AbsenceMap = Map<string, Map<string, number>>;
+
+const weekday = (key: string) => new Date(`${key}T12:00:00Z`).getUTCDay();
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+function workingDayKeys(from: string, to: string, workingDays: readonly number[]): string[] {
+  const keys: string[] = [];
+  for (let d = from; d <= to; d = addDaysKey(d, 1)) if (workingDays.includes(weekday(d))) keys.push(d);
+  return keys;
+}
+
+/** Attendance (toggle + plan) or leave (toggle + plan) is on. One settings read when both toggles are off. */
+export async function attendanceOrLeaveOn(): Promise<boolean> {
+  const settings = await getAttendanceSettings();
+  if (!settings?.attendanceEnabled && !settings?.leaveEnabled) return false;
+  const orgId = requireTenantContext().orgId;
+  if (settings?.attendanceEnabled && (await isPlanningCapabilityAllowed(orgId, "attendanceEnabled"))) return true;
+  return Boolean(settings?.leaveEnabled) && (await isPlanningCapabilityAllowed(orgId, "leaveManagementEnabled"));
+}
+
+export async function absenceByPerson(
+  people: readonly AbsencePerson[],
+  from: string,
+  to: string,
+  workingDays: readonly number[],
+  defaultWeeklyCapacityHours: number
+): Promise<AbsenceMap> {
+  const out: AbsenceMap = new Map();
+  if (people.length === 0 || to < from) return out;
+  // Holidays and leave are Attendance & Leave data: a workspace with neither part EFFECTIVELY on
+  // (toggle AND plan) keeps exactly the capacity it had — byte-identical, no holiday subtracted.
+  if (!(await attendanceOrLeaveOn())) return out;
+  const [holidayOf, leaveOf] = await Promise.all([
+    loadHolidays(people.map((p) => p.holidayCalendarId), from, to),
+    loadApprovedLeave(people.map((p) => p.id), from, to)
+  ]);
+  const perWeek = workingDays.length || 5;
+  for (const p of people) {
+    const perDay = (p.weeklyCapacityHours ?? defaultWeeklyCapacityHours) / perWeek;
+    const days = new Map<string, number>();
+    for (const d of workingDayKeys(from, to, workingDays)) {
+      const fraction = holidayOf(p.holidayCalendarId, d, p.id) ? 1 : leaveFractionOf(leaveOf, p.id, d);
+      if (fraction > 0) days.set(d, r2(perDay * fraction));
+    }
+    if (days.size) out.set(p.id, days);
+  }
+  return out;
+}
+
+/**
+ * Time off inside [from, to] for one person: per working day, the larger of what isTimeOff bookings
+ * claim and what the absence map says. Pure.
+ */
+export function mergedTimeOffHours(
+  bookings: ReadonlyArray<{ startDate: Date; endDate: Date; hoursPerDay: number }>,
+  absence: Map<string, number> | undefined,
+  from: string,
+  to: string,
+  workingDays: readonly number[]
+): number {
+  let total = 0;
+  for (let d = from; d <= to; d = addDaysKey(d, 1)) {
+    if (!workingDays.includes(weekday(d))) continue;
+    let booked = 0;
+    for (const b of bookings) {
+      const s = b.startDate.toISOString().slice(0, 10);
+      const e = b.endDate.toISOString().slice(0, 10);
+      if (d >= s && d <= e) booked += b.hoursPerDay;
+    }
+    total += Math.max(booked, absence?.get(d) ?? 0);
+  }
+  return r2(total);
+}
+
+type ExpectationInput = Omit<Parameters<typeof expectedHours>[0], "from" | "to">;
+
+/** The per-person inputs expectedHours needs over [from, to]. Four queries however many people. */
+async function expectationInputs(userIds: readonly string[], from: string, to: string): Promise<Map<string, ExpectationInput>> {
+  const out = new Map<string, ExpectationInput>();
+  const [planning, people] = await Promise.all([
+    getPlanningSettings(),
+    prisma.user.findMany({ where: { id: { in: [...userIds] } }, select: { id: true, managerId: true, holidayCalendarId: true, weeklyCapacityHours: true } })
+  ]);
+  const [holidayOf, leaveOf, shiftsOf] = await Promise.all([
+    loadHolidays(people.map((p) => p.holidayCalendarId), from, to),
+    loadApprovedLeave(people.map((p) => p.id), from, to),
+    shiftsForUsersInRange(people, from, to)
+  ]);
+  for (const p of people) {
+    out.set(p.id, {
+      workingDays: planning.workingDays,
+      isHoliday: (d) => Boolean(holidayOf(p.holidayCalendarId, d, p.id)),
+      leaveFraction: (d) => leaveFractionOf(leaveOf, p.id, d),
+      weeklyCapacityHours: p.weeklyCapacityHours != null ? Number(p.weeklyCapacityHours) : planning.defaultWeeklyCapacityHours,
+      // 7.0.0: a person on a shift is expected the shift's minutes on the shift's working days.
+      shiftOn: shiftsOf.get(p.id)
+    });
+  }
+  return out;
+}
+
+/** Expected hours per person over [from, to]. Four queries however many people (the shift lookup is one). */
+export async function expectedHoursFor(userIds: readonly string[], from: string, to: string): Promise<Map<string, ExpectedHours>> {
+  const out = new Map<string, ExpectedHours>();
+  if (userIds.length === 0 || to < from) return out;
+  for (const [id, input] of await expectationInputs(userIds, from, to)) out.set(id, expectedHours({ from, to, ...input }));
+  return out;
+}
+
+/**
+ * 7.0.0 overtime: expected hours per person PER DAY over [from, to] — the same rule as
+ * expectedHoursFor, one day at a time (a night shift's hours belong to its start date).
+ */
+export async function expectedHoursByDay(userIds: readonly string[], from: string, to: string): Promise<Map<string, Map<string, number>>> {
+  const out = new Map<string, Map<string, number>>();
+  if (userIds.length === 0 || to < from) return out;
+  for (const [id, input] of await expectationInputs(userIds, from, to)) {
+    const days = new Map<string, number>();
+    for (let d = from; d <= to; d = addDaysKey(d, 1)) days.set(d, expectedHours({ from: d, to: d, ...input }).expectedHours);
+    out.set(id, days);
+  }
+  return out;
+}

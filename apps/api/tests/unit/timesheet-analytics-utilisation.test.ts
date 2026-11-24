@@ -91,6 +91,11 @@ function personMatches(p: any, where: Record<string, any>): boolean {
   return true;
 }
 
+// V17 Phase B: approved leave / holidays are covered by leave-capacity tests; none here.
+vi.mock("../../src/services/leave-capacity.service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/services/leave-capacity.service.js")>()),
+  absenceByPerson: async () => new Map()
+}));
 vi.mock("../../src/config/prisma.js", () => ({
   prisma: {
     timesheet: {

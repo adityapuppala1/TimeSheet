@@ -34,6 +34,7 @@ export const SETTINGS_TABS = new Set([
   "chat-integrations",
   "security-devops",
   "face-verification",
+  "attendance",
   "integrations",
   "billing",
   "public-api",

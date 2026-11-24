@@ -74,9 +74,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { DataTable } from "../components/ui/data-table";
 import { TimesheetReportPanel } from "../components/TimesheetReportPanel";
 import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
+import { AttendanceLeaveSummary } from "../components/AttendanceLeaveSummary";
 import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
 import { TimesheetAnalyticsPanel } from "../components/TimesheetAnalyticsPanel";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
+import { LeaveProfileSummary } from "../components/attendance/LeaveProfileSummary";
+import { sitesApi } from "../components/attendance/WorkSites";
+import { EMPLOYMENT_TYPE_OPTIONS } from "../lib/employment-type";
 import {
   EMPTY_FILTERS,
   TablePager,
@@ -118,6 +122,7 @@ import { formatHours, formatNumber } from "../lib/format";
 import { QueryError } from "../components/QueryState";
 import {
   activityTypeApi,
+  api,
   attestationApi,
   faceApi,
   fileUrl,
@@ -1144,8 +1149,22 @@ function UserEditDialog({
     managerId: "none",
     designation: "",
     githubUsername: "",
-    faceVerificationRequired: false
+    faceVerificationRequired: false,
+    employmentType: "none",
+    siteId: "none",
+    joinDate: "",
+    dateOfBirth: ""
   });
+  // 7.0.0 celebrations: the join date, read on its own (the user list never carries it). The birthday
+  // arrives in the same response ONLY for a super admin (the API omits it for everyone else), so its
+  // presence is what decides whether the field is shown at all.
+  const celebrationFields = useQuery({ queryKey: ["users", user?.id, "celebrations"], queryFn: async () => (await api.get<{ joinDate: string | null; dateOfBirth?: string | null }>(`/users/${user!.id}/celebrations`)).data, enabled: Boolean(user), retry: false });
+  useEffect(() => {
+    if (celebrationFields.data) setForm((f) => ({ ...f, joinDate: celebrationFields.data.joinDate ?? "", dateOfBirth: celebrationFields.data.dateOfBirth ?? "" }));
+  }, [celebrationFields.data]);
+  // 7.0.0 leave policies: the home work site picker (sites are a super-admin list; without it the
+  // field is neither shown nor sent, so an ADMIN's save never clears a site).
+  const sites = useQuery({ queryKey: ["attendance", "admin", "sites"], queryFn: sitesApi.list, enabled: Boolean(user) && viewerIsSuperAdmin, retry: false });
   // Extra roles ALSO granted, beyond form.role (the active one) — never includes form.role
   // itself. Super-admin-only; an ADMIN never sees or sends this.
   const [extraRoles, setExtraRoles] = useState<string[]>([]);
@@ -1163,7 +1182,11 @@ function UserEditDialog({
         managerId: user.managerId ?? "none",
         designation: user.designation ?? "",
         githubUsername: user.githubUsername ?? "",
-        faceVerificationRequired: user.faceVerificationRequired ?? false
+        faceVerificationRequired: user.faceVerificationRequired ?? false,
+        employmentType: user.employmentType ?? "none",
+        siteId: user.siteId ?? "none",
+        joinDate: "",
+        dateOfBirth: ""
       });
       setExtraRoles(user.heldRoles.filter((r) => r !== user.role.name));
     }
@@ -1248,6 +1271,46 @@ function UserEditDialog({
                   />
                 </div>
               </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="ue-employment">Employment type</Label>
+                  <Select value={form.employmentType} onValueChange={(value) => setForm({ ...form, employmentType: value })}>
+                    <SelectTrigger id="ue-employment"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not set</SelectItem>
+                      {EMPLOYMENT_TYPE_OPTIONS.map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">Leave types and holiday calendars can be limited to some employment types.</p>
+                </div>
+                {sites.data && (
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="ue-site">Work site</Label>
+                    <Select value={form.siteId} onValueChange={(value) => setForm({ ...form, siteId: value })}>
+                      <SelectTrigger id="ue-site"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">No site</SelectItem>
+                        {sites.data.map((site) => <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">Picks the site&rsquo;s holiday calendar when they have none of their own.</p>
+                  </div>
+                )}
+              </div>
+              {celebrationFields.data && (
+                <div className="grid gap-1.5 sm:max-w-xs">
+                  <Label htmlFor="ue-join-date">Join date</Label>
+                  <Input id="ue-join-date" type="date" value={form.joinDate} onChange={(e) => setForm({ ...form, joinDate: e.target.value })} />
+                  <p className="text-xs text-muted-foreground">Used for work anniversaries when celebrations are on.</p>
+                </div>
+              )}
+              {celebrationFields.data && "dateOfBirth" in celebrationFields.data && (
+                <div className="grid gap-1.5 sm:max-w-xs">
+                  <Label htmlFor="ue-dob">Birthday</Label>
+                  <Input id="ue-dob" type="date" value={form.dateOfBirth} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} />
+                  <p className="text-xs text-muted-foreground">Only super admins can see or change this. Colleagues see the day and month on the birthday, never the year.</p>
+                </div>
+              )}
               <div className="grid gap-1.5">
                 <Label>Reports to</Label>
                 <Select value={form.managerId} onValueChange={(value) => setForm({ ...form, managerId: value })}>
@@ -1283,6 +1346,7 @@ function UserEditDialog({
                 </div>
               )}
             </div>
+            {user && <LeaveProfileSummary userId={user.id} manager={user.manager} />}
             <DialogFooter>
               <Button variant="outline" onClick={onClose}>Cancel</Button>
               <Button
@@ -1304,7 +1368,14 @@ function UserEditDialog({
                     managerId: form.managerId === "none" ? null : form.managerId,
                     designation: form.designation.trim() || null,
                     githubUsername: form.githubUsername.trim() || null,
-                    faceVerificationRequired: form.faceVerificationRequired
+                    faceVerificationRequired: form.faceVerificationRequired,
+                    employmentType: form.employmentType === "none" ? null : form.employmentType,
+                    ...(sites.data ? { siteId: form.siteId === "none" ? null : form.siteId } : {}),
+                    ...(celebrationFields.data ? { joinDate: form.joinDate || null } : {}),
+                    // Only when it was shown AND changed: an unchanged save must not rewrite a private field.
+                    ...(celebrationFields.data && "dateOfBirth" in celebrationFields.data && form.dateOfBirth !== (celebrationFields.data.dateOfBirth ?? "")
+                      ? { dateOfBirth: form.dateOfBirth || null }
+                      : {})
                   })
                 }
                 disabled={!form.name.trim() || !form.email.trim()}
@@ -3250,6 +3321,9 @@ export function ReportsPage() {
       {/* Sits under the report because it answers the follow-up question. The report says where
           the hours went; this says whether that was a reasonable amount of them. */}
       <TimesheetAnalyticsPanel />
+
+      {/* 7.0.0: only with Attendance or Leave on and in the plan; renders nothing otherwise. */}
+      <AttendanceLeaveSummary />
 
       <Card>
         <CardHeader className="flex-col items-start justify-between gap-3 space-y-0 sm:flex-row sm:items-center">

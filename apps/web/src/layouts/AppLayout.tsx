@@ -17,6 +17,8 @@ import { ForcedPasswordChange } from "../components/ForcedPasswordChange";
 import { ForcedMfaSetup } from "../components/ForcedMfaSetup";
 import { isMfaSetupRequired, isPasswordChangeRequired } from "../lib/password-change-gate";
 import { FaceModelUpgradePrompt } from "../components/FaceModelUpgradePrompt";
+import { PunchInBanner, PunchInController } from "../components/PunchIn";
+import { usePunchInGate } from "../lib/punch-in-gate";
 import { SessionEndedDialog } from "../components/SessionEndedDialog";
 import { MobileNav, Sidebar } from "../components/Sidebar";
 import { Topbar } from "../components/Topbar";
@@ -30,6 +32,9 @@ export function AppLayout() {
   const user = useAuthStore((s) => s.user);
   const hydrated = useAuthStore((s) => s.hydrated);
   const setUser = useAuthStore((s) => s.setUser);
+  // Punch-in holds the face-model prompt (and, in Topbar, the tour) while it is asking — see
+  // lib/punch-in-gate.ts for the whole first-load order.
+  const punchInHolds = usePunchInGate((s) => s.holdsOthers);
 
   // Timezone backfill: someone who never chose a timezone gets their DEVICE's zone recorded
   // once — detected in the browser, which is the only party that actually knows where the
@@ -84,6 +89,7 @@ export function AppLayout() {
           <Topbar />
           <MaintenanceBanner />
           <PasswordChangeBanner />
+          <PunchInBanner />
           {/* pb-20 reserves clearance for MobileNav below (fixed, ~56-60px tall, <lg only) —
               without it the last ~56px of every page's content renders underneath the fixed
               bar on phone/tablet (e.g. a page-bottom submit button becomes unreachable). */}
@@ -100,7 +106,10 @@ export function AppLayout() {
       <OnboardingGate />
       {/* Deliberately BELOW the gate: an unenrolled user is held by OnboardingGate and has no
           thin model to improve, so the two can never stack. Dismissible, never blocking. */}
-      <FaceModelUpgradePrompt />
+      {/* Punch-in comes after onboarding (it says nothing while the gate is up) and before the
+          face-model prompt, which waits while punch-in is asking. */}
+      <PunchInController />
+      {!punchInHolds && <FaceModelUpgradePrompt />}
       {/* Heartbeat + "you've been signed out" dialog — how an admin's force-logout reaches
           this tab within seconds rather than on the next hard refresh. */}
       <SessionEndedDialog />

@@ -50,6 +50,10 @@ import { runInBackground } from "../lib/run-in-background";
 import { localDateKey } from "../lib/local-date";
 import { dayTotalFor } from "../lib/day-total";
 import { useAuthStore } from "../store/auth";
+import { attendanceApi } from "../services/attendance-api";
+import { dayOffPrompt } from "../lib/day-grid";
+import { MissedDayReasonFields } from "../components/MissedDayReasonFields";
+import { missedReasonProblem, readMissedDayRefusal, type MissedReasonOption } from "../lib/missed-day-reason";
 
 const MAX_DAILY_HOURS = 12;
 const OPEN_TICKET_STATUSES = "OPEN,IN_PROGRESS,IN_REVIEW,REOPENED";
@@ -359,6 +363,72 @@ export function Timesheet() {
     [dayEntries.data, currentUser?.id, workDate]
   );
 
+  /**
+   * V17 A4: the first entry on a past working day needs a reason. The server decides (holidays,
+   * working days, existing entries, an earlier reason, the workspace toggle); this asks it whenever
+   * the date changes so the prompt is on screen BEFORE Save. A 422 refusal opens the same prompt,
+   * which covers anything the check could not know in time. Keyed under ["timesheets"] so a save
+   * refreshes it — the second entry on that day no longer needs one.
+   */
+  // 7.0.0: leave or a holiday on the picked day ("You're on leave today (PL)"). The day-grid
+  // endpoint answers { enabled: false } with Attendance & Leave off, so nothing shows then.
+  const dayStatus = useQuery({
+    queryKey: ["attendance", "day-grid", "self", workDate],
+    queryFn: () => attendanceApi.dayGrid(workDate, workDate),
+    enabled: Boolean(currentUser?.id && workDate),
+    staleTime: 5 * 60_000
+  });
+  const offPrompt = useMemo(() => {
+    const grid = dayStatus.data;
+    if (!grid?.enabled) return null;
+    const mine = grid.people.find((p) => p.userId === currentUser?.id);
+    return dayOffPrompt(mine?.days[workDate], workDate === todayKey());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayStatus.data, currentUser?.id, workDate]);
+  const workDateIsPast = Boolean(workDate) && workDate < todayKey();
+  const missedCheck = useQuery({
+    queryKey: ["timesheets", "missed-day", currentUser?.id, workDate],
+    queryFn: () => attendanceApi.missedDayCheck(workDate),
+    enabled: Boolean(currentUser?.id) && workDateIsPast,
+    staleTime: 30_000
+  });
+  const [missedCode, setMissedCode] = useState("");
+  const [missedNote, setMissedNote] = useState("");
+  const [missedError, setMissedError] = useState<{ field: "missedReasonCode" | "missedReasonNote"; message: string } | null>(null);
+  const [missedRefusal, setMissedRefusal] = useState<{ date: string; options: MissedReasonOption[] } | null>(null);
+  const missedRef = useRef<HTMLDivElement>(null);
+  const refusalForDate = missedRefusal?.date === workDate ? missedRefusal : null;
+  const missedRequired = workDateIsPast && (Boolean(missedCheck.data?.required) || Boolean(refusalForDate));
+  const missedOptions = refusalForDate?.options.length ? refusalForDate.options : (missedCheck.data?.options ?? []);
+
+  // A different day is a different question.
+  useEffect(() => {
+    setMissedCode("");
+    setMissedNote("");
+    setMissedError(null);
+  }, [workDate]);
+
+  const showMissedPrompt = (problem: { field: "missedReasonCode" | "missedReasonNote"; message: string }) => {
+    setMissedError(problem);
+    requestAnimationFrame(() => {
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      missedRef.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+    });
+    toast.error("Tell us why this day was missed", { description: problem.message });
+  };
+
+  /** True when the reason (if one is needed) is complete; otherwise shows the prompt. */
+  const missedReasonReady = (): boolean => {
+    if (!missedRequired) return true;
+    const problem = missedReasonProblem(missedOptions, missedCode, missedNote);
+    if (problem) {
+      showMissedPrompt(problem);
+      return false;
+    }
+    setMissedError(null);
+    return true;
+  };
+
   const projectedDayTotal = dayTotal + total;
   const overCap = projectedDayTotal > MAX_DAILY_HOURS;
   const capPercent = Math.min(100, Math.round((projectedDayTotal / MAX_DAILY_HOURS) * 100));
@@ -372,7 +442,9 @@ export function Timesheet() {
         // Single-use token proving a live identity check just passed. Only present when the
         // workspace policy covers this user; the server re-checks whether it was required at
         // all, so omitting it can never bypass the gate.
-        ...(faceVerificationId ? { faceVerificationId } : {})
+        ...(faceVerificationId ? { faceVerificationId } : {}),
+        // Only when the server asked for one; it ignores them otherwise.
+        ...(missedRequired && missedCode ? { missedReasonCode: missedCode, missedReasonNote: missedNote.trim() } : {})
       };
       if (files.length) {
         const fd = new window.FormData();
@@ -385,6 +457,10 @@ export function Timesheet() {
     onSuccess: (_data, variables) => {
       runInBackground(queryClient.invalidateQueries({ queryKey: ["timesheets"] }));
       setFiles([]);
+      setMissedRefusal(null);
+      setMissedCode("");
+      setMissedNote("");
+      setMissedError(null);
       form.reset({
         projectId: form.getValues("projectId"),
         moduleId: form.getValues("moduleId"),
@@ -403,7 +479,14 @@ export function Timesheet() {
           : "Your manager has been notified for approval."
       });
     },
-    onError: (error: any) => {
+    onError: (error: any, variables) => {
+      // The server's missed-day refusal becomes the prompt, with the options it sent.
+      const refusal = readMissedDayRefusal(error);
+      if (refusal) {
+        setMissedRefusal({ date: variables.values.workDate, options: refusal.options });
+        showMissedPrompt({ field: refusal.field, message: refusal.message });
+        return;
+      }
       const message = error?.response?.data?.message ?? "Submission failed. Check required fields, time overlap, and max hours.";
       toast.error("Could not save timesheet", { description: message });
     },
@@ -414,6 +497,7 @@ export function Timesheet() {
 
   const saveOnce = (variables: { values: FormData; draft: boolean; faceVerificationId?: string }) => {
     if (mutationLock.current) return;
+    if (!missedReasonReady()) return;
     mutationLock.current = true;
     mutation.mutate(variables);
   };
@@ -445,6 +529,8 @@ export function Timesheet() {
   /** Submit path for "Submit for approval". Drafts bypass this entirely — they're private
    *  working state, and the server only gates SUBMITTED. */
   const requestSubmit = (values: FormData) => {
+    // Before the face check, so a missing reason never spends a verification.
+    if (!missedReasonReady()) return;
     if (faceStatus.data?.requiredForTimesheet) {
       setPendingValues(values);
       setFaceDialogOpen(true);
@@ -624,6 +710,26 @@ export function Timesheet() {
                 />
               </section>
 
+              {missedRequired && (
+                <div ref={missedRef}>
+                  <MissedDayReasonFields
+                    date={workDate}
+                    options={missedOptions}
+                    code={missedCode}
+                    note={missedNote}
+                    onCodeChange={(code) => {
+                      setMissedCode(code);
+                      setMissedError(null);
+                    }}
+                    onNoteChange={(note) => {
+                      setMissedNote(note);
+                      if (missedError?.field === "missedReasonNote") setMissedError(null);
+                    }}
+                    error={missedError}
+                  />
+                </div>
+              )}
+
               <Separator />
 
               <FormField
@@ -687,6 +793,11 @@ export function Timesheet() {
                     <Sparkles className="h-4 w-4 text-primary" />
                     This entry: <span className="text-primary">{total.toFixed(2)}h</span>
                   </div>
+                  {offPrompt && dayTotal === 0 && (
+                    <p className="text-xs font-medium text-foreground" data-testid="timesheet-day-off">
+                      {offPrompt}. You can still log time if you worked.
+                    </p>
+                  )}
                   <p className="text-xs text-muted-foreground">
                     Already logged on <span className="font-semibold text-foreground">{workDate}</span>:{" "}
                     <span className="font-semibold">{dayTotal.toFixed(2)}h</span> · projected total:{" "}
@@ -697,7 +808,7 @@ export function Timesheet() {
                   </p>
                   <Progress value={capPercent} className={overCap ? "[&>div]:bg-destructive" : ""} />
                 </div>
-                <div className="flex flex-wrap gap-2 md:justify-end">
+                <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap md:justify-end">
                   <Button
                     type="button"
                     variant="ghost"
@@ -714,7 +825,7 @@ export function Timesheet() {
                   >
                     <Save className="h-4 w-4" />Save draft
                   </Button>
-                  <Button disabled={mutation.isPending || overCap || total <= 0}>
+                  <Button className="col-span-2 min-h-[44px] sm:col-span-1 sm:min-h-0" disabled={mutation.isPending || overCap || total <= 0}>
                     <Send className="h-4 w-4" />Submit for approval
                   </Button>
                 </div>

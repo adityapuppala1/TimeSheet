@@ -44,6 +44,10 @@ describe("plan tier limits", () => {
         maxGoals: 0,
         changeManagementEnabled: false,
         maxChangePolicies: 0,
+        attendanceEnabled: false,
+        leaveManagementEnabled: false,
+        attendanceIntegrationsEnabled: false,
+        attendanceAiInsightsEnabled: false,
         practiceUpdateEnabled: false,
         // Managed backups (3.14.0). Starter gets none — deliberately, because a backup has a real
         // recurring per-workspace cost that scales with cadence. The pre-deletion snapshot the
@@ -75,6 +79,10 @@ describe("plan tier limits", () => {
         maxGoals: 25,
         changeManagementEnabled: true,
         maxChangePolicies: 5,
+        attendanceEnabled: true,
+        leaveManagementEnabled: false,
+        attendanceIntegrationsEnabled: false,
+        attendanceAiInsightsEnabled: false,
         practiceUpdateEnabled: true,
         // Weekly, one destination, no test restores — the honest floor for a paying team, bounding
         // the worst case at seven days of work for one dump and one upload a week.
@@ -103,6 +111,10 @@ describe("plan tier limits", () => {
         maxGoals: UNLIMITED_PLAN_ITEMS,
         changeManagementEnabled: true,
         maxChangePolicies: UNLIMITED_PLAN_ITEMS,
+        attendanceEnabled: true,
+        leaveManagementEnabled: true,
+        attendanceIntegrationsEnabled: true,
+        attendanceAiInsightsEnabled: true,
         practiceUpdateEnabled: true,
         // Daily and dedicated, several destinations, and the expensive half — test restores and
         // PITR. HOURLY exists in the model and is deliberately NOT granted by the tier: it
@@ -125,6 +137,8 @@ describe("plan tier limits", () => {
     expect(starter.proofingEnabled).toBe(false);
     expect(starter.customWorkflowsEnabled).toBe(false);
     expect(starter.aiPmCopilotEnabled).toBe(false);
+    expect(starter.attendanceEnabled).toBe(false);
+    expect(starter.leaveManagementEnabled).toBe(false);
   });
 
   it("gates the AI PM copilot behind a non-zero AI budget", () => {
@@ -182,7 +196,11 @@ describe("plan tier limits", () => {
         "approvalsEnabled",
         "proofingEnabled",
         "customWorkflowsEnabled",
-        "aiPmCopilotEnabled"
+        "aiPmCopilotEnabled",
+        "attendanceEnabled",
+        "leaveManagementEnabled",
+        "attendanceIntegrationsEnabled",
+        "attendanceAiInsightsEnabled"
       ] as const) {
         if (lower[capability]) expect(higher[capability], `${order[i]} ${capability}`).toBe(true);
       }

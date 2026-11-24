@@ -31,6 +31,7 @@ vi.mock("../../src/services/ai.service.js", () => ({
   generateWeeklyDigest: vi.fn()
 }));
 vi.mock("../../src/services/principal.service.js", () => ({ loadRequestUser: vi.fn(async () => ({ permissions: [] })) }));
+vi.mock("../../src/services/weekly-digest-expected.service.js", () => ({ digestExpectedHoursHtml: vi.fn(async () => "") }));
 vi.mock("../../src/services/notify.service.js", () => ({ dispatchNotification: vi.fn(async () => undefined) }));
 vi.mock("../../src/services/weekly-digest-data.service.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/services/weekly-digest-data.service.js")>(

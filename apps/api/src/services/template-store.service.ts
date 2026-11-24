@@ -30,6 +30,14 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "reminder.daily": ["name", "date", "deadlineHour", "appUrl"],
   "reminder.escalation.employee": ["name", "missedDate", "managerName", "appUrl"],
   "reminder.escalation.manager": ["managerName", "employeeName", "missedDate", "employeeEmail", "appUrl"],
+  // V17 A4 attendance
+  "reminder.punch_in": ["name", "date", "appUrl"],
+  // V17 Phase B leave
+  "leave.requested": ["approverName", "employeeName", "leaveType", "dates", "days", "appUrl"],
+  "leave.decided": ["name", "leaveType", "decision", "decidedBy", "dates", "days", "note", "appUrl"],
+  // Comp-off, attendance corrections and overtime claims share one pair, with the kind as a variable.
+  "attendance.requested": ["approverName", "employeeName", "requestKind", "summary", "appUrl"],
+  "attendance.decided": ["name", "requestKind", "decision", "decidedBy", "summary", "note", "appUrl"],
 
   // Ticketing
   "ticket.assigned": ["assigneeName", "ticketKey", "title", "priority", "assignedBy", "type", "module", "description", "appUrl"],
@@ -40,7 +48,7 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "ticket.received_via_email": ["senderName", "ticketKey", "title", "priority", "appUrl"],
   "ticket.needs_review": ["targetName", "ticketKey", "title", "senderEmail", "confidence", "ticketId", "appUrl"],
   "ticket.reporter_resolved": ["reporterName", "ticketKey", "title", "outcome", "appUrl"],
-  "digest.weekly": ["name", "weekLabel", "summary", "tablesHtml", "appUrl"],
+  "digest.weekly": ["name", "weekLabel", "summary", "expectedHoursHtml", "tablesHtml", "appUrl"],
   "digest.practice_update": ["periodLabel", "headline", "sectionsHtml", "appUrl"],
   "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "ticketId", "appUrl"],
   "ticket.reopened_digest": ["ticketKey", "title", "closedBy", "scanSummary", "riskVerdict", "survivedText", "fixedText", "slaText", "ticketId", "appUrl"],
@@ -90,6 +98,12 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "reminder.daily": "Daily 4 PM nudge to log today's timesheet (weekdays only).",
   "reminder.escalation.employee": "Next-morning escalation reminder to the employee for a missed log day.",
   "reminder.escalation.manager": "Next-morning notification to the manager when a report missed yesterday's log.",
+  "leave.requested": "Sent to the approver (the person's manager, or the admin pool when they have none) when a leave request needs a decision.",
+  "leave.decided": "Sent to the person who asked for leave when their request is approved or rejected.",
+  "attendance.requested": "Sent to the approver when a comp-off request, attendance correction or overtime claim needs a decision.",
+  "attendance.decided": "Sent to the person who made a comp-off request, attendance correction or overtime claim when it is approved or rejected.",
+  "reminder.punch_in":
+    "Punch-in reminder at the hour set under Attendance & Leave (11:00 by default), in each person's timezone — only on their working days, never on a holiday, and only when no punch has arrived from any source.",
 
   "ticket.assigned": "Sent to the assignee when a ticket is assigned to them.",
   "ticket.status_changed": "Sent to the reporter, assignee, and watchers when a ticket's status changes.",
@@ -225,6 +239,23 @@ export function sampleVariables(key: string): Record<string, string> {
       name: "Aanya Sharma", missedDate: "2026-05-26",
       managerName: "Mira Kapoor", appUrl: "https://timesphere.local"
     },
+    "reminder.punch_in": { name: "Aanya Sharma", date: "2026-05-27", appUrl: "https://timesphere.local" },
+    "leave.requested": {
+      approverName: "Mira Kapoor", employeeName: "Aanya Sharma", leaveType: "Privilege leave",
+      dates: "2026-06-01 to 2026-06-03", days: "3", appUrl: "https://timesphere.local"
+    },
+    "leave.decided": {
+      name: "Aanya Sharma", leaveType: "Privilege leave", decision: "approved", decidedBy: "Mira Kapoor",
+      dates: "2026-06-01 to 2026-06-03", days: "3", note: "Enjoy!", appUrl: "https://timesphere.local"
+    },
+    "attendance.requested": {
+      approverName: "Mira Kapoor", employeeName: "Aanya Sharma", requestKind: "a comp-off request",
+      summary: "Worked 2026-06-06, 1 day(s)", appUrl: "https://timesphere.local"
+    },
+    "attendance.decided": {
+      name: "Aanya Sharma", requestKind: "comp-off request", decision: "approved", decidedBy: "Mira Kapoor",
+      summary: "Worked 2026-06-06, 1 day(s)", note: "Thanks for covering.", appUrl: "https://timesphere.local"
+    },
     "reminder.escalation.manager": {
       managerName: "Mira Kapoor", employeeName: "Aanya Sharma",
       employeeEmail: "aanya@example.com", missedDate: "2026-05-26",
@@ -294,6 +325,8 @@ export function sampleVariables(key: string): Record<string, string> {
       appUrl: "https://timesphere.local"
     },
     "digest.weekly": {
+      expectedHoursHtml:
+        "<p style=\"margin:0 0 12px;padding:10px 14px;border:1px solid #E2E8F0;border-left:4px solid #0EA5E9;border-radius:8px;background-color:#FAFBFC;font-size:14px;\">Expected last week: 32h (after 1 holiday). Logged: 30.5h.</p>",
       tablesHtml: "<p style=\"color:#64748B;font-size:13px;\">(the tables of last week, month-to-date and year-to-date figures render here)</p>",
       name: "Dev Patel", weekLabel: "Jun 29 - Jul 5",
       summary: "It was a solid week — you resolved 4 tickets and logged 32.5 hours, mostly on the Payments module. HICS-OPS-12 (checkout timeout) is still open and worth a look Monday morning.",
@@ -524,6 +557,37 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
       targetName: V("name"), employeeName: V("name"), managerName: V("managerName"), date: V("missedDate"), project: "-"
     })
   },
+  "leave.requested": {
+    subject: "{{employeeName}} requested {{days}} day(s) of {{leaveType}}",
+    html: compiledTemplates.leaveRequested({
+      approverName: V("approverName"), employeeName: V("employeeName"), leaveType: V("leaveType"),
+      dates: V("dates"), days: V("days")
+    })
+  },
+  "leave.decided": {
+    subject: "Your {{leaveType}} request was {{decision}}",
+    html: compiledTemplates.leaveDecided({
+      name: V("name"), leaveType: V("leaveType"), decision: V("decision"), decidedBy: V("decidedBy"),
+      dates: V("dates"), days: V("days"), note: V("note")
+    })
+  },
+  "attendance.requested": {
+    subject: "{{employeeName}} sent {{requestKind}} for your decision",
+    html: compiledTemplates.attendanceRequested({
+      approverName: V("approverName"), employeeName: V("employeeName"), requestKind: V("requestKind"), summary: V("summary")
+    })
+  },
+  "attendance.decided": {
+    subject: "Your {{requestKind}} was {{decision}}",
+    html: compiledTemplates.attendanceDecided({
+      name: V("name"), requestKind: V("requestKind"), decision: V("decision"), decidedBy: V("decidedBy"),
+      summary: V("summary"), note: V("note")
+    })
+  },
+  "reminder.punch_in": {
+    subject: "You haven't punched in yet ({{date}})",
+    html: compiledTemplates.punchInReminder({ name: V("name"), date: V("date") })
+  },
   "reminder.escalation.manager": {
     subject: "{{employeeName}} missed a timesheet on {{missedDate}}",
     html: compiledTemplates.escalation({
@@ -608,7 +672,7 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
   },
   "digest.weekly": {
     subject: "Your week in review - {{weekLabel}}",
-    html: compiledTemplates.weeklyDigest({ name: V("name"), weekLabel: V("weekLabel"), summary: V("summary"), tablesHtml: V("tablesHtml") })
+    html: compiledTemplates.weeklyDigest({ name: V("name"), weekLabel: V("weekLabel"), summary: V("summary"), expectedHoursHtml: V("expectedHoursHtml"), tablesHtml: V("tablesHtml") })
   },
   "digest.security_weekly": {
     subject: "Security digest - week of {{weekLabel}}",

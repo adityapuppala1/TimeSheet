@@ -567,11 +567,23 @@ export const outboundWebhookEvents = [
   "ticket.status_changed",
   "ticket.closed",
   "timesheet.submitted",
-  "timesheet.approved"
+  "timesheet.approved",
+  /* V17 Phase B leave lifecycle. */
+  "leave.requested",
+  "leave.approved",
+  "leave.rejected",
+  "leave.cancelled",
+  "compoff.requested",
+  "compoff.approved"
 ] as const;
 export type OutboundWebhookEvent = (typeof outboundWebhookEvents)[number];
 export const apiKeyScopes = ["READ", "WRITE"] as const;
 export type ApiKeyScope = (typeof apiKeyScopes)[number];
+/** Granular grants layered on top of READ/WRITE (V17 A3). A key holds none unless an admin ticks
+ *  them, so every key issued before they existed keeps exactly its old reach. */
+/** V17 Phase B adds leave:read / leave:write — like the attendance grants, READ/WRITE never imply them. */
+export const apiKeyGrants = ["attendance:read", "attendance:write", "leave:read", "leave:write"] as const;
+export type ApiKeyGrant = (typeof apiKeyGrants)[number];
 
 export interface TicketInput {
   projectId: string;
@@ -595,6 +607,11 @@ export interface NotificationPreferences {
   emailPracticeUpdate: boolean;
   emailDailyReminder: boolean;
   emailDailyEscalation: boolean;
+  /** V17 A4: the punch-in reminder. Fires only with attendance on and its reminder enabled. */
+  emailPunchInReminder: boolean;
+  /** V17 Phase B: a leave request waiting on its approver / the requester hears the decision. */
+  emailLeaveRequested: boolean;
+  emailLeaveDecided: boolean;
   emailTicketAssigned: boolean;
   emailTicketStatusChanged: boolean;
   emailTicketCommented: boolean;
@@ -669,6 +686,9 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailPracticeUpdate",
   "emailDailyReminder",
   "emailDailyEscalation",
+  "emailPunchInReminder",
+  "emailLeaveRequested",
+  "emailLeaveDecided",
   "emailTicketAssigned",
   "emailTicketStatusChanged",
   "emailTicketCommented",
@@ -1151,6 +1171,17 @@ export interface PlanTierLimits {
    *  to record a change it actually made, whatever its plan says. */
   maxChangePolicies: number;
 
+  /* --- Attendance, leave & holidays (V17) ---------------------------------------------------- */
+  /** Punch-in, holiday calendars and missed-day reasons. Fails CLOSED like every capability here:
+   *  a tier that loses it keeps every record, it just stops collecting new ones. */
+  attendanceEnabled: boolean;
+  /** Leave types, balances and approvals (phase B). Enterprise only — it is an HR system of record. */
+  leaveManagementEnabled: boolean;
+  /** API-key scopes, signed webhooks, CSV and MCP ingest from biometric/HRMS sources. */
+  attendanceIntegrationsEnabled: boolean;
+  /** AI suggestions over attendance aggregates. Gated because it spends model budget. */
+  attendanceAiInsightsEnabled: boolean;
+
   /* --- Weekly AI/ML Practice Update (3.5.0) ------------------------------------------------ */
   /**
    * The consolidated leadership digest — draft, review, send, and the Monday cadence.
@@ -1268,6 +1299,10 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxGoals: 0,
     changeManagementEnabled: false,
     maxChangePolicies: 0,
+    attendanceEnabled: false,
+    leaveManagementEnabled: false,
+    attendanceIntegrationsEnabled: false,
+    attendanceAiInsightsEnabled: false,
     practiceUpdateEnabled: false,
     // No automatic backups on Starter. The pre-deletion snapshot the retention programme takes is
     // NOT this — every workspace gets one of those, on every plan.
@@ -1304,6 +1339,12 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     // what Enterprise buys off, not the capability.
     changeManagementEnabled: true,
     maxChangePolicies: 5,
+    // Team gets the everyday half of attendance — punch-in, holiday calendars, missed-day reasons.
+    // Leave (an HR system of record), external ingest and AI analytics are what Enterprise buys.
+    attendanceEnabled: true,
+    leaveManagementEnabled: false,
+    attendanceIntegrationsEnabled: false,
+    attendanceAiInsightsEnabled: false,
     // A practice update is a management artefact, and Team is where a workspace has managers in it.
     practiceUpdateEnabled: true,
     // WEEKLY, and one destination. A weekly off-site copy is the honest floor for a paying team:
@@ -1336,6 +1377,10 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxGoals: UNLIMITED_PLAN_ITEMS,
     changeManagementEnabled: true,
     maxChangePolicies: UNLIMITED_PLAN_ITEMS,
+    attendanceEnabled: true,
+    leaveManagementEnabled: true,
+    attendanceIntegrationsEnabled: true,
+    attendanceAiInsightsEnabled: true,
     practiceUpdateEnabled: true,
     // DAILY, dedicated, with room for several destinations — a primary bucket plus an off-site
     // copy is a normal enterprise requirement, not an exotic one. HOURLY exists in the model and
@@ -1862,3 +1907,33 @@ export type SalesLeadStatus = (typeof SALES_LEAD_STATUSES)[number];
 
 /** A code back into words, tolerating a value stored before an option was renamed. */
 export const salesLabel = (map: Record<string, string>, code: string | null | undefined): string => (code ? (map[code] ?? code) : "—");
+
+/* ------------------------------------------------------------------ *
+ * iCalendar (RFC 5545) — shared by the web's holiday download and the API's private calendar
+ * feed (7.0.0), so both escape and fold identically.
+ * ------------------------------------------------------------------ */
+
+/** TEXT value escaping: backslash, semicolon, comma, newline. */
+export const icsEscape = (s: string): string => s.replaceAll("\\", "\\\\").replaceAll(";", "\\;").replaceAll(",", "\\,").replaceAll(/\r?\n/g, "\\n");
+
+/** RFC 5545 line folding: no line longer than 75 octets, continuation lines start with a space. */
+export function foldIcsLine(line: string): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(line).length <= 75) return line;
+  const parts: string[] = [];
+  let current = "";
+  let bytes = 0;
+  for (const ch of line) {
+    const size = encoder.encode(ch).length;
+    const limit = parts.length === 0 ? 75 : 74;
+    if (bytes + size > limit) {
+      parts.push(current);
+      current = "";
+      bytes = 0;
+    }
+    current += ch;
+    bytes += size;
+  }
+  parts.push(current);
+  return parts.join("\r\n ");
+}

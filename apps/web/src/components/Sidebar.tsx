@@ -8,6 +8,7 @@
  * WHO renders this: `layouts/AppLayout.tsx` (`Sidebar` + `MobileNav`), `components/Topbar.tsx`
  * (`MobileDrawerNav`, opened by the hamburger button).
  */
+import { useOvertimeInboxCount } from "./attendance/Overtime";
 import {
   BarChart3,
   BrainCircuit,
@@ -17,6 +18,8 @@ import {
   ChevronRight,
   ClipboardList,
   FileClock,
+  Fingerprint,
+  Plane,
   FileStack,
   FileText,
   FolderKanban,
@@ -45,6 +48,7 @@ import {
   Workflow
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { TEAM_VIEW_ROLES } from "../lib/attendance-team";
 import { useState } from "react";
 import { Link, NavLink, useLocation } from "react-router";
 import { permissions, type Permission } from "@timesheet/shared";
@@ -61,6 +65,8 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { brandingApi, brandingLogoUrl, fileUrl, projectApi } from "../services/api";
 import { useMediaQuery } from "../lib/use-media-query";
+import { attendanceApi, MY_TODAY_QUERY_KEY, regularizationApi } from "../services/attendance-api";
+import { LEAVE_STATUS_KEY, leaveApi } from "../services/leave-api";
 
 /**
  * Section headings group the nav so 15 items don't read as one undifferentiated list.
@@ -99,6 +105,11 @@ export interface NavItem {
    *  a key of the server-computed `effective` object — see lib/use-planning.ts. Omit for items
    *  that are always available. */
   feature?: keyof PlanningEffective;
+  /** V17 A5: shown only while Attendance is on for the workspace (toggle AND plan) — read from the
+   *  same /attendance/me/today answer the punch-in pop-up already fetches, so it costs no request. */
+  attendance?: boolean;
+  /** V17 UI v2: shown only while leave is on (toggle AND plan) — GET /api/leave/status. */
+  leave?: boolean;
 }
 
 /** Exported so the product tour builds its itinerary from the SAME list and the SAME visibility
@@ -151,6 +162,8 @@ export const nav: NavItem[] = [
   // who has just met Agents and Workflows can find the thing that explains how they relate.
   { to: "/app/ai", label: "AI overview", icon: Sparkles, role: "SUPER_ADMIN", section: "Plan" },
 
+  { to: "/app/attendance", label: "Attendance", icon: Fingerprint, section: "Team", attendance: true },
+  { to: "/app/attendance/leave", label: "Leave", icon: Plane, section: "Team", leave: true },
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
   // ONE entry, no permission gate — the page adapts instead of there being two of it. An approver
   // gets the queue, SLA metrics and reports roll-up; everybody else gets the org chart alone, which
@@ -196,8 +209,12 @@ export const nav: NavItem[] = [
 export function isVisible(
   item: NavItem,
   user?: { role: string; permissions: string[] },
-  features?: PlanningEffective
+  features?: PlanningEffective,
+  attendanceOn = false,
+  leaveOn = false
 ): boolean {
+  if (item.attendance && !attendanceOn) return false;
+  if (item.leave && !leaveOn) return false;
   if (item.role && user?.role !== item.role) return false;
   if (item.permission && !user?.permissions.includes(item.permission)) return false;
   // A feature-gated item is hidden when `features` hasn't loaded yet, not shown. Flashing a link
@@ -207,8 +224,70 @@ export function isVisible(
   return true;
 }
 
+/** Whether Attendance is on for this workspace. Shares the punch-in pop-up's cache entry. */
+function useAttendanceOn(): boolean {
+  const user = useAuthStore((s) => s.user);
+  const today = useQuery({
+    queryKey: MY_TODAY_QUERY_KEY,
+    queryFn: attendanceApi.myToday,
+    enabled: Boolean(user),
+    staleTime: 60_000,
+    retry: false
+  });
+  return Boolean(today.data?.enabled);
+}
+
+/** Whether leave is on for this workspace (toggle AND plan). Never 403s, so it is safe on every load. */
+function useLeaveOn(): boolean {
+  const user = useAuthStore((s) => s.user);
+  const status = useQuery({ queryKey: LEAVE_STATUS_KEY, queryFn: leaveApi.status, enabled: Boolean(user), staleTime: 60_000, retry: false });
+  return Boolean(status.data?.enabled);
+}
+
+/**
+ * 7.0.0 — leave requests waiting on this approver, for the Attendance nav badge. Shares the
+ * approvals inbox's cache entry (["leave","inbox","PENDING"]), so opening the inbox costs nothing
+ * extra, and polls gently (every 2 minutes, only while the tab is visible). Only roles that can open
+ * the Team view ask; leave off means no request at all.
+ */
+function usePendingApprovals(enabled: boolean): number {
+  const role = useAuthStore((s) => s.user?.role ?? "");
+  const leaveOn = useLeaveOn();
+  const q = useQuery({
+    queryKey: ["leave", "inbox", "PENDING"],
+    queryFn: () => leaveApi.inbox("PENDING"),
+    enabled: enabled && leaveOn && TEAM_VIEW_ROLES.has(role),
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+    refetchIntervalInBackground: false,
+    retry: false
+  });
+  // 7.0.0: attendance corrections waiting on me. Its own query: corrections need attendance, not leave.
+  const user = useAuthStore((s) => s.user);
+  const today = useQuery({ queryKey: MY_TODAY_QUERY_KEY, queryFn: attendanceApi.myToday, enabled: Boolean(user) && enabled, staleTime: 60_000, retry: false });
+  const regOn = Boolean(today.data?.regularization?.enabled);
+  const reg = useQuery({
+    queryKey: ["attendance", "regularizations", "inbox"],
+    queryFn: regularizationApi.inbox,
+    enabled: enabled && regOn && TEAM_VIEW_ROLES.has(role),
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+    refetchIntervalInBackground: false,
+    retry: false
+  });
+  // 7.0.0: overtime claims waiting on me (only while claims need approval).
+  const overtime = useOvertimeInboxCount(enabled, TEAM_VIEW_ROLES.has(role));
+  // The cache entry is shared, so a row that did not ask must not read it either.
+  if (!enabled) return 0;
+  const corrections = regOn ? (reg.data?.total ?? 0) : 0;
+  // 7.0.0: comp-off requests waiting on me count too (the field is absent while comp-off is off).
+  return (leaveOn ? (q.data?.total ?? 0) + (q.data?.compOffPending ?? 0) : 0) + corrections + overtime;
+}
+
 function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavigate?: () => void; slim?: boolean }) {
   const user = useAuthStore((s) => s.user);
+  const pending = usePendingApprovals(Boolean(item.attendance));
+  const badgeText = pending > 99 ? "99+" : String(pending);
   // One route, two audiences: /app/team is "My team" to an approver and "Org chart" to everybody
   // else, because that is what each of them actually gets when they open it.
   const label =
@@ -223,7 +302,7 @@ function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavig
       onClick={onNavigate}
       className={({ isActive }) =>
         cn(
-          "group flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground",
+          "group relative flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground",
           slim && "justify-center px-0",
           isActive && "bg-primary/10 text-primary hover:bg-primary/15"
         )
@@ -237,6 +316,18 @@ function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavig
           {/* The label leaves the layout in slim mode rather than being clipped — a truncated
               "Wor…" next to an icon reads as broken, an icon with a tooltip reads as designed. */}
           {!slim && label}
+          {pending > 0 && (
+            <span
+              className={cn(
+                "rounded-full bg-primary px-1.5 text-[10px] font-bold leading-4 text-primary-foreground tabular-nums",
+                slim ? "absolute right-1 top-1" : "ml-auto"
+              )}
+              aria-label={`${pending} leave ${pending === 1 ? "request" : "requests"} waiting for you`}
+              data-testid="nav-pending-approvals"
+            >
+              {badgeText}
+            </span>
+          )}
         </>
       )}
     </NavLink>
@@ -560,7 +651,9 @@ export function Sidebar() {
   // an empty hidden box costs one element — but its contents are built only where they show.
   const wide = useMediaQuery("(min-width: 1024px)");
   const { features } = usePlanningFeatures();
-  const visible = nav.filter((item) => isVisible(item, user, features));
+  const attendanceOn = useAttendanceOn();
+  const leaveOn = useLeaveOn();
+  const visible = nav.filter((item) => isVisible(item, user, features, attendanceOn, leaveOn));
   const avatarSrc = fileUrl(user?.avatarUrl);
   // Defaults to expanded — the responsive e2e suite (and first-time users) must find every link
   // visible with no interaction; slim is an opt-in the browser remembers.
@@ -675,7 +768,9 @@ export function Sidebar() {
 export function MobileDrawerNav({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const user = useAuthStore((s) => s.user);
   const { features } = usePlanningFeatures();
-  const visible = nav.filter((item) => isVisible(item, user, features));
+  const attendanceOn = useAttendanceOn();
+  const leaveOn = useLeaveOn();
+  const visible = nav.filter((item) => isVisible(item, user, features, attendanceOn, leaveOn));
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -695,7 +790,9 @@ export function MobileDrawerNav({ open, onOpenChange }: { open: boolean; onOpenC
 export function MobileNav() {
   const user = useAuthStore((s) => s.user);
   const { features } = usePlanningFeatures();
-  const visible = nav.filter((item) => isVisible(item, user, features)).slice(0, 5);
+  const attendanceOn = useAttendanceOn();
+  const leaveOn = useLeaveOn();
+  const visible = nav.filter((item) => isVisible(item, user, features, attendanceOn, leaveOn)).slice(0, 5);
   return (
     <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-border bg-background/95 px-1 py-1.5 shadow-soft backdrop-blur-xl lg:hidden">
       {visible.map((item) => (

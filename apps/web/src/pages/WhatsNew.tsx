@@ -586,4 +586,4 @@ function ReleaseCard({
 
 /** One prose style for every rendered note fragment, so intro and sections cannot drift apart. */
 const NOTES_PROSE =
-  "prose-sm max-w-none text-sm leading-6 [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_h1]:text-base [&_h1]:font-bold [&_h2]:text-sm [&_h2]:font-bold [&_h4]:mt-2 [&_h4]:text-sm [&_h4]:font-semibold [&_li]:ml-4 [&_li]:mt-1 [&_ul]:list-disc [&_ol]:list-decimal [&_p]:mt-2 [&_p:first-child]:mt-0 [&_strong]:font-semibold";
+  "prose-sm max-w-none text-sm leading-6 [&_a]:text-primary [&_a]:underline [&_code]:break-all [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_h1]:text-base [&_h1]:font-bold [&_h2]:text-sm [&_h2]:font-bold [&_h4]:mt-2 [&_h4]:text-sm [&_h4]:font-semibold [&_li]:ml-4 [&_li]:mt-1 [&_ul]:list-disc [&_ol]:list-decimal [&_p]:mt-2 [&_p:first-child]:mt-0 [&_strong]:font-semibold";

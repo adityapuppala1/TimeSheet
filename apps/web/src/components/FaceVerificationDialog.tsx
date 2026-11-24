@@ -39,7 +39,7 @@ import { useFaceStatus } from "../lib/use-face-status";
 interface FaceVerificationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  context: "TIMESHEET" | "TICKET" | "APPROVAL";
+  context: "TIMESHEET" | "TICKET" | "APPROVAL" | "PUNCH_IN";
   /** Called with the single-use verification id once the check passes. */
   onVerified: (verificationId: string) => void;
   /** What the user is about to do, e.g. "submit this timesheet". */
