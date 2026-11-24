@@ -14,7 +14,8 @@ export function scopeSummary(types: readonly string[] | undefined, siteIds: read
   if (types?.length) parts.push(types.map((t) => EMPLOYMENT_TYPE_OPTIONS.find(([v]) => v === t)?.[1] ?? t).join(", "));
   if (siteIds?.length) {
     const names = siteIds.map((id) => siteName?.(id)).filter((n): n is string => Boolean(n));
-    parts.push(names.length === siteIds.length ? names.join(", ") : `${siteIds.length} site${siteIds.length === 1 ? "" : "s"}`);
+    const count = `${siteIds.length} ${siteIds.length === 1 ? "site" : "sites"}`;
+    parts.push(names.length === siteIds.length ? names.join(", ") : count);
   }
   return parts.length ? parts.join(" · ") : "Everyone";
 }

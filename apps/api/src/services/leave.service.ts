@@ -364,6 +364,12 @@ export async function listLeaveTypes(includeDisabled: boolean, forUserId?: strin
 
 const OUT_OF_SCOPE_TYPE = "That leave type does not apply to you.";
 
+/** 7.0.0: 404 for no person, 422 LEAVE_TYPE_OUT_OF_SCOPE for a type outside their policy scope. */
+function assertInScope<P extends { employmentType?: string | null; siteId?: string | null }>(type: LeaveType, person: P | null): asserts person is P {
+  if (!person) throw new AppError(404, "User not found");
+  if (!inPolicyScope(type, person)) throw new AppError(422, OUT_OF_SCOPE_TYPE, { code: "LEAVE_TYPE_OUT_OF_SCOPE" });
+}
+
 /* ------------------------------------------------------------------ *
  * Ledger helpers
  * ------------------------------------------------------------------ */
@@ -840,8 +846,7 @@ export async function previewLeave(userId: string, q: z.infer<typeof previewQuer
     where: { id: userId, status: "ACTIVE", deletedAt: null },
     select: { id: true, timezone: true, holidayCalendarId: true, managerId: true, createdAt: true, ...SCOPE_SELECT }
   });
-  if (!person) throw new AppError(404, "User not found");
-  if (!inPolicyScope(type, person)) throw new AppError(422, OUT_OF_SCOPE_TYPE, { code: "LEAVE_TYPE_OUT_OF_SCOPE" });
+  assertInScope(type, person);
   const settings = await getAttendanceSettings();
   const startMonth = settings.leaveYearStartMonth ?? 1;
   const today = todayKeyFor(now, person.timezone, serverTimezone);

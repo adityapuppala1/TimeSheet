@@ -879,6 +879,14 @@ function plainPatchFields(body: Record<string, unknown>): PatchData {
   return data;
 }
 
+/** 7.0.0: a site that does not exist is a 422, not an FK error (the edit dialog lists the real ones). */
+async function checkedSiteId(siteId: string | null | undefined): Promise<string | null> {
+  if (siteId && !(await prisma.attendanceSite.findUnique({ where: { id: siteId }, select: { id: true } }))) {
+    throw new AppError(422, "That work site does not exist.");
+  }
+  return siteId ?? null;
+}
+
 userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
   const targetId = String(req.params.id);
   assertRoleSetShape(req.user!, req.body);
@@ -905,13 +913,7 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
     const role = await prisma.role.findUniqueOrThrow({ where: { name: req.body.role } });
     data.roleId = role.id;
   }
-  if ("siteId" in req.body) {
-    // A site that does not exist is a 422, not an FK error (the edit dialog lists the real ones).
-    if (req.body.siteId && !(await prisma.attendanceSite.findUnique({ where: { id: req.body.siteId }, select: { id: true } }))) {
-      throw new AppError(422, "That work site does not exist.");
-    }
-    data.siteId = req.body.siteId ?? null;
-  }
+  if ("siteId" in req.body) data.siteId = await checkedSiteId(req.body.siteId);
   if ("managerId" in req.body) {
     // Only a CHANGE is checked: the edit dialog sends the current manager back on every save, and
     // refusing that because the manager was deactivated since would block fixing a typo in a name.
