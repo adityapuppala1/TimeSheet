@@ -259,6 +259,9 @@ Only when Attendance or Leave is on and in the plan; otherwise these screens are
 - **Late leave changes two years back settle fully.** A correction to a year whose next year is also closed now
   cascades through every closed year, leaving nothing behind.
 - **Payroll counts an unpunched half-day leave as half a day absent**, not a whole one.
+- **The weekly digest shows its tables.** The seeded `digest.weekly` template now carries `{{tablesHtml}}`, so the
+  counted last-week, month-to-date and year-to-date tables reach people on the default template (tenant migration
+  `20261130400000_weekly_digest_tables_html`, which updates only an unedited default).
 - **A fresh install's database matches the schema.** Two indexes the migrations create are now declared in the schema,
   verified by replaying every tenant and control-plane migration into an empty database.
 
