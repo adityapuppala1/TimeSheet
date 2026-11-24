@@ -18,7 +18,14 @@ const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const STATUSES = new Set(["PENDING", "APPROVED", "REJECTED", "CANCELLED"]);
 
 const todayKey = () => new Date().toISOString().slice(0, 10);
-const half = (start: string, end: string) => (start === "FULL" && end === "FULL" ? "" : ` (${[start !== "FULL" ? `starts ${start}` : "", end !== "FULL" ? `ends ${end}` : ""].filter(Boolean).join(", ")})`);
+function half(start: string, end: string): string {
+  const parts: string[] = [];
+  if (start !== "FULL") parts.push("starts " + start);
+  if (end !== "FULL") parts.push("ends " + end);
+  return parts.length ? " (" + parts.join(", ") + ")" : "";
+}
+const span = (a: string, b: string) => (b === a ? a : a + " to " + b);
+const SCOPE_WORDS = { self: "you", team: "your reports", everyone: "the workspace" } as const;
 
 /** Pure: the range a who_is_off call covers. A single `date` wins; else from/to; else this week. */
 export function offRange(args: Record<string, unknown>, today: string): { from: string; to: string } {
@@ -42,11 +49,12 @@ export const AI_CHAT_LEAVE_TOOLS: ReadonlyArray<AiChatTool> = [
       const { from, to } = offRange(args, todayKey());
       const result = await whoIsOff({ id: ctx.req.user.id, role: ctx.req.user.role }, from, to);
       if (!result.enabled) return OFF;
-      const who = result.scope === "self" ? "you" : result.scope === "team" ? "your reports" : "the workspace";
-      if (result.people.length === 0) return `Nobody among ${who} is on approved leave ${from === to ? `on ${from}` : `from ${from} to ${to}`}.`;
+      const who = SCOPE_WORDS[result.scope];
+      const when = from === to ? "on " + from : "from " + from + " to " + to;
+      if (result.people.length === 0) return `Nobody among ${who} is on approved leave ${when}.`;
       return (
         `Approved leave among ${who}, ${from} to ${to}:\n` +
-        result.people.map((p) => `${p.name}: ${p.type} ${p.startDate}${p.endDate !== p.startDate ? ` to ${p.endDate}` : ""}${half(p.startHalf, p.endHalf)}, ${p.days} day(s)`).join("\n")
+        result.people.map((p) => `${p.name}: ${p.type} ${span(p.startDate, p.endDate)}${half(p.startHalf, p.endHalf)}, ${p.days} day(s)`).join("\n")
       );
     }
   },
@@ -78,7 +86,7 @@ export const AI_CHAT_LEAVE_TOOLS: ReadonlyArray<AiChatTool> = [
       const day = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
       return rows
         .slice(0, 40)
-        .map((r) => `${r.leaveType.code} ${day(r.startDate)}${day(r.endDate) !== day(r.startDate) ? ` to ${day(r.endDate)}` : ""}, ${Number(r.days)} day(s): ${r.status}`)
+        .map((r) => `${r.leaveType.code} ${span(day(r.startDate), day(r.endDate))}, ${Number(r.days)} day(s): ${r.status}`)
         .join("\n");
     }
   }

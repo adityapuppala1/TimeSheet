@@ -565,11 +565,16 @@ export function HolidayCalendarView() {
   );
 }
 
+const holidayBadgeText = (h: { isOptional: boolean; optedIn?: boolean }) => {
+  if (!h.isOptional) return "Public";
+  return h.optedIn ? "Optional · taken" : "Optional";
+};
+
 function HolidayBadges({ h }: Readonly<{ h: { date: string; isOptional: boolean; optedIn?: boolean } }>) {
   const note = fallsOnNote(h.date);
   return (
     <span className="flex flex-wrap items-center gap-1.5">
-      <Badge variant={h.isOptional ? "muted" : "info"}>{h.isOptional ? (h.optedIn ? "Optional · taken" : "Optional") : "Public"}</Badge>
+      <Badge variant={h.isOptional ? "muted" : "info"}>{holidayBadgeText(h)}</Badge>
       {note && <span className="text-xs text-muted-foreground">{note}</span>}
     </span>
   );

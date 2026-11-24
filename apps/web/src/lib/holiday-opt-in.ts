@@ -27,7 +27,9 @@ export function optionalChoice(h: OptionalHolidayLike, cap: number | null, taken
   const action = h.optedIn ? "out" : "in";
   if (h.date < today) return { action, disabled: true, reason: "This day has passed." };
   if (action === "in" && cap !== null && takenThisYear >= cap) {
-    return { action, disabled: true, reason: cap === 0 ? "Your calendar allows no optional holidays." : `You have taken all ${cap} optional ${cap === 1 ? "holiday" : "holidays"} for ${h.date.slice(0, 4)}.` };
+    const noun = cap === 1 ? "holiday" : "holidays";
+    const reason = cap === 0 ? "Your calendar allows no optional holidays." : `You have taken all ${cap} optional ${noun} for ${h.date.slice(0, 4)}.`;
+    return { action, disabled: true, reason };
   }
   return { action, disabled: false, reason: null };
 }

@@ -874,7 +874,9 @@ const TOOLS: readonly McpToolRegistration[] = [
     untrustedContent: false,
     handler: async (ctx, args) => {
       await assertLeaveOn();
-      let range = args.date ? { from: args.date, to: args.date } : args.from && args.to ? { from: args.from, to: args.to } : weekOf(new Date().toISOString().slice(0, 10));
+      let range = weekOf(new Date().toISOString().slice(0, 10));
+      if (args.from && args.to) range = { from: args.from, to: args.to };
+      if (args.date) range = { from: args.date, to: args.date };
       if (range.from > range.to) throw new AppError(422, "from must be on or before to.");
       if ((Date.parse(range.to) - Date.parse(range.from)) / 86_400_000 > 93) range = { from: range.from, to: new Date(Date.parse(range.from) + 93 * 86_400_000).toISOString().slice(0, 10) };
       const result = await whoIsOff({ id: ctx.user.id, role: ctx.user.role, name: ctx.user.name }, range.from, range.to);

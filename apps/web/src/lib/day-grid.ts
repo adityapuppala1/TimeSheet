@@ -151,6 +151,7 @@ export function dayLink(
 export function dayOffPrompt(day: Pick<DayGridDay, "status" | "holidayName" | "leaveTypeCode"> | undefined, isToday: boolean): string | null {
   if (!day) return null;
   if (day.status === "HOLIDAY") return `Holiday: ${day.holidayName ?? "public holiday"}`;
-  if (day.status === "LEAVE") return `You're on leave ${isToday ? "today" : "on this day"}${day.leaveTypeCode ? ` (${day.leaveTypeCode})` : ""}`;
+  const code = day.leaveTypeCode ? " (" + day.leaveTypeCode + ")" : "";
+  if (day.status === "LEAVE") return `You're on leave ${isToday ? "today" : "on this day"}${code}`;
   return null;
 }
