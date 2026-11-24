@@ -144,7 +144,7 @@ export function MyCompOffCard() {
             {rows.map((r) => (
               <li key={r.id} className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border p-2 text-sm">
                 <div className="min-w-0 flex-1">
-                  <p className="truncate">{compOffLine(r)}</p>
+                  <p className="break-words">{compOffLine(r)}</p>
                   <p className="text-xs text-muted-foreground">
                     {STATUS_TEXT[r.status]}
                     {expiryText(r)}
