@@ -438,6 +438,40 @@ export const HELP_ARTICLES: HelpArticle[] = [
     keywords: ["shift", "roster", "night shift", "rota", "working hours", "schedule", "lateness"]
   },
   {
+    id: "attendance-corrections",
+    category: "Timesheets",
+    title: "Ask to correct a missed or wrong punch",
+    roles: ["EMPLOYEE", "TEAM_LEAD", "MANAGER", "ADMIN", "SUPER_ADMIN"],
+    where: "Attendance → My attendance → open a past day",
+    when: "When you forgot to punch in or out, or the recorded time is wrong, and your workspace has turned corrections on.",
+    steps: [
+      "Open Attendance → My attendance and tap the day in the calendar.",
+      "Press Request correction. Enter the punch-in time and, if you have it, the punch-out time.",
+      "Write a short reason and press Send request. Your manager is told.",
+      "Once approved, the day shows the corrected times. You can cancel a request while it is still waiting."
+    ],
+    notes:
+      "Corrections are off unless an admin turns them on (Workspace Settings → Attendance & Leave → Corrections), with a limit on how many days back and how many a month. Only past days can be corrected. Your reason is seen only by you and the person who decides. Managers decide from the Attendance team view; an active approval delegate can decide on their behalf. The original punch is kept in the history.",
+    keywords: ["regularisation", "regularization", "correction", "missed punch", "forgot to punch", "punch out", "attendance correction", "fix attendance"]
+  },
+  {
+    id: "attendance-work-sites",
+    category: "Timesheets",
+    title: "Set up work sites",
+    roles: ["SUPER_ADMIN"],
+    where: "Workspace Settings → Attendance & Leave → Work sites",
+    when: "When you want punches to say where they happened (At Head office, Outside work sites) without anyone seeing a location.",
+    steps: [
+      "Open Workspace Settings → Attendance & Leave and choose Work sites.",
+      "Add a site: a name, its latitude and longitude (or press Use my current location while you are there), and a radius in metres.",
+      "Optionally choose what happens when someone punches in from the web outside every site: Label only, Allow and flag, or Block. This needs location turned on.",
+      "Punches now show At <site> or Outside work sites, and the organisation breakdown can be grouped by Location label."
+    ],
+    notes:
+      "Nobody, including managers, sees a coordinate: only the site label. A punch is matched to the nearest site whose circle contains it. Punches without a location, or with no sites defined, keep their usual label. Pausing a site stops new punches matching it; labels already recorded stay.",
+    keywords: ["work site", "geofence", "office location", "location label", "site", "outside work sites", "radius"]
+  },
+  {
     id: "approval-cover",
     category: "Timesheets",
     title: "Let someone cover your leave approvals",

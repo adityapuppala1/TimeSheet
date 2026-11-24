@@ -46,11 +46,38 @@ as days anyone owed a timesheet on. With the module off, every screen and API re
   person is on a night shift, punches from every source (web, API, webhook, CSV) are filed on the shift's START date,
   so an integration that matched records on the calendar date of the punch should expect the previous day's key for
   after-midnight punches. `GET /api/attendance/me/today` gains `shift` (null without one).
+- **Expected hours follow the person's shift.** The weekly digest, the leave preview and the capacity board now count
+  a shifted person's own working days and shift length (start to end minus break). People without a shift keep the
+  workspace week, so nothing moves until a shift is assigned.
+- **Attendance corrections reverse a Phase A decision, so they ship OFF (one more additive tenant migration:
+  `AttendanceRegularizationRequest` and three settings columns).** Phase A deliberately had no correction request;
+  a workspace that wants one turns it on under Workspace Settings → Attendance & Leave → Corrections (defaults: 7 days
+  back, 3 a month). The punch source enum gains `REGULARIZATION` on `AttendanceSource`, `AttendanceEvent`,
+  `AttendanceRecord` and `LeaveRequest`: an approved correction outranks every other source, including a
+  biometric webhook, so a later device swipe will not undo it. A reporting job that switched on the source should
+  expect the new value. `GET /api/attendance/me/today` gains `regularization` (absent while off).
+- **Work sites (one more additive tenant migration: `AttendanceSite`, `AttendanceRecord.siteLabel` /
+  `siteFlagged`, `GlobalAttendanceSettings.requireSite`).** With no site defined nothing changes. Once sites exist,
+  every punch that carries a location (web, API, webhook, CSV) is labelled "At <site>" or "Outside work sites";
+  Team Activity shows that label in place of "Location shared". `requireSite` defaults to OFF and only acts on the
+  web punch-in.
 - **Two new webhook events, `compoff.requested` and `compoff.approved`.** Existing subscriptions are not opted in.
 - **The access log redacts calendar feed tokens** (`/api/calendar/feed/[redacted]`). A log shipper that parsed the
   raw path of that route will see the placeholder.
 
 ### ✨ Features: Attendance, leave and holiday calendars
+
+- **Attendance corrections (off by default).** When an admin turns them on, a person opens a past day on My
+  attendance and presses Request correction: the right punch-in (and punch-out) and a reason. Their manager, or an
+  active delegate, approves or rejects it from the Team view (it counts in the Attendance badge). Approval replaces
+  that day's punch; the original stays in the history. Limits: how many days back and how many a month. The reason
+  is shown only to the person and whoever decides.
+- **Work sites.** Workspace Settings → Attendance & Leave → Work sites: named sites with a centre (typed in, or
+  "Use my current location") and a radius. Punches say "At Head office" or "Outside work sites"; nobody sees a
+  coordinate. An optional rule for the web punch-in: label only, allow and flag for review, or block. The
+  organisation breakdown gains a Location label grouping.
+- **Expected hours follow shifts.** A person on a 4×10 shift is expected 10 hours on their four days, in the digest,
+  the leave preview and the capacity board.
 
 - **Shifts and rosters.** Workspace Settings → Attendance & Leave → Shifts: define shifts (start, end, break,
   working days; a shift may run past midnight) and assign one to a person or to a manager's whole team from a date.

@@ -3387,6 +3387,47 @@ middle of the off-shift gap), for every ingest source. `GET /api/attendance/me/t
 (`{ id, name, startMinute, endMinute, breakMinutes, workingDays, crossesMidnight, expectedMinutes }` or null) and,
 with lateness on, `expectedStartMinute` is the shift start.
 
+#### Attendance corrections (7.0.0)
+
+Off until `regularizationEnabled` is on (and attendance is on). Any signed-in person, under `/api/attendance`:
+
+- `POST /regularizations` — `{ workDate, punchInAt, punchOutAt?, reason }`. Times are ISO-8601 instants with a zone.
+  `workDate` must be before the person's today and within `regularizationMaxDaysBack` (422
+  `REGULARIZATION_OUT_OF_RANGE`); the punch-in must fall on that work date by the same (shift-aware) rule ingest
+  uses, punch-out after punch-in and within 24 hours (422 `REGULARIZATION_INVALID_PUNCH`). One pending request per
+  day (409 `REGULARIZATION_DUPLICATE`); at most `regularizationMonthlyCap` pending + approved per calendar month of
+  the corrected day (422 `REGULARIZATION_CAP`).
+- `GET /regularizations/me` — `{ items }`, newest day first. `POST /regularizations/:id/cancel` — pending only.
+- `GET /regularizations/inbox` — `{ total, items }`: requests the caller may decide (the leave rule: the manager,
+  the admin pool when there is none, an active delegate with `onBehalfOf`).
+- `POST /regularizations/:id/decision` — `{ decision: APPROVE | REJECT, note? }` (note required to reject). `403`
+  for anyone who may not decide, including for an unknown id; `409 REGULARIZATION_ALREADY_DECIDED` for the loser of
+  a race. Approval writes through ingest with source `REGULARIZATION` and `externalRef` `REG:<id>`; the replaced
+  punch is kept on the new event's `input.previous` and the old events become `SUPERSEDED`.
+
+Rows carry `originalPunchInAt` / `originalPunchOutAt` (the punch when the request was made). `reason` and
+`decisionNote` reach only the requester and the deciders. Settings: `regularizationEnabled` (false),
+`regularizationMaxDaysBack` (7, 1-60), `regularizationMonthlyCap` (3, 1-31) on `PUT /api/attendance/admin/settings`.
+
+#### Work sites (7.0.0)
+
+Super admin, under `/api/attendance/admin` (writes need the `attendanceEnabled` plan):
+
+- `GET /sites` — `{ sites: [{ id, name, latitude, longitude, radiusM, enabled }] }`.
+- `POST /sites`, `PUT /sites/:id` — `{ name, latitude, longitude, radiusM, enabled? }`; numbers only (latitude
+  -90..90, longitude -180..180, radius 25-50000 whole metres). `409` on a duplicate name. `DELETE /sites/:id`
+  (`409 SITE_RULE_NEEDS_SITE` when it is the last enabled site and a rule is on).
+- `PUT /settings` accepts `requireSite`: `OFF` (default), `BLOCK`, `ALLOW_FLAGGED`. Anything but `OFF` needs
+  location on (`409 SITE_RULE_NEEDS_LOCATION`) and an enabled site (`409 SITE_RULE_NEEDS_SITE`).
+
+Every punch with a location, from any source, stores `siteLabel`: `"At <name>"` for the nearest site whose radius
+contains it (haversine distance; the boundary counts), `"Outside work sites"`, or null when there are no sites or no
+location. Web punch-in under `BLOCK` outside every site (or without a location) is `422 OUTSIDE_WORK_SITES`; under
+`ALLOW_FLAGGED` it is recorded with `siteFlagged: true`. The label is what person-facing reads return (`record.siteLabel`
+on `/me/today`, `siteLabel` on `/me/history`, Team Activity's `location`); coordinates are never returned there.
+`GET /api/attendance/analytics/org` gains `bySite: [{ label, people, suppressed, punches }]`, k-anonymous like
+`bySource` (punches with no label group as `"No site label"`).
+
 #### Comp-off, approval cover, calendar feed and payroll (7.0.0)
 
 All are off until switched on and need leave on (`leaveEnabled` and the `leaveManagementEnabled`
