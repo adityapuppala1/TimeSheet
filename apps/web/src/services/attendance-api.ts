@@ -36,6 +36,10 @@ export interface AttendanceSettings {
   webPriority: number;
   mcpPriority: number;
   csvPriority: number;
+  /** 7.0.0 regularisation: corrections to a past day's punch, decided by the manager. OFF by default. */
+  regularizationEnabled: boolean;
+  regularizationMaxDaysBack: number;
+  regularizationMonthlyCap: number;
 }
 
 export interface AttendanceEntitlements {
@@ -161,7 +165,38 @@ export interface MyToday {
   shift?: { id: string; name: string; startMinute: number; endMinute: number; breakMinutes: number; workingDays: number[]; crossesMidnight: boolean; expectedMinutes: number } | null;
   record?: AttendancePunchRecord | null;
   steps?: PunchStep[];
+  /** 7.0.0: corrections can be asked for, and how far back. Absent while they are off. */
+  regularization?: { enabled: true; maxDaysBack: number };
 }
+
+export type RegularizationStatus = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
+
+export interface RegularizationRow {
+  id: string;
+  user?: { id: string; name: string; email: string; avatarUrl: string | null };
+  workDate: string;
+  punchInAt: string;
+  punchOutAt: string | null;
+  originalPunchInAt: string | null;
+  originalPunchOutAt: string | null;
+  /** Only the requester and the people who may decide ever receive it. */
+  reason: string | null;
+  status: RegularizationStatus;
+  decisionNote: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+  onBehalfOf?: string | null;
+}
+
+export const regularizationApi = {
+  mine: async () => (await api.get<{ items: RegularizationRow[] }>("/attendance/regularizations/me")).data.items,
+  request: async (body: { workDate: string; punchInAt: string; punchOutAt: string | null; reason: string }) =>
+    (await api.post<RegularizationRow>("/attendance/regularizations", body)).data,
+  cancel: async (id: string) => (await api.post<RegularizationRow>(`/attendance/regularizations/${id}/cancel`)).data,
+  inbox: async () => (await api.get<{ total: number; items: RegularizationRow[] }>("/attendance/regularizations/inbox")).data,
+  decide: async (id: string, decision: "APPROVE" | "REJECT", note?: string) =>
+    (await api.post<RegularizationRow>(`/attendance/regularizations/${id}/decision`, note ? { decision, note } : { decision })).data
+};
 
 export interface PunchInPayload {
   lat?: number | null;

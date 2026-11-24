@@ -40,7 +40,8 @@ const SOURCE_LABELS: Record<AttendanceSourceKind, string> = {
   API: "API",
   WEBHOOK: "Integration",
   MCP: "AI assistant",
-  CSV: "Import"
+  CSV: "Import",
+  REGULARIZATION: "Correction"
 };
 
 export async function isAttendanceOn(): Promise<boolean> {
@@ -143,6 +144,8 @@ export interface MyTodayResponse {
   expectedStartMinute?: number;
   /** 7.0.0: the person's shift for this work date; null = the workspace day. */
   shift?: ReturnType<typeof publicShift>;
+  /** 7.0.0: corrections can be asked for (and how far back). Absent while they are off. */
+  regularization?: { enabled: true; maxDaysBack: number };
   record?: ReturnType<typeof publicRecord>;
   steps?: PunchStep[];
 }
@@ -198,6 +201,7 @@ export async function getMyToday(userId: string, now: Date = new Date()): Promis
     // A shift's start replaces the workspace start for lateness.
     ...(settings.latenessEnabled ? { latenessEnabled: true, expectedStartMinute: shift ? shift.startMinute : settings.expectedStartMinute } : {}),
     shift: publicShift(shift),
+    ...(settings.regularizationEnabled ? { regularization: { enabled: true as const, maxDaysBack: settings.regularizationMaxDaysBack } } : {}),
     record: publicRecord(record),
     steps
   };

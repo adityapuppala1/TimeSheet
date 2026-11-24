@@ -78,7 +78,10 @@ export const FIELD_LABELS: Partial<Record<keyof AttendanceSettings, string>> = {
   latenessEnabled: "Expected start time",
   expectedStartMinute: "Expected start",
   locationConsentText: "Location consent text",
-  locationRetentionDays: "Evidence retention"
+  locationRetentionDays: "Evidence retention",
+  regularizationEnabled: "Attendance corrections",
+  regularizationMaxDaysBack: "Corrections: days back",
+  regularizationMonthlyCap: "Corrections per month"
 };
 
 const clock = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
@@ -175,7 +178,8 @@ export function settingsSections(leaveEntitled: boolean): NavSection[] {
     { id: "reminders", label: "Reminders", group: "Attendance" },
     { id: "holidays", label: "Working days & holidays", group: "Attendance" },
     { id: "shifts", label: "Shifts", group: "Attendance" },
-    { id: "reasons", label: "Missed-day reasons", group: "Attendance" }
+    { id: "reasons", label: "Missed-day reasons", group: "Attendance" },
+    { id: "corrections", label: "Corrections", group: "Attendance" }
   ];
   const leave: NavSection[] = [
     { id: "leave-types", label: "Leave types", group: "Leave" },

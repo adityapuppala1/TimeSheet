@@ -340,6 +340,21 @@ export function AttendanceSettingsCard({ readOnly }: { readOnly: boolean }) {
             </div>
           )}
 
+          {section === "corrections" && (
+            <StagedToggle
+              id="att-regularization"
+              label="Let people ask to correct a past day's punch"
+              hint="Off by default. Someone who forgot to punch in or out asks for the right times with a reason; their manager (or an active delegate) decides. Approval replaces the day's punch and the original stays in the history."
+              checked={values.regularizationEnabled}
+              disabled={disabled}
+              changed={changed("regularizationEnabled")}
+              onChange={(v) => stage({ regularizationEnabled: v })}
+            >
+              <StagedNumber id="att-reg-days" label="How many days back" hint="Today is never corrected this way: people punch as usual." value={values.regularizationMaxDaysBack} min={1} max={60} disabled={disabled} onChange={(v) => stage({ regularizationMaxDaysBack: v })} />
+              <StagedNumber id="att-reg-cap" label="Corrections per person per month" hint="Pending and approved requests count; cancelled and rejected ones do not." value={values.regularizationMonthlyCap} min={1} max={31} disabled={disabled} onChange={(v) => stage({ regularizationMonthlyCap: v })} />
+            </StagedToggle>
+          )}
+
           {section === "leave-types" && <LeaveTypesSection readOnly={readOnly} />}
           {section === "leave-settings" && (
             <div className="grid min-w-0 gap-4">
@@ -506,7 +521,10 @@ function dirtySections(changes: Array<{ key: string }>, leaveChanges: unknown[])
     latenessEnabled: "analytics",
     expectedStartMinute: "analytics",
     locationConsentText: "privacy",
-    locationRetentionDays: "privacy"
+    locationRetentionDays: "privacy",
+    regularizationEnabled: "corrections",
+    regularizationMaxDaysBack: "corrections",
+    regularizationMonthlyCap: "corrections"
   };
   const out = new Set(changes.map((c) => map[c.key]).filter(Boolean));
   if (leaveChanges.length > 0) out.add("leave-settings");

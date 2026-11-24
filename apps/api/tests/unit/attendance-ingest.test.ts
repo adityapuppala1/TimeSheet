@@ -45,8 +45,7 @@ function matches(row: Row, where: Row | undefined): boolean {
       }
       if ("in" in v) return (v.in as unknown[]).includes(row[k]);
       if (k === "userId_workDate") return row.userId === v.userId && +row.workDate === +v.workDate;
-      if (k === "user") return true;
-      return false;
+      return k === "user";
     }
     if (v instanceof Date) return +row[k] === +v;
     return (row[k] ?? null) === v;
@@ -252,6 +251,27 @@ describe("ingestPunch", () => {
     expect(+db.records[0].punchOutAt).toBe(+new Date("2026-11-23T09:00:00Z"));
   });
 
+  it("7.0.0: an approved correction (REGULARIZATION) replaces even a device punch, keeps the old one, and needs no integrations plan", async () => {
+    const device = await ingest.ingestPunch({ kind: "WEBHOOK", sourceId: DOOR, identifier: "E100", punchInAt: "2026-11-23T03:25:00Z", externalRef: "d1", now: NOW });
+    entitlements.attendanceIntegrationsEnabled = false;
+    const fix = await ingest.ingestPunch({ kind: "REGULARIZATION", userId: "u-ana", punchInAt: "2026-11-23T04:00:00Z", punchOutAt: "2026-11-23T08:00:00Z", externalRef: "REG:r1", now: NOW });
+    expect(fix).toMatchObject({ status: "ACCEPTED", created: false, recordId: device.recordId });
+    expect(db.records).toHaveLength(1);
+    // A correction may move punch-in LATER: it replaces, it does not merge to the earliest.
+    expect(db.records[0]).toMatchObject({ source: "REGULARIZATION" });
+    expect(+db.records[0].punchInAt).toBe(+new Date("2026-11-23T04:00:00Z"));
+    expect(db.events.find((e) => e.id === device.eventId)!.status).toBe("SUPERSEDED");
+    const fixEvent = db.events.find((e) => e.id === fix.eventId)!;
+    expect(fixEvent.input.previous).toMatchObject({ source: "WEBHOOK", punchInAt: "2026-11-23T03:25:00.000Z" });
+    // A later device swipe cannot undo the decision, and a replayed approval is a duplicate.
+    entitlements.attendanceIntegrationsEnabled = true;
+    const swipe = await ingest.ingestPunch({ kind: "WEBHOOK", sourceId: DOOR, identifier: "E100", punchInAt: "2026-11-23T03:10:00Z", externalRef: "d2", now: NOW });
+    expect(swipe.status).toBe("SUPERSEDED");
+    const again = await ingest.ingestPunch({ kind: "REGULARIZATION", userId: "u-ana", punchInAt: "2026-11-23T04:00:00Z", externalRef: "REG:r1", now: NOW });
+    expect(again.status).toBe("DUPLICATE");
+    expect(ingest.rankOf("REGULARIZATION", null, settings)).toBeGreaterThan(ingest.rankOf("WEBHOOK", 5000, settings));
+  });
+
   it("rejects malformed times without a thrown error", async () => {
     const naive = await ingest.ingestPunch({ kind: "API", identifier: "ana@x.io", punchInAt: "2026-11-23T09:00", externalRef: "n", now: NOW });
     const backwards = await ingest.ingestPunch({ kind: "API", identifier: "ana@x.io", punchInAt: "2026-11-23T09:00:00Z", punchOutAt: "2026-11-23T08:00:00Z", externalRef: "b", now: NOW });
@@ -295,6 +315,7 @@ describe("webhook signature", () => {
     expect(webhook.verifyAttendanceSignature({ secret: SECRET, timestamp: ts, eventId: EVT, signature: sig, rawBody: body, nowMs: NOW.getTime() })).toBe("OK");
   });
   it("signs the event id: a captured body replayed under a fresh event id fails", () => {
+    // eslint-disable-next-line sonarjs/hardcoded-secret-signatures -- a test fixture HMAC, not a credential
     expect(sig).toBe("sha256=" + crypto.createHmac("sha256", SECRET).update(`${ts}.${EVT}.${body}`).digest("hex"));
     expect(webhook.verifyAttendanceSignature({ secret: SECRET, timestamp: ts, eventId: "evt-2", signature: sig, rawBody: body, nowMs: NOW.getTime() })).toBe("BAD_SIGNATURE");
   });

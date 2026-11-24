@@ -76,7 +76,11 @@ export const attendanceSettingsBody = z
     apiPriority: z.number().int().min(-1000).max(5000),
     webPriority: z.number().int().min(-1000).max(5000),
     mcpPriority: z.number().int().min(-1000).max(5000),
-    csvPriority: z.number().int().min(-1000).max(5000)
+    csvPriority: z.number().int().min(-1000).max(5000),
+    // 7.0.0 regularisation (attendance-regularization.service.ts). OFF by default.
+    regularizationEnabled: z.boolean(),
+    regularizationMaxDaysBack: z.number().int().min(1).max(60),
+    regularizationMonthlyCap: z.number().int().min(1).max(31)
   })
   .partial()
   .strict();

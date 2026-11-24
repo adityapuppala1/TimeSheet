@@ -43,7 +43,8 @@ const SOURCE_LABELS: Record<AttendanceSourceKind, string> = {
   API: "API",
   WEBHOOK: "Integration",
   MCP: "AI assistant",
-  CSV: "Import"
+  CSV: "Import",
+  REGULARIZATION: "Correction"
 };
 
 /** The audit actions that mean "this person signed in". Written by auth.service.ts. */

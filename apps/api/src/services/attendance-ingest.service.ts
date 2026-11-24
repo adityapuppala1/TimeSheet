@@ -41,6 +41,8 @@ export const RAW_PAYLOAD_CAP = 8_000;
 const FUTURE_TOLERANCE_MS = 10 * 60 * 1000;
 
 const WEBHOOK_BASE_RANK = 1000;
+/** 7.0.0: an approved correction is a decision about the day, made after the fact. Nothing outranks it. */
+const REGULARIZATION_RANK = 1_000_000;
 
 export type PublicIngestStatus = "RECEIVED" | "DUPLICATE" | "REJECTED";
 
@@ -107,7 +109,8 @@ export async function assertIngestAllowed(kind: AttendanceSourceKind): Promise<v
   if (!settings?.attendanceEnabled || !(await isPlanningCapabilityAllowed(orgId, "attendanceEnabled"))) {
     throw new AppError(403, "Attendance is not enabled for this workspace.");
   }
-  if (kind !== "WEB" && !(await isPlanningCapabilityAllowed(orgId, "attendanceIntegrationsEnabled"))) {
+  // A correction is decided in the app by a manager, not an integration: it needs no integrations plan.
+  if (kind !== "WEB" && kind !== "REGULARIZATION" && !(await isPlanningCapabilityAllowed(orgId, "attendanceIntegrationsEnabled"))) {
     throw new AppError(403, "Attendance integrations are not included in this plan. Upgrade to Enterprise to use them.");
   }
 }
@@ -184,6 +187,8 @@ export function rankOf(kind: AttendanceSourceKind, sourcePriority: number | null
       return (settings.mcpPriority ?? 20) + own;
     case "CSV":
       return (settings.csvPriority ?? 10) + own;
+    case "REGULARIZATION":
+      return REGULARIZATION_RANK;
   }
 }
 
@@ -300,7 +305,9 @@ async function settle(tx: Prisma.TransactionClient, c: SettleContext): Promise<I
   }
 
   // Same source again (a device sending the punch-out later): merge into the record it owns.
-  if (existing.source === c.input.kind && (existing.sourceId ?? null) === (c.source?.id ?? null)) {
+  // Not for a correction: it REPLACES the times (it may move a punch-in later), so it takes over below.
+  const correction = c.input.kind === "REGULARIZATION";
+  if (!correction && existing.source === c.input.kind && (existing.sourceId ?? null) === (c.source?.id ?? null)) {
     const earliestIn = c.punchInAt < existing.punchInAt ? c.punchInAt : existing.punchInAt;
     const laterOut = c.punchOutAt && (!existing.punchOutAt || c.punchOutAt > existing.punchOutAt);
     await tx.attendanceRecord.update({
@@ -312,7 +319,7 @@ async function settle(tx: Prisma.TransactionClient, c: SettleContext): Promise<I
 
   const incoming = rankOf(c.input.kind, c.source?.priority, c.settings);
   const current = rankOf(existing.source, existing.sourceRef?.priority, c.settings);
-  if (incoming <= current) {
+  if (!correction && incoming <= current) {
     const reason = `Kept the existing ${existing.source} punch (priority ${current} ≥ ${incoming}).`;
     return { eventId: await logEvent("SUPERSEDED", reason, existing.id), status: "SUPERSEDED", reason, recordId: existing.id, created: false };
   }

@@ -28,6 +28,15 @@ import {
   spanDays
 } from "../services/attendance-team.service.js";
 import { AppError } from "../middleware/error.js";
+import {
+  cancelRegularization,
+  decideRegularization,
+  listMyRegularizations,
+  listRegularizationInbox,
+  regularizationDecisionBody,
+  regularizationRequestBody,
+  requestRegularization
+} from "../services/attendance-regularization.service.js";
 import { getDayGrid, parseGridRange } from "../services/attendance-day-grid.service.js";
 import {
   defaultRange,
@@ -42,6 +51,33 @@ import {
 } from "../services/attendance-analytics.service.js";
 
 export const attendanceRouter = Router();
+
+const actorOf = (req: { user?: { id: string; role: string } }) => ({ id: req.user!.id, role: req.user!.role });
+const regIdParam = (req: { params: Record<string, unknown> }) => z.string().min(1).max(64).parse(String(req.params.id));
+
+/* ----------------------------- Regularisation (7.0.0) ----------------------------- */
+
+attendanceRouter.get("/regularizations/me", requireAuth, async (req, res) => {
+  res.json({ items: await listMyRegularizations(req.user!.id) });
+});
+
+attendanceRouter.post("/regularizations", requireAuth, validate(z.object({ body: regularizationRequestBody })), async (req, res) => {
+  const body = regularizationRequestBody.parse(req.body);
+  res.status(201).json(await requestRegularization({ userId: req.user!.id, ...body }));
+});
+
+attendanceRouter.post("/regularizations/:id/cancel", requireAuth, async (req, res) => {
+  res.json(await cancelRegularization(req.user!.id, regIdParam(req)));
+});
+
+attendanceRouter.get("/regularizations/inbox", requireAuth, async (req, res) => {
+  res.json(await listRegularizationInbox(actorOf(req)));
+});
+
+attendanceRouter.post("/regularizations/:id/decision", requireAuth, validate(z.object({ body: regularizationDecisionBody })), async (req, res) => {
+  const body = regularizationDecisionBody.parse(req.body);
+  res.json(await decideRegularization({ actor: actorOf(req), requestId: regIdParam(req), decision: body.decision, note: body.note ?? null }));
+});
 
 attendanceRouter.get("/me/today", requireAuth, async (req, res) => {
   res.json(await getMyToday(req.user!.id));
@@ -118,7 +154,7 @@ attendanceRouter.get("/missed-reasons/check", requireAuth, async (req, res) => {
 /* ----------------------------- Team Activity (V17 A5) ----------------------------- */
 
 const dayStatuses = ["WEEKEND", "HOLIDAY", "LEAVE", "PRESENT", "ABSENT", "PENDING"] as const;
-const sourceKinds = ["WEB", "API", "WEBHOOK", "MCP", "CSV"] as const;
+const sourceKinds = ["WEB", "API", "WEBHOOK", "MCP", "CSV", "REGULARIZATION"] as const;
 
 /** Parsed here, not by validate(): validate() discards its parse, and these are query strings. */
 const teamDayQuery = z.object({

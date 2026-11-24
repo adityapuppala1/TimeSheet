@@ -64,7 +64,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { brandingApi, brandingLogoUrl, fileUrl, projectApi } from "../services/api";
 import { useMediaQuery } from "../lib/use-media-query";
-import { attendanceApi, MY_TODAY_QUERY_KEY } from "../services/attendance-api";
+import { attendanceApi, MY_TODAY_QUERY_KEY, regularizationApi } from "../services/attendance-api";
 import { LEAVE_STATUS_KEY, leaveApi } from "../services/leave-api";
 
 /**
@@ -261,10 +261,24 @@ function usePendingApprovals(enabled: boolean): number {
     refetchIntervalInBackground: false,
     retry: false
   });
+  // 7.0.0: attendance corrections waiting on me. Its own query: corrections need attendance, not leave.
+  const user = useAuthStore((s) => s.user);
+  const today = useQuery({ queryKey: MY_TODAY_QUERY_KEY, queryFn: attendanceApi.myToday, enabled: Boolean(user) && enabled, staleTime: 60_000, retry: false });
+  const regOn = Boolean(today.data?.regularization?.enabled);
+  const reg = useQuery({
+    queryKey: ["attendance", "regularizations", "inbox"],
+    queryFn: regularizationApi.inbox,
+    enabled: enabled && regOn && TEAM_VIEW_ROLES.has(role),
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+    refetchIntervalInBackground: false,
+    retry: false
+  });
   // The cache entry is shared, so a row that did not ask must not read it either.
   if (!enabled) return 0;
+  const corrections = regOn ? (reg.data?.total ?? 0) : 0;
   // 7.0.0: comp-off requests waiting on me count too (the field is absent while comp-off is off).
-  return (q.data?.total ?? 0) + (q.data?.compOffPending ?? 0);
+  return (leaveOn ? (q.data?.total ?? 0) + (q.data?.compOffPending ?? 0) : 0) + corrections;
 }
 
 function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavigate?: () => void; slim?: boolean }) {

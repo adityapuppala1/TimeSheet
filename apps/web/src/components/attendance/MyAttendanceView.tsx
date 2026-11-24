@@ -4,8 +4,9 @@
  * right rail with leave balances, the next holidays and a Request leave button.
  *
  * Every card loads and fails on its own: a failed history never blanks the balances. Status is
- * always colour + icon + letter + text (lib/attendance-status.ts). There is deliberately no
- * "correct this day" request here, only the reason a person already gave and a link to log time.
+ * always colour + icon + letter + text (lib/attendance-status.ts). The day sheet shows the reason a
+ * person already gave and a link to log time; when the workspace turned corrections on (7.0.0, off by
+ * default) it also offers "Request correction" for a past day (Regularization.tsx).
  *
  * Mobile order: today, week, balances, calendar, needs attention, holidays, insights.
  */
@@ -31,6 +32,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Skeleton } from "../ui/skeleton";
 import { AttendanceStatusBadge } from "./AttendanceStatusBadge";
 import { CompOffDayAction, MyCompOffCard } from "./CompOff";
+import { RegularizationDayAction } from "./Regularization";
 import { CardError, SectionCard, todayKey } from "./attendance-ui";
 import { leaveColour, useLeaveBalances, useLeaveEnabled, useMyHolidays } from "./use-leave";
 
@@ -277,6 +279,7 @@ function DaySheet({ data, onClose, today }: Readonly<{ data: CellData | null; on
                 </Button>
               )}
               <CompOffDayAction date={day.date} isWorkingDay={day.isWorkingDay} />
+              <RegularizationDayAction date={day.date} punchInAt={day.punchInAt ?? null} punchOutAt={day.punchOutAt ?? null} />
             </div>
           </>
         )}

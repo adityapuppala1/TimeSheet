@@ -17,6 +17,7 @@ import { PageHeader } from "../components/PageHeader";
 import { MyAnalyticsSection, TeamInsightsView } from "../components/attendance/AttendanceAnalytics";
 import { AdminCancelLeave } from "../components/attendance/AdminCancelLeave";
 import { CompOffInbox } from "../components/attendance/CompOff";
+import { RegularizationInbox, useRegularization } from "../components/attendance/Regularization";
 import { ApprovalDelegations } from "../components/attendance/ApprovalDelegations";
 import { ApprovalsInbox } from "../components/attendance/ApprovalsInbox";
 import { ApplyLeave, HolidayCalendarView, LeaveNav, MyLeaveRequests } from "../components/attendance/LeaveScreens";
@@ -111,6 +112,9 @@ function TeamPanel({ leaveOn }: Readonly<{ leaveOn: boolean }>) {
   const today = useMyToday();
   const admin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN" || s.user?.role === "ADMIN");
   const lateness = today.data?.latenessEnabled ? { enabled: true, expectedStartMinute: today.data.expectedStartMinute ?? 570 } : null;
+  // 7.0.0: attendance corrections are decided here too, and need attendance, not leave.
+  const regOn = Boolean(useRegularization());
+  const rail = leaveOn || regOn;
 
   // The Approvals panel only exists as a tab on a phone; widening the window puts it back in the rail.
   useEffect(() => {
@@ -119,7 +123,7 @@ function TeamPanel({ leaveOn }: Readonly<{ leaveOn: boolean }>) {
 
   const options = [
     { value: "board" as const, label: "Who's in" },
-    ...(leaveOn && !wide ? [{ value: "approvals" as const, label: "Approvals" }] : []),
+    ...(rail && !wide ? [{ value: "approvals" as const, label: "Approvals" }] : []),
     ...(leaveOn ? [{ value: "calendar" as const, label: wide ? "Leave calendar" : "Calendar" }] : []),
     { value: "insights" as const, label: "Insights" }
   ];
@@ -128,19 +132,21 @@ function TeamPanel({ leaveOn }: Readonly<{ leaveOn: boolean }>) {
     <div className="grid min-w-0 gap-4">
       <Segmented label="Team view" value={tab} onChange={setTab} options={options} className="w-full sm:w-fit" />
       {tab === "board" && (
-        <div className={cn("grid min-w-0 gap-4", leaveOn && "lg:grid-cols-[minmax(0,1fr)_320px]")}>
+        <div className={cn("grid min-w-0 gap-4", rail && "lg:grid-cols-[minmax(0,1fr)_320px]")}>
           <WhosInBoard leaveOn={leaveOn} lateness={lateness} />
-          {leaveOn && wide && (
+          {rail && wide && (
             <div className="grid min-w-0 content-start gap-4">
-              <ApprovalsInbox />
-              <CompOffInbox />
-              <ApprovalDelegations />
+              {leaveOn && <ApprovalsInbox />}
+              {leaveOn && <CompOffInbox />}
+              <RegularizationInbox />
+              {leaveOn && <ApprovalDelegations />}
             </div>
           )}
         </div>
       )}
       {tab === "approvals" && leaveOn && <ApprovalsInbox />}
       {tab === "approvals" && leaveOn && <CompOffInbox />}
+      {tab === "approvals" && <RegularizationInbox />}
       {tab === "approvals" && leaveOn && <ApprovalDelegations />}
       {tab === "calendar" && leaveOn && <TeamLeaveCalendar />}
       {tab === "calendar" && leaveOn && admin && <AdminCancelLeave />}

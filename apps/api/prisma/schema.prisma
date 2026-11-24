@@ -379,6 +379,7 @@ model User {
   holidayOptIns               HolidayOptIn[]
   /// V17 Phase B leave. Cascade with the person (personal data), like attendance.
   compOffRequests             CompOffRequest[]
+  attendanceRegularizationRequests AttendanceRegularizationRequest[]
   leaveRequests               LeaveRequest[]
   leaveLedger                 LeaveBalanceLedger[]
 
@@ -6150,6 +6151,9 @@ enum AttendanceSourceKind {
   WEBHOOK
   MCP
   CSV
+  /// 7.0.0: an approved regularisation (correction) request. Outranks every other source: it is a
+  /// decision about the day, made after the fact. The replaced punch stays on the event history.
+  REGULARIZATION
 }
 
 /// Which field on an inbound event identifies the person. employeeCode and externalId exist
@@ -6234,6 +6238,15 @@ model GlobalAttendanceSettings {
   compOffLeaveTypeCode String  @default("CO") @db.VarChar(20)
   /// Days after approval an unused credit expires (the nightly accrual run). NULL = never.
   compOffExpiryDays    Int?
+
+  /// --- Regularisation (7.0.0) ----------------------------------------------------------------
+  /// A person asks to add or correct a punch for a past day; the manager decides. OFF by default:
+  /// Phase A decided "no corrections", and this reverses that only for workspaces that opt in.
+  regularizationEnabled     Boolean @default(false)
+  /// How far back (days before today, in the person's zone) a correction may be asked for.
+  regularizationMaxDaysBack Int     @default(7)
+  /// Open or approved requests per person per calendar month (of the day corrected).
+  regularizationMonthlyCap  Int     @default(3)
 
   updatedById String?
   updatedAt   DateTime @updatedAt
@@ -6620,6 +6633,40 @@ model ApprovalDelegation {
 /// 7.0.0 comp-off: a request for leave credit for working on a weekend or holiday. Decided by the
 /// same rule as leave (decisionRight); approval credits the configured type through the ledger with
 /// idempotency key `COMPOFF:<id>`, and the accrual run expires it (`COMPOFF-EXPIRY:<id>`).
+/// 7.0.0 regularisation: "add or correct my punch for that day". Decided like leave
+/// (resolveDecisionRight). Approval writes through ingestPunch (source REGULARIZATION, externalRef
+/// `REG:<id>`), so the record's old punch stays on its AttendanceEvent history; the request also
+/// keeps the punch it saw when it was made (original*), for the approver and the audit trail.
+model AttendanceRegularizationRequest {
+  id                     String             @id @default(uuid())
+  userId                 String
+  user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workDate               DateTime           @db.Date
+  punchInAt              DateTime
+  punchOutAt             DateTime?
+  originalPunchInAt      DateTime?
+  originalPunchOutAt     DateTime?
+  /// Shown to the requester and the people who may decide; never to anyone else.
+  reason                 String             @db.Text
+  status                 LeaveRequestStatus @default(PENDING)
+  approverId             String?            @db.VarChar(64)
+  decidedById            String?            @db.VarChar(64)
+  onBehalfOfId           String?            @db.VarChar(64)
+  decidedAt              DateTime?
+  decisionNote           String?            @db.Text
+  overriddenBySuperAdmin Boolean            @default(false)
+  /// The AttendanceEvent the approval produced.
+  eventId                String?            @db.VarChar(64)
+  cancelledAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, workDate])
+  @@index([approverId, status])
+  @@index([status])
+}
+
 model CompOffRequest {
   id                     String             @id @default(uuid())
   userId                 String
