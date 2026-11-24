@@ -1,11 +1,11 @@
 /**
  * Client-side CSV for the Organisation tables (V17 UI v2). Cells that a spreadsheet would read as a
- * formula (leading = + - @ tab or CR) are prefixed with an apostrophe, so an exported name can never
+ * formula (leading = + - @ tab or CR, also behind leading whitespace) are prefixed with an apostrophe, so an exported name can never
  * run as one when the file is opened.
  */
 export function csvCell(value: string | number | null | undefined): string {
   let text = value == null ? "" : String(value);
-  if (/^[=+\-@\t\r]/.test(text) && Number.isNaN(Number(text))) text = `'${text}`;
+  if (/^\s*[=+\-@\t\r]/.test(text) && Number.isNaN(Number(text))) text = `'${text}`;
   return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 

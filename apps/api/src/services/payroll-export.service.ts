@@ -257,14 +257,13 @@ export function payrollCsv(report: PayrollReport): string {
   ];
   const lines = [head.map(csvCell).join(",")];
   for (const r of report.rows) {
-    // A spreadsheet formula prefix in a name is neutralised: this file is opened in Excel by payroll.
-    const safe = (v: string | null) => (v && /^[=+\-@]/.test(v) ? `'${v}` : v);
+    // csvCell neutralises a spreadsheet formula prefix (after trimming): this file is opened in Excel by payroll.
     lines.push(
       [
         report.month,
-        safe(r.employeeCode),
-        safe(r.name),
-        safe(r.email),
+        r.employeeCode,
+        r.name,
+        r.email,
         r.workingDays,
         r.holidays,
         r.present,

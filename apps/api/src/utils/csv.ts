@@ -16,6 +16,17 @@ export const CSV_EOL = "\r\n";
 export const UTF8_BOM = "﻿";
 
 /**
+ * CSV / formula injection guard. A cell a spreadsheet would evaluate (= + - @, or a tab or CR in
+ * front of one, after any leading whitespace) gets an apostrophe in front, the OWASP mitigation.
+ * A plain number ("-2.5") is not a formula and is left as a number.
+ */
+export function neutraliseFormula(text: string): string {
+  if (!/^\s*[=+\-@\t\r]/.test(text)) return text;
+  if (/^[+-]?\d+(\.\d+)?$/.test(text)) return text;
+  return `'${text}`;
+}
+
+/**
  * One field, escaped.
  *
  * Newlines are collapsed to spaces rather than quoted-and-preserved: a quoted newline is legal
@@ -23,7 +34,9 @@ export const UTF8_BOM = "﻿";
  * description is the field most likely to contain one.
  */
 export function csvCell(value: unknown): string {
-  const text = value === null || value === undefined ? "" : String(value).replace(/[\r\n]+/g, " ").trim();
+  // Neutralised AFTER normalising and trimming: checking first let " =cmd" or "\n=cmd" through,
+  // because the trim then put the "=" at the front of the cell.
+  const text = neutraliseFormula(value === null || value === undefined ? "" : String(value).replace(/[\r\n]+/g, " ").trim());
   // Quotes are doubled, and any field carrying a delimiter, a quote or a leading/trailing space is
   // wrapped — the three cases that otherwise corrupt the row.
   return /["|,]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
