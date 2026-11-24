@@ -414,7 +414,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Open Sidebar → Attendance → My attendance. In the Comp-off card pick the day you worked, or tap the day on the calendar and press Request comp-off for this day.",
       "The card says what the day earns: half a day from 4 hours, a full day from 8 (your admin may set other thresholds), or why it does not qualify.",
       "Add a note for your approver if you like and press Request comp-off. Your approver is told.",
-      "Once approved, the days are added to your Compensatory off (CO) balance; apply for leave of that type as usual. A pending request can be cancelled from the same card."
+      "Once approved, the days are added to your Compensatory off (CO) balance; apply for leave of that type as usual. A pending request can be cancelled from the same card.",
+      "You get an email, as well as the bell notice, when your request is approved or rejected. Under Balance history on My attendance the credit reads Comp-off credit, and an unused one that lapsed reads Comp-off expired."
     ],
     notes:
       "Only weekends and holidays in your own calendar count (an optional holiday only if you took it). One open request per day, up to 60 days after it. If your admin set an expiry, an unused credit lapses that many days after approval; whatever you have already taken is never taken back.",
@@ -451,7 +452,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Once approved, the day shows the corrected times. You can cancel a request while it is still waiting."
     ],
     notes:
-      "Corrections are off unless an admin turns them on (Workspace Settings → Attendance & Leave → Corrections), with a limit on how many days back and how many a month. Only past days can be corrected. Your reason is seen only by you and the person who decides. Managers decide from the Attendance team view; an active approval delegate can decide on their behalf. The original punch is kept in the history.",
+      "Corrections are off unless an admin turns them on (Workspace Settings → Attendance & Leave → Corrections), with a limit on how many days back and how many a month. Only past days can be corrected. Your reason is seen only by you and the person who decides. Managers decide from the Attendance team view; an active approval delegate can decide on their behalf. The original punch is kept in the history. Deciders are emailed when a request arrives and you are emailed the decision, under the same Email channels switches as leave requests (Leave and attendance requests, Leave and attendance decisions); the reason is never in the email.",
     keywords: ["regularisation", "regularization", "correction", "missed punch", "forgot to punch", "punch out", "attendance correction", "fix attendance"]
   },
   {

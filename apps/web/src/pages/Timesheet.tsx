@@ -808,7 +808,7 @@ export function Timesheet() {
                   </p>
                   <Progress value={capPercent} className={overCap ? "[&>div]:bg-destructive" : ""} />
                 </div>
-                <div className="flex flex-wrap gap-2 md:justify-end">
+                <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap md:justify-end">
                   <Button
                     type="button"
                     variant="ghost"
@@ -825,7 +825,7 @@ export function Timesheet() {
                   >
                     <Save className="h-4 w-4" />Save draft
                   </Button>
-                  <Button disabled={mutation.isPending || overCap || total <= 0}>
+                  <Button className="col-span-2 min-h-[44px] sm:col-span-1 sm:min-h-0" disabled={mutation.isPending || overCap || total <= 0}>
                     <Send className="h-4 w-4" />Submit for approval
                   </Button>
                 </div>

@@ -35,6 +35,9 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   // V17 Phase B leave
   "leave.requested": ["approverName", "employeeName", "leaveType", "dates", "days", "appUrl"],
   "leave.decided": ["name", "leaveType", "decision", "decidedBy", "dates", "days", "note", "appUrl"],
+  // Comp-off, attendance corrections and overtime claims share one pair, with the kind as a variable.
+  "attendance.requested": ["approverName", "employeeName", "requestKind", "summary", "appUrl"],
+  "attendance.decided": ["name", "requestKind", "decision", "decidedBy", "summary", "note", "appUrl"],
 
   // Ticketing
   "ticket.assigned": ["assigneeName", "ticketKey", "title", "priority", "assignedBy", "type", "module", "description", "appUrl"],
@@ -97,6 +100,8 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "reminder.escalation.manager": "Next-morning notification to the manager when a report missed yesterday's log.",
   "leave.requested": "Sent to the approver (the person's manager, or the admin pool when they have none) when a leave request needs a decision.",
   "leave.decided": "Sent to the person who asked for leave when their request is approved or rejected.",
+  "attendance.requested": "Sent to the approver when a comp-off request, attendance correction or overtime claim needs a decision.",
+  "attendance.decided": "Sent to the person who made a comp-off request, attendance correction or overtime claim when it is approved or rejected.",
   "reminder.punch_in":
     "Punch-in reminder at the hour set under Attendance & Leave (11:00 by default), in each person's timezone — only on their working days, never on a holiday, and only when no punch has arrived from any source.",
 
@@ -242,6 +247,14 @@ export function sampleVariables(key: string): Record<string, string> {
     "leave.decided": {
       name: "Aanya Sharma", leaveType: "Privilege leave", decision: "approved", decidedBy: "Mira Kapoor",
       dates: "2026-06-01 to 2026-06-03", days: "3", note: "Enjoy!", appUrl: "https://timesphere.local"
+    },
+    "attendance.requested": {
+      approverName: "Mira Kapoor", employeeName: "Aanya Sharma", requestKind: "a comp-off request",
+      summary: "Worked 2026-06-06, 1 day(s)", appUrl: "https://timesphere.local"
+    },
+    "attendance.decided": {
+      name: "Aanya Sharma", requestKind: "comp-off request", decision: "approved", decidedBy: "Mira Kapoor",
+      summary: "Worked 2026-06-06, 1 day(s)", note: "Thanks for covering.", appUrl: "https://timesphere.local"
     },
     "reminder.escalation.manager": {
       managerName: "Mira Kapoor", employeeName: "Aanya Sharma",
@@ -556,6 +569,19 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
     html: compiledTemplates.leaveDecided({
       name: V("name"), leaveType: V("leaveType"), decision: V("decision"), decidedBy: V("decidedBy"),
       dates: V("dates"), days: V("days"), note: V("note")
+    })
+  },
+  "attendance.requested": {
+    subject: "{{employeeName}} sent {{requestKind}} for your decision",
+    html: compiledTemplates.attendanceRequested({
+      approverName: V("approverName"), employeeName: V("employeeName"), requestKind: V("requestKind"), summary: V("summary")
+    })
+  },
+  "attendance.decided": {
+    subject: "Your {{requestKind}} was {{decision}}",
+    html: compiledTemplates.attendanceDecided({
+      name: V("name"), requestKind: V("requestKind"), decision: V("decision"), decidedBy: V("decidedBy"),
+      summary: V("summary"), note: V("note")
     })
   },
   "reminder.punch_in": {

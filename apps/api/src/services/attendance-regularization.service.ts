@@ -38,6 +38,7 @@ import { assertAttendanceOn, isAttendanceOn } from "./attendance-punch.service.j
 import { ingestPunch, parseInstant } from "./attendance-ingest.service.js";
 import { audit } from "./audit.service.js";
 import { dispatchNotification } from "./notify.service.js";
+import { decisionEmail, requestedEmail } from "./attendance-request-mail.js";
 import { NOT_DEACTIVATED } from "./people-visibility.service.js";
 import { addDaysKey } from "./leave-calc.js";
 import { delegatesOf } from "./approval-delegation.service.js";
@@ -161,13 +162,13 @@ async function lockPerson(tx: Prisma.TransactionClient, userId: string): Promise
 
 async function approverRecipients(request: { userId: string; approverId: string | null }, fallback: Fallback) {
   if (request.approverId) {
-    const manager = await prisma.user.findFirst({ where: { id: request.approverId, status: "ACTIVE", deletedAt: null }, select: { id: true } });
+    const manager = await prisma.user.findFirst({ where: { id: request.approverId, status: "ACTIVE", deletedAt: null }, select: { id: true, name: true } });
     if (manager) return [manager, ...(await delegatesOf(manager.id)).filter((d) => d.id !== request.userId && d.id !== manager.id)];
   }
   const roles = fallback === "SUPER_ADMINS" ? ["SUPER_ADMIN"] : ["SUPER_ADMIN", "ADMIN"];
   return prisma.user.findMany({
     where: { status: "ACTIVE", deletedAt: null, isAgent: false, id: { not: request.userId }, role: { name: { in: roles as never } } },
-    select: { id: true },
+    select: { id: true, name: true },
     take: 25
   });
 }
@@ -248,6 +249,7 @@ export async function requestRegularization(input: RegularizationInput) {
       title: `${person.name} asked to correct their attendance`,
       body: `For ${input.workDate}`,
       link: "/app/attendance/team",
+      email: requestedEmail({ approverName: r.name, employeeName: person.name, kind: "attendance correction", summary: `For ${input.workDate}` }),
       metadata: { regularizationRequestId: created.id }
     });
   }
@@ -373,6 +375,7 @@ export async function decideRegularization(input: {
     title: `Your attendance correction for ${toKey(request.workDate)} was ${approve ? "approved" : "rejected"}`,
     body: approve ? "Your attendance for that day now shows the corrected times." : (input.note?.trim() ?? ""),
     link: "/app/attendance",
+    email: await decisionEmail(request.userId, input.actor, { kind: "attendance correction", approve, summary: `For ${toKey(request.workDate)}`, note: input.note ?? null }),
     metadata: { regularizationRequestId: request.id }
   });
   const decided = await prisma.attendanceRegularizationRequest.findUniqueOrThrow({ where: { id: request.id }, include: { user: USER_SELECT } });

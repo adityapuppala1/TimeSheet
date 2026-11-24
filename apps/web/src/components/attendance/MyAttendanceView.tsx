@@ -351,6 +351,36 @@ function Ring({ balance }: Readonly<{ balance: LeaveBalance }>) {
   );
 }
 
+function BalanceHistory() {
+  const [open, setOpen] = useState(false);
+  const q = useQuery({ queryKey: ["leave", "ledger"], queryFn: () => leaveApi.ledger(), enabled: open, staleTime: 30_000 });
+  return (
+    <div className="grid gap-2">
+      <Button type="button" variant="ghost" size="sm" className="min-h-[44px] justify-self-start px-2 sm:min-h-8" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        {open ? "Hide balance history" : "Balance history"}
+      </Button>
+      {open && q.isLoading && <Skeleton className="h-16 w-full" />}
+      {open && q.isError && <CardError message="Balance history could not be loaded." onRetry={() => runInBackground(q.refetch())} />}
+      {open && q.data && q.data.items.length === 0 && <p className="text-xs text-muted-foreground">Nothing has moved your balance this year yet.</p>}
+      {open && q.data && q.data.items.length > 0 && (
+        <ul className="grid max-h-64 gap-1.5 overflow-y-auto">
+          {q.data.items.map((row) => (
+            <li key={row.id} className="flex min-w-0 items-start justify-between gap-3 text-xs">
+              <span className="min-w-0">
+                <span className="block truncate font-medium">{row.label}</span>
+                <span className="block truncate text-muted-foreground">{row.leaveType.name}{row.reason ? ` · ${row.reason}` : ""} · {shortDay(row.createdAt.slice(0, 10))}</span>
+              </span>
+              <span className={cn("shrink-0 font-semibold tabular-nums", row.delta < 0 ? "text-destructive" : "text-success-ink")}>
+                {row.delta > 0 ? "+" : ""}{round1(row.delta)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function BalancesCard() {
   const q = useLeaveBalances(true);
   return (
@@ -365,6 +395,7 @@ function BalancesCard() {
           ))}
         </div>
       )}
+      {q.data && q.data.balances.length > 0 && <BalanceHistory />}
       <Button asChild className="min-h-[44px] w-full">
         <Link to="/app/attendance/leave">
           <Plane className="mr-2 h-4 w-4" aria-hidden="true" />

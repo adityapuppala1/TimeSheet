@@ -47,6 +47,7 @@ import { getPlanningSettings } from "./planning.service.js";
 import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
 import { NOT_DEACTIVATED } from "./people-visibility.service.js";
 import { carryChange, isYearSettled, settleLateMovement, settlementFacts } from "./leave-settlement.service.js";
+import { leaveLedgerLabel } from "./leave-ledger-label.js";
 import { runInBackground } from "../utils/run-in-background.js";
 import { delegatesOf, delegatorsFor } from "./approval-delegation.service.js";
 import {
@@ -509,6 +510,7 @@ export async function getLedger(userId: string, leaveYear: number) {
     leaveYear: r.leaveYear,
     delta: num(r.delta),
     kind: r.kind,
+    label: leaveLedgerLabel(r.kind, r.idempotencyKey),
     reason: r.reason,
     refRequestId: r.refRequestId,
     createdAt: r.createdAt.toISOString()

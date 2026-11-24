@@ -511,6 +511,26 @@ export const templates = {
         paragraph(button("Open TimeSphere", appUrl("/app/attendance"), ACCENT))
     ),
 
+  /** Comp-off, attendance correction and overtime claim: the approver's side. No reason, as for leave. */
+  attendanceRequested: (params: { approverName: string; employeeName: string; requestKind: string; summary: string }) =>
+    shell(
+      { title: "Attendance request", preheader: `${params.employeeName} sent ${params.requestKind}.`, accentColor: ACCENT },
+      heading(`Hi ${escape(params.approverName.split(" ")[0])}, a request needs your decision`) +
+        paragraph(`<strong>${escape(params.employeeName)}</strong> sent ${escape(params.requestKind)}: ${escape(params.summary)}.`) +
+        paragraph("Open TimeSphere to review the request and the reason attached to it.") +
+        paragraph(button("Review the request", appUrl("/app/attendance"), ACCENT))
+    ),
+
+  /** The requester hears the decision on a comp-off, correction or overtime claim. */
+  attendanceDecided: (params: { name: string; requestKind: string; decision: string; decidedBy: string; summary: string; note: string }) =>
+    shell(
+      { title: "Request decided", preheader: `Your ${params.requestKind} was ${params.decision}.`, accentColor: ACCENT },
+      heading(`Hi ${escape(params.name.split(" ")[0])}, your request was ${escape(params.decision)}`) +
+        paragraph(`Your ${escape(params.requestKind)} (${escape(params.summary)}) was <strong>${escape(params.decision)}</strong> by ${escape(params.decidedBy)}.`) +
+        paragraph(`Note: ${escape(params.note)}`) +
+        paragraph(button("Open TimeSphere", appUrl("/app/attendance"), ACCENT))
+    ),
+
   /** V17 A4: the punch-in reminder — sent only on a working day with no punch from ANY source yet. */
   punchInReminder: (params: { name: string; date: string }) =>
     shell(

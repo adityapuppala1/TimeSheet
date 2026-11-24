@@ -113,6 +113,15 @@ as days anyone owed a timesheet on. With the module off, every screen and API re
 - **Sandwich rule (off by default, per leave type).** Weekends and holidays fully inside one leave request count as
   leave: Friday to Monday costs 4 days. The Apply screen says how many enclosed days it counted, and the payroll
   export counts the same days, with a Sandwich days column while the rule is in use.
+- **Email for comp-off, corrections and overtime.** Approvers are emailed when one of these needs a decision and the
+  person is emailed the outcome, through the same two Email channels switches and role mutes as leave (now labelled
+  "Leave and attendance requests" and "Leave and attendance decisions"). Two new editable templates,
+  `attendance.requested` and `attendance.decided`, are added by a tenant migration with `INSERT IGNORE`. The reason
+  is never in the email.
+- **Balance history on My attendance.** Comp-off credits and expiries read "Comp-off credit" and "Comp-off expired"
+  instead of looking like a manual adjustment; the ledger API gains a `label` on each row.
+- **Birthday on the Edit user dialog (super admins only).** The join date was already there; the birthday is shown
+  and sent only for a super admin, and only when changed.
 - **Kiosk / QR punch (off by default).** A super admin registers a kiosk device, optionally at a work site, and gets
   a one-time device token (rotate or revoke it any time). Open /kiosk on the device: it shows a QR code that changes
   every 30 seconds. People scan it with their own phone while signed in and punch in. Codes are signed, expire after

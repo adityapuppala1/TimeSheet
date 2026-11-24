@@ -37,6 +37,7 @@ import { todayKeyFor } from "./attendance-day-status.js";
 import { assertAttendanceOn, isAttendanceOn } from "./attendance-punch.service.js";
 import { audit } from "./audit.service.js";
 import { dispatchNotification } from "./notify.service.js";
+import { decisionEmail, requestedEmail } from "./attendance-request-mail.js";
 import { NOT_DEACTIVATED } from "./people-visibility.service.js";
 import { delegatesOf } from "./approval-delegation.service.js";
 import { expectedHoursByDay } from "./leave-capacity.service.js";
@@ -180,13 +181,13 @@ async function lockPerson(tx: Prisma.TransactionClient, userId: string): Promise
 
 async function approverRecipients(request: { userId: string; approverId: string | null }, fallback: Fallback) {
   if (request.approverId) {
-    const manager = await prisma.user.findFirst({ where: { id: request.approverId, status: "ACTIVE", deletedAt: null }, select: { id: true } });
+    const manager = await prisma.user.findFirst({ where: { id: request.approverId, status: "ACTIVE", deletedAt: null }, select: { id: true, name: true } });
     if (manager) return [manager, ...(await delegatesOf(manager.id)).filter((d) => d.id !== request.userId && d.id !== manager.id)];
   }
   const roles = fallback === "SUPER_ADMINS" ? ["SUPER_ADMIN"] : ["SUPER_ADMIN", "ADMIN"];
   return prisma.user.findMany({
     where: { status: "ACTIVE", deletedAt: null, isAgent: false, id: { not: request.userId }, role: { name: { in: roles as never } } },
-    select: { id: true },
+    select: { id: true, name: true },
     take: 25
   });
 }
@@ -236,6 +237,7 @@ export async function requestOvertimeClaim(input: { userId: string; weekStart: s
       title: `${person.name} claimed overtime`,
       body: `Week of ${input.weekStart} · ${week.overtimeHours}h`,
       link: "/app/attendance/team",
+      email: requestedEmail({ approverName: r.name, employeeName: person.name, kind: "overtime claim", summary: `Week of ${input.weekStart}, ${week.overtimeHours}h` }),
       metadata: { overtimeClaimId: created.id }
     });
   }
@@ -317,6 +319,7 @@ export async function decideOvertimeClaim(input: { actor: { id: string; role: st
     title: `Your overtime for the week of ${weekStart} was ${approve ? "approved" : "rejected"}`,
     body: approve ? `${Number(request.hours)}h approved` : (input.note?.trim() ?? ""),
     link: "/app/attendance",
+    email: await decisionEmail(request.userId, input.actor, { kind: "overtime claim", approve, summary: `Week of ${weekStart}, ${Number(request.hours)}h`, note: input.note ?? null }),
     metadata: { overtimeClaimId: request.id }
   });
   const decided = await prisma.overtimeClaim.findUniqueOrThrow({ where: { id: request.id }, include: { user: USER_SELECT } });

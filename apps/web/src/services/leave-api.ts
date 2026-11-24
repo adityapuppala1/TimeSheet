@@ -45,6 +45,18 @@ export interface LeaveBalance {
   expiringAtYearEnd: number;
 }
 
+/** One line of a person's leave balance history. `label` names what posted it (a comp-off credit is not a manual adjustment). */
+export interface LeaveLedgerRow {
+  id: string;
+  leaveType: { code: string; name: string };
+  leaveYear: number;
+  delta: number;
+  kind: string;
+  label: string;
+  reason: string | null;
+  createdAt: string;
+}
+
 export interface LeaveBalances {
   leaveYear: number;
   from: string;
@@ -232,6 +244,7 @@ export const leaveApi = {
   status: async () => (await api.get<{ enabled: boolean; leaveYearStartMonth: number; compOffEnabled?: boolean }>("/leave/status")).data,
   types: async () => (await api.get<{ items: LeaveTypeRow[] }>("/leave/types")).data.items,
   balances: async (year?: number) => (await api.get<LeaveBalances>("/leave/me/balances", { params: year ? { year } : {} })).data,
+  ledger: async (year?: number) => (await api.get<{ leaveYear: number; items: LeaveLedgerRow[] }>("/leave/me/ledger", { params: year ? { year } : {} })).data,
   requests: async (status?: LeaveStatus) => (await api.get<{ items: LeaveRequestRow[] }>("/leave/me/requests", { params: status ? { status } : {} })).data.items,
   preview: async (params: PreviewParams) => (await api.get<LeavePreview>("/leave/me/preview", { params })).data,
   apply: async (payload: ApplyPayload) => {

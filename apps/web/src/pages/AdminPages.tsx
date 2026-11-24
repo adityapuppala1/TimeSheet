@@ -1152,12 +1152,15 @@ function UserEditDialog({
     faceVerificationRequired: false,
     employmentType: "none",
     siteId: "none",
-    joinDate: ""
+    joinDate: "",
+    dateOfBirth: ""
   });
-  // 7.0.0 celebrations: the join date, read on its own (the user list never carries it).
-  const celebrationFields = useQuery({ queryKey: ["users", user?.id, "celebrations"], queryFn: async () => (await api.get<{ joinDate: string | null }>(`/users/${user!.id}/celebrations`)).data, enabled: Boolean(user), retry: false });
+  // 7.0.0 celebrations: the join date, read on its own (the user list never carries it). The birthday
+  // arrives in the same response ONLY for a super admin (the API omits it for everyone else), so its
+  // presence is what decides whether the field is shown at all.
+  const celebrationFields = useQuery({ queryKey: ["users", user?.id, "celebrations"], queryFn: async () => (await api.get<{ joinDate: string | null; dateOfBirth?: string | null }>(`/users/${user!.id}/celebrations`)).data, enabled: Boolean(user), retry: false });
   useEffect(() => {
-    if (celebrationFields.data) setForm((f) => ({ ...f, joinDate: celebrationFields.data.joinDate ?? "" }));
+    if (celebrationFields.data) setForm((f) => ({ ...f, joinDate: celebrationFields.data.joinDate ?? "", dateOfBirth: celebrationFields.data.dateOfBirth ?? "" }));
   }, [celebrationFields.data]);
   // 7.0.0 leave policies: the home work site picker (sites are a super-admin list; without it the
   // field is neither shown nor sent, so an ADMIN's save never clears a site).
@@ -1182,7 +1185,8 @@ function UserEditDialog({
         faceVerificationRequired: user.faceVerificationRequired ?? false,
         employmentType: user.employmentType ?? "none",
         siteId: user.siteId ?? "none",
-        joinDate: ""
+        joinDate: "",
+        dateOfBirth: ""
       });
       setExtraRoles(user.heldRoles.filter((r) => r !== user.role.name));
     }
@@ -1300,6 +1304,13 @@ function UserEditDialog({
                   <p className="text-xs text-muted-foreground">Used for work anniversaries when celebrations are on.</p>
                 </div>
               )}
+              {celebrationFields.data && "dateOfBirth" in celebrationFields.data && (
+                <div className="grid gap-1.5 sm:max-w-xs">
+                  <Label htmlFor="ue-dob">Birthday</Label>
+                  <Input id="ue-dob" type="date" value={form.dateOfBirth} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} />
+                  <p className="text-xs text-muted-foreground">Only super admins can see or change this. Colleagues see the day and month on the birthday, never the year.</p>
+                </div>
+              )}
               <div className="grid gap-1.5">
                 <Label>Reports to</Label>
                 <Select value={form.managerId} onValueChange={(value) => setForm({ ...form, managerId: value })}>
@@ -1360,7 +1371,11 @@ function UserEditDialog({
                     faceVerificationRequired: form.faceVerificationRequired,
                     employmentType: form.employmentType === "none" ? null : form.employmentType,
                     ...(sites.data ? { siteId: form.siteId === "none" ? null : form.siteId } : {}),
-                    ...(celebrationFields.data ? { joinDate: form.joinDate || null } : {})
+                    ...(celebrationFields.data ? { joinDate: form.joinDate || null } : {}),
+                    // Only when it was shown AND changed: an unchanged save must not rewrite a private field.
+                    ...(celebrationFields.data && "dateOfBirth" in celebrationFields.data && form.dateOfBirth !== (celebrationFields.data.dateOfBirth ?? "")
+                      ? { dateOfBirth: form.dateOfBirth || null }
+                      : {})
                   })
                 }
                 disabled={!form.name.trim() || !form.email.trim()}

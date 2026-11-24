@@ -33,6 +33,7 @@ import { loadHolidays } from "./attendance-team.service.js";
 import { audit } from "./audit.service.js";
 import { emitDomainEvent } from "./domain-events.js";
 import { dispatchNotification } from "./notify.service.js";
+import { decisionEmail, requestedEmail } from "./attendance-request-mail.js";
 import { getPlanningSettings } from "./planning.service.js";
 import { NOT_DEACTIVATED } from "./people-visibility.service.js";
 import { isYearSettled, settleLateMovement } from "./leave-settlement.service.js";
@@ -185,13 +186,13 @@ async function lockPerson(tx: Prisma.TransactionClient, userId: string): Promise
 
 async function approverRecipients(request: { userId: string; approverId: string | null }, fallback: Fallback) {
   if (request.approverId) {
-    const manager = await prisma.user.findFirst({ where: { id: request.approverId, status: "ACTIVE", deletedAt: null }, select: { id: true } });
+    const manager = await prisma.user.findFirst({ where: { id: request.approverId, status: "ACTIVE", deletedAt: null }, select: { id: true, name: true } });
     if (manager) return [manager, ...(await delegatesOf(manager.id)).filter((d) => d.id !== request.userId && d.id !== manager.id)];
   }
   const roles = fallback === "SUPER_ADMINS" ? ["SUPER_ADMIN"] : ["SUPER_ADMIN", "ADMIN"];
   return prisma.user.findMany({
     where: { status: "ACTIVE", deletedAt: null, isAgent: false, id: { not: request.userId }, role: { name: { in: roles as never } } },
-    select: { id: true },
+    select: { id: true, name: true },
     take: 25
   });
 }
@@ -250,6 +251,7 @@ export async function requestCompOff(input: { userId: string; workDate: string; 
       title: `${person.name} requested comp-off`,
       body: `Worked ${input.workDate} · ${Number(created.days)} day(s)`,
       link: "/app/attendance?tab=leave-inbox",
+      email: requestedEmail({ approverName: r.name, employeeName: person.name, kind: "comp-off request", summary: `Worked ${input.workDate}, ${Number(created.days)} day(s)` }),
       metadata: { compOffRequestId: created.id }
     });
   }
@@ -362,13 +364,14 @@ export async function decideCompOff(input: { actor: { id: string; role: string; 
     ...(right.onBehalfOfId ? { onBehalfOf: right.onBehalfOfId } : {})
   });
   if (approve && person) emitDomainEvent("compoff.approved", webhookPayload(decided, person, type?.code));
-  await notifyCompOffDecided(request, { approve, days, workDate, typeName: type?.name ?? null, expiresOn, note: input.note ?? null });
+  await notifyCompOffDecided(request, input.actor, { approve, days, workDate, typeName: type?.name ?? null, expiresOn, note: input.note ?? null });
   return publicCompOff(decided);
 }
 
 /** The requester's in-app notice: approved (how much, into which type, until when) or rejected (the note). */
 async function notifyCompOffDecided(
   request: { id: string; userId: string },
+  actor: { id: string; name?: string | null },
   d: { approve: boolean; days: number; workDate: string; typeName: string | null; expiresOn: string | null; note: string | null }
 ): Promise<void> {
   const until = d.expiresOn ? ", use by " + d.expiresOn : "";
@@ -379,6 +382,7 @@ async function notifyCompOffDecided(
     title: `Your comp-off for ${d.workDate} was ${d.approve ? "approved" : "rejected"}`,
     body,
     link: "/app/attendance?tab=leave",
+    email: await decisionEmail(request.userId, actor, { kind: "comp-off request", approve: d.approve, summary: `Worked ${d.workDate}, ${d.days} day(s)`, note: d.approve ? [body, d.note?.trim()].filter(Boolean).join(" - ") : d.note }),
     metadata: { compOffRequestId: request.id }
   });
 }

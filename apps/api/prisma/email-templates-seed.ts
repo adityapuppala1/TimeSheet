@@ -463,6 +463,45 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
     })
   },
 
+  "attendance.requested": {
+    subject: "{{employeeName}} sent {{requestKind}} for your decision",
+    bodyHtml: shell({
+      preheader: "An attendance request is waiting for your decision.",
+      accent: COLORS.accent,
+      body: [
+        heading("Hi {{approverName}}, a request needs your decision"),
+        lead("<strong>{{employeeName}}</strong> sent {{requestKind}}."),
+        infoCard([{ label: "Details", value: "{{summary}}", emphasize: true }], COLORS.accent),
+        // No reason here on purpose, same as leave.requested: it is personal and an email outlives
+        // the decision. The approver reads it in the app.
+        lead("Open TimeSphere to review the request and the reason attached to it."),
+        button("Review the request", "{{appUrl}}/app/attendance", COLORS.accent)
+      ].join("\n"),
+      footerNote: "You are receiving this because you decide attendance requests for this person in TimeSphere."
+    })
+  },
+
+  "attendance.decided": {
+    subject: "Your {{requestKind}} was {{decision}}",
+    bodyHtml: shell({
+      preheader: "Your attendance request has been decided.",
+      accent: COLORS.accent,
+      body: [
+        heading("Hi {{name}}, your request was {{decision}}"),
+        lead("Your {{requestKind}} has been <strong>{{decision}}</strong> by {{decidedBy}}."),
+        infoCard(
+          [
+            { label: "Details", value: "{{summary}}", emphasize: true },
+            { label: "Note", value: "{{note}}" }
+          ],
+          COLORS.accent
+        ),
+        button("Open TimeSphere", "{{appUrl}}/app/attendance", COLORS.accent)
+      ].join("\n"),
+      footerNote: "Sent when a comp-off request, attendance correction or overtime claim you made is approved or rejected."
+    })
+  },
+
   "reminder.escalation.manager": {
     subject: "{{employeeName}} missed yesterday's timesheet",
     bodyHtml: shell({
