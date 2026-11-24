@@ -95,6 +95,20 @@ describe("the monthly report", () => {
     expect((await svc.buildPayrollReport("2026-11", { now: NOW })).leaveYearClosed).toBe(true);
   });
 
+  it("judges a closed leave year per person, not off one person's EXPIRY row", async () => {
+    addUser(world, { id: "emp2", role: "EMPLOYEE", name: "Bea" });
+    world.leaveBalanceLedger.push({ userId: "emp", leaveTypeId: "type-PL", leaveYear: 2026, delta: -1, kind: "EXPIRY", idempotencyKey: "EXPIRY:emp:type-PL:2026" });
+    const r = await svc.buildPayrollReport("2026-11", { now: NOW });
+    expect(r.rows.find((x) => x.userId === "emp")!.leaveYearClosed).toBe(true);
+    expect(r.rows.find((x) => x.userId === "emp2")!.leaveYearClosed).toBe(false);
+    // The banner only says "final" when it is final for everyone in the export.
+    expect(r.leaveYearClosed).toBe(false);
+    const csv = svc.payrollCsv(r).replace("\uFEFF", "").split("\r\n");
+    const at = (name: string) => csv.find((l) => l.includes(name))!.split(",").at(-1);
+    expect(at("Bea")).toBe("no");
+    expect(at("cmd")).toBe("yes");
+  });
+
   it("is refused while Attendance & Leave is off", async () => {
     world.settings.attendanceEnabled = false;
     world.settings.leaveEnabled = false;

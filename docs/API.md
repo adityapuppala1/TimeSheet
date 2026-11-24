@@ -3149,8 +3149,9 @@ integrations). The loser is kept in the admin delivery log, never dropped.
   no leave; only counted while attendance is on), `leave` (days by type code, working days only,
   halves as 0.5), `paidLeave`, `unpaidLeave` (LOP: types with `isPaid: false`), `compOffTaken`,
   `compOffEarned`, `loggedHours` (timesheets not rejected or deleted). The response also carries
-  `leaveTypes`, `leaveYear` and `leaveYearClosed` — true once that leave year has ended or been
-  settled by the year-end rollover; treat that month as final. `format=csv` returns the same as a
+  `leaveTypes`, `leaveYear` and `leaveYearClosed`. Each row has its own `leaveYearClosed`: true once that leave
+  year has ended or the year-end rollover has settled THAT person's balances (the CSV's "Leave year closed" column is
+  per row). The report-level flag is true only when every row is closed; treat that month as final. `format=csv` returns the same as a
   CSV (UTF-8 BOM, CRLF, a column per leave type, a formula-looking cell prefixed with `'`). Never a
   reason, note or location. While overtime is on (7.0.0) each row also has `overtimeHours` and the report
   `overtime: { basis: "APPROVED" | "COMPUTED" }` (approved claim hours when claims need approval, else the

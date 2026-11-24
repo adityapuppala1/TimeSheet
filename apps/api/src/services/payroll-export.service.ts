@@ -61,6 +61,8 @@ export interface PayrollRow {
   overtimeHours?: number;
   /** 7.0.0: only while some leave type has the sandwich rule on (weekends / holidays debited as leave). */
   sandwichDays?: number;
+  /** This person's leave year is closed: it has ended, or the rollover has settled their balances. */
+  leaveYearClosed: boolean;
 }
 
 export interface PayrollReport {
@@ -68,6 +70,7 @@ export interface PayrollReport {
   from: string;
   to: string;
   leaveYear: number;
+  /** True only when every row's leave year is closed: the export is final for everyone in it. */
   leaveYearClosed: boolean;
   leaveTypes: Array<{ code: string; name: string; isPaid: boolean }>;
   /** 7.0.0: present only while overtime is on. Weeks count in the month their Monday falls in. */
@@ -117,7 +120,8 @@ export async function buildPayrollReport(month: string, opts: { now?: Date; empl
     ids.length ? prisma.timesheet.findMany({ where: { userId: { in: ids }, workDate: { gte: fromDate, lte: toDate }, status: { not: "REJECTED" }, deletedAt: null }, select: { userId: true, totalHours: true } }) : [],
     ids.length ? prisma.compOffRequest.findMany({ where: { userId: { in: ids }, status: "APPROVED", workDate: { gte: fromDate, lte: toDate } }, select: { userId: true, days: true } }) : [],
     prisma.leaveType.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }], select: { code: true, name: true, isPaid: true, sandwichRule: true } }),
-    prisma.leaveBalanceLedger.findFirst({ where: { leaveYear, idempotencyKey: { startsWith: "EXPIRY:" } }, select: { id: true } })
+    // Per person: one person's rollover says nothing about anybody else's balances.
+    ids.length ? prisma.leaveBalanceLedger.findMany({ where: { userId: { in: ids }, leaveYear, idempotencyKey: { startsWith: "EXPIRY:" } }, select: { userId: true } }) : []
   ]);
 
   const overtime = await overtimeHoursForPeriod(ids, from, to);
@@ -128,6 +132,8 @@ export async function buildPayrollReport(month: string, opts: { now?: Date; empl
   for (const c of compOffs) earned.set(c.userId, (earned.get(c.userId) ?? 0) + Number(c.days));
   const compOffCode = settings.compOffLeaveTypeCode ?? "CO";
   const sandwichRule = types.some((t) => Boolean(t.sandwichRule));
+  const yearEnded = leaveYearBounds(leaveYear, startMonth).to < today;
+  const settledFor = new Set(settled.map((s) => s.userId));
 
   const rows: PayrollRow[] = people.map((p) => {
     const isHoliday = (d: string) => Boolean(holidayOf(p.holidayCalendarId, d, p.id));
@@ -147,13 +153,13 @@ export async function buildPayrollReport(month: string, opts: { now?: Date; empl
       compOffEarned: r2(earned.get(p.id) ?? 0),
       loggedHours: r2(hours.get(p.id) ?? 0),
       ...(overtime ? { overtimeHours: overtime.hours.get(p.id) ?? 0 } : {}),
-      ...(sandwichRule ? { sandwichDays: totals.sandwich } : {})
+      ...(sandwichRule ? { sandwichDays: totals.sandwich } : {}),
+      leaveYearClosed: yearEnded || settledFor.has(p.id)
     };
   });
 
-  const yearEnded = leaveYearBounds(leaveYear, startMonth).to < today;
   const leaveTypes = types.map((t) => ({ code: t.code, name: t.name, isPaid: t.isPaid }));
-  return { month, from, to, leaveYear, leaveYearClosed: yearEnded || Boolean(settled), leaveTypes, ...(overtime ? { overtime: { basis: overtime.basis } } : {}), ...(sandwichRule ? { sandwichRule: true } : {}), rows };
+  return { month, from, to, leaveYear, leaveYearClosed: yearEnded || (rows.length > 0 && rows.every((r) => r.leaveYearClosed)), leaveTypes, ...(overtime ? { overtime: { basis: overtime.basis } } : {}), ...(sandwichRule ? { sandwichRule: true } : {}), rows };
 }
 
 type LeaveRow = { startDate: Date; endDate: Date; startHalf: "FULL" | "FIRST_HALF" | "SECOND_HALF"; endHalf: "FULL" | "FIRST_HALF" | "SECOND_HALF"; days?: unknown; leaveType: { code: string; isPaid: boolean } };
@@ -276,7 +282,7 @@ export function payrollCsv(report: PayrollReport): string {
         r.loggedHours,
         ...(report.overtime ? [r.overtimeHours ?? 0] : []),
         ...(report.sandwichRule ? [r.sandwichDays ?? 0] : []),
-        report.leaveYearClosed ? "yes" : "no"
+        r.leaveYearClosed ? "yes" : "no"
       ]
         .map(csvCell)
         .join(",")
