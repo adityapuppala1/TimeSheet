@@ -209,12 +209,16 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
     const fillScope = fillScopeFor(actor?.permissions ?? [], user._count.reports);
     const tablesHtml = await buildDigestTables({ userId: user.id, periods, scope, fillScope });
     // 7.0.0: "" unless Attendance & Leave is on — the digest is unchanged with the module off.
+    // A failure here costs the line, never the digest.
     const expectedHoursHtml = await digestExpectedHoursHtml(
       user.id,
       weekStartUtcDate.toISOString().slice(0, 10),
       new Date(weekEndUtcDate.getTime() - DAY_MS).toISOString().slice(0, 10),
       hoursLogged
-    );
+    ).catch((error: unknown) => {
+      console.warn(`[weekly-digest] no expected-hours line for ${user.name}:`, (error as Error).message);
+      return "";
+    });
 
     await dispatchNotification({
       userId: user.id,
