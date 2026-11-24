@@ -204,7 +204,7 @@ settingsRouter.get("/notifications", requireSuperAdmin, async (_req, res) => {
   res.json(withRuntimeMeta(settings));
 });
 
-const updateSchema = z.object({
+export const notificationsUpdateSchema = z.object({
   body: z
     .object({
       ...Object.fromEntries(
@@ -218,7 +218,8 @@ const updateSchema = z.object({
       // known roles so a typo can't silently persist a mute that no UI can ever clear again —
       // this column is free-form JSON at the DB level, so this schema IS its only integrity check.
       emailRoleMutes: z
-        .record(
+        // partialRecord: zod 4's z.record over an enum key is exhaustive, so the web's partial map 422'd.
+        .partialRecord(
           z.enum(notificationPreferenceKeys as unknown as [string, ...string[]]),
           z.array(z.enum(roles as unknown as [string, ...string[]]))
         )
@@ -227,7 +228,7 @@ const updateSchema = z.object({
     .strict()
 });
 
-settingsRouter.patch("/notifications", requireSuperAdmin, validate(updateSchema), async (req, res) => {
+settingsRouter.patch("/notifications", requireSuperAdmin, validate(notificationsUpdateSchema), async (req, res) => {
   const data: Record<string, boolean | number | Record<string, string[]>> = {};
   for (const key of notificationPreferenceKeys) {
     if (typeof req.body[key] === "boolean") data[key] = req.body[key];
