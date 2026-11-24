@@ -135,7 +135,7 @@ export function WeekDraftPanel() {
               they're added as drafts for you to check and submit.
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
             <div role="group" aria-label="Week" className="inline-flex rounded-md border border-border p-0.5">
               {([0, 1] as const).map((w) => (
                 <button
