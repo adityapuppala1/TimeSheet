@@ -88,10 +88,31 @@ export interface DayRules {
   workingDays: readonly number[];
   /** True when `dateKey` is a holiday in the person's calendar. */
   isHoliday: (dateKey: string) => boolean;
+  /** 7.0.0: the leave type's sandwich rule (LeaveType.sandwichRule). Omitted = off. */
+  sandwich?: boolean;
 }
 
 /**
- * What a request COSTS: working days in the span that are not holidays, a half counting 0.5.
+ * 7.0.0 SANDWICH RULE: the weekends and holidays FULLY ENCLOSED by leave days of this one request —
+ * a non-working day with a counted leave day (a working, non-holiday day) both before and after it
+ * inside the span. Days at the start or end of the span are never enclosed (Sat-Mon costs only
+ * Monday). A half day at an edge still encloses: a span may only start on a SECOND_HALF and end on a
+ * FIRST_HALF, i.e. the half that touches the gap, so the person is away across the whole gap. An
+ * enclosed day counts as a full day. Empty when the rule is off. Pure.
+ */
+export function sandwichedDays(span: LeaveSpan, rules: DayRules): string[] {
+  if (!rules.sandwich) return [];
+  const days = [...dayPortions(span).keys()];
+  const counted = days.map((d) => rules.workingDays.includes(weekdayOf(d)) && !rules.isHoliday(d));
+  const first = counted.indexOf(true);
+  const last = counted.lastIndexOf(true);
+  if (first < 0 || first === last) return [];
+  return days.filter((_, i) => i > first && i < last && !counted[i]);
+}
+
+/**
+ * What a request COSTS: working days in the span that are not holidays, a half counting 0.5, plus —
+ * with the sandwich rule on — every enclosed weekend and holiday as a full day.
  * A request made entirely of weekends and holidays costs 0 (and the service refuses it).
  */
 export function countLeaveDays(span: LeaveSpan, rules: DayRules): number {
@@ -101,7 +122,7 @@ export function countLeaveDays(span: LeaveSpan, rules: DayRules): number {
     if (rules.isHoliday(d)) continue;
     total += portionFraction(half);
   }
-  return total;
+  return total + sandwichedDays(span, rules).length;
 }
 
 /** Two portions of the SAME day clash unless they are the two different halves. */
@@ -351,7 +372,10 @@ const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "
  */
 export function excludedDays(span: LeaveSpan, rules: DayRules & { holidayName: (dateKey: string) => string | null }): ExcludedDay[] {
   const out: ExcludedDay[] = [];
+  // A sandwiched day is counted, so it is not "excluded".
+  const sandwiched = new Set(sandwichedDays(span, rules));
   for (const d of dayPortions(span).keys()) {
+    if (sandwiched.has(d)) continue;
     const weekday = weekdayOf(d);
     if (!rules.workingDays.includes(weekday)) {
       out.push({ date: d, reason: "WEEKEND", label: WEEKDAY_NAMES[weekday] });

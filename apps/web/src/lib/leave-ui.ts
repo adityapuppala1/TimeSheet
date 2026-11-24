@@ -96,6 +96,13 @@ export function excludedText(excluded: LeavePreview["excluded"]): string | null 
   return `excludes ${labels.join(", ")}`;
 }
 
+/** 7.0.0 sandwich rule: "includes 2 enclosed weekend or holiday days" — why the count is higher. */
+export function sandwichedText(sandwiched: readonly string[] | undefined): string | null {
+  const n = sandwiched?.length ?? 0;
+  if (n === 0) return null;
+  return `includes ${n} enclosed weekend or holiday ${n === 1 ? "day" : "days"} (this leave type counts them)`;
+}
+
 /** When the type's rules would take the balance below zero, say so in the policy's own words. */
 export function negativeBalanceMessage(p: Pick<LeavePreview, "balanceAfter" | "allowNegative">, typeName: string): string | null {
   if (p.balanceAfter == null || p.balanceAfter >= 0) return null;

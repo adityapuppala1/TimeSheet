@@ -27,6 +27,8 @@ export interface LeaveTypeRow {
   /** 7.0.0 policy scope: empty = everyone on that axis. */
   scopeEmploymentTypes?: string[];
   scopeSiteIds?: string[];
+  /** 7.0.0: count weekends and holidays enclosed by one request's leave days. */
+  sandwichRule?: boolean;
 }
 
 export interface LeaveBalance {
@@ -84,6 +86,8 @@ export interface LeavePreview {
   problems: Array<{ code: string; message: string }>;
   days: number;
   excluded: Array<{ date: string; reason: "WEEKEND" | "HOLIDAY"; label: string }>;
+  /** 7.0.0: weekends / holidays counted by the type's sandwich rule. */
+  sandwiched?: string[];
   balanceBefore: number | null;
   balanceAfter: number | null;
   allowNegative: boolean;

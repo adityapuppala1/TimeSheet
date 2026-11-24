@@ -20,6 +20,7 @@ import {
   buildIcs,
   canCancel,
   excludedText,
+  sandwichedText,
   FILTER_LABELS,
   fallsOnNote,
   filterRequests,
@@ -135,6 +136,7 @@ function SummaryBody({ preview, typeName, loading }: Readonly<{ preview: Awaited
     return <p className="text-sm text-muted-foreground">{loading ? "Working it out…" : "Choose a type and your dates to see what it costs."}</p>;
   }
   const excluded = excludedText(preview.excluded);
+  const sandwiched = sandwichedText(preview.sandwiched);
   const change = balanceChange(preview);
   const negative = negativeBalanceMessage(preview, typeName);
   const blocking = preview.problems.filter((p) => p.code !== "LEAVE_INSUFFICIENT_BALANCE" || !negative);
@@ -144,6 +146,7 @@ function SummaryBody({ preview, typeName, loading }: Readonly<{ preview: Awaited
         <div>
           <p className="text-3xl font-black tabular-nums leading-none">{formatDays(preview.days)}</p>
           {excluded && <p className="mt-1 text-xs text-muted-foreground">{excluded}</p>}
+          {sandwiched && <p className="mt-1 text-xs text-muted-foreground">{sandwiched}</p>}
         </div>
       )}
       {change && <p className="text-sm font-medium tabular-nums">{change}</p>}

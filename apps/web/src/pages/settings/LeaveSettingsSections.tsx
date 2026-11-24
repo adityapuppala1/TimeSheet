@@ -53,6 +53,7 @@ interface TypeForm {
   /** 7.0.0: empty = everyone on that axis. */
   scopeEmploymentTypes: string[];
   scopeSiteIds: string[];
+  sandwichRule: boolean;
 }
 
 const BLANK: TypeForm = {
@@ -69,7 +70,8 @@ const BLANK: TypeForm = {
   allowNegative: false,
   enabled: true,
   scopeEmploymentTypes: [],
-  scopeSiteIds: []
+  scopeSiteIds: [],
+  sandwichRule: false
 };
 
 function formFrom(t: LeaveTypeRow): TypeForm {
@@ -87,7 +89,8 @@ function formFrom(t: LeaveTypeRow): TypeForm {
     allowNegative: t.allowNegative,
     enabled: t.enabled,
     scopeEmploymentTypes: t.scopeEmploymentTypes ?? [],
-    scopeSiteIds: t.scopeSiteIds ?? []
+    scopeSiteIds: t.scopeSiteIds ?? [],
+    sandwichRule: t.sandwichRule ?? false
   };
 }
 
@@ -219,6 +222,13 @@ function TypeDialog({
               <FlagRow id="lt-half" label="Allow half days" checked={f.allowHalfDay} onChange={(v) => set({ allowHalfDay: v })} />
               <FlagRow id="lt-paid" label="Paid leave" checked={f.isPaid} onChange={(v) => set({ isPaid: v })} />
               <FlagRow id="lt-approval" label="Needs approval" hint="Off means requests are approved automatically." checked={f.requiresApproval} onChange={(v) => set({ requiresApproval: v })} />
+              <FlagRow
+                id="lt-sandwich"
+                label="Sandwich rule"
+                hint="Weekends and holidays fully between leave days of one request count as leave (Friday to Monday costs 4 days, not 2). Only new requests are affected."
+                checked={f.sandwichRule}
+                onChange={(v) => set({ sandwichRule: v })}
+              />
               <FlagRow id="lt-neg" label="Allow a negative balance" hint="Otherwise a request that would go below zero is declined." checked={f.allowNegative} onChange={(v) => set({ allowNegative: v })} />
               <FlagRow
                 id="lt-doc"

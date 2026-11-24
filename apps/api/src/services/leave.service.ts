@@ -55,6 +55,7 @@ import {
   countLeaveDays,
   excludedDays,
   findClash,
+  sandwichedDays,
   EMPLOYMENT_TYPES,
   inPolicyScope,
   scopeList,
@@ -117,7 +118,9 @@ export const leaveTypeBody = z
     sortOrder: z.number().int().min(0).max(10000),
     // 7.0.0 policy scope: empty / null = everyone on that axis.
     scopeEmploymentTypes: z.array(z.enum(EMPLOYMENT_TYPES)).max(4).nullable().optional(),
-    scopeSiteIds: z.array(z.string().min(1).max(64)).max(200).nullable().optional()
+    scopeSiteIds: z.array(z.string().min(1).max(64)).max(200).nullable().optional(),
+    // 7.0.0: count weekends and holidays enclosed by leave days of one request. Off by default.
+    sandwichRule: z.boolean().optional()
   })
   .strict();
 
@@ -269,7 +272,8 @@ export function publicLeaveType(t: LeaveType) {
     enabled: t.enabled,
     sortOrder: t.sortOrder,
     scopeEmploymentTypes: scopeList(t.scopeEmploymentTypes),
-    scopeSiteIds: scopeList(t.scopeSiteIds)
+    scopeSiteIds: scopeList(t.scopeSiteIds),
+    sandwichRule: Boolean(t.sandwichRule)
   };
 }
 
@@ -607,7 +611,9 @@ export async function applyLeave(input: ApplyInput): Promise<ApplyResult> {
     getPlanningSettings(),
     loadHolidays([person.holidayCalendarId], span.startDate, span.endDate)
   ]);
-  const days = countLeaveDays(span, { workingDays: planning.workingDays, isHoliday: (d) => Boolean(holidayOf(person.holidayCalendarId, d, person.id)) });
+  // 7.0.0: with the type's sandwich rule, enclosed weekends and holidays count too. The result is
+  // stored on the request, so the debit, a reversal and any settlement use exactly this number.
+  const days = countLeaveDays(span, { workingDays: planning.workingDays, isHoliday: (d) => Boolean(holidayOf(person.holidayCalendarId, d, person.id)), sandwich: type.sandwichRule });
   if (days <= 0) throw new AppError(422, "Those dates are all weekends or holidays — there is nothing to take leave from.", { code: "LEAVE_NO_WORKING_DAYS" });
 
   if (!input.external && type.requiresDocumentAfterDays != null && days > type.requiresDocumentAfterDays && !input.attachment) {
@@ -740,6 +746,8 @@ export interface LeavePreview {
   problems: Array<{ code: string; message: string }>;
   days: number;
   excluded: ReturnType<typeof excludedDays>;
+  /** 7.0.0: weekends / holidays counted by the type's sandwich rule (empty when it is off). */
+  sandwiched: string[];
   balanceBefore: number | null;
   balanceAfter: number | null;
   allowNegative: boolean;
@@ -847,7 +855,7 @@ export async function previewLeave(userId: string, q: z.infer<typeof previewQuer
     approver: null as LeavePreview["approver"]
   };
   if (problems.length) {
-    return { ok: false, days: 0, excluded: [], balanceBefore: null, balanceAfter: null, overlap: null, ...base, problems };
+    return { ok: false, days: 0, excluded: [], sandwiched: [], balanceBefore: null, balanceAfter: null, overlap: null, ...base, problems };
   }
 
   const [planning, holidayOf, existing, facts, pending, manager] = await Promise.all([
@@ -867,10 +875,11 @@ export async function previewLeave(userId: string, q: z.infer<typeof previewQuer
     activeApprover(person.managerId)
   ]);
   const isHoliday = (d: string) => Boolean(holidayOf(person.holidayCalendarId, d, person.id));
-  const days = countLeaveDays(span, { workingDays: planning.workingDays, isHoliday });
+  const dayRules = { workingDays: planning.workingDays, isHoliday, sandwich: type.sandwichRule };
+  const days = countLeaveDays(span, dayRules);
+  const sandwiched = sandwichedDays(span, dayRules);
   const excluded = excludedDays(span, {
-    workingDays: planning.workingDays,
-    isHoliday,
+    ...dayRules,
     holidayName: (d) => holidayOf(person.holidayCalendarId, d, person.id)?.name ?? null
   });
   if (days <= 0) problems.push({ code: "LEAVE_NO_WORKING_DAYS", message: "Those dates are all weekends or holidays — there is nothing to take leave from." });
@@ -890,6 +899,7 @@ export async function previewLeave(userId: string, q: z.infer<typeof previewQuer
     problems,
     days,
     excluded,
+    sandwiched,
     balanceBefore: available,
     balanceAfter: r2(available - days),
     allowNegative: type.allowNegative,

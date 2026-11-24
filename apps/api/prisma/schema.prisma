@@ -6623,6 +6623,9 @@ model LeaveType {
   /// sees, applies for nor accrues the type (leave-calc.ts#inPolicyScope).
   scopeEmploymentTypes      Json?
   scopeSiteIds              Json?
+  /// 7.0.0 sandwich rule: weekends and holidays fully enclosed between leave days of the SAME
+  /// request are counted as leave (leave-calc.ts#sandwichedDays). OFF by default.
+  sandwichRule              Boolean      @default(false)
 
   ledger   LeaveBalanceLedger[]
   requests LeaveRequest[]

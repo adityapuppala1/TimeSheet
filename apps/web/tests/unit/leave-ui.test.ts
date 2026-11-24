@@ -199,3 +199,13 @@ describe("buildIcs", () => {
     expect(folded.split("\r\n").slice(1).every((l) => l.startsWith(" "))).toBe(true);
   });
 });
+
+describe("sandwichedText (7.0.0)", () => {
+  it("says nothing when no day is sandwiched, and counts them otherwise", async () => {
+    const { sandwichedText } = await import("../../src/lib/leave-ui");
+    expect(sandwichedText(undefined)).toBeNull();
+    expect(sandwichedText([])).toBeNull();
+    expect(sandwichedText(["2026-11-28"])).toMatch(/1 enclosed weekend or holiday day /);
+    expect(sandwichedText(["2026-11-28", "2026-11-29"])).toMatch(/2 enclosed .* days/);
+  });
+});
