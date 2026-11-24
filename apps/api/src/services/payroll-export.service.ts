@@ -205,13 +205,18 @@ function leaveTotals(leaves: readonly LeaveRow[], from: string, to: string, isWo
     if (l.leaveType.isPaid) paid += days;
     else unpaid += days;
   }
-  // Both halves of one day taken (two half-day requests) is a whole day off.
+  const halfLeave = splitHalves(halves, fullLeave);
+  return { byType, fullLeave, halfLeave, paid, unpaid, sandwich: r2(sandwich) };
+}
+
+/** Days with half a day of leave. Both halves of one day taken (two half-day requests) is a whole day off, added to `fullLeave`. */
+function splitHalves(halves: ReadonlyMap<string, number>, fullLeave: Set<string>): Set<string> {
   const halfLeave = new Set<string>();
   for (const [d, n] of halves) {
     if (n >= 2) fullLeave.add(d);
     else if (!fullLeave.has(d)) halfLeave.add(d);
   }
-  return { byType, fullLeave, halfLeave, paid, unpaid, sandwich: r2(sandwich) };
+  return halfLeave;
 }
 
 /** Working days, holidays on scheduled days, present and absent (resolveDayStatus) for one person. */

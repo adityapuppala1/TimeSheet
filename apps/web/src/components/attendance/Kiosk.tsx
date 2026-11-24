@@ -257,17 +257,13 @@ export function KioskDisplayPage() {
         timer.current = window.setTimeout(tick, Math.max(0, wait));
         return;
       }
-      timer.current = window.setTimeout(() => {
-        fetchKioskCodeUsed(token, nonce)
-          .then((used) => {
-            if (!live) return;
-            if (used) tick();
-            else watch(nonce, rotateAt);
-          })
-          .catch(() => {
-            if (live) watch(nonce, rotateAt);
-          });
-      }, KIOSK_USED_POLL_MS);
+      timer.current = window.setTimeout(() => runInBackground(checkUsed(nonce, rotateAt)), KIOSK_USED_POLL_MS);
+    };
+    const checkUsed = async (nonce: string, rotateAt: number) => {
+      const used = await fetchKioskCodeUsed(token, nonce).catch(() => false);
+      if (!live) return;
+      if (used) tick();
+      else watch(nonce, rotateAt);
     };
     tick();
     return () => {

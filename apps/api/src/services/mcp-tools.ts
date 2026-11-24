@@ -49,6 +49,15 @@ import { assertIngestAllowed, ingestPunch } from "./attendance-ingest.service.js
 import { isPunchInFaceRequired, publicRecord } from "./attendance-punch.service.js";
 import { getAttendanceSettings } from "./attendance-settings.service.js";
 import { locationlessSiteVerdict, OUTSIDE_SITES } from "./attendance-site.service.js";
+
+/** The work-site rule for the assistant's punch: throws under BLOCK, returns flagged evidence under ALLOW_FLAGGED. */
+async function locationlessSiteEvidence(rule: Parameters<typeof locationlessSiteVerdict>[0]): Promise<{ siteLabel: string; siteFlagged: true } | null> {
+  const site = await locationlessSiteVerdict(rule);
+  if (site === "BLOCK") {
+    throw new AppError(403, "This workspace requires you to punch in at a work site. Punch in from the TimeSphere web app.", { code: "OUTSIDE_WORK_SITES" });
+  }
+  return site === "FLAG" ? { siteLabel: OUTSIDE_SITES, siteFlagged: true } : null;
+}
 import { applyLeave, assertLeaveOn, getBalances, listMyRequests, withoutPrivateText } from "./leave.service.js";
 import { weekOf, whoIsOff } from "./leave-who-is-off.service.js";
 
@@ -713,10 +722,7 @@ const TOOLS: readonly McpToolRegistration[] = [
       }
       // An assistant cannot supply a location, so the work-site rule treats this like a web punch-in
       // without one: refused under BLOCK, recorded flagged under ALLOW_FLAGGED.
-      const site = await locationlessSiteVerdict(settings.requireSite);
-      if (site === "BLOCK") {
-        throw new AppError(403, "This workspace requires you to punch in at a work site. Punch in from the TimeSphere web app.", { code: "OUTSIDE_WORK_SITES" });
-      }
+      const siteEvidence = await locationlessSiteEvidence(settings.requireSite);
       const me = await prisma.user.findUnique({ where: { id: ctx.user.id }, select: { id: true, timezone: true } });
       if (!me) throw new AppError(404, "User not found");
       const result = await ingestPunch({
@@ -725,7 +731,7 @@ const TOOLS: readonly McpToolRegistration[] = [
         userId: me.id,
         punchInAt: new Date(),
         gateChecked: true,
-        ...(site === "FLAG" ? { evidence: { siteLabel: OUTSIDE_SITES, siteFlagged: true } } : {})
+        ...(siteEvidence ? { evidence: siteEvidence } : {})
       });
       const record = result.recordId
         ? await prisma.attendanceRecord.findUnique({ where: { id: result.recordId }, include: { sourceRef: { select: { name: true } } } })
