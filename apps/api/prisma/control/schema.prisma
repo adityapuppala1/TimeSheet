@@ -222,6 +222,9 @@ model Organization {
   emailDomains    OrgEmailDomain[]
 
   @@index([status])
+  /// Declared because control migration 20260827230000_trial_lifecycle creates it (the trial worker
+  /// scans by it); without it a fresh replay of the migrations and this schema disagree.
+  @@index([trialEndsAt])
 }
 
 /// Platform-level SMTP — the account the DEPLOYMENT sends from, as opposed to the per-workspace

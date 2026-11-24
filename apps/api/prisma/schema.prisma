@@ -4724,6 +4724,10 @@ model AiProposal {
   @@index([status, createdAt])
   @@index([scopeProjectId, status])
   @@index([expiresAt])
+  /// Declared because migration 20260917140000_proposal_source_document creates it by this name; without
+  /// it a fresh replay of the migrations and this schema disagree (the schema expects MySQL's implicit
+  /// `_fkey` index instead).
+  @@index([sourceDocumentId])
 }
 
 /// One row per calendar month: the serialized gate the AI budget check goes through.
