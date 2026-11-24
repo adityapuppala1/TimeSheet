@@ -236,6 +236,31 @@ Only when Attendance or Leave is on and in the plan; otherwise these screens are
   role's toggle no longer fails validation; omitting the map still leaves the stored one untouched.
 - **Timesheet at 320px.** The Draft my week actions wrap, so `/app/timesheet` no longer overflows horizontally on the
   narrowest phones.
+- **Comp-off across the year end.** A comp-off is credited to the leave year of the day it is approved, so December
+  work approved after the rollover is no longer expired or capped by the closed year. Expiry takes the credit back from
+  the year it now sits in, carried or not.
+- **CSV formula cells, everywhere.** Every export neutralises a cell starting with `=`, `+`, `-`, `@`, tab or CR after
+  trimming, so a leading space or newline no longer slips a formula into Excel. The timesheet report export, which had
+  no guard, now has one; plain numbers are left as numbers.
+- **Assistant punch-in follows the work-site rule.** The MCP `punch_in` tool is refused under "Block" and recorded
+  flagged under "Allow and flag" once a site exists. Devices, the kiosk, the attendance API, webhooks and CSV imports
+  stay exempt as trusted integrations.
+- **A kiosk code works once.** A QR code is single use across everyone, so a forwarded photo of it cannot punch
+  someone else in, and the kiosk shows a fresh code straight after each scan (one more additive tenant migration,
+  `20261130300000_kiosk_nonce_single_use`, and `GET /api/attendance/kiosk/device/code/used`).
+- **Decision notes stay private in the admin "all" inbox.** An admin browsing requests they cannot decide no longer
+  sees the decider's note, as they already did not see the reason or the document.
+- **No credentials in logs.** A 500's log line, the access log and request telemetry redact calendar feed tokens and
+  every query-string value (an OIDC callback's code and state included).
+- **Approval delegations cannot loop under a race.** Creating A to B and B to A at the same moment locks both people,
+  so one of them is refused.
+- **Payroll's "Leave year closed" is per person**, rather than set for everyone by one person's rollover; the report
+  flag is true only when the whole export is final.
+- **Late leave changes two years back settle fully.** A correction to a year whose next year is also closed now
+  cascades through every closed year, leaving nothing behind.
+- **Payroll counts an unpunched half-day leave as half a day absent**, not a whole one.
+- **A fresh install's database matches the schema.** Two indexes the migrations create are now declared in the schema,
+  verified by replaying every tenant and control-plane migration into an empty database.
 
 ## 6.4.0 — the Agents Office: watch your AI teammates work, and replay their last 24 hours — 2026-11-23
 
