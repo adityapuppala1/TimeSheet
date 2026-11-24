@@ -353,6 +353,20 @@ const FEATURES: Feature[] = [
     body: "The Agents page opens on a 3D office where each teammate is a person: working, on duty, off, or asking for a look. Real hand-offs, meetings over a shared item and queued runs show as they happen, and a timeline replays the last 24 hours. What is only illustration is labelled SIMULATED or Idle, never passed off as work."
   },
   {
+    icon: CalendarCheck,
+    group: "Track the work",
+    gate: "attendanceEnabled",
+    title: "Attendance, holidays and missed-day reasons",
+    body: "Off until an admin switches it on. Then a punch-in after login — optional (a banner) or mandatory — with location and a face check as separate, off-by-default options; no map or coordinates are ever shown. Holiday calendars adjust expected hours, an 11:00 reminder email can be muted per role, and a past working day with no entries asks for a reason from a dropdown (or Other). Punches arrive from the web, the API, a signed webhook, MCP, CSV or an HRMS/biometric feed, each record keeping its source, with source priority settling conflicts."
+  },
+  {
+    icon: CalendarCheck,
+    group: "Track the work",
+    gate: "leaveManagementEnabled",
+    title: "Leave you can approve, count and audit",
+    body: "Leave types such as PL, CL and SL with accrual, carry-forward, half days and document rules, over a balance ledger. Requests go to the manager with an admin fallback and a super-admin override, with bulk approve; an HRMS can send leave in, either trusted or re-approved here. Leave reduces expected hours, managers get a team activity view, and Me, Team and Organisation analytics carry AI suggestions built only from k-anonymous aggregates. Public API grants and leave webhooks included."
+  },
+  {
     icon: Workflow,
     group: "Plan & forecast",
     gate: "aiPmCopilotEnabled",

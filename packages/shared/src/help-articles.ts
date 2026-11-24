@@ -326,7 +326,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Privacy & retention: set the location consent wording and how many days raw location evidence is kept."
     ],
     notes:
-      "Everything defaults to off for existing workspaces. Working days come from the Planning settings. The Leave and Approvals sections are placeholders until leave management ships.",
+      "Everything defaults to off for existing workspaces. Working days come from the Planning settings. Leave types, balances and approvals are in the Leave sections and need the leave-management entitlement (Enterprise by default).",
     keywords: ["attendance", "settings", "enable", "holiday", "calendar", "reasons", "punch in mode", "plan", "tier", "retention"]
   },
   {
@@ -348,6 +348,60 @@ export const HELP_ARTICLES: HelpArticle[] = [
     notes:
       "When two sources report the same day the higher priority wins and the other punch is kept for audit. Deleting a source stops it immediately; past records and the log stay. Reference: docs/API.md.",
     keywords: ["integration", "webhook", "biometric", "hrms", "api key", "csv import", "mcp", "source", "device", "hmac"]
+  },
+  {
+    id: "leave-apply",
+    category: "Timesheets",
+    title: "Apply for leave and track your requests",
+    where: "Sidebar → Attendance → Leave (shown once your workspace turns leave on)",
+    when: "When you need time off, or want to see where a request stands or what your balance is.",
+    steps: [
+      "Open Sidebar → Attendance → Leave. Apply is the first view.",
+      "Pick the leave type (for example Privilege, Casual or Sick). Your balance for it is shown.",
+      "Choose the first and last day. For half a day, set the part of the day on the first or last date.",
+      "Add a reason if you wish. If the type needs a supporting document beyond a number of days, attach it.",
+      "Check the summary and submit. Your approver is named on the form.",
+      "My requests lists every request with its state. Cancel one that is still open from there; Holidays shows your calendar."
+    ],
+    notes:
+      "Approved leave and holidays reduce your expected hours and never ask for a missed-day reason. Leave sent in from an HRMS may arrive already approved or wait for a re-approve, depending on how your admin set the integration.",
+    keywords: ["leave", "time off", "vacation", "sick", "casual", "balance", "half day", "holiday", "apply", "request"]
+  },
+  {
+    id: "leave-approve",
+    category: "Timesheets",
+    title: "Approve leave requests",
+    roles: ["MANAGER", "TEAM_LEAD", "ADMIN", "SUPER_ADMIN"],
+    where: "Sidebar → Attendance → Team → Approvals",
+    when: "When a person who reports to you has asked for leave.",
+    steps: [
+      "Open Sidebar → Attendance → Team. Approvals lists the requests waiting on you (on a wide screen it sits beside the board).",
+      "Open a request to see the dates, type, balance and any document, then Approve or Reject. A rejection can carry a reason.",
+      "To clear several, switch on bulk mode, tick the requests and approve them together after the confirmation.",
+      "The Leave calendar tab shows who is away and when."
+    ],
+    notes:
+      "If a person has no manager, an admin approves; a super admin can override. A decision cannot be undone from this screen. Reasons are visible to approvers only.",
+    keywords: ["approve leave", "reject leave", "bulk approve", "leave calendar", "approvals", "manager", "team"]
+  },
+  {
+    id: "leave-setup",
+    category: "Workspace settings",
+    title: "Set up leave types, balances and holiday calendars",
+    roles: ADMIN,
+    where: "Workspace Settings → Attendance & Leave",
+    when: "Before you switch leave on for the workspace.",
+    steps: [
+      "Confirm the plan includes leave management (Enterprise by default; a platform administrator can grant it per workspace).",
+      "Add leave types such as PL, CL and SL, each with its yearly allowance, accrual (monthly or all at once), carry-forward, whether half days are allowed and when a document is required.",
+      "Add holiday calendars and their holidays; assign a calendar to people who follow a different one.",
+      "Choose who approves when there is no manager (any admin, or super admins only).",
+      "If an HRMS sends leave in on the signed webhook, choose whether its approvals are trusted (recorded as approved) or re-approved here (queued for your approvers).",
+      "Switch leave on. Balances start from the allowance and follow a ledger you can read."
+    ],
+    notes:
+      "API keys can be granted leave:read and leave:write. Reference: docs/API.md.",
+    keywords: ["leave types", "accrual", "carry forward", "balance", "ledger", "holiday calendar", "hrms", "leave settings", "PL", "CL", "SL"]
   },
   {
     id: "approve-timesheets",
