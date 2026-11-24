@@ -52,6 +52,7 @@ import {
   publicLeaveType
 } from "../services/leave.service.js";
 import { runLeaveAccrual } from "../workers/leave-accrual.worker.js";
+import { buildPayrollReport, payrollCsv } from "../services/payroll-export.service.js";
 import { createDelegation, delegateCandidates, delegationBody, listDelegations, revokeDelegation } from "../services/approval-delegation.service.js";
 import {
   cancelCompOff,
@@ -429,4 +430,21 @@ leaveRouter.post("/delegations", requireAuth, validate(z.object({ body: delegati
 leaveRouter.post("/delegations/:id/revoke", requireAuth, async (req, res) => {
   await assertLeaveOn();
   res.json(await revokeDelegation(actorOf(req), String(req.params.id)));
+});
+
+/* ----------------------------- payroll export (7.0.0) ----------------------------- */
+
+/** ADMIN and SUPER_ADMIN: the monthly per-person report, as JSON or (format=csv) a CSV download. */
+leaveRouter.get("/payroll", requireAuth, async (req, res) => {
+  if (req.user!.role !== "ADMIN" && req.user!.role !== "SUPER_ADMIN") throw new AppError(403, "Only an administrator can export payroll.");
+  const month = typeof req.query.month === "string" ? req.query.month : "";
+  const report = await buildPayrollReport(month);
+  await audit(req.user!.id, "attendance.payroll_exported", "PayrollReport", month, { month, rows: report.rows.length, format: req.query.format === "csv" ? "csv" : "json" });
+  if (req.query.format === "csv") {
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="payroll-${month}.csv"`);
+    res.send(payrollCsv(report));
+    return;
+  }
+  res.json(report);
 });

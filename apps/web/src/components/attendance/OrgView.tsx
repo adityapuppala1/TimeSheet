@@ -8,6 +8,7 @@
  * box; every chart has a "View as table" switch and labels its values directly; one hue plus grey;
  * deltas carry an arrow icon and words; nothing ranks or names individuals.
  */
+import { PayrollExportCard } from "./PayrollExport";
 import { runInBackground } from "../../lib/run-in-background";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, CalendarDays, CheckCircle2, Download, Minus, PauseCircle, Plug, ShieldCheck, Table2, BarChart3 } from "lucide-react";
@@ -371,6 +372,7 @@ export function OrgAnalyticsView() {
 
           <h2 className="text-sm font-semibold text-muted-foreground">More detail</h2>
           <div className="grid min-w-0 gap-3 lg:grid-cols-2">
+            <PayrollExportCard />
             <SectionCard title="Sign-in times" description="Successful sign-ins per hour, in each person's timezone.">
               {d.loginHistogram.hours ? (
                 <HistogramChart

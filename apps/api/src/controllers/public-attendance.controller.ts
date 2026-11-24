@@ -17,6 +17,7 @@ import { requireApiGrant, type PublicApiRequest } from "../middleware/public-api
 import { assertIngestAllowed, ingestPunch, publicStatus } from "../services/attendance-ingest.service.js";
 import { externalPunchItem, identifierOf, MAX_ITEMS_PER_REQUEST, type ItemResult } from "../services/attendance-webhook.service.js";
 import { isoDate } from "../services/attendance-settings.service.js";
+import { buildPayrollReport, payrollCsv } from "../services/payroll-export.service.js";
 
 export const publicAttendanceRouter = Router();
 
@@ -106,6 +107,21 @@ publicAttendanceRouter.get("/attendance", requireApiGrant("attendance:read"), as
     }
   });
   res.json({ items: records.map((r) => ({ ...r, workDate: r.workDate.toISOString().slice(0, 10) })) });
+});
+
+/** 7.0.0: the monthly payroll report (JSON; `format=csv` for the CSV). Counts only, never reasons. */
+publicAttendanceRouter.get("/attendance/payroll", requireApiGrant("attendance:read"), async (req: PublicApiRequest, res) => {
+  await assertIngestAllowed("API");
+  const month = typeof req.query.month === "string" ? req.query.month : "";
+  const employee = typeof req.query.employee === "string" ? req.query.employee : undefined;
+  const report = await buildPayrollReport(month, { employee });
+  if (req.query.format === "csv") {
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="payroll-${month}.csv"`);
+    res.send(payrollCsv(report));
+    return;
+  }
+  res.json(report);
 });
 
 publicAttendanceRouter.get("/holidays", requireApiGrant("attendance:read"), async (req: PublicApiRequest, res) => {
