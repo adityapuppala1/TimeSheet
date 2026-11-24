@@ -85,13 +85,16 @@ export function tallyPerson(
 const HALF_WORDS = { FIRST_HALF: "first half", SECOND_HALF: "second half" } as const;
 
 /** One sentence for the popover / accessible name; empty when there is nothing to add. */
+/** " · text" when there is text, else "". */
+const dot = (text: string | null | undefined): string => (text ? " · " + text : "");
+
 export function dayNote(day: DayGridDay | undefined, absent: boolean, logged: boolean): string {
   if (!day) return "";
   const type = day.leaveTypeName && day.leaveTypeName !== day.leaveTypeCode ? `${day.leaveTypeName} (${day.leaveTypeCode})` : (day.leaveTypeCode ?? "");
   const extra = logged ? " Time was still logged on this day." : "";
-  if (day.status === "HOLIDAY") return `Holiday${day.holidayName ? ` · ${day.holidayName}` : ""}.${extra}`;
-  if (day.status === "LEAVE") return `On leave${type ? ` · ${type}` : ""}.${extra}`;
-  if (day.halfDay) return `Half-day leave${type ? ` · ${type}` : ""}, ${HALF_WORDS[day.halfDay]}.`;
+  if (day.status === "HOLIDAY") return `Holiday${dot(day.holidayName)}.${extra}`;
+  if (day.status === "LEAVE") return `On leave${dot(type)}.${extra}`;
+  if (day.halfDay) return `Half-day leave${dot(type)}, ${HALF_WORDS[day.halfDay]}.`;
   if (absent) return "Did not punch in.";
   return "";
 }
@@ -99,9 +102,9 @@ export function dayNote(day: DayGridDay | undefined, absent: boolean, logged: bo
 /** The timeline lane's small label: "On leave · PL", "Holiday · Diwali", "Not punched in". */
 export function laneLabel(day: DayGridDay | undefined, attendanceEnabled: boolean): string | null {
   if (!day) return null;
-  if (day.status === "LEAVE") return `On leave${day.leaveTypeCode ? ` · ${day.leaveTypeCode}` : ""}`;
-  if (day.status === "HOLIDAY") return `Holiday${day.holidayName ? ` · ${day.holidayName}` : ""}`;
-  if (day.halfDay) return `Half-day leave${day.leaveTypeCode ? ` · ${day.leaveTypeCode}` : ""}`;
+  if (day.status === "LEAVE") return `On leave${dot(day.leaveTypeCode)}`;
+  if (day.status === "HOLIDAY") return `Holiday${dot(day.holidayName)}`;
+  if (day.halfDay) return `Half-day leave${dot(day.leaveTypeCode)}`;
   if (attendanceEnabled && day.status === "ABSENT") return "Not punched in";
   return null;
 }

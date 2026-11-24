@@ -75,6 +75,35 @@ export type DayGridResponse =
       people: GridPerson[];
     };
 
+/** One resolved day as the client sees it, folded into the person's summary. */
+function gridDayOf(
+  r: ReturnType<typeof resolveDayStatus>,
+  leave: { type: string } | null,
+  attendanceEnabled: boolean,
+  summary: GridSummary,
+  usedCodes: Set<string>
+): GridDay {
+  // Leave on with attendance off: no punch exists to judge, so no ABSENT / PRESENT verdict.
+  const noVerdict = !attendanceEnabled && (r.status === "ABSENT" || r.status === "PRESENT");
+  const status: AttendanceDayStatus = noVerdict ? "PENDING" : r.status;
+  const day: GridDay = { status };
+  if (status === "HOLIDAY" && r.holidayName) {
+    day.holidayName = r.holidayName;
+    summary.holidays += 1;
+  }
+  if (leave && (status === "LEAVE" || r.leaveHalf)) {
+    day.leaveTypeCode = leave.type;
+    usedCodes.add(leave.type);
+    if (r.leaveHalf) day.halfDay = r.leaveHalf;
+    summary.leaveDays[leave.type] = (summary.leaveDays[leave.type] ?? 0) + (r.leaveHalf ? 0.5 : 1);
+  }
+  // Working days = the calendar's working days minus holidays; leave is taken OUT of them.
+  if (status !== "WEEKEND" && status !== "HOLIDAY") summary.workingDays += 1;
+  if (status === "PRESENT") summary.presentDays += 1;
+  if (status === "ABSENT") summary.absentDays += 1;
+  return day;
+}
+
 function dateKeys(from: string, to: string): string[] {
   const out: string[] = [];
   for (let t = Date.parse(`${from}T00:00:00Z`); t <= Date.parse(`${to}T00:00:00Z`); t += DAY_MS) out.push(new Date(t).toISOString().slice(0, 10));
@@ -152,24 +181,7 @@ export async function getDayGrid(
         timeZone: p.timezone,
         fallbackZone: serverTimezone
       });
-      // Leave on with attendance off: no punch exists to judge, so no ABSENT / PRESENT verdict.
-      const status: AttendanceDayStatus = !attendanceEnabled && (r.status === "ABSENT" || r.status === "PRESENT") ? "PENDING" : r.status;
-      const day: GridDay = { status };
-      if (status === "HOLIDAY" && r.holidayName) {
-        day.holidayName = r.holidayName;
-        summary.holidays += 1;
-      }
-      if (leave && (status === "LEAVE" || r.leaveHalf)) {
-        day.leaveTypeCode = leave.type;
-        usedCodes.add(leave.type);
-        if (r.leaveHalf) day.halfDay = r.leaveHalf;
-        summary.leaveDays[leave.type] = (summary.leaveDays[leave.type] ?? 0) + (r.leaveHalf ? 0.5 : 1);
-      }
-      // Working days = the calendar's working days minus holidays; leave is taken OUT of them.
-      if (status !== "WEEKEND" && status !== "HOLIDAY") summary.workingDays += 1;
-      if (status === "PRESENT") summary.presentDays += 1;
-      if (status === "ABSENT") summary.absentDays += 1;
-      days[key] = day;
+      days[key] = gridDayOf(r, leave, attendanceEnabled, summary, usedCodes);
     }
     summary.loggedHours = Math.round((hoursBy.get(p.id) ?? 0) * 100) / 100;
     return { userId: p.id, name: p.name, days, summary };

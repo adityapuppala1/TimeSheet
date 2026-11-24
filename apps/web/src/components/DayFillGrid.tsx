@@ -289,7 +289,7 @@ function FillCell({ person, col, rows, size, lookup }: { person: PersonRow; col:
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setOpen(false), 120);
   };
-  const label = `${person.name}, ${col.longLabel}: ${STATE_WORDS[state]}${entriesNote(rows)}${note ? `. ${note}` : ""}`;
+  const label = `${person.name}, ${col.longLabel}: ${STATE_WORDS[state]}${entriesNote(rows)}${note ? ". " + note : ""}`;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverAnchor asChild>
@@ -359,6 +359,18 @@ interface GroupStat {
 
 type GridItem = { kind: "group"; group: GroupStat } | { kind: "person"; person: PersonRow };
 
+const bump = (m: Map<string, number>, key: string) => m.set(key, (m.get(key) ?? 0) + 1);
+
+/** One person's day in their team's roll-up. Someone who logged on a day off counts as "logged". */
+function countGroupDay(g: GroupStat, p: PersonRow, key: string, lookup?: DayStatusLookup): void {
+  const filled = Boolean(p.byDay.get(key)?.length);
+  if (filled) bump(g.perDay, key);
+  const day = lookup?.get(p.id, key);
+  if (filled || !isDayOff(day)) return;
+  bump(g.perDayOff, key);
+  if (day?.status === "LEAVE") bump(g.perDayLeave, key);
+}
+
 function buildGroups(people: PersonRow[], cols: DayCol[], lookup?: DayStatusLookup): GroupStat[] {
   const map = new Map<string, GroupStat>();
   for (const p of people) {
@@ -374,16 +386,7 @@ function buildGroups(people: PersonRow[], cols: DayCol[], lookup?: DayStatusLook
     g.hours += p.hours;
     g.plannedHours += p.plannedHours;
     if (p.gapDays > 0) g.gapPeople += 1;
-    for (const c of cols) {
-      const filled = Boolean(p.byDay.get(c.key)?.length);
-      if (filled) g.perDay.set(c.key, (g.perDay.get(c.key) ?? 0) + 1);
-      const day = lookup?.get(p.id, c.key);
-      // Someone who logged on their day off still counts as "logged", never as "off".
-      if (!filled && isDayOff(day)) {
-        g.perDayOff.set(c.key, (g.perDayOff.get(c.key) ?? 0) + 1);
-        if (day?.status === "LEAVE") g.perDayLeave.set(c.key, (g.perDayLeave.get(c.key) ?? 0) + 1);
-      }
-    }
+    for (const c of cols) countGroupDay(g, p, c.key, lookup);
   }
   return [...map.values()];
 }
@@ -468,6 +471,14 @@ function TotalsCell({
   );
 }
 
+/** " · 1 on leave · 2 on holiday" for a team row's day; "" when nobody was off. */
+function offDayNote(onLeave: number, onHoliday: number): string {
+  let note = "";
+  if (onLeave > 0) note += ` · ${onLeave} on leave`;
+  if (onHoliday > 0) note += ` · ${onHoliday} on holiday`;
+  return note;
+}
+
 function groupDayTone(filled: number, size: number, due: boolean): string {
   if (size > 0 && filled >= size) return "text-emerald-700 dark:text-emerald-300";
   if (filled > 0) return "text-amber-700 dark:text-amber-300";
@@ -518,7 +529,7 @@ function GroupRow({
         const owed = size - off;
         const due = c.expected && !c.upcoming && owed > 0;
         const quiet = filled === 0 && !due;
-        const offNote = off > 0 ? (onLeave > 0 ? ` · ${onLeave} on leave` : "") + (off > onLeave ? ` · ${off - onLeave} on holiday` : "") : "";
+        const offNote = offDayNote(onLeave, off - onLeave);
         return (
           <div
             key={c.key}

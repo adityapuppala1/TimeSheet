@@ -1225,6 +1225,8 @@ const STATUS_GLYPH: Record<string, { Icon: typeof Check; label: string }> = {
   DRAFT: { Icon: PencilLine, label: "Draft" }
 };
 
+type LaneStatus = "LEAVE" | "HOLIDAY" | "ABSENT";
+
 interface DayLane {
   key: string;
   name: string;
@@ -1232,7 +1234,7 @@ interface DayLane {
   entries: TimesheetRowLite[];
   /** 7.0.0: "On leave · PL", "Holiday · Diwali", "Not punched in" — only with the module on. */
   note?: string | null;
-  noteStatus?: "LEAVE" | "HOLIDAY" | "ABSENT";
+  noteStatus?: LaneStatus;
 }
 
 /** Empty lanes added for people off on the day; past this many the card would be a list of absences. */
@@ -1310,7 +1312,7 @@ function TimelineLane({
 }
 
 /** The lane's day-status chip: colour + icon + words, from the shared status module. */
-function LaneNote({ text, status }: { text: string; status: "LEAVE" | "HOLIDAY" | "ABSENT" }) {
+function LaneNote({ text, status }: { text: string; status: LaneStatus }) {
   const meta = STATUS_META[status];
   return (
     <span className={cn("status-chip mt-0.5 inline-flex max-w-full items-center gap-1 rounded px-1 text-[10px] font-semibold", meta.className)} data-testid="timeline-lane-note">
@@ -1423,7 +1425,9 @@ function DayTimeline({
       const day = dayStatus.get(id, selectedKey);
       const note = laneLabel(day, dayStatus.attendanceEnabled);
       if (!note || !day) return null;
-      const status: "LEAVE" | "HOLIDAY" | "ABSENT" = day.status === "HOLIDAY" ? "HOLIDAY" : day.status === "ABSENT" && !day.halfDay ? "ABSENT" : "LEAVE";
+      let status: LaneStatus = "LEAVE";
+      if (day.status === "HOLIDAY") status = "HOLIDAY";
+      else if (day.status === "ABSENT" && !day.halfDay) status = "ABSENT";
       return { note, status };
     };
     for (const lane of laneMap.values()) {
