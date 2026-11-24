@@ -3478,6 +3478,58 @@ of the same request count as full days (edges never; a half day at an edge still
 apply time and stored in `days`, so the debit, a reversal and settlement use it. `GET /api/leave/me/preview` gains
 `sandwiched` (the counted dates) and leaves them out of `excluded`.
 
+Payroll (`GET /api/leave/payroll`): while any leave type has `sandwichRule` on, the report carries
+`sandwichRule: true`, each row `sandwichDays` (weekends / holidays debited by the rule, already included in `leave`,
+`paidLeave` and `unpaidLeave`) and the CSV a `Sandwich days` column before `Leave year closed`. A request inside the
+month counts its stored `days`; one straddling two months counts its in-month working days plus its in-month
+enclosed days, never more than the stored count debited. Without the rule the shape is unchanged.
+
+#### Scope site ids (7.0.0)
+
+`scopeSiteIds` on `POST/PUT /api/leave/admin/types[/:id]` and `POST/PUT /api/attendance/admin/calendars[/:id]` must
+name existing work sites: an unknown id is `422` with `code: "UNKNOWN_SITE"` and `details.siteIds`. Deleting a site
+(`DELETE /api/attendance/admin/sites/:id`) removes its id from every scope in the same transaction; a list left empty
+becomes `null` (everyone).
+
+#### Kiosk / QR punch (7.0.0)
+
+Off by default (`kioskEnabled` in `PUT /api/attendance/admin/settings`, and attendance on); the device and punch
+calls answer `403 KIOSK_OFF` while off.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET | `/api/attendance/admin/kiosks` | SUPER_ADMIN | `{ items, enabled }`; never a token |
+| POST | `/api/attendance/admin/kiosks` | SUPER_ADMIN | `{ name, siteId? }` → `201 { kiosk, token }`; the token is shown once, only its SHA-256 is kept |
+| PUT | `/api/attendance/admin/kiosks/:id` | SUPER_ADMIN | `{ name?, siteId? }`; an unknown site is `422` |
+| POST | `/api/attendance/admin/kiosks/:id/rotate` | SUPER_ADMIN | new token and signing salt (the old token and its codes stop at once); un-revokes |
+| POST | `/api/attendance/admin/kiosks/:id/revoke` | SUPER_ADMIN | `204` |
+| GET | `/api/attendance/kiosk/status` | signed in | `{ enabled }` |
+| GET | `/api/attendance/kiosk/device/code` | the device (`X-Kiosk-Token` header) | `{ code, expiresAt, refreshInMs, kioskName, siteName }`; `401 KIOSK_UNAUTHORIZED` for an unknown or revoked token; 30/min per IP |
+| POST | `/api/attendance/kiosk/punch` | signed in | `{ code, verificationId? }` → `201` punched, `200` already in today; 20/min per IP |
+
+A code is `base64url({k: kioskId, w: window, n: nonce}).base64url(HMAC-SHA256)`; `window` counts 30-second steps
+since the epoch and the key is derived from `ENCRYPTION_KEY`, the tenant's org id (from the Host), the kiosk id and
+its salt. The punch refuses a bad signature or junk (`422 KIOSK_CODE_INVALID`), a window older than the previous one
+(`422 KIOSK_CODE_EXPIRED`), a revoked kiosk (`422 KIOSK_REVOKED`) and a nonce this person already used
+(`409 KIOSK_CODE_USED`). It is ingested with source `KIOSK` (ranked like `WEB`, no integrations plan needed), no
+location, and `siteLabel` = the kiosk's site name: a kiosk punch satisfies `requireSite`. Face: when
+`punchInFaceRequired` applies, send the `verificationId` of a `PUNCH_IN` face check, exactly as for the web punch;
+`faceFailureRule` decides between refusing it and recording it flagged.
+
+#### Birthdays and work anniversaries (7.0.0)
+
+Off by default (`celebrationsEnabled` in `PUT /api/attendance/admin/settings`, and attendance or leave on).
+
+- `GET /api/attendance/celebrations` → `{ enabled, from, to, items: [{ userId, name, avatarUrl, kind: "BIRTHDAY" |
+  "ANNIVERSARY", monthDay: "MM-DD", date, years? }] }` for Monday to Sunday of this week. People: the team view's
+  scope (everyone for unrestricted roles, direct reports for managers) plus yourself; opted-out people are left out.
+  Never a year of birth; `years` only on anniversaries of at least one year. `{ enabled: false, items: [] }` while off.
+- `GET /api/attendance/celebrations/me` → `{ enabled, dateOfBirth, joinDate, celebrationsOptOut }` (your own full
+  date). `PUT` the same path with `{ dateOfBirth?: "YYYY-MM-DD" | null, celebrationsOptOut?: boolean }`.
+- `PATCH /api/users/:id` accepts `joinDate` (USERS_MANAGE) and `dateOfBirth` (SUPER_ADMIN only, `403` otherwise).
+  `GET /api/users/:id/celebrations` → `{ joinDate, celebrationsOptOut }`, plus `dateOfBirth` for a super admin.
+- No other response carries `dateOfBirth`: the tenant Prisma client omits it unless a query selects it.
+
 #### Comp-off, approval cover, calendar feed and payroll (7.0.0)
 
 All are off until switched on and need leave on (`leaveEnabled` and the `leaveManagementEnabled`

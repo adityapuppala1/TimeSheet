@@ -539,6 +539,56 @@ export const HELP_ARTICLES: HelpArticle[] = [
     keywords: ["sandwich", "sandwich leave", "weekend in leave", "holiday in leave", "intervening holidays"]
   },
   {
+    id: "attendance-kiosk-setup",
+    category: "Timesheets",
+    title: "Set up a punch-in kiosk (QR code)",
+    roles: ["SUPER_ADMIN"],
+    where: "Workspace Settings → Attendance & Leave → Kiosk / QR punch",
+    when: "When people should punch in at the office door by scanning a code with their own phone.",
+    steps: [
+      "Open Workspace Settings → Attendance & Leave and choose Kiosk / QR punch.",
+      "Switch on Let people punch in by scanning a kiosk's QR code, and save.",
+      "Add a kiosk: give it a name and, optionally, the work site it stands at. Copy the device token shown: it is shown only once.",
+      "On the kiosk device (a tablet or a screen), open /kiosk on your workspace's address and paste the token. It shows a QR code that changes every 30 seconds.",
+      "Lost a device? Revoke it. Rotate gives a new token and stops the old one at once."
+    ],
+    notes:
+      "Off by default and needs Attendance on. A kiosk punch counts as being at the kiosk's site, so the work-site rule never blocks or flags it; it records no location. When the face check is required for punch-in, people do it on their own phone after scanning, exactly as for a web punch. Codes are signed, last about a minute and cannot be reused; a code from one workspace never works in another.",
+    keywords: ["kiosk", "QR code", "qr punch", "scan to punch in", "front door", "tablet punch", "device token"]
+  },
+  {
+    id: "attendance-kiosk-punch",
+    category: "Timesheets",
+    title: "Punch in by scanning the kiosk",
+    roles: ["EMPLOYEE", "TEAM_LEAD", "MANAGER", "ADMIN", "SUPER_ADMIN"],
+    where: "The kiosk screen at your office → your phone's camera",
+    when: "When your office has a punch-in kiosk.",
+    steps: [
+      "Point your phone's camera at the QR code on the kiosk and open the link.",
+      "Sign in if asked, then press Punch in. If your workspace requires a face check, it runs on your phone first.",
+      "You see Punched in and the time. Scanning again the same day just says you are already in."
+    ],
+    notes: "Use your own phone and your own account. The code changes every 30 seconds; if it has expired, scan again.",
+    keywords: ["kiosk", "scan", "QR", "punch in at office", "qr code punch"]
+  },
+  {
+    id: "celebrations",
+    category: "Timesheets",
+    title: "Birthdays and work anniversaries this week",
+    roles: ["EMPLOYEE", "TEAM_LEAD", "MANAGER", "ADMIN", "SUPER_ADMIN"],
+    where: "Dashboard; Attendance → Team → Leave calendar; Profile → Birthday and work anniversary",
+    when: "When your workspace shows birthdays and work anniversaries, and you want to add yours or stay out of it.",
+    steps: [
+      "A super admin switches it on under Workspace Settings → Attendance & Leave → Birthdays & anniversaries. Admins set each person's join date on People → Edit.",
+      "On your Profile, add your birthday under Birthday and work anniversary and press Save birthday.",
+      "To stay out of the strip, switch off Show me in the This week strip.",
+      "The Dashboard and the Team leave calendar show a This week strip for the people you can see in the team view."
+    ],
+    notes:
+      "Off by default. Only the day and month are shown, never the year or an age. Anniversaries show years of service from the first year. Only you and super admins can see your birth year.",
+    keywords: ["birthday", "work anniversary", "celebrations", "join date", "this week", "opt out"]
+  },
+  {
     id: "approval-cover",
     category: "Timesheets",
     title: "Let someone cover your leave approvals",

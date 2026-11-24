@@ -71,7 +71,22 @@ as days anyone owed a timesheet on. With the module off, every screen and API re
   calendar is unscoped, so nothing moves until an admin sets a scope. Holiday calendar precedence is now: a person's
   own calendar, then a scoped calendar matching them, then the default.
 - **Sandwich rule (one more additive tenant migration: `LeaveType.sandwichRule`, default false).** Requests made
-  before an admin switches it on keep their stored days.
+  before an admin switches it on keep their stored days. While any type has the rule on, the payroll export's leave
+  columns count what was debited (the stored days of a request inside the month; a request straddling two months
+  splits its enclosed days by month) and gain `sandwichDays` plus a `Sandwich days` CSV column before `Leave year
+  closed`. With no type using the rule the export is unchanged.
+- **Scope site ids are checked.** Saving a leave type or holiday calendar whose `scopeSiteIds` names a site that does
+  not exist is now a 422 (`UNKNOWN_SITE`); deleting a work site removes its id from every scope, and a scope left
+  empty means everyone again. A script that saved stale ids will now be refused.
+- **Kiosk / QR punch ships OFF (one more additive tenant migration: `GlobalAttendanceSettings.kioskEnabled`, the
+  `AttendanceKiosk` and `AttendanceKioskNonce` tables, and `KIOSK` added to the attendance source enum).** Code that
+  switches over `AttendanceRecord.source` or the team view's `source` filter should expect `KIOSK`. Kiosk codes are
+  signed with a key derived from `ENCRYPTION_KEY`: rotating that key invalidates the codes on screen for at most a
+  minute, and nothing else.
+- **Birthdays and work anniversaries ship OFF (one more additive tenant migration: `User.dateOfBirth`,
+  `User.joinDate`, `User.celebrationsOptOut` and `GlobalAttendanceSettings.celebrationsEnabled`).** The tenant
+  database client now omits `User.dateOfBirth` from every read unless a query selects it by name, so no user list,
+  include or update response can carry a birth year. Code that needs it must `select: { dateOfBirth: true }`.
 - **Two new webhook events, `compoff.requested` and `compoff.approved`.** Existing subscriptions are not opted in.
 - **The access log redacts calendar feed tokens** (`/api/calendar/feed/[redacted]`). A log shipper that parsed the
   raw path of that route will see the placeholder.
@@ -96,7 +111,16 @@ as days anyone owed a timesheet on. With the module off, every screen and API re
   types and holiday calendars can be limited to some employment types and/or sites: people see, apply for and accrue
   only the types meant for them, and get their site's holiday calendar unless they have one of their own.
 - **Sandwich rule (off by default, per leave type).** Weekends and holidays fully inside one leave request count as
-  leave: Friday to Monday costs 4 days. The Apply screen says how many enclosed days it counted.
+  leave: Friday to Monday costs 4 days. The Apply screen says how many enclosed days it counted, and the payroll
+  export counts the same days, with a Sandwich days column while the rule is in use.
+- **Kiosk / QR punch (off by default).** A super admin registers a kiosk device, optionally at a work site, and gets
+  a one-time device token (rotate or revoke it any time). Open /kiosk on the device: it shows a QR code that changes
+  every 30 seconds. People scan it with their own phone while signed in and punch in. Codes are signed, expire after
+  about a minute and cannot be reused; a kiosk punch counts as being at the kiosk's site, and the face check applies
+  as for any punch.
+- **Birthdays and work anniversaries this week (off by default).** A small strip on the Dashboard and the Team leave
+  calendar, for the people you can already see in the team view. Day and month only, never a year or an age; years
+  of service from one year on. People add their birthday and can opt out on their Profile; admins set join dates.
 - **Expected hours follow shifts.** A person on a 4×10 shift is expected 10 hours on their four days, in the digest,
   the leave preview and the capacity board.
 
