@@ -159,18 +159,24 @@ export function LoadError() {
 
 export function InsightsList({ audience, from, to }: Readonly<{ audience: AnalyticsAudience; from: string; to: string }>) {
   const q = useQuery({ queryKey: ["attendance", "insights", audience, from, to], queryFn: () => attendanceAnalyticsApi.insights(audience, from, to) });
-  // Dismissed for this visit only: nothing is saved, so a dismissed card is back next session.
+  // Saved per person, audience and range (7.0.0): the server leaves dismissed cards out next time.
+  // The local set hides a card at once, before the save round-trips.
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const shown = (q.data?.insights ?? []).filter((i) => !dismissed.has(i.id));
+  const anyDismissed = dismissed.size > 0 || (q.data?.dismissedCount ?? 0) > 0;
+  const dismiss = (id: string) => {
+    setDismissed((prev) => new Set(prev).add(id));
+    runInBackground(attendanceAnalyticsApi.dismissInsight(audience, id, from, to));
+  };
   return (
     <SectionCard title="Suggestions" description="What stands out in this range, the figures behind it and one thing to try.">
       {q.isLoading && <Skeleton className="h-24 w-full" />}
       {q.isError && <CardError message="Suggestions are not available right now." onRetry={() => runInBackground(q.refetch())} />}
-      {q.data && shown.length === 0 && <p className="text-xs text-muted-foreground">{q.data.insights.length === 0 ? "Nothing stands out in this range." : "All suggestions dismissed for this visit."}</p>}
+      {q.data && shown.length === 0 && <p className="text-xs text-muted-foreground">{anyDismissed ? "All suggestions for this range are dismissed." : "Nothing stands out in this range."}</p>}
       {shown.length > 0 && (
         <ul className="grid gap-2 lg:grid-cols-2">
           {shown.map((i) => (
-            <InsightCard key={i.id} insight={i} onDismiss={() => setDismissed((prev) => new Set(prev).add(i.id))} />
+            <InsightCard key={i.id} insight={i} onDismiss={() => dismiss(i.id)} />
           ))}
         </ul>
       )}

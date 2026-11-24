@@ -375,6 +375,7 @@ model User {
   holidayCalendar             HolidayCalendar?     @relation(fields: [holidayCalendarId], references: [id], onDelete: SetNull)
   attendanceRecords           AttendanceRecord[]
   missedDayReasons            MissedDayReason[]
+  attendanceInsightDismissals AttendanceInsightDismissal[]
   /// V17 Phase B leave. Cascade with the person (personal data), like attendance.
   leaveRequests               LeaveRequest[]
   leaveLedger                 LeaveBalanceLedger[]
@@ -6411,6 +6412,19 @@ model MissedDayReason {
 
 /// V17 A6: one cached AI suggestion set per audience + scope + date range. Rule-based insights are
 /// never stored — they are free to recompute. `cacheKey` is `${audience}:${scope}:${from}:${to}`.
+/// 7.0.0: a suggestion card someone dismissed. Per person, per insight id, per period
+/// ("<audience>:<from>:<to>"), so the same card comes back for a different range or audience.
+model AttendanceInsightDismissal {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  insightId String   @db.VarChar(64)
+  period    String   @db.VarChar(64)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, insightId, period])
+}
+
 model AttendanceInsightCache {
   id        String   @id @default(uuid())
   cacheKey  String   @unique @db.VarChar(191)

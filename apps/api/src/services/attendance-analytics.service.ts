@@ -999,7 +999,29 @@ export async function getInsights(actor: { id: string; role: string }, audience:
   const data = await load(range);
   const rules = ruleInsights(data);
   const ai = await aiInsightsFor(audience, scope, () => load(aiCanonicalRange(now)), actor.id, now);
-  return { audience, range: data.range, aiStatus: ai.status, insights: [...ai.insights, ...rules] };
+  const period = insightPeriod(audience, data.range);
+  const dismissed = await dismissedInsightIds(actor.id, period);
+  const insights = [...ai.insights, ...rules].filter((i) => !dismissed.has(i.id));
+  return { audience, range: data.range, period, aiStatus: ai.status, insights, dismissedCount: dismissed.size };
+}
+
+/** The dismissal period: audience plus the range the viewer is looking at. Pure. */
+export function insightPeriod(audience: AnalyticsAudience, range: { from: string; to: string }): string {
+  return `${audience}:${range.from}:${range.to}`;
+}
+
+async function dismissedInsightIds(userId: string, period: string): Promise<Set<string>> {
+  const rows = await prisma.attendanceInsightDismissal.findMany({ where: { userId, period }, select: { insightId: true } });
+  return new Set(rows.map((r) => r.insightId));
+}
+
+/** Persists one dismissal; dismissing twice is a no-op (unique key). */
+export async function dismissInsight(userId: string, insightId: string, period: string): Promise<void> {
+  await prisma.attendanceInsightDismissal.upsert({
+    where: { userId_insightId_period: { userId, insightId, period } },
+    create: { userId, insightId, period },
+    update: {}
+  });
 }
 
 /** Default range: the last DEFAULT_RANGE_DAYS days ending on `today`. */

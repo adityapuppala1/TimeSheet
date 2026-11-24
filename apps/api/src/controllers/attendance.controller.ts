@@ -31,6 +31,8 @@ import { getDayGrid, parseGridRange } from "../services/attendance-day-grid.serv
 import {
   defaultRange,
   getInsights,
+  dismissInsight,
+  insightPeriod,
   getMyAnalytics,
   getOrgAnalytics,
   getTeamAnalytics,
@@ -188,4 +190,14 @@ attendanceRouter.get("/analytics/:audience/insights", requireAuth, aiRateLimit, 
   await assertAttendanceOn();
   const audience = z.enum(["me", "team", "org"]).parse(req.params.audience) as AnalyticsAudience;
   res.json(await getInsights({ id: req.user!.id, role: req.user!.role }, audience, await analyticsRange(req.query, req.user!.id)));
+});
+
+/** 7.0.0: a dismissed suggestion stays dismissed for this person, audience and range. */
+attendanceRouter.post("/analytics/:audience/insights/:insightId/dismiss", requireAuth, async (req, res) => {
+  await assertAttendanceOn();
+  const audience = z.enum(["me", "team", "org"]).parse(req.params.audience) as AnalyticsAudience;
+  const insightId = z.string().trim().min(1).max(64).parse(String(req.params.insightId));
+  const range = await analyticsRange(req.query, req.user!.id);
+  await dismissInsight(req.user!.id, insightId, insightPeriod(audience, range));
+  res.status(204).end();
 });

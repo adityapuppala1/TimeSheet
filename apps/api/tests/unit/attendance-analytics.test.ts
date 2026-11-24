@@ -59,6 +59,14 @@ vi.mock("../../src/config/prisma.js", () => ({
     leaveType: { findMany: async () => [{ id: "t-pl", code: "PL", name: "Privilege", colour: "primary", annualQuota: 12, accrual: "YEARLY_UPFRONT", carryForwardMax: 0, allowHalfDay: true, isPaid: true, requiresApproval: true, requiresDocumentAfterDays: null, allowNegative: false, enabled: true, sortOrder: 0 }] },
     leaveBalanceLedger: { groupBy: async () => [] },
     attendanceEvent: { groupBy: async () => [] },
+    attendanceInsightDismissal: {
+      findMany: async ({ where }: { where: { userId: string; period: string } }) =>
+        dismissals.filter((d) => d.userId === where.userId && d.period === where.period),
+      upsert: async ({ create }: { create: { userId: string; insightId: string; period: string } }) => {
+        if (!dismissals.some((d) => d.userId === create.userId && d.insightId === create.insightId && d.period === create.period)) dismissals.push(create);
+        return create;
+      }
+    },
     attendanceInsightCache: {
       findUnique: async ({ where }: { where: { cacheKey: string } }) => cacheRow ?? cacheStore.get(where.cacheKey) ?? null,
       upsert: async (args: { create: { cacheKey: string; insights: unknown; expiresAt: Date } }) => {
@@ -70,6 +78,7 @@ vi.mock("../../src/config/prisma.js", () => ({
   }
 }));
 
+const dismissals: Array<{ userId: string; insightId: string; period: string }> = [];
 vi.mock("../../src/config/tenant-context.js", () => ({ requireTenantContext: () => ({ orgId: "org-1" }) }));
 vi.mock("../../src/services/plan-limits.service.js", () => ({
   getPlanningEntitlements: async () => ({ attendanceEnabled: true, attendanceAiInsightsEnabled: true }),
@@ -126,6 +135,7 @@ const absent = (date: string, reasonCode: string | null = null) =>
   day(date, { status: "ABSENT", punchMinute: null, source: null, hoursLogged: 0, hasTimesheet: false, reasonCode });
 
 beforeEach(() => {
+  dismissals.length = 0;
   actor = { id: "mgr", name: "Max", email: "max@x.io", role: "MANAGER", permissions: [] };
   settingsRow = { attendanceEnabled: true, minGroupSize: 3, latenessEnabled: false, expectedStartMinute: 600, aiInsightsSelf: true, aiInsightsManager: true, aiInsightsOrg: true, aiInsightsFrequency: "WEEKLY" };
   cacheRow = null;
@@ -422,6 +432,19 @@ describe("scope", () => {
 /* ----------------------------- AI fallback and cache ----------------------------- */
 
 describe("insights", () => {
+  it("a dismissal persists for that person and range only", async () => {
+    dismissals.length = 0;
+    const q = "from=2026-11-16&to=2026-11-20";
+    const first = await request(app()).get(`/att/analytics/team/insights?${q}`).expect(200);
+    const target = first.body.insights.find((i: { source: string }) => i.source === "rule");
+    await request(app()).post(`/att/analytics/team/insights/${encodeURIComponent(target.id)}/dismiss?${q}`).expect(204);
+    const again = await request(app()).get(`/att/analytics/team/insights?${q}`).expect(200);
+    expect(again.body.insights.map((i: { id: string }) => i.id)).not.toContain(target.id);
+    expect(again.body.dismissedCount).toBe(1);
+    const other = await request(app()).get("/att/analytics/team/insights?from=2026-11-01&to=2026-11-20").expect(200);
+    expect(other.body.dismissedCount).toBe(0);
+  });
+
   it("marks AI items 'ai' and rule items 'rule'", async () => {
     const res = await request(app()).get("/att/analytics/team/insights?from=2026-11-16&to=2026-11-20");
     expect(res.status).toBe(200);

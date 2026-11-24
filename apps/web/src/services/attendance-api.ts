@@ -517,6 +517,8 @@ export interface InsightsResponse {
   audience: AnalyticsAudience;
   aiStatus: "off" | "fresh" | "cached" | "unavailable";
   insights: AttendanceInsight[];
+  /** How many cards this person already dismissed for this audience and range (7.0.0). */
+  dismissedCount?: number;
 }
 
 const rangeParams = (from: string, to: string) => ({ params: { from, to } });
@@ -526,5 +528,8 @@ export const attendanceAnalyticsApi = {
   team: async (from: string, to: string) => (await api.get<TeamAnalytics>("/attendance/analytics/team", rangeParams(from, to))).data,
   org: async (from: string, to: string) => (await api.get<OrgAnalytics>("/attendance/analytics/org", rangeParams(from, to))).data,
   insights: async (audience: AnalyticsAudience, from: string, to: string) =>
-    (await api.get<InsightsResponse>(`/attendance/analytics/${audience}/insights`, rangeParams(from, to))).data
+    (await api.get<InsightsResponse>(`/attendance/analytics/${audience}/insights`, rangeParams(from, to))).data,
+  dismissInsight: async (audience: AnalyticsAudience, insightId: string, from: string, to: string) => {
+    await api.post(`/attendance/analytics/${audience}/insights/${encodeURIComponent(insightId)}/dismiss`, null, rangeParams(from, to));
+  }
 };
