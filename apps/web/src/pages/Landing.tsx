@@ -357,7 +357,7 @@ const FEATURES: Feature[] = [
     group: "Track the work",
     gate: "attendanceEnabled",
     title: "Attendance, holidays and missed-day reasons",
-    body: "Off until an admin switches it on. Then a punch-in after login — optional (a banner) or mandatory — with location and a face check as separate, off-by-default options; no map or coordinates are ever shown. Holiday calendars adjust expected hours, an 11:00 reminder email can be muted per role, and a past working day with no entries asks for a reason from a dropdown (or Other). Punches arrive from the web, the API, a signed webhook, MCP, CSV or an HRMS/biometric feed, each record keeping its source, with source priority settling conflicts."
+    body: "Off until an admin switches it on. Then a punch-in after login — optional (a banner) or mandatory — with location and a face check as separate, off-by-default options; no map or coordinates are ever shown. Holiday calendars adjust expected hours, an 11:00 reminder email can be muted per role, and a past working day with no entries asks for a reason from a dropdown (or Other). Punches arrive from the web, the API, a signed webhook, MCP, CSV or an HRMS/biometric feed, each record keeping its source, with source priority settling conflicts. Once it is on, the home dashboard and Reports show leave, holidays and missed punch-ins, and a day off is never counted as a gap."
   },
   {
     icon: CalendarCheck,

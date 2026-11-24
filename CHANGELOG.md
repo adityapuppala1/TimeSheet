@@ -10,9 +10,19 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
-## 6.5.0 — Attendance, leave and holiday calendars: off until you switch them on — 2026-11-24
+## 7.0.0 — Attendance, leave and holiday calendars: off until you switch them on — 2026-11-24
 
 A new module, **off for every workspace until an admin opts in**. It adds a tenant migration, which `update.sh` applies, and a control-plane migration for the four new plan entitlements.
+
+**Why this is a major.** Once a workspace switches the module on, figures people already read change meaning:
+the Home dashboard's "x with gaps", its team-row ratios and its Plan hours stop counting leave and holiday days
+as days anyone owed a timesheet on. With the module off, every screen and API response is exactly what it was.
+
+### ⬆ Upgrade notes
+
+- Nothing to run beyond `update.sh` (or `migrate deploy` plus the tenant fan-out). Nothing switches on by itself.
+- After a super admin enables Attendance or Leave, expect lower Plan hours and fewer gaps on the Home dashboard
+  for anyone on leave or on a holiday. That is the intended change, not a data fault.
 
 ### ✨ Features: Attendance, leave and holiday calendars
 
@@ -46,6 +56,24 @@ A new module, **off for every workspace until an admin opts in**. It adds a tena
   (`READ`/`WRITE` never imply them), and leave events on the signed webhook. See `docs/API.md`.
 - **Help.** New articles for punching in, missed-day reasons, my attendance, team activity, organisation insights,
   applying for and approving leave, and setting the module up. Ask AI answers from the same articles.
+
+### 📊 On the dashboard and in Reports: leave, holidays and absence
+
+Only when Attendance or Leave is on and in the plan; otherwise these screens are unchanged.
+
+- **Daily logging status.** A day of leave shows a plane and the leave type code ("PL"), a holiday a star, each in
+  its own status colour (never red); a half day of leave carries a "½" marker. A working day with nothing logged
+  and no punch-in carries an "A" marker. The popover names the leave type or holiday, and says so when time was
+  logged anyway (the cell stays green).
+- **Leave and holidays are not gaps.** They leave the "x with gaps" count, each person's days ratio and Plan hours
+  (a half day plans 4h). Team rows read e.g. "2/3" with an on-leave count beneath.
+- **Day timeline.** A person's lane is labelled "On leave · PL", "Holiday · Diwali" or "Not punched in", and
+  someone off for the whole day gets a labelled lane of their own.
+- **Reports → Attendance & leave.** Per person for a chosen range: working days, holidays, leave days by type,
+  present and absent days and logged hours, with a CSV export.
+- **API.** `GET /api/attendance/day-grid?from&to` returns each visible person's day status (the dashboard's own
+  people scope: admins see everyone, anyone else themselves and their direct reports). It never returns a leave
+  reason, a note or a coordinate, and answers `{ "enabled": false }` with the module off.
 
 ### 🐛 Fixes
 
