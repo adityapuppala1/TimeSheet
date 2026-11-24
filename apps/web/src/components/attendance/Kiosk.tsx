@@ -60,6 +60,13 @@ export function kioskPunchUrl(origin: string, code: string): string {
   return `${origin}/app/attendance/kiosk-punch?c=${encodeURIComponent(code)}`;
 }
 
+/** Pure: revoked / last seen / never connected. */
+export function kioskStatusText(k: Pick<KioskDevice, "revoked" | "lastSeenAt">): string {
+  if (k.revoked) return "Revoked";
+  if (k.lastSeenAt) return `last seen ${new Date(k.lastSeenAt).toLocaleString()}`;
+  return "never connected";
+}
+
 const KIOSKS_KEY = ["attendance-admin", "kiosks"] as const;
 const TOKEN_STORE = "timesphere.kioskToken";
 const serverMessage = (err: unknown, fallback: string) => (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? fallback;
@@ -144,7 +151,7 @@ export function KioskDevicesSection({ readOnly }: Readonly<{ readOnly: boolean }
               <div className="min-w-0">
                 <p className="truncate font-medium">{k.name}</p>
                 <p className="text-xs text-muted-foreground">
-                  {k.siteName ? `At ${k.siteName}` : "No site"} · token {k.tokenHint}… · {k.revoked ? "Revoked" : k.lastSeenAt ? `last seen ${new Date(k.lastSeenAt).toLocaleString()}` : "never connected"}
+                  {k.siteName ? `At ${k.siteName}` : "No site"} · token {k.tokenHint}… · {kioskStatusText(k)}
                 </p>
               </div>
               <div className="flex gap-2">
@@ -269,7 +276,7 @@ export function KioskDisplayPage() {
     <main className="grid min-h-screen place-items-center gap-4 bg-background p-4 text-center">
       <div className="grid justify-items-center gap-3">
         <h1 className="text-2xl font-semibold">Scan to punch in</h1>
-        <p className="text-muted-foreground">{state ? `${state.kioskName}${state.siteName ? ` · ${state.siteName}` : ""}` : "Loading…"}</p>
+        <p className="text-muted-foreground">{state ? [state.kioskName, state.siteName].filter(Boolean).join(" · ") : "Loading…"}</p>
         {qr ? <img src={qr} alt="Punch-in QR code. Scan it with your phone's camera while signed in." className="h-[min(80vw,360px)] w-[min(80vw,360px)] rounded-lg bg-white p-2" /> : <Skeleton className="h-[min(80vw,360px)] w-[min(80vw,360px)]" />}
         <p className="text-sm text-muted-foreground">Use your own phone. The code changes every 30 seconds.</p>
         {error && (

@@ -53,7 +53,9 @@ export function dayMonthLabel(monthDay: string): string {
 /** Pure: the line for one item. */
 export function celebrationText(item: CelebrationItem): string {
   if (item.kind === "BIRTHDAY") return `${item.name} · birthday · ${dayMonthLabel(item.monthDay)}`;
-  const years = item.years && item.years >= 1 ? ` · ${item.years} ${item.years === 1 ? "year" : "years"}` : "";
+  const n = item.years ?? 0;
+  const unit = n === 1 ? "year" : "years";
+  const years = n >= 1 ? ` · ${n} ${unit}` : "";
   return `${item.name} · work anniversary${years} · ${dayMonthLabel(item.monthDay)}`;
 }
 

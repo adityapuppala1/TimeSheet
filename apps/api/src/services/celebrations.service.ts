@@ -60,24 +60,16 @@ export function celebrationsInRange(
 ): CelebrationItem[] {
   const years = [...new Set([Number(from.slice(0, 4)), Number(to.slice(0, 4))])];
   const out: CelebrationItem[] = [];
-  for (const p of people) {
-    if (p.celebrationsOptOut) continue;
+  // Each occurrence of "MM-DD" inside [from, to] (two candidate years when the week crosses New Year).
+  const hits = (day: Date) => {
+    const key = toKey(day);
+    return years.map((y) => ({ y, date: occurrence(key.slice(5), y), md: key.slice(5), since: Number(key.slice(0, 4)) })).filter((h) => h.date >= from && h.date <= to);
+  };
+  for (const p of people.filter((x) => !x.celebrationsOptOut)) {
     const base = { userId: p.id, name: p.name, avatarUrl: p.avatarUrl ?? null };
-    if (p.dateOfBirth) {
-      const md = toKey(p.dateOfBirth).slice(5);
-      for (const y of years) {
-        const date = occurrence(md, y);
-        if (date >= from && date <= to) out.push({ ...base, kind: "BIRTHDAY", monthDay: md, date });
-      }
-    }
-    if (p.joinDate) {
-      const joined = toKey(p.joinDate);
-      const md = joined.slice(5);
-      for (const y of years) {
-        const date = occurrence(md, y);
-        const served = y - Number(joined.slice(0, 4));
-        if (date >= from && date <= to && served >= 1) out.push({ ...base, kind: "ANNIVERSARY", monthDay: md, date, years: served });
-      }
+    for (const h of p.dateOfBirth ? hits(p.dateOfBirth) : []) out.push({ ...base, kind: "BIRTHDAY", monthDay: h.md, date: h.date });
+    for (const h of p.joinDate ? hits(p.joinDate) : []) {
+      if (h.y - h.since >= 1) out.push({ ...base, kind: "ANNIVERSARY", monthDay: h.md, date: h.date, years: h.y - h.since });
     }
   }
   return out.sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name));

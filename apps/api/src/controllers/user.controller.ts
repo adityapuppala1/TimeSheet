@@ -893,6 +893,25 @@ async function checkedSiteId(siteId: string | null | undefined): Promise<string 
   return siteId ?? null;
 }
 
+/** Never a birthday in the audit row: it is read far more widely than a profile. */
+function auditablePatch(body: Record<string, unknown>): Record<string, unknown> {
+  if (!("dateOfBirth" in body)) return body;
+  const { dateOfBirth, ...rest } = body;
+  return { ...rest, dateOfBirthSet: Boolean(dateOfBirth) };
+}
+
+/** 7.0.0: join date (any user manager) and birthday (super admins only: the birth year is private). */
+function celebrationPatchFields(body: Record<string, unknown>, actorRole: string): Pick<PatchData, "joinDate" | "dateOfBirth"> {
+  const day = (v: unknown) => (v ? new Date(`${String(v)}T00:00:00Z`) : null);
+  const out: Pick<PatchData, "joinDate" | "dateOfBirth"> = {};
+  if ("joinDate" in body) out.joinDate = day(body.joinDate);
+  if ("dateOfBirth" in body) {
+    if (actorRole !== "SUPER_ADMIN") throw new AppError(403, "Only a super admin can set someone's birthday.");
+    out.dateOfBirth = day(body.dateOfBirth);
+  }
+  return out;
+}
+
 userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
   const targetId = String(req.params.id);
   assertRoleSetShape(req.user!, req.body);
@@ -920,12 +939,7 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
     data.roleId = role.id;
   }
   if ("siteId" in req.body) data.siteId = await checkedSiteId(req.body.siteId);
-  if ("joinDate" in req.body) data.joinDate = req.body.joinDate ? new Date(`${String(req.body.joinDate)}T00:00:00Z`) : null;
-  if ("dateOfBirth" in req.body) {
-    // The birth year is private to the person and super admins: nobody else may set (or see) it.
-    if (req.user!.role !== "SUPER_ADMIN") throw new AppError(403, "Only a super admin can set someone's birthday.");
-    data.dateOfBirth = req.body.dateOfBirth ? new Date(`${String(req.body.dateOfBirth)}T00:00:00Z`) : null;
-  }
+  Object.assign(data, celebrationPatchFields(req.body, req.user!.role));
   if ("managerId" in req.body) {
     // Only a CHANGE is checked: the edit dialog sends the current manager back on every save, and
     // refusing that because the manager was deactivated since would block fixing a typo in a name.
@@ -935,8 +949,7 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
 
   const user = await prisma.user.update({ where: { id: targetId }, data, include: { role: true } });
   if (newHeldRoleNames) await replaceHeldRoles(user.id, newHeldRoleNames);
-  const { dateOfBirth: _dob, ...auditBody } = req.body as Record<string, unknown>;
-  await audit(req.user!.id, "user.updated", "User", user.id, "dateOfBirth" in req.body ? { ...auditBody, dateOfBirthSet: Boolean(_dob) } : req.body);
+  await audit(req.user!.id, "user.updated", "User", user.id, auditablePatch(req.body));
   if (req.body.status && req.body.status !== row.status) await syncSeatsAfterChange();
 
   // The person just became individually covered by the face policy — tell them now, not at
