@@ -169,7 +169,7 @@ export async function getDayGrid(
     const days: Record<string, GridDay> = {};
     const summary: GridSummary = { workingDays: 0, holidays: 0, leaveDays: {}, presentDays: 0, absentDays: 0, loggedHours: 0 };
     for (const key of keys) {
-      const holiday = holidayOf(p.holidayCalendarId, key);
+      const holiday = holidayOf(p.holidayCalendarId, key, p.id);
       const leave = leaveOf(p.id, key);
       const r = resolveDayStatus({
         dateKey: key,

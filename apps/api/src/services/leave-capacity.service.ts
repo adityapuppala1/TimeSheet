@@ -74,7 +74,7 @@ export async function absenceByPerson(
     const perDay = (p.weeklyCapacityHours ?? defaultWeeklyCapacityHours) / perWeek;
     const days = new Map<string, number>();
     for (const d of workingDayKeys(from, to, workingDays)) {
-      const fraction = holidayOf(p.holidayCalendarId, d) ? 1 : leaveFractionOf(leaveOf, p.id, d);
+      const fraction = holidayOf(p.holidayCalendarId, d, p.id) ? 1 : leaveFractionOf(leaveOf, p.id, d);
       if (fraction > 0) days.set(d, r2(perDay * fraction));
     }
     if (days.size) out.set(p.id, days);
@@ -126,7 +126,7 @@ export async function expectedHoursFor(userIds: readonly string[], from: string,
         from,
         to,
         workingDays: planning.workingDays,
-        isHoliday: (d) => Boolean(holidayOf(p.holidayCalendarId, d)),
+        isHoliday: (d) => Boolean(holidayOf(p.holidayCalendarId, d, p.id)),
         leaveFraction: (d) => leaveFractionOf(leaveOf, p.id, d),
         weeklyCapacityHours: p.weeklyCapacityHours != null ? Number(p.weeklyCapacityHours) : planning.defaultWeeklyCapacityHours
       })

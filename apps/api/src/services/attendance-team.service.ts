@@ -112,7 +112,13 @@ function addDays(dateKey: string, days: number): string {
   return new Date(dayStart(dateKey).getTime() + days * DAY_MS).toISOString().slice(0, 10);
 }
 
-/** Holidays for a set of calendars over a date range, keyed `calendarId|dateKey`. One query. */
+/**
+ * Holidays for a set of calendars over a date range, keyed `calendarId|dateKey`. Two queries at most.
+ *
+ * 7.0.0 OPTIONAL HOLIDAYS: an optional holiday is a holiday only for a person who opted into it
+ * (HolidayOptIn). Pass that person's id as the third argument; without it — or without an opt-in —
+ * an optional holiday is a working day. Mandatory holidays are unchanged.
+ */
 export async function loadHolidays(calendarIds: Array<string | null>, from: string, to: string) {
   const defaultId = calendarIds.some((id) => !id)
     ? ((await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true } }))?.id ?? null)
@@ -121,11 +127,21 @@ export async function loadHolidays(calendarIds: Array<string | null>, from: stri
   const rows = ids.length
     ? await prisma.holiday.findMany({
         where: { calendarId: { in: ids }, date: { gte: dayStart(from), lte: dayStart(to) } },
-        select: { calendarId: true, date: true, name: true }
+        select: { id: true, calendarId: true, date: true, name: true, isOptional: true }
       })
     : [];
-  const map = new Map(rows.map((h) => [`${h.calendarId}|${h.date.toISOString().slice(0, 10)}`, { name: h.name }]));
-  return (calendarId: string | null, dateKey: string) => map.get(`${calendarId ?? defaultId}|${dateKey}`) ?? null;
+  const optionalIds = rows.filter((h) => h.isOptional).map((h) => h.id);
+  const optIns = optionalIds.length
+    ? await prisma.holidayOptIn.findMany({ where: { holidayId: { in: optionalIds } }, select: { userId: true, holidayId: true } })
+    : [];
+  const optedIn = new Set(optIns.map((o) => `${o.userId}|${o.holidayId}`));
+  const map = new Map(rows.map((h) => [`${h.calendarId}|${h.date.toISOString().slice(0, 10)}`, h]));
+  return (calendarId: string | null, dateKey: string, userId?: string) => {
+    const h = map.get(`${calendarId ?? defaultId}|${dateKey}`);
+    if (!h) return null;
+    if (h.isOptional && !(userId && optedIn.has(`${userId}|${h.id}`))) return null;
+    return { name: h.name };
+  };
 }
 
 export interface TeamTodayQuery {
@@ -229,7 +245,7 @@ export async function getTeamDay(actor: { id: string; role: string }, query: Tea
     const day = resolveDayStatus({
       dateKey: query.date,
       workingDays: planning?.workingDays ?? [1, 2, 3, 4, 5],
-      holiday: holidayOf ? holidayOf(p.holidayCalendarId, query.date) : null,
+      holiday: holidayOf ? holidayOf(p.holidayCalendarId, query.date, p.id) : null,
       leave: leaveOf ? leaveOf(p.id, query.date) : null,
       punchedIn: Boolean(record),
       now,
@@ -436,7 +452,7 @@ export async function getMyHistory(userId: string, from: string, to: string, now
     const day = resolveDayStatus({
       dateKey: key,
       workingDays: planning.workingDays,
-      holiday: holidayOf(user.holidayCalendarId, key),
+      holiday: holidayOf(user.holidayCalendarId, key, userId),
       leave: leaveOf(userId, key),
       punchedIn: Boolean(record),
       now,

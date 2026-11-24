@@ -562,7 +562,7 @@ export async function applyLeave(input: ApplyInput): Promise<ApplyResult> {
     getPlanningSettings(),
     loadHolidays([person.holidayCalendarId], span.startDate, span.endDate)
   ]);
-  const days = countLeaveDays(span, { workingDays: planning.workingDays, isHoliday: (d) => Boolean(holidayOf(person.holidayCalendarId, d)) });
+  const days = countLeaveDays(span, { workingDays: planning.workingDays, isHoliday: (d) => Boolean(holidayOf(person.holidayCalendarId, d, person.id)) });
   if (days <= 0) throw new AppError(422, "Those dates are all weekends or holidays — there is nothing to take leave from.", { code: "LEAVE_NO_WORKING_DAYS" });
 
   if (!input.external && type.requiresDocumentAfterDays != null && days > type.requiresDocumentAfterDays && !input.attachment) {
@@ -820,12 +820,12 @@ export async function previewLeave(userId: string, q: z.infer<typeof previewQuer
     pendingDays(prisma, userId, leaveYear, type.id),
     activeApprover(person.managerId)
   ]);
-  const isHoliday = (d: string) => Boolean(holidayOf(person.holidayCalendarId, d));
+  const isHoliday = (d: string) => Boolean(holidayOf(person.holidayCalendarId, d, person.id));
   const days = countLeaveDays(span, { workingDays: planning.workingDays, isHoliday });
   const excluded = excludedDays(span, {
     workingDays: planning.workingDays,
     isHoliday,
-    holidayName: (d) => holidayOf(person.holidayCalendarId, d)?.name ?? null
+    holidayName: (d) => holidayOf(person.holidayCalendarId, d, person.id)?.name ?? null
   });
   if (days <= 0) problems.push({ code: "LEAVE_NO_WORKING_DAYS", message: "Those dates are all weekends or holidays — there is nothing to take leave from." });
 

@@ -75,16 +75,24 @@ export async function findLeaveInRange(userIds: readonly string[], from: string,
 }
 
 /** The person's holiday on `dateKey`: their own calendar, else the workspace default. */
-export async function findHoliday(holidayCalendarId: string | null, dateKey: string): Promise<{ name: string } | null> {
+export async function findHoliday(holidayCalendarId: string | null, dateKey: string, userId?: string): Promise<{ name: string } | null> {
   const calendarId =
     holidayCalendarId ??
     (await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true } }))?.id ??
     null;
   if (!calendarId) return null;
-  return prisma.holiday.findFirst({
+  const holiday = await prisma.holiday.findFirst({
     where: { calendarId, date: new Date(`${dateKey}T00:00:00Z`) },
-    select: { name: true }
+    select: { id: true, name: true, isOptional: true }
   });
+  if (!holiday) return null;
+  // 7.0.0: an optional holiday is a holiday only for someone who opted into it.
+  if (holiday.isOptional) {
+    if (!userId) return null;
+    const opted = await prisma.holidayOptIn.findUnique({ where: { userId_holidayId: { userId, holidayId: holiday.id } }, select: { id: true } });
+    if (!opted) return null;
+  }
+  return { name: holiday.name };
 }
 
 /**
@@ -150,7 +158,7 @@ export async function getMyToday(userId: string, now: Date = new Date()): Promis
   const [settings, planning, user] = await Promise.all([getAttendanceSettings(), getPlanningSettings(), loadUser(userId)]);
   const dateKey = todayKeyFor(now, user.timezone, serverTimezone);
   const [holiday, leave, record, faceRequired] = await Promise.all([
-    findHoliday(user.holidayCalendarId, dateKey),
+    findHoliday(user.holidayCalendarId, dateKey, userId),
     findLeaveForDay(userId, dateKey),
     prisma.attendanceRecord.findUnique({
       where: { userId_workDate: { userId, workDate: new Date(`${dateKey}T00:00:00Z`) } },
@@ -355,16 +363,35 @@ export async function getMyHolidays(userId: string, from: string, to: string) {
   const calendar = user.holidayCalendarId
     ? await prisma.holidayCalendar.findUnique({ where: { id: user.holidayCalendarId }, select: { id: true, name: true } })
     : await prisma.holidayCalendar.findFirst({ where: { isDefault: true }, select: { id: true, name: true } });
-  if (!calendar) return { calendar: null, from, to, holidays: [] };
+  if (!calendar) return { calendar: null, from, to, holidays: [], maxOptionalPerYear: null, optionalTakenByYear: {} };
   const rows = await prisma.holiday.findMany({
     where: { calendarId: calendar.id, date: { gte: new Date(`${from}T00:00:00Z`), lte: new Date(`${to}T00:00:00Z`) } },
     orderBy: { date: "asc" },
     select: { id: true, date: true, name: true, isOptional: true }
   });
+  // 7.0.0: which optional holidays this person took, and the calendar's yearly cap.
+  const [cap, optIns] = await Promise.all([
+    prisma.holidayCalendar.findUnique({ where: { id: calendar.id }, select: { maxOptionalPerYear: true } }),
+    prisma.holidayOptIn.findMany({ where: { userId, holiday: { calendarId: calendar.id } }, select: { holidayId: true, holiday: { select: { date: true } } } })
+  ]);
+  const opted = new Set(optIns.map((o) => o.holidayId));
+  const optionalTakenByYear: Record<string, number> = {};
+  for (const o of optIns) {
+    const y = String(o.holiday.date.getUTCFullYear());
+    optionalTakenByYear[y] = (optionalTakenByYear[y] ?? 0) + 1;
+  }
   return {
     calendar,
     from,
     to,
-    holidays: rows.map((h) => ({ id: h.id, date: h.date.toISOString().slice(0, 10), name: h.name, isOptional: h.isOptional }))
+    maxOptionalPerYear: cap?.maxOptionalPerYear ?? null,
+    optionalTakenByYear,
+    holidays: rows.map((h) => ({
+      id: h.id,
+      date: h.date.toISOString().slice(0, 10),
+      name: h.name,
+      isOptional: h.isOptional,
+      optedIn: h.isOptional && opted.has(h.id)
+    }))
   };
 }

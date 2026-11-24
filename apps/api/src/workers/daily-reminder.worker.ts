@@ -332,7 +332,7 @@ export async function runPunchInReminders(now: Date = new Date()): Promise<{ sen
     const day = resolveDayStatus({
       dateKey,
       workingDays: planning.workingDays,
-      holiday: holidayOf(user.holidayCalendarId ?? null, dateKey),
+      holiday: holidayOf(user.holidayCalendarId ?? null, dateKey, user.id),
       leave: leaveOf(user.id, dateKey),
       punchedIn: punched.has(`${user.id}|${dateKey}`),
       now,

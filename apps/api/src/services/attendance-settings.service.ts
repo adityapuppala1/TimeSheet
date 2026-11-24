@@ -99,7 +99,9 @@ export const calendarBody = z
   .object({
     name: z.string().trim().min(1).max(120),
     description: z.string().trim().max(500).nullable().optional(),
-    isDefault: z.boolean().optional()
+    isDefault: z.boolean().optional(),
+    /** 7.0.0: optional holidays one person may take per calendar year; null = no limit. */
+    maxOptionalPerYear: z.number().int().min(0).max(366).nullable().optional()
   })
   .strict();
 

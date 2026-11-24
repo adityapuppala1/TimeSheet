@@ -9,6 +9,7 @@
  * IP and user agent are taken from the request, never the body — a client that could name its own
  * IP would make the evidence worthless.
  */
+import { optInHoliday, optOutHoliday } from "../services/holiday-opt-in.service.js";
 import { Router } from "express";
 import { z } from "zod";
 import { aiRateLimit } from "../middleware/ai-rate-limit.js";
@@ -86,6 +87,14 @@ attendanceRouter.get("/me/holidays", requireAuth, async (req, res) => {
   await assertAttendanceOn();
   const { from, to } = rangeQuery(req.query, 400);
   res.json(await getMyHolidays(req.user!.id, from, to));
+});
+
+/** 7.0.0: take (PUT) or drop (DELETE) one optional holiday in the caller's own calendar. */
+attendanceRouter.put("/me/optional-holidays/:holidayId", requireAuth, async (req, res) => {
+  res.json(await optInHoliday(req.user!.id, String(req.params.holidayId)));
+});
+attendanceRouter.delete("/me/optional-holidays/:holidayId", requireAuth, async (req, res) => {
+  res.json(await optOutHoliday(req.user!.id, String(req.params.holidayId)));
 });
 
 /**

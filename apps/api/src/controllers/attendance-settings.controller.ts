@@ -118,7 +118,7 @@ attendanceSettingsRouter.post("/calendars", validate(z.object({ body: calendarBo
       const existing = await tx.holidayCalendar.count();
       const isDefault = existing === 0 ? true : Boolean(body.isDefault);
       if (isDefault) await tx.holidayCalendar.updateMany({ where: { isDefault: true }, data: { isDefault: false } });
-      return tx.holidayCalendar.create({ data: { name: body.name, description: body.description ?? null, isDefault } });
+      return tx.holidayCalendar.create({ data: { name: body.name, description: body.description ?? null, isDefault, maxOptionalPerYear: body.maxOptionalPerYear ?? null } });
     });
     await audit(req.user!.id, "attendance.calendar_created", "HolidayCalendar", created.id, body);
     res.status(201).json(created);

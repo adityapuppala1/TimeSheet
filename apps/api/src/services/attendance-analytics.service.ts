@@ -358,7 +358,7 @@ export async function loadPersonFacts(people: LoadedPerson[], from: string, to: 
       const day = resolveDayStatus({
         dateKey: date,
         workingDays: planning.workingDays,
-        holiday: holidayOf(p.holidayCalendarId, date),
+        holiday: holidayOf(p.holidayCalendarId, date, p.id),
         leave: leaveOf(p.id, date),
         punchedIn: Boolean(record),
         now,

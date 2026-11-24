@@ -111,7 +111,7 @@ export async function missedDayReasonState(
   const user = await client.user.findUnique({ where: { id: userId }, select: { holidayCalendarId: true } });
   const workDate = new Date(`${workDateKey}T00:00:00Z`);
   const [holiday, existingEntries, reason] = await Promise.all([
-    findHoliday(user?.holidayCalendarId ?? null, workDateKey),
+    findHoliday(user?.holidayCalendarId ?? null, workDateKey, userId),
     client.timesheet.count({ where: { userId, workDate, deletedAt: null } }),
     client.missedDayReason.findUnique({ where: { userId_workDate: { userId, workDate } }, select: { id: true } })
   ]);

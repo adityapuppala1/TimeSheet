@@ -376,6 +376,7 @@ model User {
   attendanceRecords           AttendanceRecord[]
   missedDayReasons            MissedDayReason[]
   attendanceInsightDismissals AttendanceInsightDismissal[]
+  holidayOptIns               HolidayOptIn[]
   /// V17 Phase B leave. Cascade with the person (personal data), like attendance.
   leaveRequests               LeaveRequest[]
   leaveLedger                 LeaveBalanceLedger[]
@@ -6230,6 +6231,9 @@ model HolidayCalendar {
   description String? @db.VarChar(500)
   /// At most one should be true; enforced in the service (MariaDB has no partial unique index).
   isDefault   Boolean @default(false)
+  /// 7.0.0: how many of this calendar's optional holidays one person may opt into per calendar
+  /// year. NULL = no limit set; 0 = optional holidays cannot be taken.
+  maxOptionalPerYear Int?
 
   holidays Holiday[]
   users    User[]
@@ -6238,6 +6242,20 @@ model HolidayCalendar {
   updatedAt DateTime @updatedAt
 
   @@index([isDefault])
+}
+
+/// 7.0.0: a person taking an optional holiday. Only then is that day a holiday for them,
+/// everywhere the day-status resolver runs; without it the day is a working day.
+model HolidayOptIn {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  holidayId String
+  holiday   Holiday  @relation(fields: [holidayId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, holidayId])
+  @@index([holidayId])
 }
 
 /// One day off in one calendar. A DATE, not a timestamp: a holiday is a calendar day wherever the
@@ -6251,6 +6269,7 @@ model Holiday {
   name       String          @db.VarChar(120)
   /// An optional (restricted) holiday — counted only for people who take it (phase B leave).
   isOptional Boolean         @default(false)
+  optIns     HolidayOptIn[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
