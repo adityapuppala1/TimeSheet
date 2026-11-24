@@ -66,6 +66,8 @@ export interface HolidayCalendarRow {
   name: string;
   description: string | null;
   isDefault: boolean;
+  /** 7.0.0: optional holidays one person may take per calendar year; null = no limit. */
+  maxOptionalPerYear?: number | null;
   holidays: HolidayRow[];
   _count: { users: number };
 }
@@ -90,9 +92,9 @@ export const attendanceAdminApi = {
   },
   calendars: {
     list: async () => (await api.get<HolidayCalendarRow[]>(`${BASE}/calendars`)).data,
-    create: async (payload: { name: string; description?: string | null; isDefault?: boolean }) =>
+    create: async (payload: { name: string; description?: string | null; isDefault?: boolean; maxOptionalPerYear?: number | null }) =>
       (await api.post<HolidayCalendarRow>(`${BASE}/calendars`, payload)).data,
-    update: async (id: string, payload: { name?: string; description?: string | null; isDefault?: boolean }) =>
+    update: async (id: string, payload: { name?: string; description?: string | null; isDefault?: boolean; maxOptionalPerYear?: number | null }) =>
       (await api.put<HolidayCalendarRow>(`${BASE}/calendars/${id}`, payload)).data,
     remove: async (id: string) => {
       await api.delete(`${BASE}/calendars/${id}`);
@@ -210,14 +212,20 @@ export const attendanceApi = {
     (await api.post<{ created: boolean; record: AttendancePunchRecord }>("/attendance/punch-in", payload)).data,
   /** V17 UI v2: stamps today's web punch with the server clock; no body. */
   punchOut: async () => (await api.post<{ updated: boolean; record: AttendancePunchRecord }>("/attendance/punch-out")).data,
-  myHolidays: async (from: string, to: string) => (await api.get<MyHolidays>("/attendance/me/holidays", { params: { from, to } })).data
+  myHolidays: async (from: string, to: string) => (await api.get<MyHolidays>("/attendance/me/holidays", { params: { from, to } })).data,
+  /** 7.0.0: take an optional holiday (409 OPTIONAL_HOLIDAY_LIMIT at the calendar's yearly cap). */
+  optInHoliday: async (holidayId: string) => (await api.put<{ holidayId: string; optedIn: boolean }>(`/attendance/me/optional-holidays/${holidayId}`)).data,
+  optOutHoliday: async (holidayId: string) => (await api.delete<{ holidayId: string; optedIn: boolean }>(`/attendance/me/optional-holidays/${holidayId}`)).data
 };
 
 export interface MyHolidays {
   calendar: { id: string; name: string } | null;
   from: string;
   to: string;
-  holidays: Array<{ id: string; date: string; name: string; isOptional: boolean }>;
+  holidays: Array<{ id: string; date: string; name: string; isOptional: boolean; optedIn?: boolean }>;
+  /** 7.0.0: the calendar's yearly cap on optional holidays (null = no limit) and how many this person took per year. */
+  maxOptionalPerYear?: number | null;
+  optionalTakenByYear?: Record<string, number>;
 }
 
 /* ------------------------------------------------------------------ *

@@ -11,7 +11,7 @@
  */
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CalendarClock, CalendarPlus, ChevronUp, CircleSlash, Download, FileText, List, Plane, Star, Users } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router";
 import { addDayKeys, buildMonthGrid, monthLabel, monthOf, shiftMonth, WEEKDAY_HEADERS } from "../../lib/attendance-calendar";
 import { downloadText } from "../../lib/csv-export";
@@ -51,6 +51,8 @@ import { Skeleton } from "../ui/skeleton";
 import { toast } from "../ui/toaster";
 import { CardError, FilterChip, PersonAvatar, Segmented, SectionCard, todayKey } from "./attendance-ui";
 import { leaveColour, useLeaveBalances, useMyHolidays } from "./use-leave";
+import { OptionalHolidayControl } from "./OptionalHolidayControl";
+import { optionalSummary, optionalTaken } from "../../lib/holiday-opt-in";
 
 const serverMessage = (err: unknown, fallback: string) => (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? fallback;
 
@@ -499,6 +501,9 @@ export function HolidayCalendarView() {
   const holidays = useMemo(() => q.data?.holidays ?? [], [q.data]);
   const upcoming = holidays.filter((h) => h.date >= today).slice(0, 4);
   const byDate = useMemo(() => new Map(holidays.map((h) => [h.date, h])), [holidays]);
+  const cap = q.data?.maxOptionalPerYear ?? null;
+  const taken = optionalTaken(q.data?.optionalTakenByYear, String(year));
+  const hasOptional = holidays.some((h) => h.isOptional);
 
   const download = () => {
     const ics = buildIcs(holidays, q.data?.calendar?.name ?? "Holidays");
@@ -546,24 +551,33 @@ export function HolidayCalendarView() {
             </ul>
           </div>
         )}
-        {holidays.length > 0 && mode === "list" && <HolidayList holidays={holidays} />}
+        {hasOptional && (
+          <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground" aria-live="polite">
+            {optionalSummary(cap, taken, String(year))}
+          </p>
+        )}
+        {holidays.length > 0 && mode === "list" && (
+          <HolidayList holidays={holidays} action={(h) => <OptionalHolidayControl holiday={h} cap={cap} takenThisYear={taken} today={today} />} />
+        )}
         {holidays.length > 0 && mode === "calendar" && <HolidayMonth month={month} setMonth={setMonth} byDate={byDate} today={today} />}
       </SectionCard>
     </div>
   );
 }
 
-function HolidayBadges({ h }: Readonly<{ h: { date: string; isOptional: boolean } }>) {
+function HolidayBadges({ h }: Readonly<{ h: { date: string; isOptional: boolean; optedIn?: boolean } }>) {
   const note = fallsOnNote(h.date);
   return (
     <span className="flex flex-wrap items-center gap-1.5">
-      <Badge variant={h.isOptional ? "muted" : "info"}>{h.isOptional ? "Optional" : "Public"}</Badge>
+      <Badge variant={h.isOptional ? "muted" : "info"}>{h.isOptional ? (h.optedIn ? "Optional · taken" : "Optional") : "Public"}</Badge>
       {note && <span className="text-xs text-muted-foreground">{note}</span>}
     </span>
   );
 }
 
-function HolidayList({ holidays }: Readonly<{ holidays: Array<{ id: string; date: string; name: string; isOptional: boolean }> }>) {
+type HolidayItem = { id: string; date: string; name: string; isOptional: boolean; optedIn?: boolean };
+
+function HolidayList({ holidays, action }: Readonly<{ holidays: HolidayItem[]; action?: (h: HolidayItem) => ReactNode }>) {
   return (
     <div className="grid gap-4">
       {groupByMonth(holidays).map((g) => (
@@ -571,7 +585,7 @@ function HolidayList({ holidays }: Readonly<{ holidays: Array<{ id: string; date
           <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{monthLabel(g.month)}</h4>
           <ul className="grid gap-1.5">
             {g.items.map((h) => (
-              <li key={h.id} className="flex min-w-0 items-center gap-3 rounded-md border border-border px-3 py-2">
+              <li key={h.id} className="flex min-w-0 flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2">
                 <span className="status-fill status-holiday grid h-10 w-10 shrink-0 place-items-center rounded-md text-center leading-none">
                   <span className="text-sm font-bold tabular-nums">{h.date.slice(8)}</span>
                 </span>
@@ -580,6 +594,7 @@ function HolidayList({ holidays }: Readonly<{ holidays: Array<{ id: string; date
                   <p className="text-xs text-muted-foreground">{new Date(`${h.date}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "long", timeZone: "UTC" })}</p>
                 </div>
                 <HolidayBadges h={h} />
+                {action?.(h)}
               </li>
             ))}
           </ul>

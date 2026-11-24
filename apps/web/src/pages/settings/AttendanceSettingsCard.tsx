@@ -58,6 +58,7 @@ import {
 import { LEAVE_STATUS_KEY, leaveAdminApi, type LeaveSettings } from "../../services/leave-api";
 import { StagedNumber, StagedSegment, StagedSelect, StagedToggle } from "./attendance-fields";
 import { AttendanceConfirmDelete } from "./AttendanceConfirmDelete";
+import { OptionalHolidayCapField } from "./OptionalHolidayCapField";
 import { AttendanceSourcesSection } from "./AttendanceSourcesSection";
 import { BalanceAdjustments, LEAVE_SETTINGS_KEY, LEAVE_TYPES_KEY, LeaveSettingsFields, LeaveTypesSection } from "./LeaveSettingsSections";
 
@@ -672,6 +673,7 @@ function HolidayCalendarsEditor({ readOnly, query }: { readOnly: boolean; query:
               )}
             </div>
           </div>
+          <OptionalHolidayCapField calendarId={calendar.id} value={calendar.maxOptionalPerYear} readOnly={readOnly} onSaved={refresh} />
           <HolidayList calendarId={calendar.id} holidays={calendar.holidays} readOnly={readOnly} onChanged={refresh} />
         </div>
       ))}
