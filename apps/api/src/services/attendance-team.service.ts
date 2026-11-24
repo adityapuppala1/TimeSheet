@@ -33,7 +33,6 @@ import { resolveDayStatus, type AttendanceDayStatus } from "./attendance-day-sta
 import { findLeaveInRange } from "./attendance-punch.service.js";
 import { halfLabel } from "./leave-calc.js";
 import { getAttendanceSettings } from "./attendance-settings.service.js";
-import { localMinuteOf } from "./attendance-analytics.service.js";
 
 const UNRESTRICTED_ROLES = new Set(["SUPER_ADMIN", "ADMIN"]);
 const MANAGING_ROLES = new Set(["MANAGER", "TEAM_LEAD"]);
@@ -180,6 +179,7 @@ function emptySummary(): StatusSummary {
 
 /** PRESENT rows whose punch-in is after the expected start, in the person's own zone. Pure. */
 export function countLate(
+  localMinuteOf: (instant: Date, zone: string | null) => number,
   rows: ReadonlyArray<Pick<TeamTodayRow, "status" | "punch" | "user">>,
   zoneOf: ReadonlyMap<string, string | null>,
   expectedStartMinute: number
@@ -285,7 +285,7 @@ export async function getTeamDay(actor: { id: string; role: string }, query: Tea
   const settings = ids.length ? await getAttendanceSettings() : null;
   const zoneOf = new Map(people.map((p) => [p.id, p.timezone]));
   const late = settings?.latenessEnabled
-    ? countLate(query.source ? all.filter((row) => row.punch?.source === query.source) : all, zoneOf, settings.expectedStartMinute ?? 600)
+    ? countLate((await import("./attendance-analytics.service.js")).localMinuteOf, query.source ? all.filter((row) => row.punch?.source === query.source) : all, zoneOf, settings.expectedStartMinute ?? 600)
     : null;
 
   const filtered = all.filter(

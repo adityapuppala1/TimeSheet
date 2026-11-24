@@ -99,7 +99,7 @@ describe("an approved December leave cancelled after the rollover", () => {
     await runLeaveAccrual(JAN_2); // 12 − 6 − 3 = 3 carried
     expect(balanceOf(world, "emp", "type-PL", 2027)).toBe(15);
 
-    await svc.cancelLeave({ actor: actor("super"), requestId: req.id, now: JAN_4 });
+    await svc.cancelLeave({ actor: actor("super"), requestId: req.id, comment: "Came in", now: JAN_4 });
     // 6 unused now → 5 carry (the cap), +2 into 2027; 2026 back at zero.
     expect(balanceOf(world, "emp", "type-PL", 2026)).toBe(0);
     expect(balanceOf(world, "emp", "type-PL", 2027)).toBe(17);
