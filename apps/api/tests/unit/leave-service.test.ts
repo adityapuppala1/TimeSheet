@@ -432,10 +432,18 @@ describe("inbox", () => {
     expect((await svc.listInbox(actor("admin"))).items.map((i) => i.user?.id).sort()).toEqual(["emp", "orphan"]);
   });
 
-  it("scope=all is super admin only", async () => {
+  it("scope=all is for administrators (ADMIN and SUPER_ADMIN) only", async () => {
     await apply();
-    await expect(svc.listInbox(actor("admin"), { scope: "all" })).rejects.toMatchObject({ statusCode: 403 });
+    await expect(svc.listInbox(actor("mgr"), { scope: "all" })).rejects.toMatchObject({ statusCode: 403 });
+    expect((await svc.listInbox(actor("admin"), { scope: "all" })).total).toBe(1);
     expect((await svc.listInbox(actor("super"), { scope: "all" })).total).toBe(1);
+  });
+
+  it("an ADMIN's scope=all hides the reason of a request a manager decides", async () => {
+    await apply({ reason: "private" });
+    const row = (await svc.listInbox(actor("admin"), { scope: "all" })).items[0];
+    expect(row.reason).toBeNull();
+    expect(row.attachment).toBeNull();
   });
 
   it("the inbox agrees with decisionRight: everything listed can be decided", async () => {

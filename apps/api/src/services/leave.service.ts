@@ -1185,7 +1185,7 @@ export async function listMyRequests(userId: string, opts: { status?: LeaveReque
 /**
  * The approver's inbox, as a Prisma filter — the SAME rule as decisionRight, expressed as a query:
  * requests whose captured approver is me; plus, for pool members, those with no approver or whose
- * approver is no longer active. `scope: "all"` (SUPER_ADMIN only) is every request.
+ * approver is no longer active. `scope: "all"` (ADMIN / SUPER_ADMIN) is every request.
  */
 export async function inboxWhere(
   actor: { id: string; role: string },
@@ -1193,7 +1193,9 @@ export async function inboxWhere(
   fallback: Fallback
 ): Promise<Prisma.LeaveRequestWhereInput> {
   if (scope === "all") {
-    if (actor.role !== "SUPER_ADMIN") throw new AppError(403, "Only a super admin can see every leave request.");
+    // ADMIN may cancel anyone's leave (cancelLeave), so they may list it too. Reasons and documents
+    // are still stripped per row unless decisionRight says the actor may decide that request.
+    if (actor.role !== "SUPER_ADMIN" && actor.role !== "ADMIN") throw new AppError(403, "Only an administrator can see every leave request.");
     return {};
   }
   const clauses: Prisma.LeaveRequestWhereInput[] = [{ approverId: actor.id }];

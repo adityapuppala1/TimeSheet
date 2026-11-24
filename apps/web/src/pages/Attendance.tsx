@@ -107,7 +107,7 @@ function TeamPanel({ leaveOn }: Readonly<{ leaveOn: boolean }>) {
   const wide = useMediaQuery("(min-width: 1024px)");
   const [tab, setTab] = useState<TeamTab>("board");
   const today = useMyToday();
-  const superAdmin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN");
+  const admin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN" || s.user?.role === "ADMIN");
   const lateness = today.data?.latenessEnabled ? { enabled: true, expectedStartMinute: today.data.expectedStartMinute ?? 570 } : null;
 
   // The Approvals panel only exists as a tab on a phone; widening the window puts it back in the rail.
@@ -133,7 +133,7 @@ function TeamPanel({ leaveOn }: Readonly<{ leaveOn: boolean }>) {
       )}
       {tab === "approvals" && leaveOn && <ApprovalsInbox />}
       {tab === "calendar" && leaveOn && <TeamLeaveCalendar />}
-      {tab === "calendar" && leaveOn && superAdmin && <AdminCancelLeave />}
+      {tab === "calendar" && leaveOn && admin && <AdminCancelLeave />}
       {tab === "insights" && <TeamInsightsView />}
     </div>
   );

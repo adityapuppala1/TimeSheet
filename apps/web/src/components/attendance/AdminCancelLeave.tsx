@@ -1,11 +1,11 @@
 /**
- * 7.0.0 — a super admin cancels someone else's approved leave, with a REQUIRED comment.
+ * 7.0.0 — an administrator (ADMIN or SUPER_ADMIN) cancels someone else's approved leave, with a REQUIRED comment.
  *
  * The API (POST /leave/me/requests/:id/cancel with { comment }) answers 422
  * LEAVE_CANCEL_COMMENT_REQUIRED without one; the comment is told to the person and audited. The
  * button stays disabled until the comment has text, so the 422 is the backstop, not the UX.
  *
- * Only a SUPER_ADMIN can list every approved request (inbox scope=all), so only they see this card.
+ * Only an ADMIN or SUPER_ADMIN can list every approved request (inbox scope=all), so only they see this card.
  * No reason or document is shown here: the list is name, type and dates.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
