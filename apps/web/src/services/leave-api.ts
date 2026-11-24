@@ -170,6 +170,11 @@ export const leaveApi = {
     return (await api.post<{ request: LeaveRequestRow; autoApproved: boolean }>("/leave/me/requests", fields)).data;
   },
   cancel: async (id: string) => (await api.post<LeaveRequestRow>(`/leave/me/requests/${id}/cancel`)).data,
+  /** An administrator cancelling someone else's leave: the comment is required (422 LEAVE_CANCEL_COMMENT_REQUIRED) and the person is told. */
+  cancelAsAdmin: async (id: string, comment: string) => (await api.post<LeaveRequestRow>(`/leave/me/requests/${id}/cancel`, { comment })).data,
+  /** Every approved request an administrator can see (scope=all). */
+  approvedAll: async () =>
+    (await api.get<{ total: number; items: LeaveRequestRow[] }>("/leave/inbox", { params: { scope: "all", status: "APPROVED", pageSize: 200 } })).data,
   expectedHours: async (from: string, to: string) => (await api.get<ExpectedHours>("/leave/me/expected-hours", { params: { from, to } })).data,
   inbox: async (status: LeaveStatus | "ALL" = "PENDING") =>
     (await api.get<{ total: number; items: LeaveRequestRow[] }>("/leave/inbox", { params: { status, pageSize: 100 } })).data,

@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router";
 import { PageHeader } from "../components/PageHeader";
 import { MyAnalyticsSection, TeamInsightsView } from "../components/attendance/AttendanceAnalytics";
+import { AdminCancelLeave } from "../components/attendance/AdminCancelLeave";
 import { ApprovalsInbox } from "../components/attendance/ApprovalsInbox";
 import { ApplyLeave, HolidayCalendarView, LeaveNav, MyLeaveRequests } from "../components/attendance/LeaveScreens";
 import { MyAttendanceView } from "../components/attendance/MyAttendanceView";
@@ -106,6 +107,7 @@ function TeamPanel({ leaveOn }: Readonly<{ leaveOn: boolean }>) {
   const wide = useMediaQuery("(min-width: 1024px)");
   const [tab, setTab] = useState<TeamTab>("board");
   const today = useMyToday();
+  const superAdmin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN");
   const lateness = today.data?.latenessEnabled ? { enabled: true, expectedStartMinute: today.data.expectedStartMinute ?? 570 } : null;
 
   // The Approvals panel only exists as a tab on a phone; widening the window puts it back in the rail.
@@ -131,6 +133,7 @@ function TeamPanel({ leaveOn }: Readonly<{ leaveOn: boolean }>) {
       )}
       {tab === "approvals" && leaveOn && <ApprovalsInbox />}
       {tab === "calendar" && leaveOn && <TeamLeaveCalendar />}
+      {tab === "calendar" && leaveOn && superAdmin && <AdminCancelLeave />}
       {tab === "insights" && <TeamInsightsView />}
     </div>
   );
