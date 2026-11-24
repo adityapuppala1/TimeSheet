@@ -549,11 +549,11 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Open Workspace Settings → Attendance & Leave and choose Kiosk / QR punch.",
       "Switch on Let people punch in by scanning a kiosk's QR code, and save.",
       "Add a kiosk: give it a name and, optionally, the work site it stands at. Copy the device token shown: it is shown only once.",
-      "On the kiosk device (a tablet or a screen), open /kiosk on your workspace's address and paste the token. It shows a QR code that changes every 30 seconds.",
+      "On the kiosk device (a tablet or a screen), open /kiosk on your workspace's address and paste the token. It shows a QR code that changes every 30 seconds, and straight after each scan.",
       "Lost a device? Revoke it. Rotate gives a new token and stops the old one at once."
     ],
     notes:
-      "Off by default and needs Attendance on. A kiosk punch counts as being at the kiosk's site, so the work-site rule never blocks or flags it; it records no location. When the face check is required for punch-in, people do it on their own phone after scanning, exactly as for a web punch. Codes are signed, last about a minute and cannot be reused; a code from one workspace never works in another.",
+      "Off by default and needs Attendance on. A kiosk punch counts as being at the kiosk's site, so the work-site rule never blocks or flags it; it records no location. When the face check is required for punch-in, people do it on their own phone after scanning, exactly as for a web punch. Codes are signed, last about a minute and work once, for one person: a photographed or forwarded code is refused; a code from one workspace never works in another.",
     keywords: ["kiosk", "QR code", "qr punch", "scan to punch in", "front door", "tablet punch", "device token"]
   },
   {

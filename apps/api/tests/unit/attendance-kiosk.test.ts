@@ -3,7 +3,15 @@
  * rotate and revoke, signed codes, and the punch's refusals — forged signature, expired window,
  * replay, revoked device, another tenant — plus the OFF gate and the KIOSK ingest call.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The fake enforces the SAME unique key the database does, read from schema.prisma, so a change
+// to the constraint changes what these tests see.
+const schema = readFileSync(fileURLToPath(new URL("../../prisma/schema.prisma", import.meta.url)), "utf8");
+const nonceModel = /model AttendanceKioskNonce \{([\s\S]*?)\n\}/.exec(schema)![1];
+const NONCE_KEY = /@@unique\(\[([^\]]+)\]\)/.exec(nonceModel)![1].split(",").map((s) => s.trim()) as Array<"kioskId" | "userId" | "nonce">;
 
 type Kiosk = { id: string; name: string; siteId: string | null; tokenHash: string; tokenHint: string; keySalt: string; revokedAt: Date | null; lastSeenAt: Date | null; createdAt: Date };
 let kiosks: Kiosk[] = [];
@@ -46,12 +54,13 @@ const client = {
   },
   attendanceSite: { findUnique: async ({ where }: { where: { id: string } }) => sites.find((s) => s.id === where.id) ?? null },
   attendanceKioskNonce: {
+    findFirst: async ({ where }: { where: { kioskId: string; nonce: string } }) => nonces.find((n) => n.kioskId === where.kioskId && n.nonce === where.nonce) ?? null,
     deleteMany: async ({ where }: { where: { createdAt: { lt: Date } } }) => {
       nonces = nonces.filter((n) => n.createdAt >= where.createdAt.lt);
       return { count: 0 };
     },
     create: async ({ data }: { data: { kioskId: string; userId: string; nonce: string } }) => {
-      if (nonces.some((n) => n.userId === data.userId && n.kioskId === data.kioskId && n.nonce === data.nonce)) throw Object.assign(new Error("dup"), { code: "P2002" });
+      if (nonces.some((n) => NONCE_KEY.every((k) => n[k] === data[k]))) throw Object.assign(new Error("dup"), { code: "P2002" });
       nonces.push({ ...data, createdAt: new Date() });
       return data;
     }
@@ -144,6 +153,23 @@ describe("the punch", () => {
     const { code } = await svc.issueKioskCode(token, NOW);
     await expect(punch("a", code, later(svc.KIOSK_WINDOW_MS))).resolves.toMatchObject({ created: true });
     await expect(punch("b", code, later(svc.KIOSK_WINDOW_MS * 2 + 1))).rejects.toMatchObject({ statusCode: 422, message: expect.stringContaining("expired") });
+  });
+
+  it("a code is single use across everyone: a second person with the same code is refused", async () => {
+    const { token } = await device();
+    const { code } = await svc.issueKioskCode(token, NOW);
+    await punch("emp", code);
+    await expect(punch("someone-else", code)).rejects.toMatchObject({ statusCode: 409, code: "KIOSK_CODE_USED" });
+    expect(ingest).toHaveBeenCalledTimes(1);
+  });
+
+  it("the kiosk learns when its code was used, so it can show a fresh one", async () => {
+    const { token } = await device();
+    const { code, nonce } = await svc.issueKioskCode(token, NOW);
+    await expect(svc.kioskCodeUsed(token, nonce, NOW)).resolves.toEqual({ used: false });
+    await punch("emp", code);
+    await expect(svc.kioskCodeUsed(token, nonce, NOW)).resolves.toEqual({ used: true });
+    await expect(svc.kioskCodeUsed("tsk_nope", nonce, NOW)).rejects.toMatchObject({ statusCode: 401 });
   });
 
   it("a code is single use per person", async () => {

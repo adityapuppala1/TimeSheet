@@ -6532,8 +6532,10 @@ model AttendanceKiosk {
   @@index([siteId])
 }
 
-/// 7.0.0: a QR nonce one person has used, so a scanned code cannot be replayed by that person.
-/// Rows older than a few minutes are useless (the code has expired) and are pruned on write.
+/// 7.0.0: a QR nonce that has been used. Single use across EVERYONE (unique per kiosk), so a code
+/// photographed and forwarded cannot punch a second person in; the kiosk shows a fresh code as soon
+/// as its current one is used. Rows older than a few minutes are useless (the code has expired) and
+/// are pruned on write.
 model AttendanceKioskNonce {
   id        String   @id @default(uuid())
   kioskId   String   @db.VarChar(64)
@@ -6541,7 +6543,7 @@ model AttendanceKioskNonce {
   nonce     String   @db.VarChar(32)
   createdAt DateTime @default(now())
 
-  @@unique([userId, kioskId, nonce])
+  @@unique([kioskId, nonce])
   @@index([createdAt])
 }
 

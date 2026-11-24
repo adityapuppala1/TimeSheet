@@ -6,6 +6,7 @@
  *   /api/attendance/kiosk
  *     GET  /status        signed in: is kiosk punch on
  *     GET  /device/code   PUBLIC, the device token in `X-Kiosk-Token` is the credential. Per-IP limit.
+ *     GET  /device/code/used?nonce=  PUBLIC, same credential: has the shown code been used yet?
  *     POST /punch         signed in: { code, verificationId? }. Per-IP limit.
  *
  * The tenant is the Host (resolveTenant runs before both), so a device or a code only ever reaches
@@ -16,7 +17,7 @@ import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
-import { createKiosk, isKioskOn, issueKioskCode, kioskPunch, listKiosks, revokeKiosk, rotateKiosk, updateKiosk } from "../services/attendance-kiosk.service.js";
+import { createKiosk, isKioskOn, issueKioskCode, kioskCodeUsed, kioskPunch, listKiosks, revokeKiosk, rotateKiosk, updateKiosk } from "../services/attendance-kiosk.service.js";
 import { assertAttendanceEntitled } from "../services/attendance-settings.service.js";
 
 export const kioskBody = z
@@ -81,6 +82,16 @@ kioskRouter.get("/device/code", deviceLimiter, async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Robots-Tag", "noindex");
   res.json(await issueKioskCode(token));
+});
+
+// The screen asks every few seconds whether its code has been used, to show a fresh one at once.
+const usedLimiter = rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: true });
+
+kioskRouter.get("/device/code/used", usedLimiter, async (req, res) => {
+  const token = req.get("x-kiosk-token");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Robots-Tag", "noindex");
+  res.json(await kioskCodeUsed(token, typeof req.query.nonce === "string" ? req.query.nonce : null));
 });
 
 kioskRouter.post("/punch", punchLimiter, requireAuth, validate(z.object({ body: kioskPunchBody })), async (req, res) => {

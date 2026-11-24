@@ -3508,14 +3508,16 @@ calls answer `403 KIOSK_OFF` while off.
 | POST | `/api/attendance/admin/kiosks/:id/rotate` | SUPER_ADMIN | new token and signing salt (the old token and its codes stop at once); un-revokes |
 | POST | `/api/attendance/admin/kiosks/:id/revoke` | SUPER_ADMIN | `204` |
 | GET | `/api/attendance/kiosk/status` | signed in | `{ enabled }` |
-| GET | `/api/attendance/kiosk/device/code` | the device (`X-Kiosk-Token` header) | `{ code, expiresAt, refreshInMs, kioskName, siteName }`; `401 KIOSK_UNAUTHORIZED` for an unknown or revoked token; 30/min per IP |
+| GET | `/api/attendance/kiosk/device/code` | the device (`X-Kiosk-Token` header) | `{ code, nonce, expiresAt, refreshInMs, kioskName, siteName }`; `401 KIOSK_UNAUTHORIZED` for an unknown or revoked token; 30/min per IP |
+| GET | `/api/attendance/kiosk/device/code/used?nonce=` | the device (`X-Kiosk-Token` header) | `{ used }`: has the code on screen been used? The screen polls it every 3 s and fetches a fresh code once it has; 60/min per IP |
 | POST | `/api/attendance/kiosk/punch` | signed in | `{ code, verificationId? }` → `201` punched, `200` already in today; 20/min per IP |
 
 A code is `base64url({k: kioskId, w: window, n: nonce}).base64url(HMAC-SHA256)`; `window` counts 30-second steps
 since the epoch and the key is derived from `ENCRYPTION_KEY`, the tenant's org id (from the Host), the kiosk id and
 its salt. The punch refuses a bad signature or junk (`422 KIOSK_CODE_INVALID`), a window older than the previous one
-(`422 KIOSK_CODE_EXPIRED`), a revoked kiosk (`422 KIOSK_REVOKED`) and a nonce this person already used
-(`409 KIOSK_CODE_USED`). It is ingested with source `KIOSK` (ranked like `WEB`, no integrations plan needed), no
+(`422 KIOSK_CODE_EXPIRED`), a revoked kiosk (`422 KIOSK_REVOKED`) and a nonce anyone has already used
+(`409 KIOSK_CODE_USED`): a code is single use across everyone (unique on kiosk and nonce), so a photographed or
+forwarded code cannot punch a second person in. It is ingested with source `KIOSK` (ranked like `WEB`, no integrations plan needed), no
 location, and `siteLabel` = the kiosk's site name: a kiosk punch satisfies `requireSite`. Face: when
 `punchInFaceRequired` applies, send the `verificationId` of a `PUNCH_IN` face check, exactly as for the web punch;
 `faceFailureRule` decides between refusing it and recording it flagged.

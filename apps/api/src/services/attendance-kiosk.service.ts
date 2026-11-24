@@ -14,8 +14,10 @@
  *
  * PUNCH. A signed-in person scans the QR on their own phone; the punch page sends the code. The API
  * checks the signature (constant time), that the window is the current or the previous one, that
- * the kiosk is not revoked, and records the nonce per person (unique) so the same code cannot be
- * replayed. It then punches through ingestPunch with source KIOSK.
+ * the kiosk is not revoked, and records the nonce (unique per kiosk, across everyone) so the same
+ * code can be used once: a photographed or forwarded code cannot punch anybody else in. The screen
+ * polls kioskCodeUsed and shows a fresh code as soon as its current one is used, on top of the
+ * 30 s rotation. It then punches through ingestPunch with source KIOSK.
  *
  * RULES. Being at the kiosk is the presence check: a kiosk punch SATISFIES requireSite (it is never
  * blocked or flagged by it), carries no location and its site label is the kiosk's site name (none
@@ -148,7 +150,19 @@ export async function issueKioskCode(token: string | undefined | null, now = new
   const kiosk = await authenticateKiosk(token, now);
   const window = windowOf(now);
   const expiresAt = new Date((window + 1) * KIOSK_WINDOW_MS);
-  return { code: signKioskCode(kiosk, window), expiresAt: expiresAt.toISOString(), refreshInMs: Math.max(1000, expiresAt.getTime() - now.getTime()), kioskName: kiosk.name, siteName: kiosk.site?.name ?? null };
+  const nonce = randomBytes(12).toString("hex");
+  // `nonce` lets the screen ask whether this code has been used (kioskCodeUsed) and show a fresh
+  // one at once; it is inside the code anyway, so returning it reveals nothing new.
+  return { code: signKioskCode(kiosk, window, nonce), nonce, expiresAt: expiresAt.toISOString(), refreshInMs: Math.max(1000, expiresAt.getTime() - now.getTime()), kioskName: kiosk.name, siteName: kiosk.site?.name ?? null };
+}
+
+/** Has the code with this nonce been used yet? Polled by the kiosk screen, by its device token. */
+export async function kioskCodeUsed(token: string | undefined | null, nonce: unknown, now = new Date()): Promise<{ used: boolean }> {
+  await assertKioskOn();
+  const kiosk = await authenticateKiosk(token, now);
+  if (typeof nonce !== "string" || !/^[0-9a-f]{8,32}$/.test(nonce)) throw invalid();
+  const row = await prisma.attendanceKioskNonce.findFirst({ where: { kioskId: kiosk.id, nonce }, select: { id: true } });
+  return { used: Boolean(row) };
 }
 
 const invalid = () => new AppError(422, "This code is not valid. Scan the code on the kiosk again.", { code: "KIOSK_CODE_INVALID" });
@@ -199,7 +213,8 @@ export async function kioskPunch(input: KioskPunchInput) {
   const now = input.now ?? new Date();
   const { kiosk, nonce } = await verifyKioskCode(input.code, now);
 
-  // Single use per person: the nonce row is unique on (person, kiosk, nonce).
+  // Single use across everyone: the nonce row is unique on (kiosk, nonce), so a forwarded code
+  // cannot punch a second person in.
   await prisma.attendanceKioskNonce.deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - NONCE_TTL_MS) } } });
   try {
     await prisma.attendanceKioskNonce.create({ data: { kioskId: kiosk.id, userId: input.userId, nonce } });

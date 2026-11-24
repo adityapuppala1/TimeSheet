@@ -52,8 +52,14 @@ export const kioskApi = {
 /** The kiosk device is not signed in: a plain client, no cookies, no 401 refresh redirect. */
 const deviceClient = axios.create({ baseURL: api.defaults.baseURL, withCredentials: false });
 export async function fetchKioskCode(token: string) {
-  return (await deviceClient.get<{ code: string; refreshInMs: number; kioskName: string; siteName: string | null }>("/attendance/kiosk/device/code", { headers: { "X-Kiosk-Token": token } })).data;
+  return (await deviceClient.get<{ code: string; nonce: string; refreshInMs: number; kioskName: string; siteName: string | null }>("/attendance/kiosk/device/code", { headers: { "X-Kiosk-Token": token } })).data;
 }
+/** Has the code on screen been used? A used code is dead for everyone, so the screen replaces it. */
+export async function fetchKioskCodeUsed(token: string, nonce: string) {
+  return (await deviceClient.get<{ used: boolean }>("/attendance/kiosk/device/code/used", { headers: { "X-Kiosk-Token": token }, params: { nonce } })).data.used;
+}
+/** How often the screen checks whether its code has been scanned. */
+export const KIOSK_USED_POLL_MS = 3000;
 
 /** Pure: the URL the QR carries — the punch page on this same host (the host IS the workspace). */
 export function kioskPunchUrl(origin: string, code: string): string {
@@ -229,7 +235,7 @@ export function KioskDisplayPage() {
           if (!live) return;
           setError(null);
           setState({ code: r.code, kioskName: r.kioskName, siteName: r.siteName });
-          timer.current = window.setTimeout(tick, Math.min(30_000, r.refreshInMs + 250));
+          watch(r.nonce, Date.now() + Math.min(30_000, r.refreshInMs + 250));
         })
         .catch((err: unknown) => {
           if (!live) return;
@@ -242,6 +248,26 @@ export function KioskDisplayPage() {
           }
           timer.current = window.setTimeout(tick, 10_000);
         });
+    };
+    // Until the code rotates, ask every few seconds whether someone has used it; a used code is
+    // refused for everyone else, so the next person needs a fresh one straight away.
+    const watch = (nonce: string, rotateAt: number) => {
+      const wait = rotateAt - Date.now();
+      if (wait <= KIOSK_USED_POLL_MS) {
+        timer.current = window.setTimeout(tick, Math.max(0, wait));
+        return;
+      }
+      timer.current = window.setTimeout(() => {
+        fetchKioskCodeUsed(token, nonce)
+          .then((used) => {
+            if (!live) return;
+            if (used) tick();
+            else watch(nonce, rotateAt);
+          })
+          .catch(() => {
+            if (live) watch(nonce, rotateAt);
+          });
+      }, KIOSK_USED_POLL_MS);
     };
     tick();
     return () => {
