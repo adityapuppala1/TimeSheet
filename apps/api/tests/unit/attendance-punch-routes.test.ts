@@ -60,10 +60,12 @@ const tx = {
   attendanceEvent: { create: async () => ({ id: "ev-1" }), updateMany: async () => ({ count: 0 }) }
 };
 let lastCreated: unknown = null;
+let sites: Array<{ name: string; latitude: number; longitude: number; radiusM: number }> = [];
 
 vi.mock("../../src/config/prisma.js", () => ({
   prisma: {
     globalAttendanceSettings: { upsert: async () => settings, findUnique: async () => settings },
+    attendanceSite: { findMany: async () => sites },
     user: { findUnique: async () => user },
     holidayCalendar: { findFirst: async () => null },
     holiday: { findFirst: async () => null },
@@ -154,6 +156,7 @@ beforeEach(() => {
   faceEnabled = true;
   faceRule = "pass";
   lastCreated = null;
+  sites = [];
   recordFindUnique.mockReset().mockImplementation(async () => lastCreated);
   recordCreate.mockReset().mockImplementation(async ({ data }: { data: Record<string, unknown> }) => (lastCreated = fakeRecord(data)));
   userUpdate.mockClear();
@@ -301,6 +304,50 @@ describe("POST /punch-in", () => {
   it("location OFF stores nothing even if coordinates are sent", async () => {
     await request(app()).post("/att/punch-in").send({ lat: 1, lng: 2 });
     expect(recordCreate.mock.calls[0][0].data).toMatchObject({ lat: null, lng: null });
+  });
+
+  describe("7.0.0 work sites", () => {
+    const office = { name: "Head office", latitude: 51.5007, longitude: -0.1246, radiusM: 150 };
+    const inside = { lat: 51.5008, lng: -0.1247, consentAccepted: true };
+    const outside = { lat: 51.51, lng: -0.1246, consentAccepted: true };
+    beforeEach(() => {
+      settings.locationMode = "OPTIONAL";
+      sites = [office];
+    });
+
+    it("OFF labels the punch and never blocks", async () => {
+      expect((await request(app()).post("/att/punch-in").send(outside)).status).toBe(201);
+      expect(recordCreate.mock.calls[0][0].data).toMatchObject({ siteLabel: "Outside work sites", siteFlagged: false });
+    });
+
+    it("labels a punch inside a site as At <site>", async () => {
+      settings.requireSite = "BLOCK";
+      expect((await request(app()).post("/att/punch-in").send(inside)).status).toBe(201);
+      expect(recordCreate.mock.calls[0][0].data).toMatchObject({ siteLabel: "At Head office", siteFlagged: false });
+    });
+
+    it("BLOCK refuses outside every site, and without a location, with no coordinate in the message", async () => {
+      settings.requireSite = "BLOCK";
+      const out = await request(app()).post("/att/punch-in").send(outside);
+      expect(out.status).toBe(422);
+      expect(String(out.body.message)).not.toMatch(/51.|0.12/);
+      expect((await request(app()).post("/att/punch-in").send({})).status).toBe(422);
+      expect(recordCreate).not.toHaveBeenCalled();
+      expect(consume).not.toHaveBeenCalled();
+    });
+
+    it("ALLOW_FLAGGED records the punch outside, flagged for review", async () => {
+      settings.requireSite = "ALLOW_FLAGGED";
+      expect((await request(app()).post("/att/punch-in").send(outside)).status).toBe(201);
+      expect(recordCreate.mock.calls[0][0].data).toMatchObject({ siteLabel: "Outside work sites", siteFlagged: true, flagged: false });
+    });
+
+    it("with no sites defined the rule does nothing and there is no label", async () => {
+      sites = [];
+      settings.requireSite = "BLOCK";
+      expect((await request(app()).post("/att/punch-in").send(outside)).status).toBe(201);
+      expect(recordCreate.mock.calls[0][0].data).toMatchObject({ siteLabel: null, siteFlagged: false });
+    });
   });
 
   it("refuses half a coordinate", async () => {

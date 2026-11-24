@@ -81,10 +81,12 @@ export function peopleWhere(scope: TeamScope, actorId: string, managerFilter?: s
   return { ...COUNTED_PEOPLE, managerId: actorId };
 }
 
-export type LocationLabel = "Location shared" | "Network only" | "Not captured";
+/** 7.0.0: a matched work site ("At Head office" / "Outside work sites") is said instead, when there is one. */
+export type LocationLabel = "Location shared" | "Network only" | "Not captured" | (string & {});
 
 /** The coarse label a manager sees instead of a coordinate. Pure. */
-export function locationLabel(record: { lat: unknown; lng: unknown; ip: string | null }): LocationLabel {
+export function locationLabel(record: { lat: unknown; lng: unknown; ip: string | null; siteLabel?: string | null }): LocationLabel {
+  if (record.siteLabel) return record.siteLabel;
   if (record.lat != null && record.lng != null) return "Location shared";
   if (record.ip) return "Network only";
   return "Not captured";
@@ -223,7 +225,7 @@ export async function getTeamDay(actor: { id: string; role: string }, query: Tea
         findLeaveInRange(ids, query.date, query.date),
         prisma.attendanceRecord.findMany({
           where: { userId: { in: ids }, workDate },
-          select: { userId: true, punchInAt: true, source: true, lat: true, lng: true, ip: true, faceAttemptId: true, flagged: true, sourceRef: { select: { name: true } } }
+          select: { userId: true, punchInAt: true, source: true, lat: true, lng: true, ip: true, faceAttemptId: true, flagged: true, siteLabel: true, sourceRef: { select: { name: true } } }
         }),
         prisma.timesheet.findMany({ where: { userId: { in: ids }, workDate }, select: { userId: true, status: true, totalHours: true } }),
         prisma.missedDayReason.findMany({ where: { userId: { in: ids }, workDate }, select: { userId: true, reasonCode: true, note: true } }),
@@ -450,7 +452,7 @@ export async function getMyHistory(userId: string, from: string, to: string, now
     findLeaveInRange([userId], from, to),
     prisma.attendanceRecord.findMany({
       where: { userId, workDate: { gte: dayStart(from), lte: dayStart(to) } },
-      select: { workDate: true, punchInAt: true, punchOutAt: true, source: true, flagged: true, faceAttemptId: true, sourceRef: { select: { name: true } } }
+      select: { workDate: true, punchInAt: true, punchOutAt: true, source: true, flagged: true, faceAttemptId: true, siteLabel: true, sourceRef: { select: { name: true } } }
     }),
     prisma.timesheet.findMany({ where: { userId, workDate: { gte: dayStart(from), lte: dayStart(to) } }, select: { workDate: true, totalHours: true } }),
     // The reason CODE only, and only the person's own: notes stay with the person and their approver.
@@ -481,6 +483,8 @@ export async function getMyHistory(userId: string, from: string, to: string, now
       punchOutAt: record?.punchOutAt?.toISOString() ?? null,
       sourceLabel: record ? (record.sourceRef?.name ?? SOURCE_LABELS[record.source]) : null,
       face: record ? faceResult(record) : null,
+      // 7.0.0: the matched work site, never a coordinate.
+      siteLabel: record?.siteLabel ?? null,
       isWorkingDay: day.isWorkingDay,
       leave: leaveOf(userId, key),
       hours: hoursBy.get(key) ?? null,

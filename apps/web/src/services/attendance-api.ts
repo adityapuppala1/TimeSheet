@@ -40,6 +40,8 @@ export interface AttendanceSettings {
   regularizationEnabled: boolean;
   regularizationMaxDaysBack: number;
   regularizationMonthlyCap: number;
+  /** 7.0.0 work sites: what a web punch-in outside every site does. */
+  requireSite: "OFF" | "BLOCK" | "ALLOW_FLAGGED";
 }
 
 export interface AttendanceEntitlements {
@@ -143,6 +145,8 @@ export interface AttendancePunchRecord {
   flagged: boolean;
   faceVerified: boolean;
   hasLocation: boolean;
+  /** 7.0.0: "At <site>" / "Outside work sites"; null without sites or a location. */
+  siteLabel?: string | null;
 }
 
 /** Only what the pop-up needs; admin configuration never reaches a non-admin. */
@@ -405,6 +409,8 @@ export interface MyHistoryDay {
   punchOutAt: string | null;
   sourceLabel: string | null;
   face: "PASSED" | "FLAGGED" | "NONE" | null;
+  /** 7.0.0: the matched work site, never a coordinate. */
+  siteLabel?: string | null;
   isWorkingDay: boolean;
   /** Approved leave on the day: the type code and the portion taken. */
   leave: { type: string; half: "FULL" | "FIRST_HALF" | "SECOND_HALF" } | null;
@@ -542,6 +548,8 @@ export interface OrgAnalytics {
   hours: { logged: number; expected: number } | null;
   byManager: Array<GroupSummary & { managerId: string | null; managerName: string }>;
   bySource: Array<{ source: PunchSourceKind; people: number; suppressed: boolean; punches: number | null }>;
+  /** 7.0.0: punch-ins per work-site label ("Location label" in the breakdown). */
+  bySite?: Array<{ label: string; people: number; suppressed: boolean; punches: number | null }>;
   face: { suppressed: boolean; checks: number | null; passRate: number | null; flagRate: number | null };
   loginHistogram: { suppressed: boolean; hours: number[] | null };
   integrations: SourceHealth[];

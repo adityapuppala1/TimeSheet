@@ -68,6 +68,8 @@ export interface DayFact {
   punchMinute: number | null;
   source: AttendanceSourceKind | null;
   face: FaceResult | null;
+  /** 7.0.0: the punch's work-site label ("At Head office" / "Outside work sites"), null when none. */
+  siteLabel?: string | null;
   hoursLogged: number;
   hasTimesheet: boolean;
   reasonCode: string | null;
@@ -332,7 +334,7 @@ export async function loadPersonFacts(people: LoadedPerson[], from: string, to: 
     prisma.attendanceRecord.findMany({
       where: { userId: { in: ids }, workDate: { gte: dayStart(from), lte: dayStart(to) } },
       // Deliberately no lat/lng/ip/userAgent/rawPayload: analytics never needs them, so never loads them.
-      select: { userId: true, workDate: true, punchInAt: true, source: true, faceAttemptId: true, flagged: true }
+      select: { userId: true, workDate: true, punchInAt: true, source: true, faceAttemptId: true, flagged: true, siteLabel: true }
     }),
     prisma.timesheet.findMany({
       where: { userId: { in: ids }, workDate: { gte: dayStart(from), lte: dayStart(to) } },
@@ -375,6 +377,7 @@ export async function loadPersonFacts(people: LoadedPerson[], from: string, to: 
         punchMinute: record ? localMinuteOf(record.punchInAt, p.timezone) : null,
         source: record?.source ?? null,
         face: record ? faceResult(record) : null,
+        siteLabel: record?.siteLabel ?? null,
         hoursLogged: hours ?? 0,
         hasTimesheet: hours !== undefined,
         reasonCode: reasonBy.get(`${p.id}|${date}`) ?? null,
@@ -545,13 +548,31 @@ export function sourceAndFace(people: ReadonlyArray<PersonFacts>, min: number) {
     const n = sourcePeople.get(source)?.size ?? 0;
     return n < min ? { source, people: n, suppressed: true, punches: null } : { source, people: n, suppressed: false, punches };
   });
+  // 7.0.0: the "Location label" breakdown — punch-ins per work-site label, k-anonymous like the rest.
+  // A punch with no label (no sites, or no location sent) is grouped as "No site label".
+  const sitePeople = new Map<string, Set<string>>();
+  const sitePunches = new Map<string, number>();
+  for (const p of people) {
+    for (const d of p.days) {
+      if (!d.source) continue;
+      const label = d.siteLabel ?? NO_SITE_LABEL;
+      sitePeople.set(label, (sitePeople.get(label) ?? new Set()).add(p.userId));
+      sitePunches.set(label, (sitePunches.get(label) ?? 0) + 1);
+    }
+  }
+  const bySite = [...sitePunches.entries()].map(([label, punches]) => {
+    const n = sitePeople.get(label)?.size ?? 0;
+    return n < min ? { label, people: n, suppressed: true, punches: null } : { label, people: n, suppressed: false, punches };
+  });
   const checks = passed + flagged;
   const face =
     facePeople.size < min
       ? { suppressed: true, checks: null, passRate: null, flagRate: null }
       : { suppressed: false, checks, passRate: ratio(passed, checks), flagRate: ratio(flagged, checks) };
-  return { bySource, face };
+  return { bySource, bySite, face };
 }
+
+export const NO_SITE_LABEL = "No site label";
 
 /** Integration health is about devices and feeds, not people — never suppressed. Pure. */
 function integrationHealth(
@@ -640,7 +661,7 @@ export async function getOrgAnalytics(actor: { id: string; role: string }, range
 
   const overall = summariseGroup(people, opts);
   const byManager = groupByManager(people, new Map(managers.map((m) => [m.id, m.name])), opts);
-  const { bySource, face } = sourceAndFace(people, opts.minGroupSize);
+  const { bySource, bySite, face } = sourceAndFace(people, opts.minGroupSize);
   const zoneOf = new Map(loaded.map((p) => [p.id, p.timezone]));
   const loginPeople = new Set(logins.map((l) => l.actorId).filter((id): id is string => Boolean(id) && zoneOf.has(id!)));
   const logins24 = loginPeople.size < opts.minGroupSize ? null : loginHistogram(logins, zoneOf);
@@ -659,6 +680,7 @@ export async function getOrgAnalytics(actor: { id: string; role: string }, range
     hours: overall.suppressed ? null : orgHours(people, opts),
     byManager,
     bySource,
+    bySite,
     face,
     loginHistogram: logins24 ? { suppressed: false, hours: logins24 } : { suppressed: true, hours: null },
     integrations,

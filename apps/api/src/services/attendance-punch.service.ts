@@ -28,6 +28,7 @@ import { getPlanningSettings } from "./planning.service.js";
 import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
 import { audit } from "./audit.service.js";
 import { ingestPunch } from "./attendance-ingest.service.js";
+import { enabledSites, OUTSIDE_SITES, siteLabelFor } from "./attendance-site.service.js";
 import { currentWorkDay, publicShift } from "./attendance-shift.service.js";
 import { loadApprovedLeave, type LeaveLookup, type LeaveOnDay } from "./leave-query.service.js";
 
@@ -121,7 +122,9 @@ export function publicRecord(record: (AttendanceRecord & { sourceRef?: { name: s
     sourceLabel: record.sourceRef?.name ?? SOURCE_LABELS[record.source],
     flagged: record.flagged,
     faceVerified: Boolean(record.faceAttemptId) && !record.flagged,
-    hasLocation: record.lat != null && record.lng != null
+    hasLocation: record.lat != null && record.lng != null,
+    /** 7.0.0: "At <site>" / "Outside work sites"; never a coordinate. */
+    siteLabel: record.siteLabel ?? null
   };
 }
 
@@ -237,6 +240,24 @@ function resolveLocation(mode: "OFF" | "OPTIONAL" | "REQUIRED", input: PunchInIn
 }
 
 /**
+ * 7.0.0 work sites: the label for this punch and what the rule does with it. No sites (or no
+ * location) = no label, and only BLOCK / ALLOW_FLAGGED ever act on that. Never a coordinate in the
+ * message: "outside work sites" is all the person is told.
+ */
+async function resolveSite(rule: "OFF" | "BLOCK" | "ALLOW_FLAGGED", location: PunchLocation | null): Promise<{ label: string | null; flagged: boolean }> {
+  const sites = await enabledSites();
+  const label = siteLabelFor(location ?? { lat: null, lng: null }, sites);
+  const atSite = label !== null && label !== OUTSIDE_SITES;
+  if (rule === "OFF" || sites.length === 0 || atSite) return { label, flagged: false };
+  if (rule === "BLOCK") {
+    throw new AppError(422, location ? "You can punch in from the web only at a work site. You appear to be outside all of them." : "Your workspace needs your location to check you are at a work site. Allow location access and try again.", {
+      code: "OUTSIDE_WORK_SITES"
+    });
+  }
+  return { label: label ?? OUTSIDE_SITES, flagged: true };
+}
+
+/**
  * Face. Reuses the /face/verify flow: the client verifies with context PUNCH_IN and presents the
  * single-use id, which consumeVerification checks for owner, context, outcome, age and reuse.
  */
@@ -279,6 +300,8 @@ export async function punchIn(input: PunchInInput): Promise<{ created: boolean; 
   if (existing) return { created: false, record: publicRecord(existing)! };
 
   const location = resolveLocation(settings.locationMode, input, Boolean(user.attendanceLocationConsentAt));
+  // Before the face check: a punch the site rule refuses must not burn a face verification.
+  const site = await resolveSite(settings.requireSite ?? "OFF", location);
   const { faceAttemptId, flagged } = await resolveFace(settings, input);
 
   // Persisted through the single ingest path (attendance-ingest.service.ts) as a WEB event, so the
@@ -298,7 +321,9 @@ export async function punchIn(input: PunchInInput): Promise<{ created: boolean; 
       ip: input.ip,
       userAgent: input.userAgent,
       faceAttemptId,
-      flagged
+      flagged,
+      siteLabel: site.label,
+      siteFlagged: site.flagged
     },
     beforeCreate: async (tx) => {
       if (location && !user.attendanceLocationConsentAt) {

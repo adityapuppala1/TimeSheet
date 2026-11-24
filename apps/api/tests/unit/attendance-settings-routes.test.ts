@@ -26,6 +26,7 @@ const holidayCreate = vi.fn();
 const calendarFindUnique = vi.fn();
 const auditFn = vi.fn().mockResolvedValue(undefined);
 let reasonSettingOn = false;
+let siteCount = 0;
 let reasonOptions: { id: string; enabled: boolean }[] = [];
 const optionUpdate = vi.fn(async ({ where, data }: { where: { id: string }; data: object }) => ({ id: where.id, ...data }));
 const optionDeleteMany = vi.fn(async () => ({ count: 1 }));
@@ -46,6 +47,11 @@ vi.mock("../../src/config/prisma.js", () => ({
     globalAttendanceSettings: { upsert: (...a: unknown[]) => upsert(...a), findUnique: async () => ({ id: "global", missedDayReasonEnabled: reasonSettingOn }) },
     holidayCalendar: { findUnique: (...a: unknown[]) => calendarFindUnique(...a), findMany: vi.fn().mockResolvedValue([]) },
     user: { count: async () => 42 },
+    attendanceSite: {
+      count: async () => siteCount,
+      findMany: async () => [],
+      create: async ({ data }: { data: Record<string, unknown> }) => ({ id: "site-1", enabled: true, ...data })
+    },
     holiday: { create: (...a: unknown[]) => holidayCreate(...a) },
     missedReasonOption: {
       findMany: vi.fn().mockResolvedValue([]),
@@ -89,6 +95,7 @@ beforeEach(() => {
   calendarFindUnique.mockReset();
   auditFn.mockClear();
   reasonSettingOn = false;
+  siteCount = 0;
   reasonOptions = [];
   optionUpdate.mockClear();
   optionDeleteMany.mockClear();
@@ -144,6 +151,24 @@ describe("/api/attendance/admin permissions and entitlement", () => {
     expect(upsert).not.toHaveBeenCalled();
   });
 
+  it("7.0.0: a work-site rule needs location on and at least one site", async () => {
+    // The mocked current settings have no locationMode, so it is sent explicitly.
+    await request(app()).put("/a/settings").send({ requireSite: "BLOCK", locationMode: "OFF" }).expect(409);
+    await request(app()).put("/a/settings").send({ requireSite: "ALLOW_FLAGGED", locationMode: "OPTIONAL" }).expect(409);
+    siteCount = 1;
+    await request(app()).put("/a/settings").send({ requireSite: "BLOCK", locationMode: "REQUIRED" }).expect(200);
+    await request(app()).put("/a/settings").send({ requireSite: "OFF" }).expect(200);
+    expect(attendanceSettingsBody.safeParse({ requireSite: "SOMETIMES" }).success).toBe(false);
+  });
+
+  it("7.0.0: work sites are numbers only, and the audit row never carries the centre", async () => {
+    await request(app()).post("/a/sites").send({ name: "HQ", latitude: "51.5", longitude: -0.12, radiusM: 100 }).expect(422);
+    const res = await request(app()).post("/a/sites").send({ name: "HQ", latitude: 51.5, longitude: -0.12, radiusM: 100 }).expect(201);
+    expect(res.body).toMatchObject({ name: "HQ", latitude: 51.5, radiusM: 100 });
+    const call = auditFn.mock.calls.find((c) => c[1] === "attendance.site_created")!;
+    expect(JSON.stringify(call[4])).not.toMatch(/51\.5|0\.12/);
+  });
+
   it("saves and audits when entitled", async () => {
     await request(app()).put("/a/settings").send({ attendanceEnabled: true, punchInReminderHour: 10 }).expect(200);
     expect(upsert).toHaveBeenCalledTimes(1);
@@ -154,10 +179,10 @@ describe("/api/attendance/admin permissions and entitlement", () => {
   });
 
   it("needs the AI entitlement to turn an AI insight on, but not to turn one off", async () => {
-    await request(app()).put("/a/settings").send({ aiInsightsSelf: true }).expect(403);
-    await request(app()).put("/a/settings").send({ aiInsightsSelf: false }).expect(200);
+    expect((await request(app()).put("/a/settings").send({ aiInsightsSelf: true })).status).toBe(403);
+    expect((await request(app()).put("/a/settings").send({ aiInsightsSelf: false })).status).toBe(200);
     entitlements.attendanceAiInsightsEnabled = true;
-    await request(app()).put("/a/settings").send({ aiInsightsOrg: true }).expect(200);
+    expect((await request(app()).put("/a/settings").send({ aiInsightsOrg: true })).status).toBe(200);
   });
 
   it("422s a malformed settings body before touching the database", async () => {
@@ -178,12 +203,12 @@ describe("holidays", () => {
   it("answers a duplicate date with 409, not a 500", async () => {
     calendarFindUnique.mockResolvedValue({ id: "cal-1" });
     holidayCreate.mockRejectedValue(Object.assign(new Error("dup"), { code: "P2002" }));
-    await request(app()).post("/a/calendars/cal-1/holidays").send({ date: "2027-01-26", name: "Dup" }).expect(409);
+    expect((await request(app()).post("/a/calendars/cal-1/holidays").send({ date: "2027-01-26", name: "Dup" })).status).toBe(409);
   });
 
   it("404s a holiday on a calendar that does not exist", async () => {
     calendarFindUnique.mockResolvedValue(null);
-    await request(app()).post("/a/calendars/nope/holidays").send({ date: "2027-01-26", name: "x" }).expect(404);
+    expect((await request(app()).post("/a/calendars/nope/holidays").send({ date: "2027-01-26", name: "x" })).status).toBe(404);
   });
 });
 

@@ -32,6 +32,7 @@ import { AppError } from "../middleware/error.js";
 import { getAttendanceSettings } from "./attendance-settings.service.js";
 import { currentWorkDay } from "./attendance-shift.service.js";
 import { isPlanningCapabilityAllowed } from "./plan-limits.service.js";
+import { enabledSites, siteLabelFor } from "./attendance-site.service.js";
 
 /** Raw payloads above this are stored as a truncated preview — a device that posts megabytes must
  *  not turn the delivery log into the biggest table in the database. */
@@ -65,6 +66,10 @@ export interface PunchEvidence {
   userAgent?: string | null;
   faceAttemptId?: string | null;
   flagged?: boolean;
+  /** 7.0.0: the work-site label, when the caller already matched it (the web punch). Left
+   *  undefined, ingest matches it itself from lat/lng; null = nothing to say. */
+  siteLabel?: string | null;
+  siteFlagged?: boolean;
 }
 
 export interface IngestInput {
@@ -262,6 +267,8 @@ function recordFields(input: IngestInput, source: SourceRow | null, externalRef:
     userAgent: evidence.userAgent ?? null,
     faceAttemptId: evidence.faceAttemptId ?? null,
     flagged: Boolean(evidence.flagged),
+    siteLabel: evidence.siteLabel?.slice(0, 140) ?? null,
+    siteFlagged: Boolean(evidence.siteFlagged),
     source: input.kind,
     sourceId: source?.id ?? null,
     externalRef
@@ -333,7 +340,8 @@ async function settle(tx: Prisma.TransactionClient, c: SettleContext): Promise<I
     punchOutAt: existing.punchOutAt?.toISOString() ?? null,
     externalRef: existing.externalRef,
     flagged: existing.flagged,
-    faceAttemptId: existing.faceAttemptId
+    faceAttemptId: existing.faceAttemptId,
+    siteLabel: existing.siteLabel
   };
   await tx.attendanceRecord.update({ where: { id: existing.id }, data: { ...fields, rawPayload: c.raw ?? Prisma.DbNull } });
   await tx.attendanceEvent.updateMany({
@@ -424,6 +432,13 @@ export async function ingestPunch(input: IngestInput): Promise<IngestResult> {
   const resolved = await dedupeAndResolve(input, source, dedupeKey, record, now);
   if ("done" in resolved) return resolved.done;
   const person = resolved.person;
+
+  // 7.0.0: every punch that carries a location gets its work-site label here, whatever the source
+  // (one path, so a device feed and the web cannot label the same spot differently).
+  const ev = input.evidence;
+  if (ev && ev.siteLabel === undefined && ev.lat != null && ev.lng != null) {
+    input = { ...input, evidence: { ...ev, siteLabel: siteLabelFor({ lat: ev.lat, lng: ev.lng }, await enabledSites()) } };
+  }
 
   // 6. The person's own calendar day.
   // 7.0.0: a night shift's work date is the day it STARTED; no shift = the local day, as before.

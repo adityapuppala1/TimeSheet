@@ -62,7 +62,9 @@ function uniqueErr() {
   return Object.assign(new Error("unique"), { code: "P2002", meta: { target: "AttendanceEvent_dedupeKey_key" } });
 }
 
+let sites: Row[] = [];
 const fake: Row = {
+  attendanceSite: { findMany: async () => sites },
   globalAttendanceSettings: { upsert: async () => settings, findUnique: async () => settings },
   user: {
     findFirst: async ({ where }: Row) => db.users.find((u) => matches(u, where)) ?? null,
@@ -175,6 +177,7 @@ beforeEach(() => {
   settings = { id: "global", attendanceEnabled: true, punchInMode: "OPTIONAL", locationMode: "OFF", punchInFaceRequired: false, apiPriority: 30, webPriority: 20, mcpPriority: 20, csvPriority: 10 };
   entitlements.attendanceEnabled = true;
   entitlements.attendanceIntegrationsEnabled = true;
+  sites = [];
 });
 
 const DOOR = "11111111-1111-1111-1111-111111111111";
@@ -270,6 +273,19 @@ describe("ingestPunch", () => {
     const again = await ingest.ingestPunch({ kind: "REGULARIZATION", userId: "u-ana", punchInAt: "2026-11-23T04:00:00Z", externalRef: "REG:r1", now: NOW });
     expect(again.status).toBe("DUPLICATE");
     expect(ingest.rankOf("REGULARIZATION", null, settings)).toBeGreaterThan(ingest.rankOf("WEBHOOK", 5000, settings));
+  });
+
+  it("7.0.0: labels a punch that carries a location with its work site, from any source", async () => {
+    sites = [{ name: "Bengaluru office", latitude: 12.9716, longitude: 77.5946, radiusM: 200 }];
+    await ingest.ingestPunch({ kind: "API", identifier: "ana@x.io", punchInAt: "2026-11-23T03:30:00Z", externalRef: "s1", evidence: { lat: 12.9717, lng: 77.5947 }, now: NOW });
+    expect(db.records[0].siteLabel).toBe("At Bengaluru office");
+    db.records = [];
+    await ingest.ingestPunch({ kind: "API", identifier: "ana@x.io", punchInAt: "2026-11-23T03:30:00Z", externalRef: "s2", evidence: { lat: 13.1, lng: 77.6 }, now: NOW });
+    expect(db.records[0].siteLabel).toBe("Outside work sites");
+    db.records = [];
+    // No location: nothing to say.
+    await ingest.ingestPunch({ kind: "API", identifier: "ana@x.io", punchInAt: "2026-11-23T03:30:00Z", externalRef: "s3", now: NOW });
+    expect(db.records[0].siteLabel).toBeNull();
   });
 
   it("rejects malformed times without a thrown error", async () => {

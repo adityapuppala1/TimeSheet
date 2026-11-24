@@ -6135,6 +6135,13 @@ enum AttendanceLocationMode {
 /// What happens when the punch-in face check fails. ALLOW_FLAGGED exists because a camera that
 /// cannot see someone at 9am must not cost them a day's attendance — it records the punch and
 /// puts the attempt in the review queue instead.
+/// 7.0.0: what a web punch-in outside every work site does. OFF only labels it.
+enum AttendanceSiteRule {
+  OFF
+  BLOCK
+  ALLOW_FLAGGED
+}
+
 enum AttendanceInsightFrequency {
   DAILY
   WEEKLY
@@ -6247,6 +6254,11 @@ model GlobalAttendanceSettings {
   regularizationMaxDaysBack Int     @default(7)
   /// Open or approved requests per person per calendar month (of the day corrected).
   regularizationMonthlyCap  Int     @default(3)
+
+  /// --- Work sites (7.0.0) --------------------------------------------------------------------
+  /// Web punch-in outside every enabled AttendanceSite: OFF labels it, BLOCK refuses it,
+  /// ALLOW_FLAGGED records it with siteFlagged. Needs location on and at least one site.
+  requireSite AttendanceSiteRule @default(OFF)
 
   updatedById String?
   updatedAt   DateTime @updatedAt
@@ -6408,6 +6420,13 @@ model AttendanceRecord {
   /// True when the punch was accepted under ALLOW_FLAGGED despite a failed face check.
   flagged       Boolean @default(false)
 
+  /// 7.0.0: "At <site>" or "Outside work sites", matched when the punch arrived. NULL = no sites
+  /// defined or no location sent. Kept after the retention worker clears lat/lng: it is a label,
+  /// not a coordinate, and it is the only location detail person-facing views show.
+  siteLabel   String? @db.VarChar(140)
+  /// Accepted under requireSite = ALLOW_FLAGGED although outside every site (or with no location).
+  siteFlagged Boolean @default(false)
+
   source      AttendanceSourceKind
   /// Set for API/WEBHOOK/CSV punches. SetNull: deleting a source must not erase history.
   sourceId    String?
@@ -6421,6 +6440,19 @@ model AttendanceRecord {
   @@unique([userId, workDate])
   @@index([workDate])
   @@index([sourceId])
+}
+
+/// 7.0.0: a named work site — a circle on the map. A punch inside one is labelled "At <name>".
+model AttendanceSite {
+  id        String  @id @default(uuid())
+  name      String  @unique @db.VarChar(120)
+  latitude  Decimal @db.Decimal(9, 6)
+  longitude Decimal @db.Decimal(9, 6)
+  radiusM   Int
+  enabled   Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 /// Admin-editable list behind the "why is this day empty?" prompt. Seeded by migration with nine

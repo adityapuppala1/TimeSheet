@@ -267,6 +267,7 @@ function DaySheet({ data, onClose, today }: Readonly<{ data: CellData | null; on
                     }
                   />
                 )}
+                {day.siteLabel && <Row label="Work site" value={day.siteLabel} />}
                 {day.face && day.face !== "NONE" && <Row label="Face check" value={day.face === "PASSED" ? "Verified" : "Flagged for review"} />}
                 <Row label="Timesheet" value={day.hours == null ? "No time logged" : `${round1(day.hours)}h logged`} />
                 {day.holidayName && <Row label="Holiday" value={day.holidayName} />}

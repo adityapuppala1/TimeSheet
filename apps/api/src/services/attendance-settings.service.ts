@@ -80,7 +80,9 @@ export const attendanceSettingsBody = z
     // 7.0.0 regularisation (attendance-regularization.service.ts). OFF by default.
     regularizationEnabled: z.boolean(),
     regularizationMaxDaysBack: z.number().int().min(1).max(60),
-    regularizationMonthlyCap: z.number().int().min(1).max(31)
+    regularizationMonthlyCap: z.number().int().min(1).max(31),
+    // 7.0.0 work sites (attendance-site.service.ts). OFF by default.
+    requireSite: z.enum(["OFF", "BLOCK", "ALLOW_FLAGGED"])
   })
   .partial()
   .strict();

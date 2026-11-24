@@ -60,6 +60,7 @@ export function matchPreset(values: AttendanceSettings): PresetId {
 
 const PUNCH_LABEL = { OFF: "off", OPTIONAL: "optional", MANDATORY: "mandatory" } as const;
 const LOCATION_LABEL = { OFF: "off", OPTIONAL: "optional", REQUIRED: "required" } as const;
+const SITE_RULE_LABEL = { OFF: "label only", BLOCK: "block outside sites", ALLOW_FLAGGED: "allow and flag" } as const;
 
 export const FIELD_LABELS: Partial<Record<keyof AttendanceSettings, string>> = {
   attendanceEnabled: "Attendance",
@@ -81,16 +82,19 @@ export const FIELD_LABELS: Partial<Record<keyof AttendanceSettings, string>> = {
   locationRetentionDays: "Evidence retention",
   regularizationEnabled: "Attendance corrections",
   regularizationMaxDaysBack: "Corrections: days back",
-  regularizationMonthlyCap: "Corrections per month"
+  regularizationMonthlyCap: "Corrections per month",
+  requireSite: "Work site rule"
 };
+
+const ENUM_WORDS: Partial<Record<keyof AttendanceSettings, Record<string, string>>> = { punchInMode: PUNCH_LABEL, locationMode: LOCATION_LABEL, requireSite: SITE_RULE_LABEL };
 
 const clock = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 
 /** A value as the person would say it ("mandatory", "11:00", "on"). */
 export function valueText(key: keyof AttendanceSettings, value: unknown): string {
   if (typeof value === "boolean") return value ? "on" : "off";
-  if (key === "punchInMode") return PUNCH_LABEL[value as keyof typeof PUNCH_LABEL] ?? String(value);
-  if (key === "locationMode") return LOCATION_LABEL[value as keyof typeof LOCATION_LABEL] ?? String(value);
+  const words = ENUM_WORDS[key];
+  if (words) return words[String(value)] ?? String(value);
   if (key === "punchInReminderHour") return clock(Number(value) * 60);
   if (key === "expectedStartMinute") return clock(Number(value));
   if (key === "locationRetentionDays") return `${value} days`;
@@ -179,7 +183,8 @@ export function settingsSections(leaveEntitled: boolean): NavSection[] {
     { id: "holidays", label: "Working days & holidays", group: "Attendance" },
     { id: "shifts", label: "Shifts", group: "Attendance" },
     { id: "reasons", label: "Missed-day reasons", group: "Attendance" },
-    { id: "corrections", label: "Corrections", group: "Attendance" }
+    { id: "corrections", label: "Corrections", group: "Attendance" },
+    { id: "sites", label: "Work sites", group: "Attendance" }
   ];
   const leave: NavSection[] = [
     { id: "leave-types", label: "Leave types", group: "Leave" },

@@ -173,7 +173,13 @@ function TrendChart({ data }: Readonly<{ data: NonNullable<OrgAnalytics["trend"]
 
 /* ----------------------------------- group by ----------------------------------- */
 
-type GroupBy = "manager" | "source";
+type GroupBy = "manager" | "source" | "site";
+
+const GROUP_DESCRIPTION: Record<GroupBy, string> = {
+  manager: "Attendance by manager's team.",
+  source: "Punch-ins by where they came from.",
+  site: "Punch-ins by work-site label. Never a map or a coordinate."
+};
 
 function GroupChart({ org }: Readonly<{ org: OrgAnalytics }>) {
   const [by, setBy] = useState<GroupBy>("manager");
@@ -184,6 +190,12 @@ function GroupChart({ org }: Readonly<{ org: OrgAnalytics }>) {
       const shown = org.byManager.filter((m) => !m.suppressed && m.aggregates?.presenceRate != null).map((m) => ({ name: m.managerName, value: Math.round((m.aggregates!.presenceRate ?? 0) * 100), people: m.people }));
       const hiddenGroups = org.byManager.filter((m) => m.suppressed).length;
       return { rows: shown.sort((a, b) => b.value - a.value), hidden: hiddenGroups, valueLabel: "Attendance", unit: "%" };
+    }
+    if (by === "site") {
+      // 7.0.0: the work-site label of each punch-in ("At Head office", "Outside work sites").
+      const sites = org.bySite ?? [];
+      const shownSites = sites.filter((s) => !s.suppressed && s.punches).map((s) => ({ name: s.label, value: s.punches ?? 0, people: s.people }));
+      return { rows: shownSites.sort((a, b) => b.value - a.value), hidden: sites.filter((s) => s.suppressed).length, valueLabel: "Punch-ins", unit: "" };
     }
     const shown = org.bySource.filter((s) => !s.suppressed && s.punches).map((s) => ({ name: s.source.toLowerCase(), value: s.punches ?? 0, people: s.people }));
     return { rows: shown.sort((a, b) => b.value - a.value), hidden: org.bySource.filter((s) => s.suppressed).length, valueLabel: "Punch-ins", unit: "" };
@@ -198,7 +210,8 @@ function GroupChart({ org }: Readonly<{ org: OrgAnalytics }>) {
       onChange={setBy}
       options={[
         { value: "manager", label: "Manager" },
-        { value: "source", label: "Source" }
+        { value: "source", label: "Source" },
+        { value: "site", label: "Location label" }
       ]}
     />
   ) : (
@@ -209,6 +222,7 @@ function GroupChart({ org }: Readonly<{ org: OrgAnalytics }>) {
       <SelectContent>
         <SelectItem value="manager">Manager</SelectItem>
         <SelectItem value="source">Source</SelectItem>
+        <SelectItem value="site">Location label</SelectItem>
       </SelectContent>
     </Select>
   );
@@ -216,7 +230,7 @@ function GroupChart({ org }: Readonly<{ org: OrgAnalytics }>) {
   return (
     <ChartShell
       title="Breakdown"
-      description={by === "manager" ? "Attendance by manager's team." : "Punch-ins by where they came from."}
+      description={GROUP_DESCRIPTION[by]}
       action={selector}
       hasData={rows.length > 0 || hidden > 0}
       empty="Nothing to break down in this range."

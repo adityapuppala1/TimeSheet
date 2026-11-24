@@ -62,6 +62,7 @@ import { OptionalHolidayCapField } from "./OptionalHolidayCapField";
 import { AttendanceSourcesSection } from "./AttendanceSourcesSection";
 import { CompOffSettingsSection } from "../../components/attendance/CompOff";
 import { ShiftsSettingsSection } from "../../components/attendance/Shifts";
+import { WorkSitesSection } from "../../components/attendance/WorkSites";
 import { BalanceAdjustments, LEAVE_SETTINGS_KEY, LEAVE_TYPES_KEY, LeaveSettingsFields, LeaveTypesSection } from "./LeaveSettingsSections";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
@@ -355,6 +356,24 @@ export function AttendanceSettingsCard({ readOnly }: { readOnly: boolean }) {
             </StagedToggle>
           )}
 
+          {section === "sites" && (
+            <div className="grid min-w-0 gap-4">
+              <StagedSegment
+                label="When someone punches in from the web outside every site"
+                hint="Needs location on and at least one site. Label only never refuses anyone; Allow and flag records the punch for review; Block refuses it."
+                value={values.requireSite}
+                disabled={disabled}
+                onChange={(v) => stage({ requireSite: v })}
+                options={[
+                  { value: "OFF", label: "Label only" },
+                  { value: "ALLOW_FLAGGED", label: "Allow and flag" },
+                  { value: "BLOCK", label: "Block" }
+                ]}
+              />
+              <WorkSitesSection readOnly={readOnly} />
+            </div>
+          )}
+
           {section === "leave-types" && <LeaveTypesSection readOnly={readOnly} />}
           {section === "leave-settings" && (
             <div className="grid min-w-0 gap-4">
@@ -524,7 +543,8 @@ function dirtySections(changes: Array<{ key: string }>, leaveChanges: unknown[])
     locationRetentionDays: "privacy",
     regularizationEnabled: "corrections",
     regularizationMaxDaysBack: "corrections",
-    regularizationMonthlyCap: "corrections"
+    regularizationMonthlyCap: "corrections",
+    requireSite: "sites"
   };
   const out = new Set(changes.map((c) => map[c.key]).filter(Boolean));
   if (leaveChanges.length > 0) out.add("leave-settings");

@@ -29,6 +29,7 @@ import {
   type AttendanceSettingsInput
 } from "../services/attendance-settings.service.js";
 import { shiftAssignmentBody, shiftBody } from "../services/attendance-shift.service.js";
+import { publicSite, siteBody } from "../services/attendance-site.service.js";
 
 export const attendanceSettingsRouter = Router();
 attendanceSettingsRouter.use(requireAuth, requireSuperAdmin);
@@ -77,6 +78,7 @@ attendanceSettingsRouter.put("/settings", validate(z.object({ body: attendanceSe
   if (body.missedDayReasonEnabled === true && (await prisma.missedReasonOption.count({ where: { enabled: true } })) === 0) {
     throw new AppError(409, "Enable at least one missed-day reason before turning on the missed-day reason rule.");
   }
+  await assertSiteRuleUsable(body);
   const data = { ...body, locationConsentText: body.locationConsentText === "" ? null : body.locationConsentText };
 
   const updated = await prisma.globalAttendanceSettings.upsert({
@@ -313,6 +315,74 @@ attendanceSettingsRouter.delete("/missed-reasons/:id", validate(z.object({ param
  * With no shift assigned, everyone keeps the workspace day — so an empty list is the old
  * behaviour. Reads are open to the super admin like the rest of this router; writes need the plan.
  * ------------------------------------------------------------------ */
+
+/**
+ * 7.0.0: a site rule that is not OFF needs something to match against: location collected, and at
+ * least one enabled site. Otherwise BLOCK would refuse every web punch in the workspace.
+ */
+async function assertSiteRuleUsable(body: AttendanceSettingsInput): Promise<void> {
+  if (body.requireSite === undefined && body.locationMode === undefined) return;
+  const current = await getAttendanceSettings();
+  const rule = body.requireSite ?? current.requireSite ?? "OFF";
+  const mode = body.locationMode ?? current.locationMode;
+  if (rule === "OFF") return;
+  if (mode === "OFF") throw new AppError(409, "Turn location on before requiring a work site.", { code: "SITE_RULE_NEEDS_LOCATION" });
+  if ((await prisma.attendanceSite.count({ where: { enabled: true } })) === 0) {
+    throw new AppError(409, "Add at least one work site before requiring one.", { code: "SITE_RULE_NEEDS_SITE" });
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Work sites (7.0.0)
+ * ------------------------------------------------------------------ */
+
+attendanceSettingsRouter.get("/sites", async (_req, res) => {
+  const rows = await prisma.attendanceSite.findMany({ orderBy: { name: "asc" } });
+  res.json({ sites: rows.map(publicSite) });
+});
+
+attendanceSettingsRouter.post("/sites", validate(z.object({ body: siteBody })), async (req, res) => {
+  await assertAttendanceEntitled();
+  const body = siteBody.parse(req.body);
+  try {
+    const created = await prisma.attendanceSite.create({ data: body });
+    // The site's own centre is admin configuration, not anyone's location; still, the audit row
+    // only needs the name and size.
+    await audit(req.user!.id, "attendance.site_created", "AttendanceSite", created.id, { name: body.name, radiusM: body.radiusM });
+    res.status(201).json(publicSite(created));
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new AppError(409, "A site with that name already exists.");
+    throw error;
+  }
+});
+
+attendanceSettingsRouter.put("/sites/:id", validate(z.object({ params: idParams, body: siteBody })), async (req, res) => {
+  await assertAttendanceEntitled();
+  const id = String(req.params.id);
+  const body = siteBody.parse(req.body);
+  try {
+    const updated = await prisma.attendanceSite.update({ where: { id }, data: body });
+    await audit(req.user!.id, "attendance.site_updated", "AttendanceSite", id, { name: body.name, radiusM: body.radiusM, enabled: body.enabled });
+    res.json(publicSite(updated));
+  } catch (error) {
+    if (isNotFound(error)) throw new AppError(404, "Site not found");
+    if (isUniqueViolation(error)) throw new AppError(409, "A site with that name already exists.");
+    throw error;
+  }
+});
+
+attendanceSettingsRouter.delete("/sites/:id", validate(z.object({ params: idParams })), async (req, res) => {
+  await assertAttendanceEntitled();
+  const id = String(req.params.id);
+  const settings = await getAttendanceSettings();
+  if (settings.requireSite !== "OFF" && (await prisma.attendanceSite.count({ where: { enabled: true, id: { not: id } } })) === 0) {
+    throw new AppError(409, "This is the last work site and a site is required. Turn the site rule off first.", { code: "SITE_RULE_NEEDS_SITE" });
+  }
+  const result = await prisma.attendanceSite.deleteMany({ where: { id } });
+  if (result.count === 0) throw new AppError(404, "Site not found");
+  await audit(req.user!.id, "attendance.site_deleted", "AttendanceSite", id);
+  res.status(204).end();
+});
 
 attendanceSettingsRouter.get("/shifts", async (_req, res) => {
   const [shifts, assignments] = await Promise.all([
