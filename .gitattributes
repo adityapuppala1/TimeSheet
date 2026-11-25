@@ -5,3 +5,9 @@
 # the single most common install-time gotcha for this repo without this rule.
 *.sh text eol=lf
 graphify-out/graph.json merge=graphify
+
+# Migration SQL is hashed and compared byte-for-byte against the email-template seed by the unit
+# tests (and by migrations that match a stored default by SHA-256). A CRLF checkout on Windows
+# breaks both, so migrations always check out with LF.
+apps/api/prisma/migrations/**/*.sql text eol=lf
+apps/api/prisma/control/migrations/**/*.sql text eol=lf

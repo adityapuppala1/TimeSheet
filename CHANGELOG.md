@@ -10,6 +10,28 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 7.0.1 — Security: Vite upgraded, and never expose the dev server — 2026-11-25
+
+### 🔒 Security: Vite 8.3.8, and the dev server is not a deployment
+
+- **Vite 8.3.2 → 8.3.8.** 8.3.0–8.3.2 carry high-severity advisories, including cross-origin
+  script execution through the dev server's middleware. A dev server reachable from the internet
+  was seen executing attacker-supplied JavaScript through a crafted `import.meta.glob` request.
+- **vitest 4.1.11 → 4.1.12** (`@vitest/mocker` code-injection advisories; test tooling only).
+- **The Vite dev server (`npm run dev`, port 5173) must never face the internet.** It serves source,
+  transforms arbitrary module requests on the server, and is built for a developer's own machine.
+  Production is the built app behind nginx/TLS: Docker Compose, Helm, or `install.sh`. See
+  [Deployment](docs/DEPLOYMENT.md#never-expose-the-dev-server).
+
+### ⬆ Upgrade notes
+
+- If any machine served `npm run dev` on a public address, **treat it as compromised**: take
+  5173/4000 off the internet, rotate every secret in `apps/api/.env` (database, JWT/session, SMTP,
+  AI keys, OAuth secrets), check for unknown scheduled tasks, startup entries and changed files,
+  then redeploy from the built app.
+- Windows checkouts: migration `.sql` files now always check out with LF line endings, so the
+  seed-vs-migration unit tests pass on Windows as they do in CI.
+
 ## 7.0.0 — Attendance, leave and holiday calendars: off until you switch them on — 2026-11-24
 
 A new module, **off for every workspace until an admin opts in**. It adds a tenant migration, which `update.sh` applies, and a control-plane migration for the four new plan entitlements.

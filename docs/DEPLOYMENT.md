@@ -18,6 +18,16 @@ Once the platform itself is deployed, see
 [docs/NEW_ORGANIZATION_SETUP.md](NEW_ORGANIZATION_SETUP.md) for the production-hardening
 checklist and the repeatable runbook for bringing a real organization online.
 
+## Never expose the dev server
+
+`npm run dev` (Vite on port 5173, the API on 4000) is for a developer's own machine or a trusted
+LAN. **Do not port-forward it or bind it to a public address.** The Vite dev server transforms
+arbitrary module requests on the server and serves source; a publicly reachable one has been
+observed executing attacker-supplied JavaScript through a crafted `import.meta.glob` request.
+Every production shape below serves the *built* app behind nginx and TLS instead. If a dev server
+was ever public, treat that machine as compromised: firewall 5173/4000, rotate every secret in
+`apps/api/.env`, look for persistence, and redeploy from a build.
+
 ## Three ways to run it
 
 Fastest first. Each is a complete deployment rather than a stepping stone, and each has its own
